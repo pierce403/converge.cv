@@ -68,10 +68,10 @@ export function Layout() {
             </svg>
             <span className="text-xs mt-1">Settings</span>
           </Link>
+
+          <DebugLogPanel placement="nav" />
         </div>
       </nav>
-
-      <DebugLogPanel />
     </div>
   );
 }
