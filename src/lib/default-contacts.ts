@@ -17,17 +17,17 @@ export interface DefaultContact {
 /**
  * Suggested default contacts for Converge
  * 
- * NOTE: These are placeholder addresses. Replace with actual XMTP-enabled addresses.
+ * NOTE: Some addresses are placeholders. Replace with actual XMTP-enabled addresses as they become available.
  * Check https://docs.xmtp.org for official bot addresses and https://base.org for Base ecosystem agents.
  */
 export const DEFAULT_CONTACTS: DefaultContact[] = [
   {
-    address: '0x0000000000000000000000000000000000000001', // Placeholder - replace with actual
-    name: 'Welcome Bot',
-    description: 'Get started with Converge and XMTP. Ask me anything!',
+    address: 'gm.xmtp.eth', // Official XMTP bot
+    name: 'GM Bot',
+    description: 'Say GM! The official XMTP bot for getting started',
     category: 'bot',
     isVerified: true,
-    avatar: '🤖',
+    avatar: '👋',
   },
   {
     address: '0x0000000000000000000000000000000000000002', // Placeholder
