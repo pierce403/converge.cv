@@ -34,6 +34,27 @@ export function SettingsPage() {
     }
   };
 
+  const handleClearCache = async () => {
+    try {
+      // Clear all service worker caches
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+      }
+      
+      // Unregister service worker
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map(reg => reg.unregister()));
+      }
+      
+      alert('Cache cleared! Refresh the page to see the latest version.');
+    } catch (error) {
+      console.error('Failed to clear cache:', error);
+      alert('Failed to clear cache');
+    }
+  };
+
   const handleClearData = async () => {
     if (
       confirm(
@@ -211,6 +232,24 @@ export function SettingsPage() {
                     strokeLinejoin="round"
                     strokeWidth={2}
                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+              </button>
+
+              <button
+                onClick={handleClearCache}
+                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between"
+              >
+                <div>
+                  <div className="font-medium">Clear App Cache</div>
+                  <div className="text-sm text-slate-400">Force refresh from server</div>
+                </div>
+                <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                   />
                 </svg>
               </button>

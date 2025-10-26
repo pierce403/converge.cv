@@ -38,7 +38,23 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Use NetworkFirst for HTML to always get fresh content when online
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api/],
         runtimeCaching: [
+          {
+            // App shell - use NetworkFirst for fresh updates
+            urlPattern: /^https:\/\/converge\.cv\/.*/i,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'app-shell',
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 60 * 60 * 24, // 1 day
+              },
+            },
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',
@@ -54,6 +70,9 @@ export default defineConfig({
             },
           },
         ],
+        // Force new service worker to activate immediately
+        skipWaiting: true,
+        clientsClaim: true,
       },
       devOptions: {
         enabled: true,
