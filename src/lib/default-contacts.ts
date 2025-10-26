@@ -30,6 +30,14 @@ export const DEFAULT_CONTACTS: DefaultContact[] = [
     avatar: '👋',
   },
   {
+    address: 'freysa.eth', // Popular XMTP bot
+    name: 'Freysa',
+    description: 'Chat with Freysa, a popular AI agent on XMTP',
+    category: 'bot',
+    isVerified: true,
+    avatar: '🤖',
+  },
+  {
     address: '0x0000000000000000000000000000000000000002', // Placeholder
     name: 'Base Agent',
     description: 'Your guide to the Base ecosystem. Get crypto prices, gas fees, and more',
