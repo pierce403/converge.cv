@@ -162,8 +162,9 @@ pnpm typecheck        # TypeScript type checking
 - Vault unlocked by default
 - Identity storage in IndexedDB
 - Clean UI with proper feature messaging
-- Floating debug log control (bottom-right) captures console output and surface state snapshots
+- Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
+- Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
 
 ### 🚧 Mock/TODO
 - XMTP v3 SDK integration (currently mock in `lib/xmtp/client.ts`)
