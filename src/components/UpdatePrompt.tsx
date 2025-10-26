@@ -22,7 +22,7 @@ export function UpdatePrompt() {
   }, [needRefresh]);
 
   const handleUpdate = () => {
-    updateServiceWorker(true);
+    updateServiceWorker();
   };
 
   const handleDismiss = () => {
