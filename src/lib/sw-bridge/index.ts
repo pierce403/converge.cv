@@ -4,12 +4,12 @@
 
 export interface SWMessage {
   type: string;
-  payload?: any;
+  payload?: unknown;
 }
 
 export interface SWResponse {
   success: boolean;
-  data?: any;
+  data?: unknown;
   error?: string;
 }
 
@@ -44,9 +44,9 @@ export async function updateBadge(count: number): Promise<void> {
   if ('setAppBadge' in navigator) {
     try {
       if (count > 0) {
-        await (navigator as any).setAppBadge(count);
+        await (navigator as Navigator & { setAppBadge: (count: number) => Promise<void> }).setAppBadge(count);
       } else {
-        await (navigator as any).clearAppBadge();
+        await (navigator as Navigator & { clearAppBadge: () => Promise<void> }).clearAppBadge();
       }
     } catch (error) {
       console.error('Failed to update badge:', error);

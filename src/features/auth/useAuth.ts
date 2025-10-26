@@ -19,6 +19,7 @@ import type { VaultSecrets, Identity } from '@/types';
 
 export function useAuth() {
   const authStore = useAuthStore();
+  const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
 
   /**
    * Create a new identity with passphrase protection
@@ -60,10 +61,10 @@ export function useAuth() {
         setVaultKey(vaultKey);
 
         // Update state
-        authStore.setIdentity(identity);
-        authStore.setVaultSecrets(secrets);
-        authStore.setAuthenticated(true);
-        authStore.setVaultUnlocked(true);
+        setIdentity(identity);
+        setVaultSecrets(secrets);
+        setAuthenticated(true);
+        setVaultUnlocked(true);
 
         // Connect XMTP
         const xmtp = getXmtpClient();
@@ -75,7 +76,7 @@ export function useAuth() {
         return false;
       }
     },
-    [authStore]
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]
   );
 
   /**
@@ -131,10 +132,10 @@ export function useAuth() {
         }
 
         // Update state
-        authStore.setIdentity(identity);
-        authStore.setVaultSecrets(secrets);
-        authStore.setAuthenticated(true);
-        authStore.setVaultUnlocked(true);
+        setIdentity(identity);
+        setVaultSecrets(secrets);
+        setAuthenticated(true);
+        setVaultUnlocked(true);
 
         // Connect XMTP
         const xmtp = getXmtpClient();
@@ -146,7 +147,7 @@ export function useAuth() {
         return false;
       }
     },
-    [authStore]
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]
   );
 
   /**
@@ -161,15 +162,15 @@ export function useAuth() {
       console.error('Failed to unlock with passkey:', error);
       return false;
     }
-  }, [authStore]);
+  }, []);
 
   /**
    * Lock vault
    */
   const lock = useCallback(() => {
     lockVault();
-    authStore.setVaultUnlocked(false);
-  }, [authStore]);
+    setVaultUnlocked(false);
+  }, [setVaultUnlocked]);
 
   /**
    * Logout completely
@@ -200,9 +201,9 @@ export function useAuth() {
       const secrets = await storage.getVaultSecrets();
 
       if (identity && secrets) {
-        authStore.setIdentity(identity);
-        authStore.setVaultSecrets(secrets);
-        authStore.setAuthenticated(true);
+        setIdentity(identity);
+        setVaultSecrets(secrets);
+        setAuthenticated(true);
         return true;
       }
 
@@ -211,7 +212,7 @@ export function useAuth() {
       console.error('Failed to check existing identity:', error);
       return false;
     }
-  }, [authStore]);
+  }, [setIdentity, setVaultSecrets, setAuthenticated]);
 
   return {
     ...authStore,

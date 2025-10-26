@@ -2,7 +2,7 @@
  * Conversation view component
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useConversationStore, useMessageStore } from '@/lib/stores';
 import { MessageBubble } from './MessageBubble';
@@ -19,7 +19,7 @@ export function ConversationView() {
   const { sendMessage, loadMessages } = useMessages();
 
   const conversation = conversations.find((c) => c.id === id);
-  const messages = messagesByConversation[id || ''] || [];
+  const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
 
   useEffect(() => {
     if (id) {

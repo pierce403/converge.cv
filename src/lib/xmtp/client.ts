@@ -33,7 +33,7 @@ export type Unsubscribe = () => void;
  * XMTP Client wrapper for v3 SDK
  */
 export class XmtpClient {
-  private client: any = null;
+  private client: unknown = null;
   private identity: XmtpIdentity | null = null;
 
   /**

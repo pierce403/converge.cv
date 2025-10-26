@@ -5,7 +5,7 @@
 import { useCallback } from 'react';
 import { useMessageStore, useConversationStore, useAuthStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
-import { getXmtpClient } from '@/lib/xmtp';
+import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import type { Message } from '@/types';
 
 export function useMessages() {
@@ -98,8 +98,13 @@ export function useMessages() {
    * Receive a message (from XMTP stream)
    */
   const receiveMessage = useCallback(
-    async (conversationId: string, xmtpMessage: any) => {
+    async (conversationId: string, xmtpMessage: XmtpMessage) => {
       try {
+        // Convert content to string if it's a Uint8Array
+        const content = typeof xmtpMessage.content === 'string' 
+          ? xmtpMessage.content 
+          : new TextDecoder().decode(xmtpMessage.content);
+
         const message: Message = {
           id: xmtpMessage.id,
           conversationId,
@@ -107,7 +112,7 @@ export function useMessages() {
           sentAt: xmtpMessage.sentAt,
           receivedAt: Date.now(),
           type: 'text',
-          body: xmtpMessage.content,
+          body: content,
           status: 'delivered',
           reactions: [],
         };
