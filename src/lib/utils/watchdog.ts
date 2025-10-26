@@ -6,7 +6,7 @@
  * sessions, a forced reload is the most practical "hard reset" available in the browser.
  */
 
-import { useDebugStore } from '@/lib/stores';
+import { logErrorEvent } from '@/lib/stores';
 
 type Cleanup = () => void;
 
@@ -23,16 +23,10 @@ let stopWatchdog: Cleanup | undefined;
 
 function logWatchdogEvent(message: string, details?: string) {
   try {
-    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-    useDebugStore.getState().addEntry({
-      id,
-      level: 'error',
+    logErrorEvent({
+      source: 'watchdog',
       message,
       details,
-      timestamp: Date.now(),
     });
   } catch (error) {
     console.error('Failed to record watchdog event', error);

@@ -2,7 +2,12 @@
  * Debug console helpers for capturing console output into the debug store.
  */
 
-import { useDebugStore, type DebugLogLevel } from '@/lib/stores';
+import {
+  logConsoleEvent,
+  logErrorEvent,
+  type DebugLogLevel,
+  type ErrorLogSource,
+} from '@/lib/stores';
 
 let consolePatched = false;
 
@@ -26,21 +31,55 @@ function formatValue(value: unknown): string {
   }
 }
 
-function addEntry(level: DebugLogLevel, args: unknown[]): void {
+function findErrorLike(args: unknown[]): { message?: string; stack?: string } | null {
+  for (const value of args) {
+    if (value instanceof Error) {
+      return { message: value.message, stack: value.stack ?? undefined };
+    }
+
+    if (typeof value === 'object' && value && 'stack' in value && typeof (value as { stack: unknown }).stack === 'string') {
+      const stack = (value as { stack: unknown }).stack as string;
+      const message = 'message' in (value as { message?: unknown }) && typeof (value as { message?: unknown }).message === 'string'
+        ? ((value as { message?: unknown }).message as string)
+        : undefined;
+      return { message, stack };
+    }
+  }
+
+  return null;
+}
+
+function recordConsoleEntry(level: DebugLogLevel, args: unknown[]): void {
   const [message, ...rest] = args;
   const entryMessage = formatValue(message);
   const details = rest.length > 0 ? rest.map(formatValue).join('\n') : undefined;
 
-  const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-  useDebugStore.getState().addEntry({
-    id,
+  logConsoleEvent({
     level,
     message: entryMessage,
     details,
-    timestamp: Date.now(),
+  });
+
+  if (level === 'error') {
+    const errorInfo = findErrorLike(args);
+    const errorMessage = errorInfo?.message || (typeof message === 'string' ? message : entryMessage);
+    const stack = errorInfo?.stack || (message instanceof Error ? message.stack : undefined);
+
+    logErrorEvent({
+      source: 'console',
+      message: errorMessage,
+      stack,
+      details,
+    });
+  }
+}
+
+function handleRuntimeError(message: string, source: ErrorLogSource, stack?: string, details?: string): void {
+  logErrorEvent({
+    source,
+    message,
+    stack,
+    details,
   });
 }
 
@@ -60,7 +99,7 @@ export function setupDebugConsole(): void {
     (...args: unknown[]) => {
       fn(...args);
       try {
-        addEntry(level, args);
+        recordConsoleEntry(level, args);
       } catch (error) {
         original.error('Failed to record debug log entry:', error);
       }
@@ -70,6 +109,41 @@ export function setupDebugConsole(): void {
   console.info = wrap('info', original.info);
   console.warn = wrap('warn', original.warn);
   console.error = wrap('error', original.error);
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('error', (event) => {
+      try {
+        const message = event.message || 'Runtime error';
+        const stack = event.error instanceof Error ? event.error.stack : undefined;
+        const details = [event.filename, event.lineno, event.colno]
+          .filter((part) => part !== undefined && part !== null)
+          .join(':');
+
+        handleRuntimeError(message, 'runtime', stack, details || undefined);
+      } catch (error) {
+        original.error('Failed to record runtime error', error);
+      }
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      try {
+        const reason = event.reason;
+        const stack = reason instanceof Error ? reason.stack : undefined;
+        const message = reason instanceof Error
+          ? reason.message
+          : typeof reason === 'string'
+            ? reason
+            : 'Unhandled promise rejection';
+        const details = typeof reason === 'object' && reason && reason !== null && !(reason instanceof Error)
+          ? formatValue(reason)
+          : undefined;
+
+        handleRuntimeError(message, 'unhandled-rejection', stack, details);
+      } catch (error) {
+        original.error('Failed to record unhandled rejection', error);
+      }
+    });
+  }
 
   consolePatched = true;
 }

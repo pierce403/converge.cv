@@ -69,7 +69,7 @@ export function Layout() {
             <span className="text-xs mt-1">Settings</span>
           </Link>
 
-          <DebugLogPanel placement="nav" />
+          <DebugLogPanel />
         </div>
       </nav>
     </div>
