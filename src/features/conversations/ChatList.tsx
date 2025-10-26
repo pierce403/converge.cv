@@ -5,6 +5,7 @@
 import { Link } from 'react-router-dom';
 import { useConversationStore } from '@/lib/stores';
 import { formatDistanceToNow } from '@/lib/utils/date';
+import { getContactInfo } from '@/lib/default-contacts';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversationStore();
@@ -56,57 +57,69 @@ export function ChatList() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto">
-        {activeConversations.map((conversation) => (
-          <Link
-            key={conversation.id}
-            to={`/chat/${conversation.id}`}
-            className="block border-b border-slate-700 hover:bg-slate-800 transition-colors"
-          >
-            <div className="flex items-center px-4 py-3">
-              {/* Avatar */}
-              <div className="w-12 h-12 rounded-full bg-primary-600 flex items-center justify-center flex-shrink-0">
-                <span className="text-white font-semibold">
-                  {conversation.peerId.slice(2, 4).toUpperCase()}
-                </span>
-              </div>
+        {activeConversations.map((conversation) => {
+          const contactInfo = getContactInfo(conversation.peerId);
 
-              {/* Content */}
-              <div className="flex-1 min-w-0 ml-3">
-                <div className="flex items-baseline justify-between mb-1">
-                  <h3 className="text-sm font-semibold truncate">
-                    {conversation.peerId.slice(0, 10)}...{conversation.peerId.slice(-8)}
-                  </h3>
-                  <span className="text-xs text-slate-400 ml-2 flex-shrink-0">
-                    {formatDistanceToNow(conversation.lastMessageAt)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-slate-400 truncate">
-                    {conversation.lastMessagePreview || 'No messages yet'}
-                  </p>
-                  {conversation.unreadCount > 0 && (
-                    <span className="ml-2 bg-primary-600 text-white text-xs font-semibold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">
-                      {conversation.unreadCount > 9 ? '9+' : conversation.unreadCount}
+          return (
+            <Link
+              key={conversation.id}
+              to={`/chat/${conversation.id}`}
+              className="block border-b border-slate-700 hover:bg-slate-800 transition-colors"
+            >
+              <div className="flex items-center px-4 py-3">
+                {/* Avatar */}
+                <div className="w-12 h-12 rounded-full bg-primary-600 flex items-center justify-center flex-shrink-0 text-lg">
+                  {contactInfo?.avatar ? (
+                    <span className="text-white" aria-hidden>
+                      {contactInfo.avatar}
+                    </span>
+                  ) : (
+                    <span className="text-white font-semibold">
+                      {conversation.peerId.slice(2, 4).toUpperCase()}
                     </span>
                   )}
                 </div>
-              </div>
 
-              {/* Pin indicator */}
-              {conversation.pinned && (
-                <div className="ml-2">
-                  <svg
-                    className="w-4 h-4 text-slate-400"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.616 1.738 5.42a1 1 0 01-.285 1.05A3.989 3.989 0 0115 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 01.894-1.788l1.599.799L11 4.323V3a1 1 0 011-1h-2z" />
-                  </svg>
+                {/* Content */}
+                <div className="flex-1 min-w-0 ml-3">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <h3 className="text-sm font-semibold truncate">
+                      {contactInfo?.name
+                        ? `${contactInfo.name}`
+                        : `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
+                    </h3>
+                    <span className="text-xs text-slate-400 ml-2 flex-shrink-0">
+                      {formatDistanceToNow(conversation.lastMessageAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-400 truncate">
+                      {conversation.lastMessagePreview || contactInfo?.description || 'No messages yet'}
+                    </p>
+                    {conversation.unreadCount > 0 && (
+                      <span className="ml-2 bg-primary-600 text-white text-xs font-semibold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">
+                        {conversation.unreadCount > 9 ? '9+' : conversation.unreadCount}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          </Link>
-        ))}
+
+                {/* Pin indicator */}
+                {conversation.pinned && (
+                  <div className="ml-2">
+                    <svg
+                      className="w-4 h-4 text-slate-400"
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
+                      <path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.616 1.738 5.42a1 1 0 01-.285 1.05A3.989 3.989 0 0115 15a3.989 3.989 0 01-2.667-1.019 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 01.894-1.788l1.599.799L11 4.323V3a1 1 0 011-1h-2z" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            </Link>
+          );
+        })}
       </div>
 
       {/* New chat button */}

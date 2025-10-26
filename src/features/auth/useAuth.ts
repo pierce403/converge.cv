@@ -303,16 +303,28 @@ export function useAuth() {
       const identity = await storage.getIdentity();
       const secrets = await storage.getVaultSecrets();
 
-      if (identity && secrets) {
-        setIdentity(identity);
-        setVaultSecrets(secrets);
-        setAuthenticated(true);
-        // Keep vault unlocked by default - user can manually lock from settings
-        setVaultUnlocked(true);
-        return true;
+      if (!identity) {
+        return false;
       }
 
-      return false;
+      setIdentity(identity);
+      setVaultSecrets(secrets ?? null);
+      setAuthenticated(true);
+      // Keep vault unlocked by default - user can manually lock from settings
+      setVaultUnlocked(true);
+
+      try {
+        const xmtp = getXmtpClient();
+        if (identity.privateKey) {
+          await xmtp.connect({ address: identity.address, privateKey: identity.privateKey });
+        } else {
+          await xmtp.connect({ address: identity.address });
+        }
+      } catch (error) {
+        console.error('Failed to reconnect XMTP client:', error);
+      }
+
+      return true;
     } catch (error) {
       console.error('Failed to check existing identity:', error);
       return false;
