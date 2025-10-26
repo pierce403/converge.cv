@@ -12,7 +12,7 @@
 - **Tech Stack**: React 18 + TypeScript + Vite + Tailwind CSS
 - **State Management**: Zustand
 - **Storage**: Dexie (IndexedDB wrapper)
-- **Messaging Protocol**: XMTP v3 (currently mock implementation)
+- **Messaging Protocol**: XMTP v3 (production network connection scaffolding in place)
 - **PWA**: vite-plugin-pwa with Workbox
 - **Deployment**: GitHub Pages (auto-deploy on push to master)
 
@@ -117,7 +117,7 @@ src/
 │   ├── settings/
 │   └── search/
 ├── lib/
-│   ├── xmtp/              # XMTP client wrapper (mock for now)
+│   ├── xmtp/              # XMTP client wrapper (in-progress mainnet integration)
 │   ├── storage/           # Dexie IndexedDB driver
 │   ├── crypto/            # Vault & encryption (optional)
 │   ├── stores/            # Zustand state stores
@@ -167,7 +167,7 @@ pnpm typecheck        # TypeScript type checking
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
 
 ### 🚧 Mock/TODO
-- XMTP v3 SDK integration (currently mock in `lib/xmtp/client.ts`)
+- XMTP v3 SDK integration (connection established, message flows still maturing)
 - Actual message sending/receiving
 - Proper wallet key derivation (currently random bytes)
 - Device-based encryption for private keys

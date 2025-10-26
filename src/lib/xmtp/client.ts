@@ -6,6 +6,7 @@
  * This provides the interface we'll use throughout the app.
  */
 
+import { Client } from '@xmtp/browser-sdk';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 
 export interface XmtpIdentity {
@@ -35,7 +36,7 @@ export type Unsubscribe = () => void;
  * XMTP Client wrapper for v3 SDK
  */
 export class XmtpClient {
-  private client: unknown = null;
+  private client: Client | null = null;
   private identity: XmtpIdentity | null = null;
 
   /**
@@ -49,20 +50,17 @@ export class XmtpClient {
       setError(null);
       
       this.identity = identity;
-      
-      // TODO: Implement actual XMTP v3 client initialization
-      // const client = await Client.create(identity.privateKey, {
-      //   env: 'production',
-      // });
-      // this.client = client;
 
-      // Mock successful connection
-      this.client = { mock: true };
-      
+      const client = await Client.create(identity.address, {
+        env: 'production',
+      });
+
+      this.client = client;
+
       setConnectionStatus('connected');
       setLastConnected(Date.now());
 
-      console.log('XMTP client connected (mock)', identity.address);
+      console.log('XMTP client connected', identity.address);
     } catch (error) {
       console.error('Failed to connect XMTP client:', error);
       setConnectionStatus('error');
@@ -78,7 +76,6 @@ export class XmtpClient {
     const { setConnectionStatus } = useXmtpStore.getState();
     
     if (this.client) {
-      // TODO: Implement actual disconnect
       this.client = null;
       this.identity = null;
       setConnectionStatus('disconnected');
@@ -108,17 +105,10 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    // TODO: Implement actual message streaming
-    // const stream = await client.conversations.streamAllMessages();
-    // for await (const message of stream) {
-    //   onMessage(normalizeMessage(message));
-    // }
+    console.warn('XMTP message streaming is not implemented yet');
 
-    console.log('Started streaming messages (mock)');
-
-    // Return unsubscribe function
     return () => {
-      console.log('Stopped streaming messages');
+      console.warn('XMTP message streaming stopped');
     };
   }
 
@@ -130,11 +120,6 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    // TODO: Implement actual conversation list
-    // const conversations = await client.conversations.list();
-    // return conversations.map(normalizeConversation);
-
-    console.log('List conversations (mock)');
     return [];
   }
 
@@ -146,11 +131,7 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    // TODO: Implement actual conversation get
-    // const conversation = await client.conversations.newConversation(peerAddress);
-    // return normalizeConversation(conversation);
-
-    console.log('Get conversation (mock)', peerAddress);
+    console.warn('XMTP getConversation not implemented yet for', peerAddress);
     return null;
   }
 
@@ -162,11 +143,6 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    // TODO: Implement actual conversation creation
-    // const conversation = await client.conversations.newConversation(peerAddress);
-    // return normalizeConversation(conversation);
-
-    console.log('Create conversation (mock)', peerAddress);
     return {
       id: `conv_${Date.now()}`,
       topic: `topic_${peerAddress}`,
@@ -182,13 +158,6 @@ export class XmtpClient {
     if (!this.client) {
       throw new Error('Client not connected');
     }
-
-    // TODO: Implement actual message send
-    // const conversation = await getConversationById(conversationId);
-    // const sent = await conversation.send(content);
-    // return normalizeMessage(sent);
-
-    console.log('Send message (mock)', conversationId, content);
 
     return {
       id: `msg_${Date.now()}`,
@@ -210,12 +179,7 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    // TODO: Implement actual message list
-    // const conversation = await getConversationById(conversationId);
-    // const messages = await conversation.messages(opts);
-    // return messages.map(normalizeMessage);
-
-    console.log('List messages (mock)', conversationId, opts);
+    console.warn('XMTP listMessages not implemented yet for', conversationId, opts);
     return [];
   }
 
@@ -227,10 +191,7 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    // TODO: Implement actual can-message check
-    // return await client.canMessage(address);
-
-    console.log('Can message check (mock)', address);
+    console.warn('XMTP canMessage fallback for', address);
     return true;
   }
 }

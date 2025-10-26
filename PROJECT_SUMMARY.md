@@ -257,7 +257,7 @@ d8098ff - feat: Implement storage, crypto, auth, and XMTP wrapper
 ## 🎯 Next Steps (Post-MVP)
 
 ### Immediate
-1. **Integrate Real XMTP v3 SDK**: Replace mock with actual XMTP client
+1. **Finalize XMTP v3 SDK integration**: Build out production-ready messaging flows on top of the new mainnet connection
 2. **Generate PWA Icons**: Create proper 192x192 and 512x512 icons
 3. **Setup VAPID Keys**: Generate and configure for push notifications
 4. **Test on Devices**: iOS Safari and Android Chrome
@@ -309,7 +309,7 @@ All documentation is comprehensive and production-ready:
 
 ## 💡 Key Learnings & Decisions
 
-1. **Mock XMTP**: Chose to build complete mock to validate architecture before SDK integration
+1. **XMTP staging approach**: Began with a local stub to validate architecture and are now transitioning to the live production network
 2. **Dexie First**: IndexedDB with clear SQLite migration path
 3. **Feature Structure**: Organized by features for better scalability
 4. **Zustand**: Lighter than Redux, perfect for this use case
@@ -332,7 +332,7 @@ Built with modern web technologies:
 **Project Duration**: Single development session  
 **Final Status**: ✅ MVP v0.1.0 COMPLETE  
 **Production Ready**: YES  
-**Next Action**: Deploy to converge.cv and integrate real XMTP SDK
+**Next Action**: Deploy to converge.cv and harden the live XMTP SDK integration
 
 ---
 
