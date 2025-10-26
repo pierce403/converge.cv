@@ -1,6 +1,7 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { PWAInstallPrompt } from '@/components/PWAInstallPrompt';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
+import { DebugLogPanel } from '@/components/DebugLogPanel';
 
 export function Layout() {
   const location = useLocation();
@@ -69,6 +70,8 @@ export function Layout() {
           </Link>
         </div>
       </nav>
+
+      <DebugLogPanel />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { useConversationStore, useAuthStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { Conversation } from '@/types';
+import { DEFAULT_CONTACTS } from '@/lib/default-contacts';
 
 export function useConversations() {
   const conversationStore = useConversationStore();
@@ -19,7 +20,48 @@ export function useConversations() {
     try {
       conversationStore.setLoading(true);
       const storage = await getStorage();
-      const conversations = await storage.listConversations({ archived: false });
+      let conversations = await storage.listConversations({ archived: false });
+
+      if (conversations.length === 0) {
+        const now = Date.now();
+        const seededConversations: Conversation[] = [];
+
+        for (const [index, contact] of DEFAULT_CONTACTS.entries()) {
+          const existing = conversations.find(
+            (conversation) =>
+              conversation.peerId.toLowerCase() === contact.address.toLowerCase()
+          );
+
+          if (existing) {
+            continue;
+          }
+
+          const timestamp = now - index * 5 * 60 * 1000;
+          const seededConversation: Conversation = {
+            id: `default-${contact.address}`,
+            peerId: contact.address,
+            topic: `default:${contact.address}`,
+            lastMessageAt: timestamp,
+            lastMessagePreview: contact.description,
+            unreadCount: 0,
+            pinned: index < 2,
+            archived: false,
+            createdAt: timestamp,
+          };
+
+          await storage.putConversation(seededConversation);
+          seededConversations.push(seededConversation);
+        }
+
+        if (seededConversations.length > 0) {
+          console.info(
+            `Seeded ${seededConversations.length} default conversations`,
+            seededConversations.map((conversation) => conversation.peerId)
+          );
+          conversations = await storage.listConversations({ archived: false });
+        }
+      }
+
       conversationStore.setConversations(conversations);
     } catch (error) {
       console.error('Failed to load conversations:', error);
