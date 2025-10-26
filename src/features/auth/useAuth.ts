@@ -21,6 +21,22 @@ export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
 
+  const connectXmtpSafely = useCallback(
+    async (address: string, privateKey?: string) => {
+      try {
+        const xmtp = getXmtpClient();
+        if (privateKey) {
+          await xmtp.connect({ address, privateKey });
+        } else {
+          await xmtp.connect({ address });
+        }
+      } catch (error) {
+        console.error('XMTP connection failed (non-blocking):', error);
+      }
+    },
+    []
+  );
+
   /**
    * Create a new identity without passphrase (simplified flow)
    */
@@ -47,8 +63,7 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        const xmtp = getXmtpClient();
-        await xmtp.connect({ address: identity.address, privateKey });
+        await connectXmtpSafely(identity.address, privateKey);
 
         return true;
       } catch (error) {
@@ -56,7 +71,7 @@ export function useAuth() {
         return false;
       }
     },
-    [setIdentity, setAuthenticated, setVaultUnlocked]
+    [setIdentity, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
   );
 
   /**
@@ -104,8 +119,7 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        const xmtp = getXmtpClient();
-        await xmtp.connect({ address: identity.address });
+        await connectXmtpSafely(identity.address);
 
         return true;
       } catch (error) {
@@ -113,7 +127,7 @@ export function useAuth() {
         return false;
       }
     },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
   );
 
   /**
@@ -167,8 +181,7 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        const xmtp = getXmtpClient();
-        await xmtp.connect({ address: identity.address });
+        await connectXmtpSafely(identity.address);
 
         return true;
       } catch (error) {
@@ -176,7 +189,7 @@ export function useAuth() {
         return false;
       }
     },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
   );
 
   /**
@@ -238,8 +251,7 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        const xmtp = getXmtpClient();
-        await xmtp.connect({ address: identity.address });
+        await connectXmtpSafely(identity.address);
 
         return true;
       } catch (error) {
@@ -247,7 +259,7 @@ export function useAuth() {
         return false;
       }
     },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
   );
 
   /**
@@ -310,23 +322,14 @@ export function useAuth() {
       // Keep vault unlocked by default - user can manually lock from settings
       setVaultUnlocked(true);
 
-      try {
-        const xmtp = getXmtpClient();
-        if (identity.privateKey) {
-          await xmtp.connect({ address: identity.address, privateKey: identity.privateKey });
-        } else {
-          await xmtp.connect({ address: identity.address });
-        }
-      } catch (error) {
-        console.error('Failed to reconnect XMTP client:', error);
-      }
+      await connectXmtpSafely(identity.address, identity.privateKey ?? undefined);
 
       return true;
     } catch (error) {
       console.error('Failed to check existing identity:', error);
       return false;
     }
-  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]);
+  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]);
 
   return {
     ...authStore,
