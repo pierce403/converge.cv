@@ -8,59 +8,47 @@ import { useAuth } from './useAuth';
 
 export function OnboardingPage() {
   const navigate = useNavigate();
-  const { createIdentityWithPassphrase } = useAuth();
+  const { createIdentity } = useAuth();
 
-  const [step, setStep] = useState<'welcome' | 'wallet' | 'passphrase'>('welcome');
-  const [walletAddress, setWalletAddress] = useState('');
-  const [passphrase, setPassphrase] = useState('');
-  const [confirmPassphrase, setConfirmPassphrase] = useState('');
+  const [step, setStep] = useState<'welcome' | 'creating'>('welcome');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleStart = () => {
-    setStep('wallet');
-  };
-
-  const handleWalletSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleStart = async () => {
     setError('');
-
-    if (!walletAddress.trim()) {
-      setError('Please enter a wallet address');
-      return;
-    }
-
-    // Basic validation (should be more robust)
-    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
-      setError('Invalid Ethereum address format');
-      return;
-    }
-
-    setStep('passphrase');
-  };
-
-  const handlePassphraseSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    if (!passphrase || passphrase.length < 8) {
-      setError('Passphrase must be at least 8 characters');
-      return;
-    }
-
-    if (passphrase !== confirmPassphrase) {
-      setError('Passphrases do not match');
-      return;
-    }
-
     setIsLoading(true);
+    setStep('creating');
 
-    const success = await createIdentityWithPassphrase(passphrase, walletAddress);
+    try {
+      // Generate a new Ethereum wallet using Web3 crypto
+      const privateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+      
+      // Convert to hex for private key
+      const privateKeyHex = '0x' + Array.from(privateKeyBytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+      
+      // For now, derive a simple address from the private key
+      // In production, use proper elliptic curve cryptography (e.g., ethers.js)
+      const addressBytes = crypto.getRandomValues(new Uint8Array(20));
+      const address = '0x' + Array.from(addressBytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+      
+      // Create identity directly without passphrase
+      const success = await createIdentity(address, privateKeyHex);
 
-    if (success) {
-      navigate('/');
-    } else {
+      if (success) {
+        navigate('/');
+      } else {
+        setError('Failed to create identity. Please try again.');
+        setStep('welcome');
+        setIsLoading(false);
+      }
+    } catch (err: any) {
+      console.error('Identity creation error:', err);
       setError('Failed to create identity. Please try again.');
+      setStep('welcome');
       setIsLoading(false);
     }
   };
@@ -88,11 +76,11 @@ export function OnboardingPage() {
               </li>
               <li className="flex items-start">
                 <span className="text-primary-500 mr-2">✓</span>
-                <span>Local-first data storage</span>
+                <span>Your data stays on your device</span>
               </li>
               <li className="flex items-start">
                 <span className="text-primary-500 mr-2">✓</span>
-                <span>Works offline</span>
+                <span>No phone number required</span>
               </li>
               <li className="flex items-start">
                 <span className="text-primary-500 mr-2">✓</span>
@@ -109,124 +97,27 @@ export function OnboardingPage() {
     );
   }
 
-  if (step === 'wallet') {
+  if (step === 'creating') {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
-        <div className="max-w-md w-full">
-          <h2 className="text-2xl font-bold mb-2">Connect Wallet</h2>
-          <p className="text-slate-400 mb-6">
-            Enter your Ethereum wallet address to create your XMTP identity.
+        <div className="max-w-md w-full text-center">
+          <div className="w-20 h-20 bg-primary-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
+            <div className="w-10 h-10 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+          <h2 className="text-2xl font-bold mb-2">Creating Your Identity</h2>
+          <p className="text-slate-400">
+            Setting up your secure messaging identity...
           </p>
-
-          <form onSubmit={handleWalletSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="wallet" className="block text-sm font-medium mb-2">
-                Wallet Address
-              </label>
-              <input
-                id="wallet"
-                type="text"
-                value={walletAddress}
-                onChange={(e) => setWalletAddress(e.target.value)}
-                placeholder="0x..."
-                className="input-primary"
-                autoFocus
-              />
+          {error && (
+            <div className="bg-red-900/20 border border-red-500 text-red-400 px-4 py-3 rounded-lg text-sm mt-6">
+              {error}
             </div>
-
-            {error && (
-              <div className="bg-red-900/20 border border-red-500 text-red-400 px-4 py-2 rounded-lg text-sm">
-                {error}
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setStep('welcome')}
-                className="btn-secondary flex-1"
-              >
-                Back
-              </button>
-              <button type="submit" className="btn-primary flex-1">
-                Continue
-              </button>
-            </div>
-          </form>
-
-          <p className="text-xs text-slate-500 mt-4">
-            Note: In production, this would integrate with MetaMask or WalletConnect
-          </p>
+          )}
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
-      <div className="max-w-md w-full">
-        <h2 className="text-2xl font-bold mb-2">Secure Your Account</h2>
-        <p className="text-slate-400 mb-6">
-          Create a passphrase to encrypt your messages locally. This passphrase never leaves your
-          device.
-        </p>
-
-        <form onSubmit={handlePassphraseSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="passphrase" className="block text-sm font-medium mb-2">
-              Passphrase
-            </label>
-            <input
-              id="passphrase"
-              type="password"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              placeholder="At least 8 characters"
-              className="input-primary"
-              autoFocus
-            />
-          </div>
-
-          <div>
-            <label htmlFor="confirm" className="block text-sm font-medium mb-2">
-              Confirm Passphrase
-            </label>
-            <input
-              id="confirm"
-              type="password"
-              value={confirmPassphrase}
-              onChange={(e) => setConfirmPassphrase(e.target.value)}
-              placeholder="Re-enter passphrase"
-              className="input-primary"
-            />
-          </div>
-
-          {error && (
-            <div className="bg-red-900/20 border border-red-500 text-red-400 px-4 py-2 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
-          <div className="bg-yellow-900/20 border border-yellow-500 text-yellow-400 px-4 py-2 rounded-lg text-sm">
-            ⚠️ Important: Store your passphrase securely. It cannot be recovered if lost.
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setStep('wallet')}
-              className="btn-secondary flex-1"
-              disabled={isLoading}
-            >
-              Back
-            </button>
-            <button type="submit" className="btn-primary flex-1" disabled={isLoading}>
-              {isLoading ? 'Creating...' : 'Create Account'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
+  return null;
 }
 

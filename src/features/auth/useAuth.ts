@@ -22,7 +22,46 @@ export function useAuth() {
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
 
   /**
-   * Create a new identity with passphrase protection
+   * Create a new identity without passphrase (simplified flow)
+   */
+  const createIdentity = useCallback(
+    async (walletAddress: string, privateKey: string) => {
+      try {
+        const storage = await getStorage();
+
+        // Create identity
+        // TODO: Generate actual XMTP identity from wallet private key
+        const identity: Identity = {
+          address: walletAddress,
+          publicKey: 'mock_public_key',
+          privateKey: privateKey, // Store encrypted in production
+          createdAt: Date.now(),
+        };
+        await storage.putIdentity(identity);
+
+        // For now, skip vault secrets - no passphrase needed
+        // In production, we'd encrypt the private key with device-based keys
+
+        // Update state
+        setIdentity(identity);
+        setAuthenticated(true);
+        setVaultUnlocked(true);
+
+        // Connect XMTP
+        const xmtp = getXmtpClient();
+        await xmtp.connect({ address: identity.address, privateKey });
+
+        return true;
+      } catch (error) {
+        console.error('Failed to create identity:', error);
+        return false;
+      }
+    },
+    [setIdentity, setAuthenticated, setVaultUnlocked]
+  );
+
+  /**
+   * Create a new identity with passphrase protection (advanced option)
    */
   const createIdentityWithPassphrase = useCallback(
     async (passphrase: string, walletAddress: string) => {
@@ -73,6 +112,70 @@ export function useAuth() {
         return true;
       } catch (error) {
         console.error('Failed to create identity:', error);
+        return false;
+      }
+    },
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]
+  );
+
+  /**
+   * Import an existing identity with wallet
+   */
+  const importIdentityWithWallet = useCallback(
+    async (passphrase: string, walletAddress: string) => {
+      try {
+        const storage = await getStorage();
+
+        // Check if identity already exists for this address
+        const existingIdentity = await storage.getIdentity();
+        if (existingIdentity && existingIdentity.address === walletAddress) {
+          console.log('Identity already exists for this address, re-importing');
+        }
+
+        // Generate vault key
+        const vaultKey = await generateVaultKey();
+
+        // Derive wrapper key from passphrase
+        const salt = generateSalt();
+        const wrapperKey = await deriveKeyFromPassphrase(passphrase, salt, 600000);
+
+        // Wrap the vault key
+        const wrappedKey = await wrapVaultKey(vaultKey, wrapperKey);
+
+        // Store vault secrets
+        const secrets: VaultSecrets = {
+          wrappedVaultKey: wrappedKey,
+          method: 'passphrase',
+          salt: btoa(String.fromCharCode(...salt)),
+          iterations: 600000,
+        };
+        await storage.putVaultSecrets(secrets);
+
+        // Import/create identity with existing wallet
+        // TODO: Load actual XMTP identity from network for this address
+        const identity: Identity = {
+          address: walletAddress,
+          publicKey: 'mock_public_key_imported',
+          createdAt: Date.now(),
+        };
+        await storage.putIdentity(identity);
+
+        // Set vault key in memory
+        setVaultKey(vaultKey);
+
+        // Update state
+        setIdentity(identity);
+        setVaultSecrets(secrets);
+        setAuthenticated(true);
+        setVaultUnlocked(true);
+
+        // Connect XMTP
+        const xmtp = getXmtpClient();
+        await xmtp.connect({ address: identity.address });
+
+        return true;
+      } catch (error) {
+        console.error('Failed to import identity:', error);
         return false;
       }
     },
@@ -204,6 +307,8 @@ export function useAuth() {
         setIdentity(identity);
         setVaultSecrets(secrets);
         setAuthenticated(true);
+        // Keep vault unlocked by default - user can manually lock from settings
+        setVaultUnlocked(true);
         return true;
       }
 
@@ -212,11 +317,13 @@ export function useAuth() {
       console.error('Failed to check existing identity:', error);
       return false;
     }
-  }, [setIdentity, setVaultSecrets, setAuthenticated]);
+  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked]);
 
   return {
     ...authStore,
+    createIdentity,
     createIdentityWithPassphrase,
+    importIdentityWithWallet,
     createIdentityWithPasskey,
     unlockWithPassphrase,
     unlockWithPasskey,

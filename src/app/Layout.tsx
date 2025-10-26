@@ -1,10 +1,18 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
+import { PWAInstallPrompt } from '@/components/PWAInstallPrompt';
+import { UpdatePrompt } from '@/components/UpdatePrompt';
 
 export function Layout() {
   const location = useLocation();
 
   return (
     <div className="flex flex-col h-screen">
+      {/* PWA Install Prompt */}
+      <PWAInstallPrompt />
+      
+      {/* Update Available Prompt */}
+      <UpdatePrompt />
+      
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between">
         <h1 className="text-xl font-bold">Converge</h1>
