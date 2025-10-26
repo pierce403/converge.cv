@@ -47,7 +47,7 @@ export async function deriveKeyFromPassphrase(
   return await crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt,
+      salt: salt as BufferSource,
       iterations,
       hash: 'SHA-256',
     },
@@ -75,11 +75,11 @@ export async function deriveKeyFromPasskey(
     // Get assertion with PRF extension
     const credential = await navigator.credentials.get({
       publicKey: {
-        challenge: salt,
+        challenge: salt as BufferSource,
         rpId: window.location.hostname,
         allowCredentials: [
           {
-            id: Uint8Array.from(atob(credentialId), (c) => c.charCodeAt(0)),
+            id: Uint8Array.from(atob(credentialId), (c) => c.charCodeAt(0)) as BufferSource,
             type: 'public-key',
           },
         ],
@@ -87,7 +87,7 @@ export async function deriveKeyFromPasskey(
         extensions: {
           prf: {
             eval: {
-              first: salt,
+              first: salt as BufferSource,
             },
           },
         },

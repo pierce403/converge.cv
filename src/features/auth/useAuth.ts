@@ -8,7 +8,6 @@ import { getStorage } from '@/lib/storage';
 import {
   generateVaultKey,
   deriveKeyFromPassphrase,
-  deriveKeyFromPasskey,
   wrapVaultKey,
   unwrapVaultKey,
   setVaultKey,
@@ -83,7 +82,7 @@ export function useAuth() {
    * Create identity with passkey protection
    */
   const createIdentityWithPasskey = useCallback(
-    async (walletAddress: string) => {
+    async (_walletAddress: string) => {
       try {
         // TODO: Implement passkey creation with PRF
         // For now, fall back to passphrase
@@ -94,7 +93,7 @@ export function useAuth() {
         return false;
       }
     },
-    [authStore]
+    []
   );
 
   /**

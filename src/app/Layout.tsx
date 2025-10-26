@@ -1,5 +1,4 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { HomeIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 
 export function Layout() {
   const location = useLocation();

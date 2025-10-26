@@ -6,8 +6,6 @@
  * This provides the interface we'll use throughout the app.
  */
 
-import type { Message } from '@/types';
-
 export interface XmtpIdentity {
   address: string;
   privateKey?: string;
@@ -86,7 +84,7 @@ export class XmtpClient {
   /**
    * Stream all incoming messages
    */
-  streamMessages(onMessage: MessageCallback): Unsubscribe {
+  streamMessages(_onMessage: MessageCallback): Unsubscribe {
     if (!this.client) {
       throw new Error('Client not connected');
     }

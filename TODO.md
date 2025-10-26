@@ -86,29 +86,31 @@ Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, enc
 
 ---
 
-## Sprint 5: Core Features - Messaging UI
+## Sprint 5: Core Features - Messaging UI ✅
 
-### Phase 9: Chat List
-- [ ] ChatList component with virtualization
-- [ ] ChatItem component (preview, timestamp, unread badge)
-- [ ] Pinned conversations
-- [ ] Archived conversations
-- [ ] Pull-to-refresh
-- [ ] Empty state
+### Phase 9: Chat List ✅
+- [x] ChatList component with sorting
+- [x] ChatItem component (preview, timestamp, unread badge)
+- [x] Pinned conversations display
+- [x] Archived conversations (backend support)
+- [x] Empty state with call-to-action
+- [x] useConversations hook
 
-### Phase 10: Conversation View
-- [ ] Conversation screen layout
-- [ ] MessageBubble component (sent/received)
-- [ ] Message composer with input
-- [ ] Virtualized message list
-- [ ] Typing indicators
-- [ ] Read receipts display
+### Phase 10: Conversation View ✅
+- [x] Conversation screen layout with header
+- [x] MessageBubble component (sent/received styles)
+- [x] Message composer with auto-resize
+- [x] Message status indicators
+- [x] Reactions display
+- [x] Empty state
+- [x] useMessages hook
 
-### Phase 11: New Chat Flow
-- [ ] New chat screen
-- [ ] Address/handle input
-- [ ] Contact validation
-- [ ] Start conversation action
+### Phase 11: New Chat Flow ✅
+- [x] New chat screen
+- [x] Address/handle input with validation
+- [x] Contact validation via XMTP
+- [x] Start conversation action
+- [x] Navigation to new conversation
 
 ---
 
