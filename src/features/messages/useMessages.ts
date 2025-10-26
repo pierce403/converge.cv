@@ -9,9 +9,19 @@ import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import type { Message } from '@/types';
 
 export function useMessages() {
-  const messageStore = useMessageStore();
-  const conversationStore = useConversationStore();
-  const { identity } = useAuthStore();
+  const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
+  const isLoading = useMessageStore((state) => state.isLoading);
+  const isSending = useMessageStore((state) => state.isSending);
+  const setMessages = useMessageStore((state) => state.setMessages);
+  const addMessage = useMessageStore((state) => state.addMessage);
+  const updateMessage = useMessageStore((state) => state.updateMessage);
+  const removeMessage = useMessageStore((state) => state.removeMessage);
+  const setLoading = useMessageStore((state) => state.setLoading);
+  const setSending = useMessageStore((state) => state.setSending);
+  const clearMessages = useMessageStore((state) => state.clearMessages);
+  const updateConversation = useConversationStore((state) => state.updateConversation);
+  const incrementUnread = useConversationStore((state) => state.incrementUnread);
+  const identity = useAuthStore((state) => state.identity);
 
   /**
    * Load messages for a conversation
@@ -19,17 +29,17 @@ export function useMessages() {
   const loadMessages = useCallback(
     async (conversationId: string) => {
       try {
-        messageStore.setLoading(true);
+        setLoading(true);
         const storage = await getStorage();
         const messages = await storage.listMessages(conversationId, { limit: 100 });
-        messageStore.setMessages(conversationId, messages);
+        setMessages(conversationId, messages);
       } catch (error) {
         console.error('Failed to load messages:', error);
       } finally {
-        messageStore.setLoading(false);
+        setLoading(false);
       }
     },
-    [messageStore]
+    [setLoading, setMessages]
   );
 
   /**
@@ -43,7 +53,7 @@ export function useMessages() {
       }
 
       try {
-        messageStore.setSending(true);
+        setSending(true);
 
         // Create message object
         const message: Message = {
@@ -58,7 +68,7 @@ export function useMessages() {
         };
 
         // Add to store immediately
-        messageStore.addMessage(conversationId, message);
+        addMessage(conversationId, message);
 
         // Persist to storage
         const storage = await getStorage();
@@ -71,27 +81,27 @@ export function useMessages() {
 
           // Update status to sent
           message.status = 'sent';
-          messageStore.updateMessage(message.id, { status: 'sent' });
+          updateMessage(message.id, { status: 'sent' });
           await storage.updateMessageStatus(message.id, 'sent');
         } catch (xmtpError) {
           console.error('Failed to send via XMTP:', xmtpError);
           message.status = 'failed';
-          messageStore.updateMessage(message.id, { status: 'failed' });
+          updateMessage(message.id, { status: 'failed' });
           await storage.updateMessageStatus(message.id, 'failed');
         }
 
         // Update conversation
-        conversationStore.updateConversation(conversationId, {
+        updateConversation(conversationId, {
           lastMessageAt: message.sentAt,
           lastMessagePreview: content.substring(0, 100),
         });
       } catch (error) {
         console.error('Failed to send message:', error);
       } finally {
-        messageStore.setSending(false);
+        setSending(false);
       }
     },
-    [identity, messageStore, conversationStore]
+    [identity, addMessage, updateMessage, setSending, updateConversation]
   );
 
   /**
@@ -118,26 +128,26 @@ export function useMessages() {
         };
 
         // Add to store
-        messageStore.addMessage(conversationId, message);
+        addMessage(conversationId, message);
 
         // Persist to storage
         const storage = await getStorage();
         await storage.putMessage(message);
 
         // Update conversation
-        conversationStore.updateConversation(conversationId, {
+        updateConversation(conversationId, {
           lastMessageAt: message.sentAt,
           lastMessagePreview: message.body.substring(0, 100),
         });
 
         // Increment unread if not viewing this conversation
         // (This would be better handled in a global message listener)
-        conversationStore.incrementUnread(conversationId);
+        incrementUnread(conversationId);
       } catch (error) {
         console.error('Failed to receive message:', error);
       }
     },
-    [messageStore, conversationStore]
+    [addMessage, updateConversation, incrementUnread]
   );
 
   /**
@@ -148,16 +158,19 @@ export function useMessages() {
       try {
         const storage = await getStorage();
         await storage.deleteMessage(messageId);
-        messageStore.removeMessage(messageId);
+        removeMessage(messageId);
       } catch (error) {
         console.error('Failed to delete message:', error);
       }
     },
-    [messageStore]
+    [removeMessage]
   );
 
   return {
-    ...messageStore,
+    messagesByConversation,
+    isLoading,
+    isSending,
+    clearMessages,
     loadMessages,
     sendMessage,
     receiveMessage,
