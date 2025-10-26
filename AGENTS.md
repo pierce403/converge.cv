@@ -178,6 +178,9 @@ pnpm typecheck        # TypeScript type checking
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
   - XMTP community Discord/forums for verified bot addresses
+- **Hosting Limitation**: GitHub Pages cannot send the COOP/COEP headers required for `SharedArrayBuffer`, so XMTP's WebAssembly
+  bindings cannot initialize there. The app now detects this and skips the connection while logging a `connect:unsupported`
+  status for debugging.
 
 ---
 

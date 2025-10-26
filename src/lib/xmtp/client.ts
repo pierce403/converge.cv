@@ -62,17 +62,42 @@ export class XmtpClient {
   async connect(identity: XmtpIdentity): Promise<void> {
     const { setConnectionStatus, setLastConnected, setError } = useXmtpStore.getState();
 
+    const globalScope: typeof globalThis | undefined =
+      typeof globalThis !== 'undefined' ? globalThis : undefined;
+    const hasSharedArrayBuffer =
+      !!globalScope &&
+      typeof globalScope.SharedArrayBuffer !== 'undefined' &&
+      globalScope.SharedArrayBuffer !== null;
+    const isCrossOriginIsolated =
+      !!globalScope && typeof globalScope.crossOriginIsolated === 'boolean'
+        ? globalScope.crossOriginIsolated
+        : false;
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'connect',
+      details: `Connecting as ${identity.address}`,
+    });
+
+    this.identity = identity;
+
+    if (!hasSharedArrayBuffer || !isCrossOriginIsolated) {
+      const message =
+        'XMTP WebAssembly bindings require SharedArrayBuffer and cross-origin isolation, which are unavailable in this environment.';
+      console.warn('Skipping XMTP connection:', message);
+      setConnectionStatus('error');
+      setError(message);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'connect:unsupported',
+        details: message,
+      });
+      return;
+    }
+
     try {
       setConnectionStatus('connecting');
       setError(null);
-
-      logNetworkEvent({
-        direction: 'outbound',
-        event: 'connect',
-        details: `Connecting as ${identity.address}`,
-      });
-
-      this.identity = identity;
 
       const client = await Client.create(identity.address, {
         env: 'production',
