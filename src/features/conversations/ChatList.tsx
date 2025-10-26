@@ -3,12 +3,12 @@
  */
 
 import { Link } from 'react-router-dom';
-import { useConversationStore } from '@/lib/stores';
+import { useConversations } from './useConversations';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
 
 export function ChatList() {
-  const { conversations, isLoading } = useConversationStore();
+  const { conversations, isLoading } = useConversations();
 
   // Sort: pinned first, then by lastMessageAt
   const sortedConversations = [...conversations].sort((a, b) => {

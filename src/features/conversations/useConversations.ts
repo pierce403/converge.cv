@@ -10,7 +10,17 @@ import type { Conversation } from '@/types';
 import { DEFAULT_CONTACTS } from '@/lib/default-contacts';
 
 export function useConversations() {
-  const conversationStore = useConversationStore();
+  const conversations = useConversationStore((state) => state.conversations);
+  const activeConversationId = useConversationStore((state) => state.activeConversationId);
+  const isLoading = useConversationStore((state) => state.isLoading);
+  const setConversations = useConversationStore((state) => state.setConversations);
+  const addConversation = useConversationStore((state) => state.addConversation);
+  const updateConversation = useConversationStore((state) => state.updateConversation);
+  const removeConversation = useConversationStore((state) => state.removeConversation);
+  const setActiveConversation = useConversationStore((state) => state.setActiveConversation);
+  const setLoading = useConversationStore((state) => state.setLoading);
+  const incrementUnread = useConversationStore((state) => state.incrementUnread);
+  const clearUnread = useConversationStore((state) => state.clearUnread);
   const { isAuthenticated, isVaultUnlocked } = useAuthStore();
 
   /**
@@ -18,7 +28,7 @@ export function useConversations() {
    */
   const loadConversations = useCallback(async () => {
     try {
-      conversationStore.setLoading(true);
+      setLoading(true);
       const storage = await getStorage();
       let conversations = await storage.listConversations({ archived: false });
 
@@ -62,13 +72,13 @@ export function useConversations() {
         }
       }
 
-      conversationStore.setConversations(conversations);
+      setConversations(conversations);
     } catch (error) {
       console.error('Failed to load conversations:', error);
     } finally {
-      conversationStore.setLoading(false);
+      setLoading(false);
     }
-  }, [conversationStore]);
+  }, [setConversations, setLoading]);
 
   /**
    * Create a new conversation
@@ -105,7 +115,7 @@ export function useConversations() {
         await storage.putConversation(conversation);
 
         // Add to store
-        conversationStore.addConversation(conversation);
+        addConversation(conversation);
 
         return conversation;
       } catch (error) {
@@ -113,7 +123,7 @@ export function useConversations() {
         return null;
       }
     },
-    [conversationStore]
+    [addConversation]
   );
 
   /**
@@ -128,13 +138,13 @@ export function useConversations() {
         if (conversation) {
           const pinned = !conversation.pinned;
           await storage.putConversation({ ...conversation, pinned });
-          conversationStore.updateConversation(conversationId, { pinned });
+          updateConversation(conversationId, { pinned });
         }
       } catch (error) {
         console.error('Failed to toggle pin:', error);
       }
     },
-    [conversationStore]
+    [updateConversation]
   );
 
   /**
@@ -149,13 +159,13 @@ export function useConversations() {
         if (conversation) {
           const archived = !conversation.archived;
           await storage.putConversation({ ...conversation, archived });
-          conversationStore.updateConversation(conversationId, { archived });
+          updateConversation(conversationId, { archived });
         }
       } catch (error) {
         console.error('Failed to toggle archive:', error);
       }
     },
-    [conversationStore]
+    [updateConversation]
   );
 
   /**
@@ -166,12 +176,12 @@ export function useConversations() {
       try {
         const storage = await getStorage();
         await storage.updateConversationUnread(conversationId, 0);
-        conversationStore.clearUnread(conversationId);
+        clearUnread(conversationId);
       } catch (error) {
         console.error('Failed to mark as read:', error);
       }
     },
-    [conversationStore]
+    [clearUnread]
   );
 
   // Load conversations when authenticated and unlocked
@@ -182,7 +192,12 @@ export function useConversations() {
   }, [isAuthenticated, isVaultUnlocked, loadConversations]);
 
   return {
-    ...conversationStore,
+    conversations,
+    activeConversationId,
+    isLoading,
+    setActiveConversation,
+    removeConversation,
+    incrementUnread,
     loadConversations,
     createConversation,
     togglePin,

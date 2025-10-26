@@ -4,7 +4,8 @@
 
 import { useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useConversationStore, useMessageStore } from '@/lib/stores';
+import { useMessageStore } from '@/lib/stores';
+import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
@@ -14,7 +15,7 @@ export function ConversationView() {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { conversations } = useConversationStore();
+  const { conversations } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
   const { sendMessage, loadMessages } = useMessages();
 
