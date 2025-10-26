@@ -170,6 +170,10 @@ pnpm typecheck        # TypeScript type checking
 - Device-based encryption for private keys
 - Group chat support
 - Attachments
+- **Default Contacts/Bots**: `src/lib/default-contacts.ts` has placeholder addresses for suggested bots (Welcome Bot, Base Agent, ENS Resolver, etc.). Replace with actual XMTP-enabled addresses when available. Check:
+  - https://docs.xmtp.org for official XMTP bots
+  - https://base.org for Base ecosystem agents
+  - XMTP community Discord/forums for verified bot addresses
 
 ---
 
