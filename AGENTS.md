@@ -221,7 +221,8 @@ Focus on **friction-free onboarding** for new users first.
 3. Document new architectural decisions
 4. Update the "Current State" section
 5. Note any new dependencies or tools added
-6. **COMMIT AND PUSH** your changes to keep the knowledge base synced:
+6. Always run the full test suite (`pnpm build` and `pnpm test`) before handing work back to the user to keep the deploy pipeline green.
+7. **COMMIT AND PUSH** your changes to keep the knowledge base synced:
    ```bash
    git add AGENTS.md
    git commit -m "docs: update AGENTS.md with new learnings"
