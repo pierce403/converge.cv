@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "prebuild": "node scripts/fix-xmtp-wasm-worker.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
