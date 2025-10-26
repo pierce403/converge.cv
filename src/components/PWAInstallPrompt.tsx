@@ -39,11 +39,6 @@ export function PWAInstallPrompt() {
     
     if (isIOS) {
       setPlatform('ios');
-      // Show instructions for iOS after a delay
-      const timer = setTimeout(() => {
-        setShowPrompt(true);
-      }, 2000);
-      return () => clearTimeout(timer);
     } else if (isChrome) {
       setPlatform('chrome');
     }
@@ -58,19 +53,20 @@ export function PWAInstallPrompt() {
 
     window.addEventListener('beforeinstallprompt', handler);
 
-    // If no prompt appears after 3 seconds on mobile, show fallback
-    const fallbackTimer = setTimeout(() => {
-      if (!deferredPrompt && window.innerWidth < 768) {
-        console.log('No beforeinstallprompt, showing fallback');
+    // Show prompt immediately on mobile (especially for iOS and fallback)
+    // The prompt will appear on the onboarding page before "Get Started"
+    const showTimer = setTimeout(() => {
+      if (window.innerWidth < 768) {
+        console.log('Showing PWA install prompt on mobile');
         setShowPrompt(true);
       }
-    }, 3000);
+    }, 500); // Short delay to let page render
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handler);
-      clearTimeout(fallbackTimer);
+      clearTimeout(showTimer);
     };
-  }, [deferredPrompt]);
+  }, []);
 
   const handleInstall = async () => {
     if (deferredPrompt) {
