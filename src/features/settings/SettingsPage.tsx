@@ -508,22 +508,49 @@ export function SettingsPage() {
             </div>
           </section>
 
-          {/* Notifications (PWA) */}
+          {/* App */}
           <section>
-            <h2 className="text-lg font-semibold mb-3">Notifications</h2>
-            <div className="bg-slate-800 rounded-lg p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium">Push Notifications</div>
-                  <div className="text-sm text-slate-400">Get notified of new messages</div>
+            <h2 className="text-lg font-semibold mb-3">App</h2>
+            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+              <div className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">Install Status</div>
+                    <div className="text-sm text-slate-400">
+                      {window.matchMedia('(display-mode: standalone)').matches
+                        ? 'Installed as app'
+                        : 'Running in browser'}
+                    </div>
+                  </div>
+                  {window.matchMedia('(display-mode: standalone)').matches ? (
+                    <span className="text-sm text-green-500">✓ Installed</span>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        localStorage.removeItem('pwa-install-dismissed');
+                        window.location.reload();
+                      }}
+                      className="btn-primary text-sm"
+                    >
+                      Install App
+                    </button>
+                  )}
                 </div>
-                <button className="btn-secondary text-sm">
-                  Enable
-                </button>
               </div>
-              <p className="text-xs text-slate-500 mt-2">
-                Requires app to be installed and browser permissions
-              </p>
+              <div className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">Push Notifications</div>
+                    <div className="text-sm text-slate-400">Get notified of new messages</div>
+                  </div>
+                  <button className="btn-secondary text-sm">
+                    Enable
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Requires app to be installed and browser permissions
+                </p>
+              </div>
             </div>
           </section>
 
