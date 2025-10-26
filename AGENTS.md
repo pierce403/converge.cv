@@ -163,6 +163,7 @@ pnpm typecheck        # TypeScript type checking
 - Identity storage in IndexedDB
 - Clean UI with proper feature messaging
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
+- Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
 

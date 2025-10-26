@@ -6,6 +6,7 @@ import { ChatList } from '@/features/conversations';
 import { ConversationView } from '@/features/messages';
 import { NewChatPage } from '@/features/conversations/NewChatPage';
 import { SettingsPage } from '@/features/settings';
+import { DebugPage } from '@/features/debug';
 import { SearchPage } from '@/features/search';
 
 export function AppRouter() {
@@ -45,6 +46,7 @@ export function AppRouter() {
         <Route path="new-chat" element={<NewChatPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="debug" element={<DebugPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
