@@ -214,6 +214,10 @@ Focus on **friction-free onboarding** for new users first.
 - Maintain the simple onboarding flow
 - Test changes in browser (localhost:3001)
 - Check for linter errors after edits
+- `pnpm install` now runs `scripts/fix-xmtp-wasm-worker.mjs` automatically to patch
+  the missing XMTP sqlite worker file inside `node_modules`. If the build complains
+  about `sqlite3-worker1-bundler-friendly.mjs`, re-run `pnpm install` or invoke the
+  script manually with `node scripts/fix-xmtp-wasm-worker.mjs` to regenerate it.
 
 ### After Completing Work
 1. **UPDATE THIS FILE** with new learnings

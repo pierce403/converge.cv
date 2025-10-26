@@ -18,34 +18,53 @@ if (!fs.existsSync(sourceFile)) {
 
 const require = createRequire(import.meta.url);
 
-let bindingsDir;
-try {
-  const pnpmRoot = path.join(projectRoot, 'node_modules', '.pnpm');
-  const entries = fs
-    .readdirSync(pnpmRoot, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
-    .map((dirent) => dirent.name);
-  const wasmBindingEntry = entries.find((name) =>
-    name.startsWith('@xmtp+wasm-bindings@')
-  );
-  if (!wasmBindingEntry) {
-    throw new Error('pnpm virtual store missing @xmtp/wasm-bindings entry');
+const resolveModulePath = (specifier) => {
+  try {
+    return require.resolve(specifier, {
+      paths: [projectRoot],
+    });
+  } catch (error) {
+    return null;
   }
-  bindingsDir = path.join(
-    pnpmRoot,
-    wasmBindingEntry,
-    'node_modules',
-    '@xmtp',
-    'wasm-bindings',
-    'dist'
+};
+
+const resolvePackageDir = (specifier) => {
+  const resolvedEntry = resolveModulePath(specifier);
+  return resolvedEntry ? path.resolve(path.dirname(resolvedEntry), '..') : null;
+};
+
+let bindingsRoot = resolvePackageDir('@xmtp/wasm-bindings');
+
+if (!bindingsRoot) {
+  const browserSdkRoot = resolvePackageDir('@xmtp/browser-sdk');
+
+  if (browserSdkRoot) {
+    const siblingCandidate = path.resolve(browserSdkRoot, '..', 'wasm-bindings');
+    const nestedNodeModulesCandidate = path.join(
+      browserSdkRoot,
+      'node_modules',
+      '@xmtp',
+      'wasm-bindings'
+    );
+
+    if (fs.existsSync(siblingCandidate)) {
+      bindingsRoot = siblingCandidate;
+    } else if (fs.existsSync(nestedNodeModulesCandidate)) {
+      bindingsRoot = nestedNodeModulesCandidate;
+    }
+  }
+}
+
+if (!bindingsRoot) {
+  console.error(
+    '[fix-xmtp-wasm-worker] Unable to locate @xmtp/wasm-bindings. Have dependencies been installed?'
   );
-} catch (error) {
-  console.error('[fix-xmtp-wasm-worker] Unable to locate @xmtp/wasm-bindings:', error);
   process.exit(1);
 }
 
 const targetDir = path.join(
-  bindingsDir,
+  bindingsRoot,
+  'dist',
   'snippets',
   'diesel-wasm-sqlite-36e85657e47f3be3',
   'src',
@@ -60,8 +79,16 @@ const targetFile = path.join(targetDir, 'sqlite3-worker1-bundler-friendly.mjs');
 
 try {
   const sourceContent = fs.readFileSync(sourceFile, 'utf8');
-  fs.writeFileSync(targetFile, sourceContent, 'utf8');
-  console.log('[fix-xmtp-wasm-worker] Wrote worker shim to', targetFile);
+  const existingContent = fs.existsSync(targetFile)
+    ? fs.readFileSync(targetFile, 'utf8')
+    : null;
+
+  if (existingContent === sourceContent) {
+    console.log('[fix-xmtp-wasm-worker] Worker shim already up to date at', targetFile);
+  } else {
+    fs.writeFileSync(targetFile, sourceContent, 'utf8');
+    console.log('[fix-xmtp-wasm-worker] Wrote worker shim to', targetFile);
+  }
 } catch (error) {
   console.error('[fix-xmtp-wasm-worker] Failed to write worker shim:', error);
   process.exit(1);
