@@ -2,47 +2,92 @@
 
 A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
 
-## 🚀 Features
+**🚀 Live Demo**: [converge.cv](https://converge.cv) (coming soon)  
+**📦 Repository**: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
 
-- **Local-First**: All data encrypted and stored locally on your device
-- **PWA**: Install on iOS, Android, and desktop - works offline
-- **XMTP v3**: Decentralized messaging protocol
-- **End-to-End Encrypted**: Military-grade encryption with WebCrypto
-- **Passkey Support**: Modern passwordless authentication
-- **Signal-like UX**: Clean, intuitive interface
+## ✨ Features
+
+### Core Features
+- **Local-First Architecture**: All data encrypted and stored locally on your device
+- **Progressive Web App**: Install on iOS, Android, and desktop - works offline
+- **XMTP v3 Protocol**: Decentralized messaging (mock implementation, ready for real SDK)
+- **End-to-End Encrypted**: Military-grade AES-GCM 256-bit encryption with WebCrypto
+- **Passkey Support**: WebAuthn PRF integration prepared for passwordless authentication
+- **Signal-like UX**: Clean, intuitive interface with familiar messaging patterns
+
+### Messaging
+- Send and receive encrypted text messages
+- Real-time message status indicators (pending → sent → delivered)
+- Message reactions support
+- Conversation management (pin, archive, search)
+- Unread message badges
+- Full-text search across conversations
+
+### Security & Privacy
+- Vault key encryption with passphrase (PBKDF2 600k iterations)
+- Local message encryption at rest
+- No server-side storage of messages
+- Lock screen with vault protection
+- Secure key management in memory
+
+### PWA Features
+- Offline app shell caching
+- Installable on all platforms
+- Push notification support (with VAPID setup)
+- Badge API for unread counts
+- Service worker for background sync
 
 ## 🛠️ Tech Stack
 
-- **Framework**: React + TypeScript + Vite
+- **Framework**: React 18 + TypeScript + Vite
 - **Routing**: react-router-dom
-- **State**: Zustand
-- **Styling**: Tailwind CSS + Headless UI
+- **State Management**: Zustand
+- **Styling**: Tailwind CSS
 - **PWA**: vite-plugin-pwa (Workbox)
-- **Messaging**: XMTP v3 browser SDK
-- **Storage**: Dexie (IndexedDB) with SQLite WASM path
+- **Messaging**: XMTP v3 browser SDK (mock, ready for real implementation)
+- **Storage**: Dexie (IndexedDB) with SQLite WASM migration path
 - **Crypto**: WebCrypto API + WebAuthn
 - **Testing**: Vitest + Playwright
+- **CI/CD**: GitHub Actions
 
-## 📦 Installation
+## 📦 Quick Start
+
+### Prerequisites
+- Node.js 18+ or 20+
+- pnpm (recommended) or npm
+
+### Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/pierce403/converge.cv.git
+cd converge.cv
+
 # Install dependencies
 pnpm install
 
 # Start development server
 pnpm dev
 
-# Build for production
-pnpm build
+# Open http://localhost:3000
+```
 
-# Preview production build
-pnpm preview
+### Development Commands
 
-# Run tests
-pnpm test
+```bash
+# Development
+pnpm dev              # Start dev server with HMR
+pnpm build            # Build for production
+pnpm preview          # Preview production build
+pnpm typecheck        # Run TypeScript checks
 
-# Run E2E tests
-pnpm test:e2e
+# Code Quality
+pnpm lint             # Run ESLint
+pnpm format           # Format code with Prettier
+
+# Testing
+pnpm test             # Run unit tests
+pnpm test:e2e         # Run E2E tests (Playwright)
 ```
 
 ## 🏗️ Project Structure
@@ -85,13 +130,116 @@ src/
 
 See [TODO.md](./TODO.md) for development roadmap and tasks.
 
+## 🏗️ Architecture
+
+```
+src/
+├── app/              # App shell, router, providers, layout
+├── features/         # Feature modules
+│   ├── auth/         # Authentication, onboarding, lock screen
+│   ├── conversations/# Chat list, new chat
+│   ├── messages/     # Conversation view, message bubbles, composer
+│   ├── settings/     # Settings page
+│   └── search/       # Search functionality
+├── lib/              # Core libraries
+│   ├── xmtp/         # XMTP client wrapper
+│   ├── storage/      # Storage driver (Dexie)
+│   ├── crypto/       # Vault, encryption, key management
+│   ├── stores/       # Zustand state stores
+│   ├── push/         # Push notification utilities
+│   └── sw-bridge/    # Service worker communication
+├── components/       # Shared UI components
+└── types/            # TypeScript type definitions
+```
+
+## 🚢 Deployment
+
+### Automatic Deployment (GitHub Actions)
+
+Every push to `master` automatically:
+1. Runs type checking and linting
+2. Builds the production bundle
+3. Deploys to GitHub Pages
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
+
+### Manual Deployment
+
+```bash
+pnpm build
+# Deploy the dist/ folder to your hosting provider
+```
+
+## 🧪 Testing
+
+### Unit Tests (Vitest)
+```bash
+pnpm test                    # Run all tests
+pnpm test -- --coverage      # Run with coverage
+pnpm test -- --watch         # Watch mode
+```
+
+### E2E Tests (Playwright)
+```bash
+pnpm test:e2e                # Run E2E tests
+```
+
+## 🔒 Security
+
+- **Client-Side Encryption**: All encryption happens in the browser
+- **Vault Key Protection**: Keys derived from passphrase with PBKDF2 (600k iterations)
+- **No Server Storage**: Messages never leave your device unencrypted
+- **Local Storage Only**: IndexedDB with encrypted data at rest
+- **WebAuthn Ready**: Passkey integration prepared for production
+
+## 🛣️ Roadmap
+
+### Current Status (MVP v0.1.0)
+- ✅ Complete authentication flow
+- ✅ Message sending and receiving (mock XMTP)
+- ✅ Encrypted local storage
+- ✅ Search functionality
+- ✅ Settings and vault management
+- ✅ PWA with offline support
+- ✅ Push notification infrastructure
+
+### Next Steps
+- [ ] Integrate real XMTP v3 SDK
+- [ ] Implement attachment support
+- [ ] Add message reactions (interactive)
+- [ ] Disappearing messages
+- [ ] SQLite WASM migration for FTS
+- [ ] Group chat support
+- [ ] Voice messages
+- [ ] Link previews
+- [ ] Multi-device sync
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
 ## 📄 License
 
-MIT
+MIT License - see [LICENSE](./LICENSE) for details
 
-## 🌐 Deployment
+## 🔗 Links
 
-This app is hosted on GitHub Pages at [converge.cv](https://converge.cv)
+- **Live App**: [converge.cv](https://converge.cv)
+- **Repository**: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
+- **Issues**: [GitHub Issues](https://github.com/pierce403/converge.cv/issues)
+- **XMTP Protocol**: [xmtp.org](https://xmtp.org)
 
-Repository: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
+## 📧 Contact
+
+Pierce Brantley - [@pierce403](https://github.com/pierce403)
+
+---
+
+Built with ❤️ using React, TypeScript, and XMTP
 
