@@ -5,14 +5,8 @@ import { OnboardingPage, LockScreen, useAuth } from '@/features/auth';
 import { ChatList } from '@/features/conversations';
 import { ConversationView } from '@/features/messages';
 import { NewChatPage } from '@/features/conversations/NewChatPage';
-
-// Placeholder Settings page
-const SettingsPage = () => (
-  <div className="p-4">
-    <h2 className="text-2xl font-bold mb-4">Settings</h2>
-    <p className="text-slate-400">Settings interface coming soon...</p>
-  </div>
-);
+import { SettingsPage } from '@/features/settings';
+import { SearchPage } from '@/features/search';
 
 export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
@@ -49,6 +43,7 @@ export function AppRouter() {
         <Route index element={<ChatList />} />
         <Route path="chat/:id" element={<ConversationView />} />
         <Route path="new-chat" element={<NewChatPage />} />
+        <Route path="search" element={<SearchPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
