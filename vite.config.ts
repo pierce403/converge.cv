@@ -6,6 +6,9 @@ import path from 'path';
 // https://vitejs.dev/config/
 export default defineConfig({
   base: '/', // Custom domain - use root path
+  optimizeDeps: {
+    exclude: ['@xmtp/wasm-bindings'],
+  },
   plugins: [
     react(),
     VitePWA({
@@ -91,6 +94,10 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
   },
   build: {
     outDir: 'dist',

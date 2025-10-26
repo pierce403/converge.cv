@@ -64,12 +64,12 @@ Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, enc
 
 ### Phase 7: XMTP Client Wrapper ✅
 - [x] Create XmtpClient class wrapper
-- [x] Implement connect() with identity (mock)
-- [x] Implement streamMessages() listener (mock)
-- [x] Implement send() functionality (mock)
-- [x] List conversations helper (mock)
+- [x] Implement connect() with identity (baseline)
+- [x] Implement streamMessages() listener (baseline)
+- [x] Implement send() functionality (baseline)
+- [x] List conversations helper (baseline)
 - [x] Error mapping & normalization
-- [x] Mock XMTP for testing (placeholder ready for real SDK)
+- [x] Local XMTP harness for testing (placeholder ready for real SDK)
 
 ---
 

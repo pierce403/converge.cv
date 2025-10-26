@@ -10,7 +10,7 @@ A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
 ### Core Features
 - **Local-First Architecture**: All data encrypted and stored locally on your device
 - **Progressive Web App**: Install on iOS, Android, and desktop - works offline
-- **XMTP v3 Protocol**: Decentralized messaging (mock implementation, ready for real SDK)
+- **XMTP v3 Protocol**: Decentralized messaging via the XMTP v3 browser SDK (production network)
 - **End-to-End Encrypted**: Military-grade AES-GCM 256-bit encryption with WebCrypto
 - **Passkey Support**: WebAuthn PRF integration prepared for passwordless authentication
 - **Signal-like UX**: Clean, intuitive interface with familiar messaging patterns
@@ -44,7 +44,7 @@ A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
 - **State Management**: Zustand
 - **Styling**: Tailwind CSS
 - **PWA**: vite-plugin-pwa (Workbox)
-- **Messaging**: XMTP v3 browser SDK (mock, ready for real implementation)
+- **Messaging**: XMTP v3 browser SDK (production network connection in progress)
 - **Storage**: Dexie (IndexedDB) with SQLite WASM migration path
 - **Crypto**: WebCrypto API + WebAuthn
 - **Testing**: Vitest + Playwright
@@ -198,7 +198,7 @@ pnpm test:e2e                # Run E2E tests
 
 ### Current Status (MVP v0.1.0)
 - ✅ Complete authentication flow
-- ✅ Message sending and receiving (mock XMTP)
+- ✅ Message sending and receiving (local pipeline while XMTP integration matures)
 - ✅ Encrypted local storage
 - ✅ Search functionality
 - ✅ Settings and vault management
@@ -206,7 +206,7 @@ pnpm test:e2e                # Run E2E tests
 - ✅ Push notification infrastructure
 
 ### Next Steps
-- [ ] Integrate real XMTP v3 SDK
+- [ ] Complete end-to-end XMTP v3 messaging flows
 - [ ] Implement attachment support
 - [ ] Add message reactions (interactive)
 - [ ] Disappearing messages

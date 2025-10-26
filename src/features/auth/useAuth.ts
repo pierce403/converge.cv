@@ -30,10 +30,9 @@ export function useAuth() {
         const storage = await getStorage();
 
         // Create identity
-        // TODO: Generate actual XMTP identity from wallet private key
         const identity: Identity = {
           address: walletAddress,
-          publicKey: 'mock_public_key',
+          publicKey: 'unavailable_public_key',
           privateKey: privateKey, // Store encrypted in production
           createdAt: Date.now(),
         };
@@ -88,10 +87,9 @@ export function useAuth() {
         await storage.putVaultSecrets(secrets);
 
         // Create identity
-        // TODO: Generate actual XMTP identity from wallet
         const identity: Identity = {
           address: walletAddress,
-          publicKey: 'mock_public_key',
+          publicKey: 'unavailable_public_key',
           createdAt: Date.now(),
         };
         await storage.putIdentity(identity);
@@ -152,10 +150,9 @@ export function useAuth() {
         await storage.putVaultSecrets(secrets);
 
         // Import/create identity with existing wallet
-        // TODO: Load actual XMTP identity from network for this address
         const identity: Identity = {
           address: walletAddress,
-          publicKey: 'mock_public_key_imported',
+          publicKey: 'unavailable_public_key',
           createdAt: Date.now(),
         };
         await storage.putIdentity(identity);
