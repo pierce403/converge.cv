@@ -5,6 +5,7 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  base: '/', // Custom domain - use root path
   plugins: [
     react(),
     VitePWA({
