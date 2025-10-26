@@ -11,12 +11,10 @@ export function OnboardingPage() {
   const { createIdentity } = useAuth();
 
   const [step, setStep] = useState<'welcome' | 'creating'>('welcome');
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleStart = async () => {
     setError('');
-    setIsLoading(true);
     setStep('creating');
 
     try {
@@ -43,13 +41,11 @@ export function OnboardingPage() {
       } else {
         setError('Failed to create identity. Please try again.');
         setStep('welcome');
-        setIsLoading(false);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Identity creation error:', err);
       setError('Failed to create identity. Please try again.');
       setStep('welcome');
-      setIsLoading(false);
     }
   };
 
