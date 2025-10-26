@@ -10,10 +10,11 @@ Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, enc
 ### Phase 1: Project Initialization ✅
 - [x] Initialize git repository
 - [x] Create TODO.md for tracking
-- [ ] Scaffold Vite + React + TypeScript project
-- [ ] Configure Tailwind CSS
-- [ ] Setup ESLint & Prettier
-- [ ] Initial commit
+- [x] Scaffold Vite + React + TypeScript project
+- [x] Configure Tailwind CSS
+- [x] Setup ESLint & Prettier
+- [x] Install dependencies
+- [x] Initial commit
 
 ### Phase 2: PWA Infrastructure
 - [ ] Install vite-plugin-pwa & configure manifest
@@ -29,11 +30,14 @@ Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, enc
 - [ ] Setup TypeScript paths & aliases
 - [ ] Configure Vitest for testing
 
-### Phase 4: Project Structure
-- [ ] Create folder structure (/app, /features, /lib, /components, /types)
-- [ ] Setup routing with react-router-dom
-- [ ] Create app shell & providers
-- [ ] Setup Zustand store structure
+### Phase 4: Project Structure ✅
+- [x] Create folder structure (/app, /features, /lib, /components, /types)
+- [x] Setup routing with react-router-dom
+- [x] Create app shell & providers
+- [x] Setup Zustand store structure
+- [x] Create basic Layout and navigation
+- [x] Add placeholder pages
+- [x] Setup GitHub Actions CI/CD
 
 ---
 
