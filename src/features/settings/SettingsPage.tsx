@@ -202,10 +202,6 @@ export function SettingsPage() {
     }
   };
 
-  const formatAddress = (address: string) => {
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
-  };
-
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
