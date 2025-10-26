@@ -59,6 +59,8 @@ export interface Identity {
   publicKey: string;
   privateKey?: string; // Should be encrypted in storage
   createdAt: number;
+  avatar?: string; // Avatar URL or data URI
+  displayName?: string; // Optional display name
 }
 
 export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'failed';

@@ -6,6 +6,8 @@
  * This provides the interface we'll use throughout the app.
  */
 
+import { useXmtpStore } from '@/lib/stores/xmtp-store';
+
 export interface XmtpIdentity {
   address: string;
   privateKey?: string;
@@ -40,7 +42,12 @@ export class XmtpClient {
    * Connect to XMTP network with an identity
    */
   async connect(identity: XmtpIdentity): Promise<void> {
+    const { setConnectionStatus, setLastConnected, setError } = useXmtpStore.getState();
+    
     try {
+      setConnectionStatus('connecting');
+      setError(null);
+      
       this.identity = identity;
       
       // TODO: Implement actual XMTP v3 client initialization
@@ -49,9 +56,17 @@ export class XmtpClient {
       // });
       // this.client = client;
 
+      // Mock successful connection
+      this.client = { mock: true };
+      
+      setConnectionStatus('connected');
+      setLastConnected(Date.now());
+
       console.log('XMTP client connected (mock)', identity.address);
     } catch (error) {
       console.error('Failed to connect XMTP client:', error);
+      setConnectionStatus('error');
+      setError(error instanceof Error ? error.message : 'Connection failed');
       throw new Error('XMTP connection failed');
     }
   }
@@ -60,10 +75,14 @@ export class XmtpClient {
    * Disconnect from XMTP network
    */
   async disconnect(): Promise<void> {
+    const { setConnectionStatus } = useXmtpStore.getState();
+    
     if (this.client) {
       // TODO: Implement actual disconnect
       this.client = null;
       this.identity = null;
+      setConnectionStatus('disconnected');
+      console.log('XMTP client disconnected');
     }
   }
 
