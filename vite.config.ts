@@ -90,6 +90,11 @@ export default defineConfig({
       '@/lib': path.resolve(__dirname, './src/lib'),
       '@/components': path.resolve(__dirname, './src/components'),
       '@/types': path.resolve(__dirname, './src/types'),
+      '@xmtp/wasm-bindings/dist/snippets/diesel-wasm-sqlite-36e85657e47f3be3/src/js/sqlite3-worker1-bundler-friendly.mjs':
+        path.resolve(
+          __dirname,
+          './scripts/templates/sqlite3-worker1-bundler-friendly.mjs',
+        ),
     },
   },
   server: {
