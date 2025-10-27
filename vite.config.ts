@@ -6,10 +6,11 @@ import path from 'path';
 // https://vitejs.dev/config/
 export default defineConfig({
   base: '/', // Custom domain - use root path
-  optimizeDeps: {
-    exclude: ['@xmtp/wasm-bindings', '@xmtp/browser-sdk'],
-    include: ['@xmtp/proto'],
-  },
+  // Don't exclude XMTP packages - they need to be bundled for workers to load them
+  // optimizeDeps: {
+  //   exclude: ['@xmtp/wasm-bindings', '@xmtp/browser-sdk'],
+  //   include: ['@xmtp/proto'],
+  // },
   plugins: [
     react(),
     VitePWA({
