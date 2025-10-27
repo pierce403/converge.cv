@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/fix-xmtp-wasm-worker.mjs",
-    "prebuild": "node scripts/fix-xmtp-wasm-worker.mjs",
+    "prebuild": "node scripts/fix-xmtp-wasm-worker.mjs && node scripts/generate-build-info.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
