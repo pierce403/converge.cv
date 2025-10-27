@@ -210,11 +210,13 @@ export class XmtpClient {
 
         // Add timeout to detect hanging
         console.log('[XMTP] Calling Client.create() with signer...');
-        console.log('[XMTP] Using production environment');
+        console.log('[XMTP] Using dev environment (matching cthulhu.bot)');
         
         const clientPromise = Client.create(signer, {
-          env: 'production',
-          loggingLevel: 'debug', // Enable SDK logging
+          env: 'dev', // Changed to 'dev' to match cthulhu.bot
+          loggingLevel: 'debug',
+          structuredLogging: false,
+          performanceLogging: false,
         }).then(async (client) => {
           console.log('[XMTP] ✅ Client.create() promise resolved!');
           return client;
