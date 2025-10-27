@@ -17,12 +17,31 @@ import {
 import { getXmtpClient } from '@/lib/xmtp';
 import type { VaultSecrets, Identity } from '@/types';
 
+function isAdvancedModeReady(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  if (typeof window.crossOriginIsolated === 'boolean') {
+    return window.crossOriginIsolated;
+  }
+
+  return false;
+}
+
 export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
 
   const connectXmtpSafely = useCallback(
     async (address: string, privateKey?: string) => {
+      if (!isAdvancedModeReady()) {
+        console.info(
+          'Delaying XMTP initialization until cross-origin isolation is enabled.'
+        );
+        return;
+      }
+
       try {
         const xmtp = getXmtpClient();
         if (privateKey) {

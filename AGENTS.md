@@ -178,9 +178,10 @@ pnpm typecheck        # TypeScript type checking
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
   - XMTP community Discord/forums for verified bot addresses
-- **Hosting Limitation**: GitHub Pages cannot send the COOP/COEP headers required for `SharedArrayBuffer`, so XMTP's WebAssembly
-  bindings cannot initialize there. The app now detects this and skips the connection while logging a `connect:unsupported`
-  status for debugging.
+- **Hosting Limitation (Resolved)**: GitHub Pages itself cannot set COOP/COEP headers, so the PWA service worker now injects
+  `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` on navigations. The app shows a
+  one-time "Enabling advanced mode…" banner while waiting for isolation, reloads after the SW takes control, and then proceeds
+  with XMTP initialization.
 
 ---
 
