@@ -28,7 +28,7 @@ This app is configured to deploy automatically to GitHub Pages via GitHub Action
 
 ### Automatic Deployment
 
-Every push to the `master` branch triggers:
+Every push to the `main` branch triggers:
 1. TypeScript type checking
 2. ESLint code quality checks
 3. Production build

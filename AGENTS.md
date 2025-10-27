@@ -146,7 +146,7 @@ pnpm typecheck        # TypeScript type checking
 
 ## Deployment
 
-- **Auto-deploy**: Every push to `master` triggers GitHub Actions
+- **Auto-deploy**: Every push to `main` triggers GitHub Actions
 - **Process**: Type check → Build → Deploy to GitHub Pages
 - **Domain**: converge.cv (CNAME configured)
 - See `DEPLOYMENT.md` for details
