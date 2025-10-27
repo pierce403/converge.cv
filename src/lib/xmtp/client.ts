@@ -405,14 +405,28 @@ export class XmtpClient {
       // Handle incoming messages in the background
       (async () => {
         try {
+          console.log('[XMTP] 📻 Stream loop started, waiting for messages...');
+          let messageCount = 0;
+          
           for await (const message of stream) {
-            if (!message) continue;
+            messageCount++;
+            console.log(`[XMTP] 📨 Stream yielded message #${messageCount}`);
             
-            console.log('[XMTP] 📨 Received message:', {
+            if (!message) {
+              console.warn('[XMTP] ⚠️  Message is null/undefined, skipping');
+              continue;
+            }
+            
+            // Log the full message object to see what we're getting
+            console.log('[XMTP] Full message object:', message);
+            console.log('[XMTP] Message keys:', Object.keys(message));
+            
+            console.log('[XMTP] 📨 Parsed message:', {
               id: message.id,
               conversationId: message.conversationId,
               senderInboxId: message.senderInboxId,
               content: typeof message.content === 'string' ? message.content.substring(0, 50) : '(binary)',
+              sentAtNs: message.sentAtNs,
             });
 
             logNetworkEvent({
@@ -422,7 +436,7 @@ export class XmtpClient {
             });
 
             // Dispatch to message store
-            // We'll use a custom event that components can listen to
+            console.log('[XMTP] Dispatching custom event xmtp:message');
             window.dispatchEvent(new CustomEvent('xmtp:message', {
               detail: {
                 conversationId: message.conversationId,
@@ -435,9 +449,13 @@ export class XmtpClient {
                 },
               },
             }));
+            console.log('[XMTP] Custom event dispatched');
           }
+          
+          console.warn('[XMTP] 📻 Stream loop ended naturally (this shouldn\'t happen)');
         } catch (error) {
           console.error('[XMTP] Message stream error:', error);
+          console.error('[XMTP] Error stack:', error instanceof Error ? error.stack : 'no stack');
           logNetworkEvent({
             direction: 'status',
             event: 'messages:stream_error',
