@@ -42,3 +42,4 @@ build
 .cache
 
 .vercel
+tmp/

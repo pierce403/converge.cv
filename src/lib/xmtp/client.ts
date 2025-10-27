@@ -59,7 +59,7 @@ export class XmtpClient {
   }
 
   /**
-   * Create an XMTP Signer from an Ethereum private key
+   * Create an XMTP Signer from an Ethereum private key (v3 format)
    */
   private createSigner(address: string, privateKeyHex: string): Signer {
     const account = privateKeyToAccount(privateKeyHex as `0x${string}`);
@@ -67,8 +67,10 @@ export class XmtpClient {
     return {
       type: 'EOA', // Externally Owned Account
       getIdentifier: () => {
+        // v3 uses: { identifier: "0x...", identifierKind: "Ethereum" }
         return {
-          kind: { case: 'address', value: address.toLowerCase() },
+          identifier: address.toLowerCase(),
+          identifierKind: 'Ethereum',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any; // Identifier type from WASM bindings
       },
