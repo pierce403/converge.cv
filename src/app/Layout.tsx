@@ -1,11 +1,81 @@
+import { useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { PWAInstallPrompt } from '@/components/PWAInstallPrompt';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { CrossOriginIsolationNotice } from '@/components/CrossOriginIsolationNotice';
+import { useConversationStore, useAuthStore } from '@/lib/stores';
+import { useMessages } from '@/features/messages/useMessages';
+import { getStorage } from '@/lib/storage';
+import type { Conversation } from '@/types';
 
 export function Layout() {
   const location = useLocation();
+  const { conversations, addConversation } = useConversationStore();
+  const { identity } = useAuthStore();
+  const { receiveMessage } = useMessages();
+
+  // Global message listener - handles ALL incoming XMTP messages
+  useEffect(() => {
+    const handleIncomingMessage = async (event: Event) => {
+      const customEvent = event as CustomEvent<{ conversationId: string; message: any }>;
+      const { conversationId, message } = customEvent.detail;
+      
+      console.log('[Layout] Global message listener: received message', {
+        conversationId,
+        messageId: message.id,
+        senderInboxId: message.senderAddress,
+      });
+
+      try {
+        // Check if conversation exists
+        let conversation = conversations.find((c) => c.id === conversationId);
+        
+        if (!conversation) {
+          console.log('[Layout] Creating new conversation for:', conversationId);
+          
+          // Create a new conversation
+          const newConversation: Conversation = {
+            id: conversationId,
+            peerId: message.senderAddress, // Use sender's inbox ID as peer ID
+            createdAt: Date.now(),
+            lastMessageAt: message.sentAt || Date.now(),
+            lastMessagePreview: '',
+            unreadCount: 0,
+            pinned: false,
+            archived: false,
+          };
+          
+          // Add to store
+          addConversation(newConversation);
+          
+          // Persist to storage
+          const storage = await getStorage();
+          await storage.putConversation(newConversation);
+          
+          console.log('[Layout] ✅ New conversation created:', newConversation);
+          
+          conversation = newConversation;
+        }
+        
+        // Process the message (adds to store, updates conversation, increments unread)
+        console.log('[Layout] Processing message with receiveMessage()');
+        await receiveMessage(conversationId, message);
+        
+        console.log('[Layout] ✅ Message processed successfully');
+      } catch (error) {
+        console.error('[Layout] Failed to handle incoming message:', error);
+      }
+    };
+
+    console.log('[Layout] 🎧 Global message listener registered');
+    window.addEventListener('xmtp:message', handleIncomingMessage);
+    
+    return () => {
+      console.log('[Layout] 🔇 Global message listener unregistered');
+      window.removeEventListener('xmtp:message', handleIncomingMessage);
+    };
+  }, [conversations, addConversation, receiveMessage, identity]);
 
   return (
     <div className="flex flex-col h-screen">
