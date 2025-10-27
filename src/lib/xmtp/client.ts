@@ -69,6 +69,7 @@ export class XmtpClient {
       getIdentifier: () => {
         return {
           kind: { case: 'address', value: address.toLowerCase() },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any; // Identifier type from WASM bindings
       },
       signMessage: async (message: string) => {
