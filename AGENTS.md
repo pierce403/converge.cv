@@ -207,7 +207,44 @@ User wants to enable:
 
 Focus on **friction-free onboarding** for new users first.
 
-### Key Technical Learning: XMTP v3 Registration Flow
+### Key Technical Learning: XMTP Browser SDK Version Compatibility
+
+**Problem**: XMTP v4 and v5 had persistent worker initialization failures with error events showing all undefined fields (message, filename, lineno all undefined).
+
+**Root Cause**: Multiple issues:
+1. **v4/v5 incompatibility** - Newer SDK versions have breaking changes and worker issues
+2. **Wrong Identifier format** - v3 uses `{ identifier: "0x...", identifierKind: "Ethereum" }` while v4/v5 use `{ kind: { case: 'address', value: '0x...' } }`
+3. **Vite bundling** - The worker file tried to import `@xmtp/wasm-bindings` as a bare module, which failed because we excluded it from Vite's optimizeDeps
+
+**Solution**:
+1. **Downgrade to v3.0.5** - The version that cthulhu.bot uses successfully
+2. **Fix Identifier format** for v3 API compatibility  
+3. **Remove Vite exclusions** - Let Vite bundle dependencies into the worker
+
+```typescript
+// v3 Signer implementation
+private createSigner(address: string, privateKeyHex: string): Signer {
+  return {
+    type: 'EOA',
+    getIdentifier: () => ({
+      identifier: address.toLowerCase(),
+      identifierKind: 'Ethereum',
+    }),
+    signMessage: async (message: string) => {
+      const signature = await account.signMessage({ message });
+      return new Uint8Array(/*...*/);
+    },
+  };
+}
+```
+
+**Key Learnings**:
+- Always check working examples (cthulhu.bot) when debugging
+- Worker errors with undefined fields = import/module loading failure
+- v3 SDK doesn't require COOP/COEP headers (has fallback for non-SharedArrayBuffer)
+- Vite's `optimizeDeps.exclude` breaks worker module imports
+
+### Key Technical Learning: XMTP v3 Registration Flow (DEPRECATED - v4/v5 only)
 **Problem**: Randomly generated Ethereum addresses were being stored locally but NOT registered with XMTP, causing "no inbox ID" errors when trying to message them from xmtp.chat.
 
 **Solution**: XMTP v3 SDK requires a multi-step registration process:
@@ -290,6 +327,6 @@ if (!isRegistered) {
 
 ---
 
-**Last Updated**: 2025-10-27 (Fixed XMTP identity registration - addresses now properly register on network with inbox IDs)
-**Updated By**: AI Agent after implementing proper XMTP v3 registration flow with wallet signatures
+**Last Updated**: 2025-10-27 (Fixed XMTP worker loading - downgraded to v3.0.5 and fixed Vite bundling)
+**Updated By**: AI Agent after debugging worker import failures
 
