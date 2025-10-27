@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Cache - Converge</title>
+    <script>
+        async function clearEverything() {
+            console.log('Clearing all caches...');
+            
+            // Unregister all service workers
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (let registration of registrations) {
+                    await registration.unregister();
+                    console.log('Service worker unregistered');
+                }
+            }
+            
+            // Delete all caches
+            if ('caches' in window) {
+                const cacheNames = await caches.keys();
+                for (let name of cacheNames) {
+                    await caches.delete(name);
+                    console.log('Deleted cache:', name);
+                }
+            }
+            
+            // Clear localStorage and sessionStorage
+            localStorage.clear();
+            sessionStorage.clear();
+            
+            // Clear IndexedDB
+            const dbs = await indexedDB.databases();
+            for (let db of dbs) {
+                indexedDB.deleteDatabase(db.name);
+                console.log('Deleted database:', db.name);
+            }
+            
+            document.body.innerHTML = '<h1>Cache Cleared!</h1><p>Redirecting to home page in 2 seconds...</p>';
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 2000);
+        }
+        
+        clearEverything();
+    </script>
+</head>
+<body>
+    <h1>Clearing cache...</h1>
+</body>
+</html>
