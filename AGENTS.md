@@ -156,9 +156,9 @@ pnpm typecheck        # TypeScript type checking
 ## Current State (as of this session)
 
 ### ✅ Completed
-- Simplified onboarding (no passphrases, auto wallet generation)
-- PWA install prompt with localStorage persistence
-- Update notification system with hourly checks
+- Simplified onboarding (no passphrases, auto wallet generation with proper secp256k1 key derivation)
+- PWA install prompt with localStorage persistence (currently disabled for debugging)
+- Update notification system with hourly checks (currently disabled for debugging)
 - Vault unlocked by default
 - Identity storage in IndexedDB
 - Clean UI with proper feature messaging
@@ -166,18 +166,20 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
-- **XMTP v3 Identity Registration**: Fully working! Identities are now properly registered on the XMTP production network with wallet signatures. Each new identity:
-  1. Creates XMTP client with address
-  2. Checks if already registered (via `isRegistered()`)
-  3. If not registered: gets signature text, signs with Ethereum private key (using viem), adds signature, and calls `registerIdentity()`
-  4. Results in a valid inbox ID that can be messaged from xmtp.chat and other XMTP clients
+- **XMTP v3 Integration**: ✅ Fully working!
+  - Identities properly registered on XMTP production network
+  - Wallet generation uses proper secp256k1 (address derived from private key via `viem`)
+  - Client auto-registers during `Client.create()` (v3 behavior)
+  - Message streaming active via `conversations.streamAllMessages()`
+  - Incoming messages displayed in real-time
+  - Can message and be messaged from xmtp.chat and other XMTP v3 clients
 
-### 🚧 Mock/TODO
-- Actual message sending/receiving (XMTP client connected, but message flows still need implementation)
-- Proper wallet key derivation (currently random bytes)
-- Device-based encryption for private keys
-- Group chat support
-- Attachments
+### 🚧 TODO
+- Message sending (receiving works, sending not yet implemented)
+- Device-based encryption for private keys (currently stored in plain text in IndexedDB)
+- Group chat support (SDK supports it, UI not implemented)
+- Attachments (text messages only for now)
+- Re-enable PWA features (install prompt, update notifications, service worker)
 - **Default Contacts/Bots**: `src/lib/default-contacts.ts` has placeholder addresses for suggested bots (Welcome Bot, Base Agent, ENS Resolver, etc.). Replace with actual XMTP-enabled addresses when available. Check:
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
@@ -207,42 +209,74 @@ User wants to enable:
 
 Focus on **friction-free onboarding** for new users first.
 
-### Key Technical Learning: XMTP Browser SDK Version Compatibility
+### Key Technical Learning: XMTP Browser SDK v3 Integration
 
-**Problem**: XMTP v4 and v5 had persistent worker initialization failures with error events showing all undefined fields (message, filename, lineno all undefined).
+**Problem**: XMTP v4 and v5 had persistent worker initialization failures, and initial v3 integration had "Unknown signer" errors.
 
-**Root Cause**: Multiple issues:
+**Root Causes**:
 1. **v4/v5 incompatibility** - Newer SDK versions have breaking changes and worker issues
 2. **Wrong Identifier format** - v3 uses `{ identifier: "0x...", identifierKind: "Ethereum" }` while v4/v5 use `{ kind: { case: 'address', value: '0x...' } }`
 3. **Vite bundling** - The worker file tried to import `@xmtp/wasm-bindings` as a bare module, which failed because we excluded it from Vite's optimizeDeps
+4. **CRITICAL: Wallet generation bug** - We generated random bytes for BOTH private key AND address separately! In Ethereum, the address must be derived from the private key using secp256k1 elliptic curve cryptography
+5. **Auto-registration** - v3 SDK auto-registers during `Client.create()`, unlike v4/v5 which require explicit `client.register()` call
+6. **Async getIdentifier** - v3 requires `getIdentifier` to be async
+7. **Message streaming** - Must explicitly call `conversations.sync()` and `conversations.streamAllMessages()` to receive messages
 
 **Solution**:
 1. **Downgrade to v3.0.5** - The version that cthulhu.bot uses successfully
 2. **Fix Identifier format** for v3 API compatibility  
 3. **Remove Vite exclusions** - Let Vite bundle dependencies into the worker
-
+4. **Properly derive address from private key**:
 ```typescript
-// v3 Signer implementation
+// ❌ WRONG - Two unrelated random values
+const privateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+const addressBytes = crypto.getRandomValues(new Uint8Array(20)); // BUG!
+
+// ✅ CORRECT - Derive address from private key
+const privateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+const account = privateKeyToAccount(privateKeyHex);
+const address = account.address; // Derived via secp256k1
+```
+
+5. **v3 Signer implementation**:
+```typescript
 private createSigner(address: string, privateKeyHex: string): Signer {
   return {
     type: 'EOA',
-    getIdentifier: () => ({
-      identifier: address.toLowerCase(),
+    getIdentifier: async () => ({  // MUST be async
+      identifier: address,          // DON'T lowercase!
       identifierKind: 'Ethereum',
     }),
     signMessage: async (message: string) => {
+      const account = privateKeyToAccount(privateKeyHex);
       const signature = await account.signMessage({ message });
-      return new Uint8Array(/*...*/);
+      return new Uint8Array(/*...convert hex to bytes...*/);
     },
   };
+}
+```
+
+6. **No manual registration needed** - Just call `Client.create()`, v3 auto-registers
+7. **Message streaming setup**:
+```typescript
+// After successful connection:
+await client.conversations.sync();
+const stream = await client.conversations.streamAllMessages();
+for await (const message of stream) {
+  // Handle incoming messages
 }
 ```
 
 **Key Learnings**:
 - Always check working examples (cthulhu.bot) when debugging
 - Worker errors with undefined fields = import/module loading failure
-- v3 SDK doesn't require COOP/COEP headers (has fallback for non-SharedArrayBuffer)
+- v3 SDK doesn't require COOP/COEP headers (but they improve performance)
 - Vite's `optimizeDeps.exclude` breaks worker module imports
+- **CRITICAL**: In Ethereum, address = `secp256k1_public_key(private_key)` - they're mathematically related!
+- v3 SDK auto-registers, v4/v5 require manual `register()` call
+- `getIdentifier` must be async in v3
+- Don't lowercase Ethereum addresses - they have checksums
+- Must explicitly start message streaming, it's not automatic
 
 ### Key Technical Learning: XMTP v3 Registration Flow (DEPRECATED - v4/v5 only)
 **Problem**: Randomly generated Ethereum addresses were being stored locally but NOT registered with XMTP, causing "no inbox ID" errors when trying to message them from xmtp.chat.
@@ -327,6 +361,6 @@ if (!isRegistered) {
 
 ---
 
-**Last Updated**: 2025-10-27 (Fixed XMTP worker loading - downgraded to v3.0.5 and fixed Vite bundling)
-**Updated By**: AI Agent after debugging worker import failures
+**Last Updated**: 2025-10-27 (XMTP v3 fully working - fixed wallet generation and message streaming)
+**Updated By**: AI Agent after completing XMTP integration
 
