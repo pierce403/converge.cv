@@ -41,6 +41,7 @@ export type Unsubscribe = () => void;
 export class XmtpClient {
   private client: Client | null = null;
   private identity: XmtpIdentity | null = null;
+  private messageStreamCloser: { close: () => void } | null = null;
 
   private formatPayload(payload: unknown): string {
     if (typeof payload === 'string') {
@@ -280,6 +281,11 @@ export class XmtpClient {
         });
 
         console.log('[XMTP] ✅ XMTP client connected', identity.address, 'inbox:', client.inboxId);
+
+        // Start syncing conversations and streaming messages
+        console.log('[XMTP] Starting conversation sync and message streaming...');
+        await this.syncConversations();
+        await this.startMessageStream();
       } finally {
         // Restore original Worker constructor
         (globalThis as typeof globalThis & { Worker: typeof Worker }).Worker = originalWorkerConstructor;
@@ -317,6 +323,17 @@ export class XmtpClient {
   async disconnect(): Promise<void> {
     const { setConnectionStatus } = useXmtpStore.getState();
 
+    // Stop message streaming
+    if (this.messageStreamCloser) {
+      try {
+        this.messageStreamCloser.close();
+        console.log('[XMTP] Message stream closed');
+      } catch (error) {
+        console.error('[XMTP] Error closing message stream:', error);
+      }
+      this.messageStreamCloser = null;
+    }
+
     if (this.client) {
       logNetworkEvent({
         direction: 'outbound',
@@ -334,6 +351,103 @@ export class XmtpClient {
         details: 'XMTP client disconnected',
       });
       console.log('XMTP client disconnected');
+    }
+  }
+
+  /**
+   * Sync all conversations from the network
+   */
+  async syncConversations(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    try {
+      console.log('[XMTP] Syncing conversations...');
+      await this.client.conversations.sync();
+      const convos = await this.client.conversations.list();
+      console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
+      
+      logNetworkEvent({
+        direction: 'inbound',
+        event: 'conversations:sync',
+        details: `Synced ${convos.length} conversations`,
+      });
+    } catch (error) {
+      console.error('[XMTP] Failed to sync conversations:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Start streaming all messages across all conversations
+   */
+  async startMessageStream(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    try {
+      console.log('[XMTP] Starting message stream...');
+      
+      // Stream all messages (DMs and groups)
+      const stream = await this.client.conversations.streamAllMessages();
+      this.messageStreamCloser = stream as unknown as { close: () => void };
+
+      console.log('[XMTP] ✅ Message stream started');
+      
+      logNetworkEvent({
+        direction: 'status',
+        event: 'messages:stream_started',
+        details: 'Listening for incoming messages',
+      });
+
+      // Handle incoming messages in the background
+      (async () => {
+        try {
+          for await (const message of stream) {
+            if (!message) continue;
+            
+            console.log('[XMTP] 📨 Received message:', {
+              id: message.id,
+              conversationId: message.conversationId,
+              senderInboxId: message.senderInboxId,
+              content: typeof message.content === 'string' ? message.content.substring(0, 50) : '(binary)',
+            });
+
+            logNetworkEvent({
+              direction: 'inbound',
+              event: 'message:received',
+              details: `From ${message.senderInboxId}`,
+            });
+
+            // Dispatch to message store
+            // We'll use a custom event that components can listen to
+            window.dispatchEvent(new CustomEvent('xmtp:message', {
+              detail: {
+                conversationId: message.conversationId,
+                message: {
+                  id: message.id,
+                  conversationTopic: message.conversationId,
+                  senderAddress: message.senderInboxId,
+                  content: message.content,
+                  sentAt: message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now(),
+                },
+              },
+            }));
+          }
+        } catch (error) {
+          console.error('[XMTP] Message stream error:', error);
+          logNetworkEvent({
+            direction: 'status',
+            event: 'messages:stream_error',
+            details: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+    } catch (error) {
+      console.error('[XMTP] Failed to start message stream:', error);
+      throw error;
     }
   }
 

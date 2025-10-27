@@ -17,7 +17,7 @@ export function ConversationView() {
 
   const { conversations } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
-  const { sendMessage, loadMessages } = useMessages();
+  const { sendMessage, loadMessages, receiveMessage } = useMessages();
 
   const conversation = conversations.find((c) => c.id === id);
   const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
@@ -27,6 +27,25 @@ export function ConversationView() {
       loadMessages(id);
     }
   }, [id, loadMessages]);
+
+  useEffect(() => {
+    // Listen for incoming XMTP messages
+    const handleIncomingMessage = (event: Event) => {
+      const customEvent = event as CustomEvent<{ conversationId: string; message: any }>;
+      const { conversationId, message } = customEvent.detail;
+      
+      // Only handle messages for the currently viewed conversation
+      if (conversationId === id) {
+        console.log('[ConversationView] Received message for current conversation:', message);
+        receiveMessage(conversationId, message);
+      }
+    };
+
+    window.addEventListener('xmtp:message', handleIncomingMessage);
+    return () => {
+      window.removeEventListener('xmtp:message', handleIncomingMessage);
+    };
+  }, [id, receiveMessage]);
 
   useEffect(() => {
     // Scroll to bottom when messages change
