@@ -12,8 +12,8 @@ importers:
         specifier: ^2.1.8
         version: 2.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@xmtp/browser-sdk':
-        specifier: ^5.0.1
-        version: 5.0.1
+        specifier: ^4.3.0
+        version: 4.3.0
       dexie:
         specifier: ^4.0.8
         version: 4.2.1
@@ -1369,8 +1369,8 @@ packages:
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
 
-  '@xmtp/browser-sdk@5.0.1':
-    resolution: {integrity: sha512-BMxiTUFOFQ6CX4w3rLXyC/hHr0T4craeEP7gXWST+G/AZp64/GcImXgLN2tcLRs20U/ZDo+yGnMlAkiOdQ+u4Q==}
+  '@xmtp/browser-sdk@4.3.0':
+    resolution: {integrity: sha512-DPQlkqBPbuWrWpNFZ8c8DeZUWtFdF9qfWj+EsO1enYApoA2wv/r9tPBI2tvtla1RctdTA+KAg0qpi4zZ7Iq8fA==}
     engines: {node: '>=20'}
 
   '@xmtp/content-type-group-updated@2.0.2':
@@ -1385,8 +1385,8 @@ packages:
   '@xmtp/proto@3.87.0':
     resolution: {integrity: sha512-aWXaWcsCGlWCD3iQNMqCOHVckili+mUu3y1hQuQmHnIQUVfIV/5o+zMmZ1sP6t2GSWo/GnDr3XBjI7nZh9V9QA==}
 
-  '@xmtp/wasm-bindings@1.5.4':
-    resolution: {integrity: sha512-4A3ERdZjWjOCQJ6jfoqXsN0uaYn/xa8PY9HRw2nrNsAx7jR6dBaDm4bD19uNE3PEcJiWn+lr/G7Cu93D+uQ9TQ==}
+  '@xmtp/wasm-bindings@1.5.3':
+    resolution: {integrity: sha512-GO3qplQQ+1L21xe2gan7salXQ7THhpA/0w9BPqPtfeJBg88bINy0DUFedxKBiRFBjkynCiWKq7UtfIDuphYW8w==}
     engines: {node: '>=20'}
 
   abitype@1.1.0:
@@ -4668,12 +4668,12 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 1.2.0
 
-  '@xmtp/browser-sdk@5.0.1':
+  '@xmtp/browser-sdk@4.3.0':
     dependencies:
       '@xmtp/content-type-group-updated': 2.0.2
       '@xmtp/content-type-primitives': 2.0.2
       '@xmtp/content-type-text': 2.0.2
-      '@xmtp/wasm-bindings': 1.5.4
+      '@xmtp/wasm-bindings': 1.5.3
       uuid: 11.1.0
 
   '@xmtp/content-type-group-updated@2.0.2':
@@ -4696,7 +4696,7 @@ snapshots:
       rxjs: 7.8.2
       undici: 5.29.0
 
-  '@xmtp/wasm-bindings@1.5.4': {}
+  '@xmtp/wasm-bindings@1.5.3': {}
 
   abitype@1.1.0(typescript@5.9.3):
     optionalDependencies:
