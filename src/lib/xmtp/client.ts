@@ -125,10 +125,26 @@ export class XmtpClient {
         details: `Creating XMTP client for ${identity.address}`,
       });
 
-      const client = await Client.create(identity.address, {
+      console.log('[XMTP] Creating client with address:', identity.address);
+      console.log('[XMTP] Environment: production');
+      console.log('[XMTP] Cross-origin isolated:', isCrossOriginIsolated);
+      console.log('[XMTP] SharedArrayBuffer available:', hasSharedArrayBuffer);
+
+      // Add timeout to detect hanging
+      const clientPromise = Client.create(identity.address, {
         env: 'production',
       });
 
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Client.create() timed out after 30 seconds'));
+        }, 30000);
+      });
+
+      console.log('[XMTP] Waiting for Client.create() to complete...');
+      const client = await Promise.race([clientPromise, timeoutPromise]);
+
+      console.log('[XMTP] Client created successfully');
       this.client = client;
 
       // Step 2: Check if already registered
@@ -220,15 +236,29 @@ export class XmtpClient {
 
       console.log('XMTP client connected', identity.address, 'inbox:', client.inboxId);
     } catch (error) {
-      console.error('Failed to connect XMTP client:', error);
+      console.error('[XMTP] Connection failed:', error);
+      console.error('[XMTP] Error type:', typeof error);
+      console.error('[XMTP] Error constructor:', error?.constructor?.name);
+      
+      // Log full error details
+      if (error instanceof Error) {
+        console.error('[XMTP] Error message:', error.message);
+        console.error('[XMTP] Error stack:', error.stack);
+      } else {
+        console.error('[XMTP] Error value:', error);
+      }
+      
+      const errorMessage = error instanceof Error ? error.message : String(error);
       setConnectionStatus('error');
-      setError(error instanceof Error ? error.message : 'Connection failed');
+      setError(errorMessage);
+      
       logNetworkEvent({
         direction: 'status',
         event: 'connect:error',
-        details: error instanceof Error ? error.message : String(error),
+        details: errorMessage,
       });
-      throw new Error('XMTP connection failed');
+      
+      throw error; // Re-throw the original error
     }
   }
 
