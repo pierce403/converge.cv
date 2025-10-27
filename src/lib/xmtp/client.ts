@@ -129,14 +129,30 @@ export class XmtpClient {
       console.log('[XMTP] Environment: production');
       console.log('[XMTP] Cross-origin isolated:', isCrossOriginIsolated);
       console.log('[XMTP] SharedArrayBuffer available:', hasSharedArrayBuffer);
+      console.log('[XMTP] WebAssembly available:', typeof WebAssembly !== 'undefined');
+      console.log('[XMTP] SDK version: @xmtp/browser-sdk@0.0.1');
 
       // Add timeout to detect hanging
+      console.log('[XMTP] Calling Client.create() with enableLogging: true...');
       const clientPromise = Client.create(identity.address, {
         env: 'production',
+        enableLogging: true, // Enable SDK logging
+      }).then(client => {
+        console.log('[XMTP] Client.create() promise resolved!');
+        return client;
+      }).catch(error => {
+        console.error('[XMTP] Client.create() promise rejected:', error);
+        throw error;
       });
 
       const timeoutPromise = new Promise<never>((_, reject) => {
+        const intervalId = setInterval(() => {
+          console.log('[XMTP] Still waiting for Client.create()... (checking every 5s)');
+        }, 5000);
+        
         setTimeout(() => {
+          clearInterval(intervalId);
+          console.error('[XMTP] Client.create() timeout reached!');
           reject(new Error('Client.create() timed out after 30 seconds'));
         }, 30000);
       });
@@ -145,6 +161,11 @@ export class XmtpClient {
       const client = await Promise.race([clientPromise, timeoutPromise]);
 
       console.log('[XMTP] Client created successfully');
+      console.log('[XMTP] Client properties:', {
+        inboxId: client.inboxId,
+        installationId: client.installationId,
+        isReady: client.isReady,
+      });
       this.client = client;
 
       // Step 2: Check if already registered
