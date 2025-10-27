@@ -7,6 +7,7 @@
  */
 
 import { Client } from '@xmtp/browser-sdk';
+import { privateKeyToAccount } from 'viem/accounts';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 
@@ -57,6 +58,24 @@ export class XmtpClient {
   }
 
   /**
+   * Sign a message with an Ethereum private key
+   */
+  private async signMessage(message: string, privateKeyHex: string): Promise<Uint8Array> {
+    // Create an account from the private key
+    const account = privateKeyToAccount(privateKeyHex as `0x${string}`);
+    
+    // Sign the message (this uses Ethereum's ECDSA signing with secp256k1)
+    const signature = await account.signMessage({ message });
+    
+    // Convert hex signature to Uint8Array
+    const signatureBytes = new Uint8Array(
+      signature.replace('0x', '').match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
+    );
+    
+    return signatureBytes;
+  }
+
+  /**
    * Connect to XMTP network with an identity
    */
   async connect(identity: XmtpIdentity): Promise<void> {
@@ -99,11 +118,80 @@ export class XmtpClient {
       setConnectionStatus('connecting');
       setError(null);
 
+      // Step 1: Create the client
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'connect:create_client',
+        details: `Creating XMTP client for ${identity.address}`,
+      });
+
       const client = await Client.create(identity.address, {
         env: 'production',
       });
 
       this.client = client;
+
+      // Step 2: Check if already registered
+      const isRegistered = await client.isRegistered();
+      logNetworkEvent({
+        direction: 'status',
+        event: 'connect:registration_check',
+        details: `Identity ${isRegistered ? 'already registered' : 'needs registration'}`,
+      });
+
+      if (!isRegistered && identity.privateKey) {
+        // Step 3: Get the signature text
+        logNetworkEvent({
+          direction: 'outbound',
+          event: 'connect:get_signature_text',
+          details: 'Requesting signature text for identity registration',
+        });
+
+        const signatureText = await client.getCreateInboxSignatureText();
+        if (!signatureText) {
+          throw new Error('No signature text returned from XMTP');
+        }
+
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:signature_text_received',
+          details: `Signature text: ${signatureText.substring(0, 50)}...`,
+        });
+
+        // Step 4: Sign the message
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:signing',
+          details: 'Signing registration message with wallet',
+        });
+
+        const signature = await this.signMessage(signatureText, identity.privateKey);
+
+        // Step 5: Add the signature
+        logNetworkEvent({
+          direction: 'outbound',
+          event: 'connect:add_signature',
+          details: `Adding signature (${signature.length} bytes)`,
+        });
+
+        // WasmSignatureRequestType.CreateInbox = 1
+        await client.addSignature(1, signature);
+
+        // Step 6: Register the identity
+        logNetworkEvent({
+          direction: 'outbound',
+          event: 'connect:register_identity',
+          details: 'Registering identity on XMTP network',
+        });
+
+        await client.registerIdentity();
+
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:registered',
+          details: `Identity successfully registered with inbox ID: ${client.inboxId}`,
+        });
+      }
 
       setConnectionStatus('connected');
       setLastConnected(Date.now());
@@ -111,10 +199,10 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'status',
         event: 'connect:success',
-        details: `Connected to XMTP as ${identity.address}`,
+        details: `Connected to XMTP as ${identity.address} (inbox: ${client.inboxId})`,
       });
 
-      console.log('XMTP client connected', identity.address);
+      console.log('XMTP client connected', identity.address, 'inbox:', client.inboxId);
     } catch (error) {
       console.error('Failed to connect XMTP client:', error);
       setConnectionStatus('error');

@@ -23,6 +23,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
+    "viem": "^2.38.4",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
