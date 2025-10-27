@@ -7,7 +7,8 @@ import path from 'path';
 export default defineConfig({
   base: '/', // Custom domain - use root path
   optimizeDeps: {
-    exclude: ['@xmtp/wasm-bindings'],
+    exclude: ['@xmtp/wasm-bindings', '@xmtp/browser-sdk'],
+    include: ['@xmtp/proto'],
   },
   plugins: [
     react(),
