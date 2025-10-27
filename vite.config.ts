@@ -13,45 +13,7 @@ export default defineConfig({
   // },
   plugins: [
     react(),
-    VitePWA({
-      strategies: 'injectManifest',
-      srcDir: 'src',
-      filename: 'sw.ts',
-      injectRegister: 'script',
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
-      manifest: {
-        name: 'Converge - XMTP Messenger',
-        short_name: 'Converge',
-        description: 'Secure, local-first messaging with XMTP v3',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
-        display: 'standalone',
-        scope: '/',
-        start_url: '/',
-        orientation: 'portrait',
-        icons: [
-          {
-            src: '/icons/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-            purpose: 'any maskable',
-          },
-          {
-            src: '/icons/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any maskable',
-          },
-        ],
-      },
-      injectManifest: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-      },
-      devOptions: {
-        enabled: true,
-      },
-    }),
+    // TEMPORARILY DISABLED PWA: Testing if our SW is blocking XMTP worker
   ],
   resolve: {
     alias: {

@@ -66,8 +66,9 @@ export class XmtpClient {
     
     return {
       type: 'EOA', // Externally Owned Account
-      getIdentifier: () => {
+      getIdentifier: async () => {
         // v3 uses: { identifier: "0x...", identifierKind: "Ethereum" }
+        // Must be async to match v3 SDK expectations
         return {
           identifier: address.toLowerCase(),
           identifierKind: 'Ethereum',
@@ -253,42 +254,19 @@ export class XmtpClient {
         });
         this.client = client;
 
-        // Step 2: Check if already registered
-        console.log('[XMTP] Checking if identity is already registered...');
-        const isRegistered = await client.isRegistered();
-        logNetworkEvent({
-          direction: 'status',
-          event: 'connect:registration_check',
-          details: `Identity ${isRegistered ? 'already registered' : 'needs registration'}`,
-        });
-
-        if (!isRegistered) {
-          console.log('[XMTP] Identity not registered, calling client.register()...');
+        // Step 2: Check if already registered (v3 auto-registers during Client.create)
+        console.log('[XMTP] Checking if identity is registered...');
+        try {
+          const isRegistered = await client.isRegistered();
+          console.log('[XMTP] isRegistered:', isRegistered);
           logNetworkEvent({
-            direction: 'outbound',
-            event: 'connect:register',
-            details: 'Registering identity on XMTP network (v5 API)',
+            direction: 'status',
+            event: 'connect:registration_check',
+            details: `Identity registered: ${isRegistered}, inbox ID: ${client.inboxId}`,
           });
-
-          try {
-            await client.register();
-            console.log('[XMTP] ✅ Registration complete! Inbox ID:', client.inboxId);
-            logNetworkEvent({
-              direction: 'status',
-              event: 'connect:registered',
-              details: `Identity successfully registered with inbox ID: ${client.inboxId}`,
-            });
-          } catch (registrationError) {
-            console.error('[XMTP] ❌ Registration failed:', registrationError);
-            logNetworkEvent({
-              direction: 'status',
-              event: 'connect:registration_error',
-              details: registrationError instanceof Error ? registrationError.message : String(registrationError),
-            });
-            throw registrationError;
-          }
-        } else {
-          console.log('[XMTP] ✅ Identity already registered with inbox ID:', client.inboxId);
+        } catch (e) {
+          console.log('[XMTP] isRegistered() check failed:', e);
+          // Non-fatal - continue anyway
         }
 
         setConnectionStatus('connected');
