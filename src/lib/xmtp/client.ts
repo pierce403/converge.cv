@@ -341,8 +341,20 @@ export class XmtpClient {
             }
             
             // Log the full message object to see what we're getting
-            console.log('[XMTP] Full message object:', message);
+            console.log('[XMTP] Full message object:');
+            console.log(message);
             console.log('[XMTP] Message keys:', Object.keys(message));
+            console.log('[XMTP] Message stringified:', JSON.stringify(message, (_key, value) => {
+              // Handle BigInt serialization
+              if (typeof value === 'bigint') {
+                return value.toString() + 'n';
+              }
+              // Handle Uint8Array
+              if (value instanceof Uint8Array) {
+                return `Uint8Array(${value.length})`;
+              }
+              return value;
+            }, 2));
             
             console.log('[XMTP] 📨 Parsed message:', {
               id: message.id,
