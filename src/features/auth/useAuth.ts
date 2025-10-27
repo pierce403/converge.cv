@@ -15,6 +15,7 @@ import {
   generateSalt,
 } from '@/lib/crypto';
 import { getXmtpClient } from '@/lib/xmtp';
+import { privateKeyToAccount } from 'viem/accounts';
 import type { VaultSecrets, Identity } from '@/types';
 
 function isAdvancedModeReady(): boolean {
@@ -64,10 +65,14 @@ export function useAuth() {
       try {
         const storage = await getStorage();
 
+        // Derive public key from private key for completeness
+        const account = privateKeyToAccount(privateKey as `0x${string}`);
+        const publicKeyHex = account.publicKey;
+        
         // Create identity
         const identity: Identity = {
           address: walletAddress,
-          publicKey: 'unavailable_public_key',
+          publicKey: publicKeyHex,
           privateKey: privateKey, // Store encrypted in production
           createdAt: Date.now(),
         };
@@ -120,10 +125,10 @@ export function useAuth() {
         };
         await storage.putVaultSecrets(secrets);
 
-        // Create identity
+        // Note: publicKey not derivable without private key in passphrase flow
         const identity: Identity = {
           address: walletAddress,
-          publicKey: 'unavailable_public_key',
+          publicKey: '', // Will be set when private key is available
           createdAt: Date.now(),
         };
         await storage.putIdentity(identity);
@@ -183,9 +188,10 @@ export function useAuth() {
         await storage.putVaultSecrets(secrets);
 
         // Import/create identity with existing wallet
+        // Note: For wallet-imported identities, we don't have the private key
         const identity: Identity = {
           address: walletAddress,
-          publicKey: 'unavailable_public_key',
+          publicKey: '', // Not available for wallet-imported identities
           createdAt: Date.now(),
         };
         await storage.putIdentity(identity);
