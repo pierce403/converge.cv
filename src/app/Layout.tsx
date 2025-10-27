@@ -2,6 +2,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import { PWAInstallPrompt } from '@/components/PWAInstallPrompt';
 import { UpdatePrompt } from '@/components/UpdatePrompt';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
+import { CrossOriginIsolationNotice } from '@/components/CrossOriginIsolationNotice';
 
 export function Layout() {
   const location = useLocation();
@@ -10,9 +11,12 @@ export function Layout() {
     <div className="flex flex-col h-screen">
       {/* PWA Install Prompt */}
       <PWAInstallPrompt />
-      
+
       {/* Update Available Prompt */}
       <UpdatePrompt />
+
+      {/* Cross-Origin Isolation Status */}
+      <CrossOriginIsolationNotice />
       
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between">

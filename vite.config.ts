@@ -12,7 +12,11 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectRegister: 'script',
+      registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
         name: 'Converge - XMTP Messenger',
@@ -39,43 +43,8 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Use NetworkFirst for HTML to always get fresh content when online
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api/],
-        runtimeCaching: [
-          {
-            // App shell - use NetworkFirst for fresh updates
-            urlPattern: /^https:\/\/converge\.cv\/.*/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'app-shell',
-              networkTimeoutSeconds: 3,
-              expiration: {
-                maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24, // 1 day
-              },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
-        ],
-        // Force new service worker to activate immediately
-        skipWaiting: true,
-        clientsClaim: true,
       },
       devOptions: {
         enabled: true,
@@ -100,7 +69,7 @@ export default defineConfig({
   server: {
     port: 3000,
     headers: {
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
       'Cross-Origin-Opener-Policy': 'same-origin',
     },
   },

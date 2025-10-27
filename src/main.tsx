@@ -5,17 +5,27 @@ import './index.css';
 import { setupDebugConsole } from '@/lib/utils/debug-console';
 import { startAppWatchdog } from '@/lib/utils/watchdog';
 
-setupDebugConsole();
-startAppWatchdog();
+const SW_RELOAD_FLAG = 'converge-sw-isolation-reload';
 
-// Register service worker
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((err) => {
-      console.error('Service worker registration failed:', err);
-    });
+if (
+  typeof navigator !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  typeof sessionStorage !== 'undefined'
+) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    const hasReloaded = sessionStorage.getItem(SW_RELOAD_FLAG);
+
+    if (hasReloaded) {
+      return;
+    }
+
+    sessionStorage.setItem(SW_RELOAD_FLAG, 'true');
+    window.location.reload();
   });
 }
+
+setupDebugConsole();
+startAppWatchdog();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
