@@ -209,9 +209,14 @@ Focus on **friction-free onboarding** for new users first.
 
 ### Before Starting Work
 1. **Read this file completely**
-2. Check `TODO.md` for planned features
-3. Review `PROJECT_SUMMARY.md` for technical overview
-4. Look at recent git history to understand latest changes
+2. **Check for time gaps**: If the last update timestamp seems old or there's been time since the last session:
+   ```bash
+   cd /home/pierce/projects/converge.cv && git pull
+   git log --oneline --no-merges HEAD~20..HEAD  # Review recent commits
+   ```
+3. Check `TODO.md` for planned features
+4. Review `PROJECT_SUMMARY.md` for technical overview
+5. Look at recent git history to understand latest changes
 
 ### While Working
 - Keep the no-passphrase principle in mind
@@ -252,6 +257,6 @@ Focus on **friction-free onboarding** for new users first.
 
 ---
 
-**Last Updated**: 2025-10-26 (Initial creation from onboarding simplification session)
-**Updated By**: AI Agent during onboarding flow simplification
+**Last Updated**: 2025-10-27 (Added git pull instructions and XMTP integration notes)
+**Updated By**: AI Agent after pulling latest changes including XMTP v3 SDK integration
 
