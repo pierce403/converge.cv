@@ -140,7 +140,7 @@ export class XmtpClient {
       console.log('[XMTP] Cross-origin isolated:', isCrossOriginIsolated);
       console.log('[XMTP] SharedArrayBuffer available:', hasSharedArrayBuffer);
       console.log('[XMTP] WebAssembly available:', typeof WebAssembly !== 'undefined');
-      console.log('[XMTP] SDK version: @xmtp/browser-sdk@4.3.0');
+      console.log('[XMTP] SDK version: @xmtp/browser-sdk@3.0.5');
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
       // Intercept Worker constructor to catch errors
