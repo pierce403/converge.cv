@@ -166,10 +166,14 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
+- **XMTP v3 Identity Registration**: Fully working! Identities are now properly registered on the XMTP production network with wallet signatures. Each new identity:
+  1. Creates XMTP client with address
+  2. Checks if already registered (via `isRegistered()`)
+  3. If not registered: gets signature text, signs with Ethereum private key (using viem), adds signature, and calls `registerIdentity()`
+  4. Results in a valid inbox ID that can be messaged from xmtp.chat and other XMTP clients
 
 ### 🚧 Mock/TODO
-- XMTP v3 SDK integration (connection established, message flows still maturing)
-- Actual message sending/receiving
+- Actual message sending/receiving (XMTP client connected, but message flows still need implementation)
 - Proper wallet key derivation (currently random bytes)
 - Device-based encryption for private keys
 - Group chat support
@@ -197,11 +201,40 @@ pnpm typecheck        # TypeScript type checking
 ## User's Goals
 
 User wants to enable:
-1. **Create new identity from nothing** → ✅ DONE
-2. **Message someone on the Base app** → 🚧 Needs real XMTP integration
+1. **Create new identity from nothing** → ✅ DONE (identities now properly registered on XMTP network)
+2. **Message someone on the Base app** → 🚧 Registration done, message send/receive flows next
 3. Worry about connecting existing identities later → Deferred
 
 Focus on **friction-free onboarding** for new users first.
+
+### Key Technical Learning: XMTP v3 Registration Flow
+**Problem**: Randomly generated Ethereum addresses were being stored locally but NOT registered with XMTP, causing "no inbox ID" errors when trying to message them from xmtp.chat.
+
+**Solution**: XMTP v3 SDK requires a multi-step registration process:
+```typescript
+const client = await Client.create(address, { env: 'production' });
+const isRegistered = await client.isRegistered();
+
+if (!isRegistered) {
+  // Get message to sign
+  const signatureText = await client.getCreateInboxSignatureText();
+  
+  // Sign with Ethereum wallet (secp256k1 ECDSA)
+  const account = privateKeyToAccount(privateKey);
+  const signature = await account.signMessage({ message: signatureText });
+  
+  // Submit signature and register
+  await client.addSignature(WasmSignatureRequestType.CreateInbox, signatureBytes);
+  await client.registerIdentity();
+  
+  // Now client.inboxId is set and address is discoverable on XMTP network
+}
+```
+
+**Key Dependencies**:
+- `viem` for proper Ethereum message signing (secp256k1, not P-256)
+- XMTP SDK's `registerIdentity()` must be called to persist on network
+- Without registration, addresses are only local and can't receive messages
 
 ---
 
@@ -257,6 +290,6 @@ Focus on **friction-free onboarding** for new users first.
 
 ---
 
-**Last Updated**: 2025-10-27 (Added git pull instructions and XMTP integration notes)
-**Updated By**: AI Agent after pulling latest changes including XMTP v3 SDK integration
+**Last Updated**: 2025-10-27 (Fixed XMTP identity registration - addresses now properly register on network with inbox IDs)
+**Updated By**: AI Agent after implementing proper XMTP v3 registration flow with wallet signatures
 
