@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './useAuth';
+import { privateKeyToAccount } from 'viem/accounts';
 
 export function OnboardingPage() {
   const navigate = useNavigate();
@@ -18,20 +19,20 @@ export function OnboardingPage() {
     setStep('creating');
 
     try {
-      // Generate a new Ethereum wallet using Web3 crypto
+      // Generate a new Ethereum wallet using proper secp256k1 cryptography
       const privateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
       
       // Convert to hex for private key
-      const privateKeyHex = '0x' + Array.from(privateKeyBytes)
+      const privateKeyHex = ('0x' + Array.from(privateKeyBytes)
         .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
+        .join('')) as `0x${string}`;
       
-      // For now, derive a simple address from the private key
-      // In production, use proper elliptic curve cryptography (e.g., ethers.js)
-      const addressBytes = crypto.getRandomValues(new Uint8Array(20));
-      const address = '0x' + Array.from(addressBytes)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
+      // IMPORTANT: Derive the address FROM the private key using elliptic curve crypto
+      // This ensures the private key and address are mathematically related
+      const account = privateKeyToAccount(privateKeyHex);
+      const address = account.address;
+      
+      console.log('[Onboarding] Generated new Ethereum wallet:', { address, privateKeyHex: privateKeyHex.slice(0, 10) + '...' });
       
       // Create identity directly without passphrase
       const success = await createIdentity(address, privateKeyHex);

@@ -69,8 +69,9 @@ export class XmtpClient {
       getIdentifier: async () => {
         // v3 uses: { identifier: "0x...", identifierKind: "Ethereum" }
         // Must be async to match v3 SDK expectations
+        // NOTE: Do NOT lowercase - use address as-is like cthulhu.bot
         return {
-          identifier: address.toLowerCase(),
+          identifier: address,
           identifierKind: 'Ethereum',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any; // Identifier type from WASM bindings
