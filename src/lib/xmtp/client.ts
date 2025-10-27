@@ -140,57 +140,73 @@ export class XmtpClient {
       });
 
       if (!isRegistered && identity.privateKey) {
-        // Step 3: Get the signature text
-        logNetworkEvent({
-          direction: 'outbound',
-          event: 'connect:get_signature_text',
-          details: 'Requesting signature text for identity registration',
-        });
+        try {
+          // Step 3: Get the signature text
+          logNetworkEvent({
+            direction: 'outbound',
+            event: 'connect:get_signature_text',
+            details: 'Requesting signature text for identity registration',
+          });
 
-        const signatureText = await client.getCreateInboxSignatureText();
-        if (!signatureText) {
-          throw new Error('No signature text returned from XMTP');
+          const signatureText = await client.getCreateInboxSignatureText();
+          if (!signatureText) {
+            throw new Error('No signature text returned from XMTP');
+          }
+
+          console.log('[XMTP] Signature text:', signatureText);
+          logNetworkEvent({
+            direction: 'status',
+            event: 'connect:signature_text_received',
+            details: `Signature text: ${signatureText.substring(0, 100)}`,
+          });
+
+          // Step 4: Sign the message
+          logNetworkEvent({
+            direction: 'status',
+            event: 'connect:signing',
+            details: 'Signing registration message with wallet',
+          });
+
+          console.log('[XMTP] Signing message...');
+          const signature = await this.signMessage(signatureText, identity.privateKey);
+          console.log('[XMTP] Signature generated:', signature.length, 'bytes');
+
+          // Step 5: Add the signature
+          logNetworkEvent({
+            direction: 'outbound',
+            event: 'connect:add_signature',
+            details: `Adding signature (${signature.length} bytes)`,
+          });
+
+          console.log('[XMTP] Adding signature to client...');
+          // WasmSignatureRequestType.CreateInbox = 1
+          await client.addSignature(1, signature);
+
+          // Step 6: Register the identity
+          logNetworkEvent({
+            direction: 'outbound',
+            event: 'connect:register_identity',
+            details: 'Registering identity on XMTP network',
+          });
+
+          console.log('[XMTP] Calling registerIdentity()...');
+          await client.registerIdentity();
+
+          console.log('[XMTP] Registration complete! Inbox ID:', client.inboxId);
+          logNetworkEvent({
+            direction: 'status',
+            event: 'connect:registered',
+            details: `Identity successfully registered with inbox ID: ${client.inboxId}`,
+          });
+        } catch (registrationError) {
+          console.error('[XMTP] Registration failed:', registrationError);
+          logNetworkEvent({
+            direction: 'status',
+            event: 'connect:registration_error',
+            details: registrationError instanceof Error ? registrationError.message : String(registrationError),
+          });
+          throw registrationError;
         }
-
-        logNetworkEvent({
-          direction: 'status',
-          event: 'connect:signature_text_received',
-          details: `Signature text: ${signatureText.substring(0, 50)}...`,
-        });
-
-        // Step 4: Sign the message
-        logNetworkEvent({
-          direction: 'status',
-          event: 'connect:signing',
-          details: 'Signing registration message with wallet',
-        });
-
-        const signature = await this.signMessage(signatureText, identity.privateKey);
-
-        // Step 5: Add the signature
-        logNetworkEvent({
-          direction: 'outbound',
-          event: 'connect:add_signature',
-          details: `Adding signature (${signature.length} bytes)`,
-        });
-
-        // WasmSignatureRequestType.CreateInbox = 1
-        await client.addSignature(1, signature);
-
-        // Step 6: Register the identity
-        logNetworkEvent({
-          direction: 'outbound',
-          event: 'connect:register_identity',
-          details: 'Registering identity on XMTP network',
-        });
-
-        await client.registerIdentity();
-
-        logNetworkEvent({
-          direction: 'status',
-          event: 'connect:registered',
-          details: `Identity successfully registered with inbox ID: ${client.inboxId}`,
-        });
       }
 
       setConnectionStatus('connected');

@@ -12,7 +12,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 export function SettingsPage() {
   const navigate = useNavigate();
   const { identity, logout, lock } = useAuth();
-  const { connectionStatus, lastConnected } = useXmtpStore();
+  const { connectionStatus, lastConnected, error: xmtpError } = useXmtpStore();
   const [storageSize, setStorageSize] = useState<number | null>(null);
   const [isLoadingSize, setIsLoadingSize] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -316,7 +316,7 @@ export function SettingsPage() {
               {/* XMTP Connection Status */}
               <div className="p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <div>
+                  <div className="flex-1">
                     <div className="font-medium">XMTP Network</div>
                     <div className="text-sm text-slate-400">Connection status</div>
                   </div>
@@ -330,6 +330,45 @@ export function SettingsPage() {
                 {lastConnected && connectionStatus === 'connected' && (
                   <div className="text-xs text-slate-500">
                     Connected since {new Date(lastConnected).toLocaleTimeString()}
+                  </div>
+                )}
+                {xmtpError && connectionStatus === 'error' && (
+                  <div className="mt-2">
+                    <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 mb-2">
+                      {xmtpError}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const xmtp = getXmtpClient();
+                        if (identity) {
+                          try {
+                            await xmtp.connect({ 
+                              address: identity.address, 
+                              privateKey: identity.privateKey 
+                            });
+                          } catch (error) {
+                            console.error('Retry failed:', error);
+                          }
+                        }
+                      }}
+                      className="text-xs text-blue-400 hover:text-blue-300 underline"
+                    >
+                      Retry Connection
+                    </button>
+                  </div>
+                )}
+                {connectionStatus === 'connecting' && (
+                  <div className="mt-2 text-xs text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      <span>Registering identity on XMTP network...</span>
+                    </div>
+                    <div className="mt-1 text-slate-500">
+                      Check the <button onClick={() => navigate('/debug')} className="underline hover:text-slate-400">Debug tab</button> for details
+                    </div>
                   </div>
                 )}
               </div>

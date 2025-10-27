@@ -113,10 +113,15 @@ export function setupDebugConsole(): void {
   if (typeof window !== 'undefined') {
     window.addEventListener('error', (event) => {
       try {
+        // Skip noisy worker errors with no useful info
+        if (event.message === 'Script error.' && !event.filename) {
+          return;
+        }
+        
         const message = event.message || 'Runtime error';
         const stack = event.error instanceof Error ? event.error.stack : undefined;
         const details = [event.filename, event.lineno, event.colno]
-          .filter((part) => part !== undefined && part !== null)
+          .filter((part) => part !== undefined && part !== null && part !== 0)
           .join(':');
 
         handleRuntimeError(message, 'runtime', stack, details || undefined);
