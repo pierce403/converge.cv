@@ -148,150 +148,71 @@ export class XmtpClient {
       console.log('[XMTP] SDK version: @xmtp/browser-sdk@3.0.5');
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
-      // Intercept Worker constructor to catch errors
-      const OriginalWorker = Worker;
-      let workerErrorCaught = false;
-      
-      const WorkerWrapper = function(scriptURL: string | URL, options?: WorkerOptions) {
-        const urlString = scriptURL instanceof URL ? scriptURL.href : String(scriptURL);
-        console.log('[XMTP] Worker being created with URL:', urlString);
-        console.log('[XMTP] Worker options:', options);
-        
-        try {
-          const worker = new OriginalWorker(scriptURL, options);
-          
-          worker.addEventListener('error', (event) => {
-            console.error('[XMTP] ❌ Worker error event:', {
-              message: event.message,
-              filename: event.filename,
-              lineno: event.lineno,
-              colno: event.colno,
-              error: event.error,
-              type: event.type,
-            });
-            console.error('[XMTP] ❌ Worker script URL was:', urlString);
-            console.error('[XMTP] ❌ This usually means the worker script has a JavaScript error or failed to load');
-            workerErrorCaught = true;
-          });
-          
-          worker.addEventListener('messageerror', (event) => {
-            console.error('[XMTP] ❌ Worker message error:', event);
-            console.error('[XMTP] ❌ Worker script URL was:', urlString);
-            workerErrorCaught = true;
-          });
-          
-          worker.addEventListener('message', (event) => {
-            console.log('[XMTP] ✅ Worker message received:', event.data);
-          });
-          
-          console.log('[XMTP] ✅ Worker object created successfully');
-          return worker;
-        } catch (err) {
-          console.error('[XMTP] ❌ Failed to create worker:', err);
-          console.error('[XMTP] ❌ Script URL was:', urlString);
-          throw err;
-        }
-      } as unknown as typeof Worker;
-      
-      WorkerWrapper.prototype = OriginalWorker.prototype;
-      
-      // Temporarily replace Worker
-      const originalWorkerConstructor = globalThis.Worker;
-      (globalThis as typeof globalThis & { Worker: typeof Worker }).Worker = WorkerWrapper;
+      // Create a signer if we have a private key
+      if (!identity.privateKey) {
+        throw new Error('Private key required for XMTP client creation');
+      }
 
-      try {
-        // Create a signer if we have a private key
-        if (!identity.privateKey) {
-          throw new Error('Private key required for XMTP client creation');
-        }
-
-        console.log('[XMTP] Creating signer for address:', identity.address);
-        const signer = this.createSigner(identity.address, identity.privateKey);
+      console.log('[XMTP] Creating signer for address:', identity.address);
+      const signer = this.createSigner(identity.address, identity.privateKey);
 
         // Add timeout to detect hanging
         console.log('[XMTP] Calling Client.create() with signer...');
         console.log('[XMTP] Using dev environment (matching cthulhu.bot)');
         
-        const clientPromise = Client.create(signer, {
-          env: 'dev', // Changed to 'dev' to match cthulhu.bot
-          loggingLevel: 'debug',
-          structuredLogging: false,
-          performanceLogging: false,
-        }).then(async (client) => {
-          console.log('[XMTP] ✅ Client.create() promise resolved!');
-          return client;
-        }).catch(error => {
-          console.error('[XMTP] ❌ Client.create() promise rejected:', error);
-          if (workerErrorCaught) {
-            console.error('[XMTP] ❌ Worker errors were detected during client creation');
-          }
-          throw error;
-        });
+      console.log('[XMTP] Calling Client.create() with signer...');
+      console.log('[XMTP] Client.create options:', {
+        env: 'dev',
+        loggingLevel: 'debug',
+        structuredLogging: false,
+        performanceLogging: false,
+      });
+      
+      const client = await Client.create(signer, {
+        env: 'dev',
+        loggingLevel: 'debug',
+        structuredLogging: false,
+        performanceLogging: false,
+      });
 
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          const intervalId = setInterval(() => {
-            console.log('[XMTP] ⏳ Still waiting for Client.create()... (checking every 5s)');
-            if (workerErrorCaught) {
-              console.warn('[XMTP] ⚠️  Worker error detected but Client.create() still pending');
-            }
-          }, 5000);
-          
-          setTimeout(() => {
-            clearInterval(intervalId);
-            console.error('[XMTP] ❌ Client.create() timeout reached!');
-            if (workerErrorCaught) {
-              console.error('[XMTP] ❌ Worker errors occurred before timeout');
-            }
-            reject(new Error('Client.create() timed out after 30 seconds' + 
-              (workerErrorCaught ? ' (worker errors detected)' : '')));
-          }, 30000);
-        });
+      console.log('[XMTP] ✅ Client created successfully');
+      console.log('[XMTP] Client properties:', {
+        inboxId: client.inboxId,
+        installationId: client.installationId,
+        isReady: client.isReady,
+      });
+      this.client = client;
 
-        console.log('[XMTP] Waiting for Client.create() to complete...');
-        const client = await Promise.race([clientPromise, timeoutPromise]);
-
-        console.log('[XMTP] ✅ Client created successfully');
-        console.log('[XMTP] Client properties:', {
-          inboxId: client.inboxId,
-          installationId: client.installationId,
-          isReady: client.isReady,
-        });
-        this.client = client;
-
-        // Step 2: Check if already registered (v3 auto-registers during Client.create)
-        console.log('[XMTP] Checking if identity is registered...');
-        try {
-          const isRegistered = await client.isRegistered();
-          console.log('[XMTP] isRegistered:', isRegistered);
-          logNetworkEvent({
-            direction: 'status',
-            event: 'connect:registration_check',
-            details: `Identity registered: ${isRegistered}, inbox ID: ${client.inboxId}`,
-          });
-        } catch (e) {
-          console.log('[XMTP] isRegistered() check failed:', e);
-          // Non-fatal - continue anyway
-        }
-
-        setConnectionStatus('connected');
-        setLastConnected(Date.now());
-
+      // Step 2: Check if already registered (v3 auto-registers during Client.create)
+      console.log('[XMTP] Checking if identity is registered...');
+      try {
+        const isRegistered = await client.isRegistered();
+        console.log('[XMTP] isRegistered:', isRegistered);
         logNetworkEvent({
           direction: 'status',
-          event: 'connect:success',
-          details: `Connected to XMTP as ${identity.address} (inbox: ${client.inboxId})`,
+          event: 'connect:registration_check',
+          details: `Identity registered: ${isRegistered}, inbox ID: ${client.inboxId}`,
         });
-
-        console.log('[XMTP] ✅ XMTP client connected', identity.address, 'inbox:', client.inboxId);
-
-        // Start syncing conversations and streaming messages
-        console.log('[XMTP] Starting conversation sync and message streaming...');
-        await this.syncConversations();
-        await this.startMessageStream();
-      } finally {
-        // Restore original Worker constructor
-        (globalThis as typeof globalThis & { Worker: typeof Worker }).Worker = originalWorkerConstructor;
+      } catch (e) {
+        console.log('[XMTP] isRegistered() check failed:', e);
+        // Non-fatal - continue anyway
       }
+
+      setConnectionStatus('connected');
+      setLastConnected(Date.now());
+
+      logNetworkEvent({
+        direction: 'status',
+        event: 'connect:success',
+        details: `Connected to XMTP as ${identity.address} (inbox: ${client.inboxId})`,
+      });
+
+      console.log('[XMTP] ✅ XMTP client connected', identity.address, 'inbox:', client.inboxId);
+
+      // Start syncing conversations and streaming messages
+      console.log('[XMTP] Starting conversation sync and message streaming...');
+      await this.syncConversations();
+      await this.startMessageStream();
     } catch (error) {
       console.error('[XMTP] Connection failed:', error);
       console.error('[XMTP] Error type:', typeof error);
