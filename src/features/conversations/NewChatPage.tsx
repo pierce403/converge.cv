@@ -6,12 +6,15 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConversations } from './useConversations';
 import { getXmtpClient } from '@/lib/xmtp';
+import { resolveAddressOrENS, isENSName, isEthereumAddress } from '@/lib/utils/ens';
 
 export function NewChatPage() {
   const navigate = useNavigate();
   const { createConversation } = useConversations();
 
-  const [address, setAddress] = useState('');
+  const [inputValue, setInputValue] = useState('');
+  const [resolvedAddress, setResolvedAddress] = useState<string | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
@@ -20,35 +23,51 @@ export function NewChatPage() {
     e.preventDefault();
     setError('');
 
-    if (!address.trim()) {
-      setError('Please enter an address');
-      return;
-    }
-
-    // Basic Ethereum address validation
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
-      setError('Invalid Ethereum address format');
+    if (!inputValue.trim()) {
+      setError('Please enter an address or ENS name');
       return;
     }
 
     try {
-      setIsChecking(true);
+      // Step 1: Resolve ENS name if needed
+      let targetAddress = inputValue.trim();
+      
+      if (isENSName(inputValue)) {
+        setIsResolving(true);
+        console.log('[NewChat] Resolving ENS name:', inputValue);
+        
+        const resolved = await resolveAddressOrENS(inputValue);
+        setIsResolving(false);
+        
+        if (!resolved) {
+          setError(`Could not resolve ENS name: ${inputValue}`);
+          return;
+        }
+        
+        targetAddress = resolved;
+        setResolvedAddress(resolved);
+        console.log('[NewChat] ✅ Resolved to:', resolved);
+      } else if (!isEthereumAddress(inputValue)) {
+        setError('Invalid Ethereum address or ENS name format');
+        return;
+      }
 
-      // Check if address can receive XMTP messages
+      // Step 2: Check if address can receive XMTP messages
+      setIsChecking(true);
       const xmtp = getXmtpClient();
-      const canMessage = await xmtp.canMessage(address);
+      const canMessage = await xmtp.canMessage(targetAddress);
 
       if (!canMessage) {
-        setError('This address is not registered on XMTP');
+        setError(`This ${isENSName(inputValue) ? 'ENS name' : 'address'} is not registered on XMTP`);
         setIsChecking(false);
         return;
       }
 
+      // Step 3: Create conversation
       setIsChecking(false);
       setIsCreating(true);
 
-      // Create conversation
-      const conversation = await createConversation(address);
+      const conversation = await createConversation(targetAddress);
 
       if (conversation) {
         navigate(`/chat/${conversation.id}`);
@@ -59,6 +78,7 @@ export function NewChatPage() {
     } catch (err) {
       console.error('Error creating conversation:', err);
       setError('Failed to create conversation. Please try again.');
+      setIsResolving(false);
       setIsChecking(false);
       setIsCreating(false);
     }
@@ -85,27 +105,36 @@ export function NewChatPage() {
           <div className="mb-6">
             <h2 className="text-lg font-semibold mb-2">Start a conversation</h2>
             <p className="text-sm text-slate-400">
-              Enter an Ethereum address to start chatting via XMTP
+              Enter an Ethereum address or ENS name to start chatting via XMTP
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="address" className="block text-sm font-medium mb-2">
-                Ethereum Address
+                Ethereum Address or ENS Name
               </label>
               <input
                 id="address"
                 type="text"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="0x..."
+                value={inputValue}
+                onChange={(e) => {
+                  setInputValue(e.target.value);
+                  setResolvedAddress(null);
+                  setError('');
+                }}
+                placeholder="0x... or example.eth"
                 className="input-primary"
                 autoFocus
-                disabled={isChecking || isCreating}
+                disabled={isResolving || isChecking || isCreating}
               />
+              {resolvedAddress && (
+                <p className="text-xs text-green-400 mt-1">
+                  ✓ Resolved to: {resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}
+                </p>
+              )}
               <p className="text-xs text-slate-500 mt-1">
-                Must be a valid Ethereum address registered on XMTP
+                Must be a valid Ethereum address or ENS name registered on XMTP
               </p>
             </div>
 
@@ -127,9 +156,9 @@ export function NewChatPage() {
               <button
                 type="submit"
                 className="btn-primary flex-1"
-                disabled={isChecking || isCreating}
+                disabled={isResolving || isChecking || isCreating}
               >
-                {isChecking ? 'Checking...' : isCreating ? 'Creating...' : 'Start Chat'}
+                {isResolving ? 'Resolving ENS...' : isChecking ? 'Checking...' : isCreating ? 'Creating...' : 'Start Chat'}
               </button>
             </div>
           </form>

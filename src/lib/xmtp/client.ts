@@ -485,34 +485,54 @@ export class XmtpClient {
   }
 
   /**
-   * Create a new conversation with a peer
+   * Create a new conversation with a peer (by inbox ID)
    */
-  async createConversation(peerAddress: string): Promise<XmtpConversation> {
+  async createConversation(peerInboxId: string): Promise<XmtpConversation> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
+    console.log('[XMTP] Creating conversation with inbox ID:', peerInboxId);
+
     logNetworkEvent({
       direction: 'outbound',
       event: 'conversations:create',
-      details: `Creating conversation with ${peerAddress}`,
+      details: `Creating conversation with ${peerInboxId}`,
     });
 
-    const conversation: XmtpConversation = {
-      id: `conv_${Date.now()}`,
-      topic: `topic_${peerAddress}`,
-      peerAddress,
-      createdAt: Date.now(),
-    };
+    try {
+      // Create a new DM conversation using the inbox ID
+      const dmConversation = await this.client.conversations.newDm(peerInboxId);
+      
+      console.log('[XMTP] ✅ DM conversation created:', {
+        id: dmConversation.id,
+        createdAtNs: dmConversation.createdAtNs,
+      });
 
-    logNetworkEvent({
-      direction: 'status',
-      event: 'conversations:create:local',
-      details: `Conversation ${conversation.id} created locally (stub)`,
-      payload: this.formatPayload(conversation),
-    });
+      const conversation: XmtpConversation = {
+        id: dmConversation.id,
+        topic: dmConversation.id, // Use conversation ID as topic
+        peerAddress: peerInboxId,
+        createdAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
+      };
 
-    return conversation;
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:create:success',
+        details: `Conversation ${conversation.id} created`,
+        payload: this.formatPayload(conversation),
+      });
+
+      return conversation;
+    } catch (error) {
+      console.error('[XMTP] Failed to create conversation:', error);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:create:error',
+        details: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   /**
@@ -523,6 +543,8 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
+    console.log('[XMTP] Sending message to conversation:', conversationId);
+
     logNetworkEvent({
       direction: 'outbound',
       event: 'messages:send',
@@ -530,22 +552,51 @@ export class XmtpClient {
       payload: this.formatPayload(content),
     });
 
-    const message: XmtpMessage = {
-      id: `msg_${Date.now()}`,
-      conversationTopic: conversationId,
-      senderAddress: this.identity?.address || 'unknown',
-      content,
-      sentAt: Date.now(),
-    };
+    try {
+      // Sync conversations to ensure we have the latest
+      await this.client.conversations.sync();
+      
+      // Find the conversation by ID
+      const conversations = await this.client.conversations.list();
+      const conversation = conversations.find((c) => c.id === conversationId);
+      
+      if (!conversation) {
+        throw new Error(`Conversation ${conversationId} not found`);
+      }
 
-    logNetworkEvent({
-      direction: 'status',
-      event: 'messages:send:queued',
-      details: `Message ${message.id} queued for delivery`,
-      payload: this.formatPayload(message),
-    });
+      console.log('[XMTP] Found conversation, sending message...');
+      
+      // Send the message
+      await conversation.send(content);
+      
+      console.log('[XMTP] ✅ Message sent successfully');
 
-    return message;
+      // Create a message object to return
+      const message: XmtpMessage = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        conversationTopic: conversationId,
+        senderAddress: this.identity?.address || 'unknown',
+        content,
+        sentAt: Date.now(),
+      };
+
+      logNetworkEvent({
+        direction: 'status',
+        event: 'messages:send:success',
+        details: `Message sent on ${conversationId}`,
+        payload: this.formatPayload(message),
+      });
+
+      return message;
+    } catch (error) {
+      console.error('[XMTP] Failed to send message:', error);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'messages:send:error',
+        details: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   /**
@@ -576,26 +627,53 @@ export class XmtpClient {
   }
 
   /**
-   * Check if an address can receive XMTP messages
+   * Check if an inbox ID can receive XMTP messages
    */
-  async canMessage(address: string): Promise<boolean> {
+  async canMessage(inboxId: string): Promise<boolean> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
-    console.warn('XMTP canMessage fallback for', address);
+    console.log('[XMTP] Checking if inbox ID can receive messages:', inboxId);
+    
     logNetworkEvent({
       direction: 'outbound',
       event: 'canMessage',
-      details: `Checking if ${address} can receive XMTP messages`,
+      details: `Checking if ${inboxId} can receive XMTP messages`,
     });
 
-    logNetworkEvent({
-      direction: 'status',
-      event: 'canMessage:result',
-      details: `Assuming ${address} is XMTP enabled (stub implementation)`,
-    });
-    return true;
+    try {
+      // In XMTP v3, canMessage expects an array of Identifier objects
+      const identifier = {
+        identifier: inboxId.toLowerCase(),
+        identifierKind: 'Ethereum' as const,
+      };
+      
+      const canMsgMap = await this.client.canMessage([identifier as any]);
+      const result = canMsgMap.get(inboxId.toLowerCase()) || false;
+      
+      console.log(`[XMTP] canMessage result for ${inboxId}:`, result);
+      
+      logNetworkEvent({
+        direction: 'status',
+        event: 'canMessage:result',
+        details: `${inboxId} ${result ? 'can' : 'cannot'} receive messages`,
+      });
+      
+      return result;
+    } catch (error) {
+      console.error('[XMTP] canMessage check failed:', error);
+      
+      logNetworkEvent({
+        direction: 'status',
+        event: 'canMessage:error',
+        details: error instanceof Error ? error.message : String(error),
+      });
+      
+      // Fallback: assume true (will fail later if actually can't message)
+      console.warn('[XMTP] ⚠️  canMessage failed, assuming inbox is valid');
+      return true;
+    }
   }
 
 }
