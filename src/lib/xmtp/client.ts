@@ -88,6 +88,14 @@ export class XmtpClient {
   async connect(identity: XmtpIdentity): Promise<void> {
     const { setConnectionStatus, setLastConnected, setError } = useXmtpStore.getState();
 
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'connect',
+      details: `Connecting as ${identity.address}`,
+    });
+
+    this.identity = identity;
+
     const globalScope: typeof globalThis | undefined =
       typeof globalThis !== 'undefined' ? globalThis : undefined;
     const hasSharedArrayBuffer =
@@ -98,14 +106,6 @@ export class XmtpClient {
       !!globalScope && typeof globalScope.crossOriginIsolated === 'boolean'
         ? globalScope.crossOriginIsolated
         : false;
-
-    logNetworkEvent({
-      direction: 'outbound',
-      event: 'connect',
-      details: `Connecting as ${identity.address}`,
-    });
-
-    this.identity = identity;
 
     if (!hasSharedArrayBuffer || !isCrossOriginIsolated) {
       const message =
