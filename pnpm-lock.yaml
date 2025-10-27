@@ -12,8 +12,8 @@ importers:
         specifier: ^2.1.8
         version: 2.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@xmtp/browser-sdk':
-        specifier: ^0.0.1
-        version: 0.0.1
+        specifier: ^5.0.1
+        version: 5.0.1
       dexie:
         specifier: ^4.0.8
         version: 4.2.1
@@ -1369,24 +1369,24 @@ packages:
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
 
-  '@xmtp/browser-sdk@0.0.1':
-    resolution: {integrity: sha512-joW3olG3562bqVX9gF7mUZ/w2vYFzcuJmjpDqVCf8f5jNUwwGSciAPAiQOI65sfOK/ZpJWfB9aHO0oIfKEP9cg==}
+  '@xmtp/browser-sdk@5.0.1':
+    resolution: {integrity: sha512-BMxiTUFOFQ6CX4w3rLXyC/hHr0T4craeEP7gXWST+G/AZp64/GcImXgLN2tcLRs20U/ZDo+yGnMlAkiOdQ+u4Q==}
     engines: {node: '>=20'}
 
-  '@xmtp/content-type-group-updated@1.0.1':
-    resolution: {integrity: sha512-jKa3jsyDdsUQzeNgC4Hz+e8/H1UWtvc2Hmomb8rgXQkK0N88vozUCro4XxxQade2ibFBXTu/noseFdZzJmqNMw==}
+  '@xmtp/content-type-group-updated@2.0.2':
+    resolution: {integrity: sha512-ZUGLtzWALo5jimk5hYBVXjbdaKT6zP6a9wK0Urzl9H+Xv2w+H3fYDhwAidU0PXTcLL81qlUM6joxKVlsF5udvA==}
 
-  '@xmtp/content-type-primitives@1.0.3':
-    resolution: {integrity: sha512-NJUsar5fXkPnlgXZY7oZkctPjmGBpRsp1iFtWuiVMcpQ8P7uh1MYLdc3IhAMCqRSFw5n6UBrqUL6d7fjaoLBEA==}
+  '@xmtp/content-type-primitives@2.0.2':
+    resolution: {integrity: sha512-OTUsCD48sO2Eg69dfre32OSnXSkmefbSZA4L0S58LqYK6+hMymFRRjEH4fvPzXc9WCw5FmCYEG7DFAaB680HiQ==}
 
-  '@xmtp/content-type-text@1.0.1':
-    resolution: {integrity: sha512-NzPWtccKc4CPHZi+edlZhTZAuFU91iB5rHR3UboqFxaGJ6UTTCsMmFRdvkoVpZ+HB18cAgPoVOLClfykI1O4pQ==}
+  '@xmtp/content-type-text@2.0.2':
+    resolution: {integrity: sha512-nlRufOYPrG5sNbruNPCsb6Qk9/jmJ5lMooPsZEo4Dbwda/2S4bSvrrIncT6if7M2SCha3hxtlgJlFGeTtHy4gQ==}
 
   '@xmtp/proto@3.87.0':
     resolution: {integrity: sha512-aWXaWcsCGlWCD3iQNMqCOHVckili+mUu3y1hQuQmHnIQUVfIV/5o+zMmZ1sP6t2GSWo/GnDr3XBjI7nZh9V9QA==}
 
-  '@xmtp/wasm-bindings@0.0.1':
-    resolution: {integrity: sha512-IXKtRpDCq2EAk2pHjMusmpeSR43ItpIDDeVK+5//8wDm+Gyhn97UU8Fxq4PEPl5KKD4mKecE1GAdkfr6PXilBQ==}
+  '@xmtp/wasm-bindings@1.5.4':
+    resolution: {integrity: sha512-4A3ERdZjWjOCQJ6jfoqXsN0uaYn/xa8PY9HRw2nrNsAx7jR6dBaDm4bD19uNE3PEcJiWn+lr/G7Cu93D+uQ9TQ==}
     engines: {node: '>=20'}
 
   abitype@1.1.0:
@@ -3065,8 +3065,8 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
-  uuid@10.0.0:
-    resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
+  uuid@11.1.0:
+    resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
     hasBin: true
 
   viem@2.38.4:
@@ -4668,27 +4668,26 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 1.2.0
 
-  '@xmtp/browser-sdk@0.0.1':
+  '@xmtp/browser-sdk@5.0.1':
     dependencies:
-      '@xmtp/content-type-group-updated': 1.0.1
-      '@xmtp/content-type-primitives': 1.0.3
-      '@xmtp/content-type-text': 1.0.1
-      '@xmtp/proto': 3.87.0
-      '@xmtp/wasm-bindings': 0.0.1
-      uuid: 10.0.0
+      '@xmtp/content-type-group-updated': 2.0.2
+      '@xmtp/content-type-primitives': 2.0.2
+      '@xmtp/content-type-text': 2.0.2
+      '@xmtp/wasm-bindings': 1.5.4
+      uuid: 11.1.0
 
-  '@xmtp/content-type-group-updated@1.0.1':
+  '@xmtp/content-type-group-updated@2.0.2':
     dependencies:
-      '@xmtp/content-type-primitives': 1.0.3
-      '@xmtp/proto': 3.87.0
-
-  '@xmtp/content-type-primitives@1.0.3':
-    dependencies:
+      '@xmtp/content-type-primitives': 2.0.2
       '@xmtp/proto': 3.87.0
 
-  '@xmtp/content-type-text@1.0.1':
+  '@xmtp/content-type-primitives@2.0.2':
     dependencies:
-      '@xmtp/content-type-primitives': 1.0.3
+      '@xmtp/proto': 3.87.0
+
+  '@xmtp/content-type-text@2.0.2':
+    dependencies:
+      '@xmtp/content-type-primitives': 2.0.2
 
   '@xmtp/proto@3.87.0':
     dependencies:
@@ -4697,7 +4696,7 @@ snapshots:
       rxjs: 7.8.2
       undici: 5.29.0
 
-  '@xmtp/wasm-bindings@0.0.1': {}
+  '@xmtp/wasm-bindings@1.5.4': {}
 
   abitype@1.1.0(typescript@5.9.3):
     optionalDependencies:
@@ -6512,7 +6511,7 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  uuid@10.0.0: {}
+  uuid@11.1.0: {}
 
   viem@2.38.4(typescript@5.9.3):
     dependencies:

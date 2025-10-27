@@ -6,7 +6,7 @@
  * This provides the interface we'll use throughout the app.
  */
 
-import { Client } from '@xmtp/browser-sdk';
+import { Client, type Signer } from '@xmtp/browser-sdk';
 import { privateKeyToAccount } from 'viem/accounts';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
@@ -59,21 +59,26 @@ export class XmtpClient {
   }
 
   /**
-   * Sign a message with an Ethereum private key
+   * Create an XMTP Signer from an Ethereum private key
    */
-  private async signMessage(message: string, privateKeyHex: string): Promise<Uint8Array> {
-    // Create an account from the private key
+  private createSigner(address: string, privateKeyHex: string): Signer {
     const account = privateKeyToAccount(privateKeyHex as `0x${string}`);
     
-    // Sign the message (this uses Ethereum's ECDSA signing with secp256k1)
-    const signature = await account.signMessage({ message });
-    
-    // Convert hex signature to Uint8Array
-    const signatureBytes = new Uint8Array(
-      signature.replace('0x', '').match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
-    );
-    
-    return signatureBytes;
+    return {
+      type: 'EOA', // Externally Owned Account
+      getIdentifier: () => {
+        return {
+          kind: { case: 'address', value: address.toLowerCase() },
+        } as any; // Identifier type from WASM bindings
+      },
+      signMessage: async (message: string) => {
+        const signature = await account.signMessage({ message });
+        // Convert hex signature to Uint8Array
+        return new Uint8Array(
+          signature.replace('0x', '').match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
+        );
+      },
+    };
   }
 
   /**
@@ -134,7 +139,7 @@ export class XmtpClient {
       console.log('[XMTP] Cross-origin isolated:', isCrossOriginIsolated);
       console.log('[XMTP] SharedArrayBuffer available:', hasSharedArrayBuffer);
       console.log('[XMTP] WebAssembly available:', typeof WebAssembly !== 'undefined');
-      console.log('[XMTP] SDK version: @xmtp/browser-sdk@0.0.1');
+      console.log('[XMTP] SDK version: @xmtp/browser-sdk@5.0.1');
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
       // Intercept Worker constructor to catch errors
@@ -189,36 +194,45 @@ export class XmtpClient {
       (globalThis as typeof globalThis & { Worker: typeof Worker }).Worker = WorkerWrapper;
 
       try {
+        // Create a signer if we have a private key
+        if (!identity.privateKey) {
+          throw new Error('Private key required for XMTP client creation');
+        }
+
+        console.log('[XMTP] Creating signer for address:', identity.address);
+        const signer = this.createSigner(identity.address, identity.privateKey);
+
         // Add timeout to detect hanging
-        console.log('[XMTP] Calling Client.create() with enableLogging: true...');
-        console.log('[XMTP] Trying dev environment first for better error messages...');
-        const clientPromise = Client.create(identity.address, {
-          env: 'dev', // Try dev environment for better error messages
-          enableLogging: true, // Enable SDK logging
-        }).then(client => {
-          console.log('[XMTP] Client.create() promise resolved!');
+        console.log('[XMTP] Calling Client.create() with signer...');
+        console.log('[XMTP] Using production environment');
+        
+        const clientPromise = Client.create(signer, {
+          env: 'production',
+          loggingLevel: 'debug', // Enable SDK logging
+        }).then(async (client) => {
+          console.log('[XMTP] ✅ Client.create() promise resolved!');
           return client;
         }).catch(error => {
-          console.error('[XMTP] Client.create() promise rejected:', error);
+          console.error('[XMTP] ❌ Client.create() promise rejected:', error);
           if (workerErrorCaught) {
-            console.error('[XMTP] Worker errors were detected during client creation');
+            console.error('[XMTP] ❌ Worker errors were detected during client creation');
           }
           throw error;
         });
 
         const timeoutPromise = new Promise<never>((_, reject) => {
           const intervalId = setInterval(() => {
-            console.log('[XMTP] Still waiting for Client.create()... (checking every 5s)');
+            console.log('[XMTP] ⏳ Still waiting for Client.create()... (checking every 5s)');
             if (workerErrorCaught) {
-              console.warn('[XMTP] Worker error detected but Client.create() still pending');
+              console.warn('[XMTP] ⚠️  Worker error detected but Client.create() still pending');
             }
           }, 5000);
           
           setTimeout(() => {
             clearInterval(intervalId);
-            console.error('[XMTP] Client.create() timeout reached!');
+            console.error('[XMTP] ❌ Client.create() timeout reached!');
             if (workerErrorCaught) {
-              console.error('[XMTP] Worker errors occurred before timeout');
+              console.error('[XMTP] ❌ Worker errors occurred before timeout');
             }
             reject(new Error('Client.create() timed out after 30 seconds' + 
               (workerErrorCaught ? ' (worker errors detected)' : '')));
@@ -226,9 +240,9 @@ export class XmtpClient {
         });
 
         console.log('[XMTP] Waiting for Client.create() to complete...');
-        const client = await Promise.race([clientPromise as Promise<Client>, timeoutPromise]);
+        const client = await Promise.race([clientPromise, timeoutPromise]);
 
-        console.log('[XMTP] Client created successfully');
+        console.log('[XMTP] ✅ Client created successfully');
         console.log('[XMTP] Client properties:', {
           inboxId: client.inboxId,
           installationId: client.installationId,
@@ -237,93 +251,53 @@ export class XmtpClient {
         this.client = client;
 
         // Step 2: Check if already registered
+        console.log('[XMTP] Checking if identity is already registered...');
         const isRegistered = await client.isRegistered();
-      logNetworkEvent({
-        direction: 'status',
-        event: 'connect:registration_check',
-        details: `Identity ${isRegistered ? 'already registered' : 'needs registration'}`,
-      });
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:registration_check',
+          details: `Identity ${isRegistered ? 'already registered' : 'needs registration'}`,
+        });
 
-      if (!isRegistered && identity.privateKey) {
-        try {
-          // Step 3: Get the signature text
+        if (!isRegistered) {
+          console.log('[XMTP] Identity not registered, calling client.register()...');
           logNetworkEvent({
             direction: 'outbound',
-            event: 'connect:get_signature_text',
-            details: 'Requesting signature text for identity registration',
+            event: 'connect:register',
+            details: 'Registering identity on XMTP network (v5 API)',
           });
 
-          const signatureText = await client.getCreateInboxSignatureText();
-          if (!signatureText) {
-            throw new Error('No signature text returned from XMTP');
+          try {
+            await client.register();
+            console.log('[XMTP] ✅ Registration complete! Inbox ID:', client.inboxId);
+            logNetworkEvent({
+              direction: 'status',
+              event: 'connect:registered',
+              details: `Identity successfully registered with inbox ID: ${client.inboxId}`,
+            });
+          } catch (registrationError) {
+            console.error('[XMTP] ❌ Registration failed:', registrationError);
+            logNetworkEvent({
+              direction: 'status',
+              event: 'connect:registration_error',
+              details: registrationError instanceof Error ? registrationError.message : String(registrationError),
+            });
+            throw registrationError;
           }
-
-          console.log('[XMTP] Signature text:', signatureText);
-          logNetworkEvent({
-            direction: 'status',
-            event: 'connect:signature_text_received',
-            details: `Signature text: ${signatureText.substring(0, 100)}`,
-          });
-
-          // Step 4: Sign the message
-          logNetworkEvent({
-            direction: 'status',
-            event: 'connect:signing',
-            details: 'Signing registration message with wallet',
-          });
-
-          console.log('[XMTP] Signing message...');
-          const signature = await this.signMessage(signatureText, identity.privateKey);
-          console.log('[XMTP] Signature generated:', signature.length, 'bytes');
-
-          // Step 5: Add the signature
-          logNetworkEvent({
-            direction: 'outbound',
-            event: 'connect:add_signature',
-            details: `Adding signature (${signature.length} bytes)`,
-          });
-
-          console.log('[XMTP] Adding signature to client...');
-          // WasmSignatureRequestType.CreateInbox = 1
-          await client.addSignature(1, signature);
-
-          // Step 6: Register the identity
-          logNetworkEvent({
-            direction: 'outbound',
-            event: 'connect:register_identity',
-            details: 'Registering identity on XMTP network',
-          });
-
-          console.log('[XMTP] Calling registerIdentity()...');
-          await client.registerIdentity();
-
-          console.log('[XMTP] Registration complete! Inbox ID:', client.inboxId);
-          logNetworkEvent({
-            direction: 'status',
-            event: 'connect:registered',
-            details: `Identity successfully registered with inbox ID: ${client.inboxId}`,
-          });
-        } catch (registrationError) {
-          console.error('[XMTP] Registration failed:', registrationError);
-          logNetworkEvent({
-            direction: 'status',
-            event: 'connect:registration_error',
-            details: registrationError instanceof Error ? registrationError.message : String(registrationError),
-          });
-          throw registrationError;
+        } else {
+          console.log('[XMTP] ✅ Identity already registered with inbox ID:', client.inboxId);
         }
-      }
 
-      setConnectionStatus('connected');
-      setLastConnected(Date.now());
+        setConnectionStatus('connected');
+        setLastConnected(Date.now());
 
-      logNetworkEvent({
-        direction: 'status',
-        event: 'connect:success',
-        details: `Connected to XMTP as ${identity.address} (inbox: ${client.inboxId})`,
-      });
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:success',
+          details: `Connected to XMTP as ${identity.address} (inbox: ${client.inboxId})`,
+        });
 
-        console.log('XMTP client connected', identity.address, 'inbox:', client.inboxId);
+        console.log('[XMTP] ✅ XMTP client connected', identity.address, 'inbox:', client.inboxId);
       } finally {
         // Restore original Worker constructor
         (globalThis as typeof globalThis & { Worker: typeof Worker }).Worker = originalWorkerConstructor;
