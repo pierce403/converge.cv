@@ -142,30 +142,42 @@ export class XmtpClient {
       let workerErrorCaught = false;
       
       const WorkerWrapper = function(scriptURL: string | URL, options?: WorkerOptions) {
-        console.log('[XMTP] Worker being created with:', scriptURL, options);
+        const urlString = scriptURL instanceof URL ? scriptURL.href : String(scriptURL);
+        console.log('[XMTP] Worker being created with URL:', urlString);
+        console.log('[XMTP] Worker options:', options);
+        
         try {
           const worker = new OriginalWorker(scriptURL, options);
           
           worker.addEventListener('error', (event) => {
-            console.error('[XMTP] Worker error event:', {
+            console.error('[XMTP] ❌ Worker error event:', {
               message: event.message,
               filename: event.filename,
               lineno: event.lineno,
               colno: event.colno,
               error: event.error,
+              type: event.type,
             });
+            console.error('[XMTP] ❌ Worker script URL was:', urlString);
+            console.error('[XMTP] ❌ This usually means the worker script has a JavaScript error or failed to load');
             workerErrorCaught = true;
           });
           
           worker.addEventListener('messageerror', (event) => {
-            console.error('[XMTP] Worker message error:', event);
+            console.error('[XMTP] ❌ Worker message error:', event);
+            console.error('[XMTP] ❌ Worker script URL was:', urlString);
             workerErrorCaught = true;
           });
           
-          console.log('[XMTP] Worker created successfully');
+          worker.addEventListener('message', (event) => {
+            console.log('[XMTP] ✅ Worker message received:', event.data);
+          });
+          
+          console.log('[XMTP] ✅ Worker object created successfully');
           return worker;
         } catch (err) {
-          console.error('[XMTP] Failed to create worker:', err);
+          console.error('[XMTP] ❌ Failed to create worker:', err);
+          console.error('[XMTP] ❌ Script URL was:', urlString);
           throw err;
         }
       } as unknown as typeof Worker;
@@ -179,8 +191,9 @@ export class XmtpClient {
       try {
         // Add timeout to detect hanging
         console.log('[XMTP] Calling Client.create() with enableLogging: true...');
+        console.log('[XMTP] Trying dev environment first for better error messages...');
         const clientPromise = Client.create(identity.address, {
-          env: 'production',
+          env: 'dev', // Try dev environment for better error messages
           enableLogging: true, // Enable SDK logging
         }).then(client => {
           console.log('[XMTP] Client.create() promise resolved!');
