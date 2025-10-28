@@ -9,6 +9,7 @@ import { getStorage } from '@/lib/storage';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
+import { useWalletConnection } from '@/lib/wagmi';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -19,6 +20,7 @@ export function SettingsPage() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [displayName, setDisplayName] = useState(identity?.displayName || '');
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const { disconnectWallet } = useWalletConnection();
 
   const handleLockVault = () => {
     lock();
@@ -31,7 +33,15 @@ export function SettingsPage() {
       )
     ) {
       try {
-        // Use logout which now clears everything properly (IndexedDB + OPFS)
+        // First, disconnect any connected wallet so we don't auto-reconnect
+        try {
+          await disconnectWallet();
+          console.log('[Settings] Disconnected wallet via wagmi');
+        } catch (e) {
+          console.warn('[Settings] Wallet disconnect failed (non-fatal):', e);
+        }
+
+        // Use logout which now clears everything properly (IndexedDB + OPFS + XMTP)
         await logout();
         navigate('/onboarding');
       } catch (error) {
