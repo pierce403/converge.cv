@@ -33,11 +33,11 @@ export function InstallationsSettings() {
     setError(null);
     try {
       const xmtp = getXmtpClient();
-      if (!xmtp.isConnected()) {
-        setError('XMTP not connected');
-        return;
-      }
-
+      
+      // Try to get inbox state even if not connected
+      // This allows viewing/revoking installations when connection failed due to 10/10 limit
+      console.log('[Installations] Loading installations, connected:', xmtp.isConnected());
+      
       const inboxState = await xmtp.getInboxState();
       console.log('[Installations] Inbox state:', inboxState);
       
@@ -48,25 +48,41 @@ export function InstallationsSettings() {
         return aTime > bTime ? -1 : aTime < bTime ? 1 : 0;
       });
 
-      // Fetch key package statuses for all installations
-      try {
-        const installationIds = sortedInstallations.map((inst) => inst.id);
-        const statuses = await xmtp.getKeyPackageStatuses(installationIds);
-        
-        const installationsWithStatus = sortedInstallations.map((installation) => ({
-          ...installation,
-          keyPackageStatus: statuses.get(installation.id),
-        }));
-        
-        setInstallations(installationsWithStatus);
-      } catch (statusErr) {
-        console.warn('[Installations] Failed to fetch key package statuses:', statusErr);
-        // Still show installations even if status fetch fails
+      console.log('[Installations] Found', sortedInstallations.length, 'installations');
+
+      // Fetch key package statuses for all installations (requires connection)
+      if (xmtp.isConnected() && sortedInstallations.length > 0) {
+        try {
+          const installationIds = sortedInstallations.map((inst) => inst.id);
+          const statuses = await xmtp.getKeyPackageStatuses(installationIds);
+          
+          const installationsWithStatus = sortedInstallations.map((installation) => ({
+            ...installation,
+            keyPackageStatus: statuses.get(installation.id),
+          }));
+          
+          setInstallations(installationsWithStatus);
+        } catch (statusErr) {
+          console.warn('[Installations] Failed to fetch key package statuses:', statusErr);
+          // Still show installations even if status fetch fails
+          setInstallations(sortedInstallations);
+        }
+      } else {
+        // Show installations without status if not connected
         setInstallations(sortedInstallations);
       }
     } catch (err) {
       console.error('[Installations] Failed to load:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load installations');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load installations';
+      
+      // Provide helpful error messages
+      if (errorMsg.includes('10/10 installations')) {
+        setError('⚠️ Installation limit reached (10/10). Cannot create management client to view installations. Please use another device or xmtp.chat to revoke old installations.');
+      } else if (errorMsg.includes('Client not connected')) {
+        setError('XMTP not connected. Please connect first to view installations.');
+      } else {
+        setError(errorMsg);
+      }
     } finally {
       setIsLoading(false);
     }

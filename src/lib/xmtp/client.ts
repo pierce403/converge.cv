@@ -10,7 +10,7 @@ import { Client, type Signer } from '@xmtp/browser-sdk';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
-import { createEOASigner, createSCWSigner, createEphemeralSigner } from '@/lib/wagmi/signers';
+import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
 
 export interface XmtpIdentity {
   address: string;
@@ -457,11 +457,53 @@ export class XmtpClient {
 
   /**
    * Get the inbox state including all installations
+   * Even if main connection failed, try to access inbox state
    */
   async getInboxState() {
     if (!this.client) {
-      throw new Error('Client not connected');
+      // If we don't have a client, try to create a minimal one just for management
+      // This can happen if connection failed due to 10/10 installations
+      console.warn('[XMTP] No client available, attempting to create management client...');
+      
+      if (!this.identity) {
+        throw new Error('No identity available');
+      }
+
+      try {
+        // Create a temporary signer for management operations
+        let signer: Signer;
+        
+        if (this.identity.privateKey) {
+          signer = createEphemeralSigner(this.identity.privateKey as `0x${string}`);
+        } else if (this.identity.signMessage) {
+          signer = createEOASigner(
+            this.identity.address as `0x${string}`,
+            this.identity.signMessage
+          );
+        } else {
+          throw new Error('Identity must have either privateKey or signMessage function');
+        }
+
+        // Create a temporary client for management
+        // This might still fail with 10/10, but at least we try
+        const tempClient = await Client.create(signer, {
+          env: 'production',
+          loggingLevel: 'debug',
+        });
+
+        const state = await tempClient.preferences.inboxState();
+        
+        // Close the temp client
+        await tempClient.close();
+        
+        return state;
+      } catch (error) {
+        console.error('[XMTP] Failed to create management client:', error);
+        throw new Error('Cannot access inbox state - XMTP connection failed. ' + 
+          (error instanceof Error ? error.message : String(error)));
+      }
     }
+    
     return await this.client.preferences.inboxState();
   }
 

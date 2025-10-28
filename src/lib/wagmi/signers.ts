@@ -17,7 +17,7 @@ export function createEOASigner(
 ): Signer {
   return {
     type: 'EOA',
-    getIdentifier: async () => ({
+    getIdentifier: () => ({
       identifier: address.toLowerCase(),
       identifierKind: 'Ethereum',
     }),
@@ -35,12 +35,12 @@ export function createEOASigner(
 export function createSCWSigner(
   address: `0x${string}`,
   signMessage: (message: string) => Promise<string>,
-  chainId: number
+  chainId: number = 1
 ): Signer {
   console.log('[Signer] Creating SCW signer with chain ID:', chainId);
   return {
     type: 'SCW',
-    getIdentifier: async () => ({
+    getIdentifier: () => ({
       identifier: address.toLowerCase(),
       identifierKind: 'Ethereum',
     }),
@@ -60,7 +60,7 @@ export function createEphemeralSigner(privateKey: Hex): Signer {
   const account = privateKeyToAccount(privateKey);
   return {
     type: 'EOA',
-    getIdentifier: async () => ({
+    getIdentifier: () => ({
       identifier: account.address.toLowerCase(),
       identifierKind: 'Ethereum',
     }),
