@@ -523,55 +523,50 @@ export class XmtpClient {
   }
 
   /**
-   * Get the inbox state including all installations
-   * Even if main connection failed, try to access inbox state
+   * Get the inbox state including all installations.
+   * - If connected, refresh from network via Preferences API.
+   * - If not connected, use Utils worker to resolve inboxId & fetch state without a client.
    */
   async getInboxState() {
-    if (!this.client) {
-      // If we don't have a client, try to create a minimal one just for management
-      // This can happen if connection failed due to 10/10 installations
-      console.warn('[XMTP] No client available, attempting to create management client...');
-      
-      if (!this.identity) {
-        throw new Error('No identity available');
-      }
+    const withTimeout = async <T>(p: Promise<T>, ms = 10000): Promise<T> => {
+      return await Promise.race<T>([
+        p,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Timeout fetching inbox state')), ms)) as Promise<T>,
+      ]);
+    };
 
-      try {
-        // Create a temporary signer for management operations
-        let signer: Signer;
-        
-        if (this.identity.privateKey) {
-          signer = createEphemeralSigner(this.identity.privateKey as `0x${string}`);
-        } else if (this.identity.signMessage) {
-          signer = createEOASigner(
-            this.identity.address as `0x${string}`,
-            this.identity.signMessage
-          );
-        } else {
-          throw new Error('Identity must have either privateKey or signMessage function');
-        }
-
-        // Create a temporary client for management
-        // This might still fail with 10/10, but at least we try
-        const tempClient = await Client.create(signer, {
-          env: 'production',
-          loggingLevel: 'debug',
-        });
-
-        const state = await tempClient.preferences.inboxState();
-        
-        // Close the temp client
-        await tempClient.close();
-        
-        return state;
-      } catch (error) {
-        console.error('[XMTP] Failed to create management client:', error);
-        throw new Error('Cannot access inbox state - XMTP connection failed. ' + 
-          (error instanceof Error ? error.message : String(error)));
-      }
+    if (this.client) {
+      // Force refresh from network to avoid stale state
+      return await withTimeout(this.client.preferences.inboxState(true));
     }
-    
-    return await this.client.preferences.inboxState();
+
+    if (!this.identity) {
+      throw new Error('No identity available');
+    }
+
+    try {
+      // Use Utils to resolve inboxId & fetch state without creating a full client
+      const { Utils } = await import('@xmtp/browser-sdk');
+      const utils = new Utils(false);
+
+      const identifier = {
+        identifier: toIdentifierHex(this.identity.address).toLowerCase(),
+        identifierKind: 'Ethereum' as const,
+      } as any;
+
+      const inboxId = await withTimeout(utils.getInboxIdForIdentifier(identifier, 'production'));
+      if (!inboxId) {
+        throw new Error('Inbox not found for this identity');
+      }
+
+      const states = (await withTimeout(utils.inboxStateFromInboxIds([inboxId], 'production')))
+        .filter(Boolean);
+      // Utils worker doesn't need explicit close; it dies with page lifecycle.
+      return states[0];
+    } catch (error) {
+      console.error('[XMTP] Failed to fetch inbox state via Utils:', error);
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
