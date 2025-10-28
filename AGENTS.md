@@ -173,13 +173,15 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
-- **XMTP v3 Integration**: ✅ Fully working!
+- **XMTP v5.0.1 Integration**: ✅ Fully working!
+  - **Upgraded from v3.0.5 → v5.0.1** (October 28, 2025)
+  - Following xmtp.chat reference implementation
   - Identities properly registered on XMTP production network
   - Wallet generation uses proper secp256k1 (address derived from private key via `viem`)
-  - Client auto-registers during `Client.create()` (v3 behavior)
   - Message streaming active via `conversations.streamAllMessages()`
   - Incoming messages displayed in real-time
-  - Can message and be messaged from xmtp.chat and other XMTP v3 clients
+  - Can message and be messaged from xmtp.chat and other XMTP v3+ clients
+  - **Key difference from v3**: `getIdentifier()` is synchronous in v5 (was async in v3)
 
 ### 🚧 TODO
 - Message sending (receiving works, sending not yet implemented)
@@ -216,18 +218,29 @@ User wants to enable:
 
 Focus on **friction-free onboarding** for new users first.
 
-### Key Technical Learning: XMTP Browser SDK v3 Integration
+### Key Technical Learning: XMTP Browser SDK Integration Journey
 
+**v3 Integration (Initial)**:
 **Problem**: XMTP v4 and v5 had persistent worker initialization failures, and initial v3 integration had "Unknown signer" errors.
 
 **Root Causes**:
-1. **v4/v5 incompatibility** - Newer SDK versions have breaking changes and worker issues
-2. **Wrong Identifier format** - v3 uses `{ identifier: "0x...", identifierKind: "Ethereum" }` while v4/v5 use `{ kind: { case: 'address', value: '0x...' } }`
+1. **v4/v5 incompatibility** - Newer SDK versions had worker issues (turned out to be related to our COOP/COEP hack)
+2. **Wrong Identifier format** - v3 uses `{ identifier: "0x...", identifierKind: "Ethereum" }`
 3. **Vite bundling** - The worker file tried to import `@xmtp/wasm-bindings` as a bare module, which failed because we excluded it from Vite's optimizeDeps
 4. **CRITICAL: Wallet generation bug** - We generated random bytes for BOTH private key AND address separately! In Ethereum, the address must be derived from the private key using secp256k1 elliptic curve cryptography
-5. **Auto-registration** - v3 SDK auto-registers during `Client.create()`, unlike v4/v5 which require explicit `client.register()` call
-6. **Async getIdentifier** - v3 requires `getIdentifier` to be async
-7. **Message streaming** - Must explicitly call `conversations.sync()` and `conversations.streamAllMessages()` to receive messages
+5. **Message streaming** - Must explicitly call `conversations.sync()` and `conversations.streamAllMessages()` to receive messages
+
+**v5 Upgrade (October 28, 2025)**:
+**Why it works now**: The v4/v5 worker issues were caused by our COOP/COEP service worker hack (for SharedArrayBuffer). After removing that hack, v5 works perfectly!
+
+**Breaking changes v3 → v5**:
+- `getIdentifier()` is now **synchronous** (was async in v3)
+- All other APIs remained the same
+
+**Benefits of v5**:
+- Latest bug fixes and performance improvements
+- Aligned with xmtp.chat reference implementation
+- Better future compatibility (v2 deprecating June 2025)
 
 **Solution**:
 1. **Downgrade to v3.0.5** - The version that cthulhu.bot uses successfully
