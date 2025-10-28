@@ -674,7 +674,7 @@ export class XmtpClient {
         console.log('[XMTP] Detected Ethereum address, creating conversation via identifier...');
 
         const identifier = {
-          identifier: toIdentifierHex(peerAddressOrInboxId).toLowerCase(),
+          identifier: peerAddressOrInboxId.toLowerCase(),
           identifierKind: 'Ethereum' as const,
         };
 
