@@ -372,3 +372,30 @@ This MVP delivers a fully functional, production-ready PWA for encrypted messagi
 ✅ CI/CD pipeline active
 ✅ Comprehensive documentation
 
+
+---
+
+## Current Sprint: Identity & Wallet Management (2025-10-28)
+
+### Identity Manager in Settings
+- [ ] Create IdentityManager component
+- [ ] List all stored identities with address, inbox ID, installation ID
+- [ ] Add "Switch Identity" functionality
+- [ ] Add "Remove Identity" for each identity
+- [ ] Show current active identity with badge
+
+### Multi-Identity Support
+- [ ] Update IndexedDB schema to support multiple identities
+- [ ] Add identity list to auth store
+- [ ] Implement identity switching logic
+- [ ] Handle XMTP client reconnection on identity switch
+- [ ] Persist active identity selection
+
+### Enhanced Installations Table  
+- [ ] Fetch key package statuses for installations
+- [ ] Display validation errors in UI
+- [ ] Show expiry timestamps (formatted)
+- [ ] Add status badges (valid/expired/error)
+- [ ] Sort installations by creation date (newest first)
+- [ ] Add "Revoke All Other Installations" button
+
