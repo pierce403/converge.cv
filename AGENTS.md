@@ -184,7 +184,7 @@ pnpm typecheck        # TypeScript type checking
   - **Key difference from v3**: `getIdentifier()` is synchronous in v5 (was async in v3)
 
 ### 🚧 TODO
-- Message sending (receiving works, sending not yet implemented)
+- Message sending: ✅ First-message send path fixed (use `getConversationById` before `send`) and DM creation via identifier. Monitor for edge cases and delivery state UX.
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
 - Group chat support (SDK supports it, UI not implemented)
 - Attachments (text messages only for now)
@@ -213,7 +213,7 @@ pnpm typecheck        # TypeScript type checking
 
 User wants to enable:
 1. **Create new identity from nothing** → ✅ DONE (identities now properly registered on XMTP network)
-2. **Message someone on the Base app** → 🚧 Registration done, message send/receive flows next
+2. **Message someone on the Base app** → ✅ DM creation + sending working (v5, identifier-based)
 3. Worry about connecting existing identities later → Deferred
 
 Focus on **friction-free onboarding** for new users first.
@@ -436,3 +436,25 @@ if (!isRegistered) {
 **Last Updated**: 2025-10-28 (Added wallet connection support with wagmi)
 **Updated By**: AI Agent after adding multi-wallet support
 
+### Messaging: Outgoing DM Creation + First Send (2025-10-28)
+
+**Problem**: New conversations created from Converge failed with “not registered” or couldn’t send the first message.
+
+**Root Causes & Fixes**:
+1. Pre-check with `canMessage(address)` returned false negatives and blocked creation. We removed this gate in the UI and let the SDK validate during creation.
+2. Inbox lookup before creating caused formatting pitfalls (0x vs raw hex). Instead of resolving inbox ids ourselves, we now call `conversations.newDmWithIdentifier({ identifier: address, identifierKind: 'Ethereum' })` for addresses. The SDK handles discovery and registration details internally.
+3. First message send path tried to find the conversation via `conversations.list()` and missed newly created DMs. We now fetch directly with `conversations.getConversationById(id)` and retry after a `sync()` before sending.
+
+**Extra Learnings**:
+- `canMessage` returns a `Map<inboxId, boolean>`; its keys are inbox ids, not addresses.
+- For identifier-based creation, pass the checksummed `0x…` address as the identifier. For direct lookup (`findInboxIdByIdentifier`), the lower-level worker expects raw hex (no `0x`)—but we no longer need that for creation.
+- To avoid WalletConnect re-prompt loops, only call `checkExistingIdentity()` on mount when not authenticated.
+- Added `check_deploy.sh` to watch GitHub Pages deploys via `gh` + `jq`.
+
+**Files**:
+- `src/features/conversations/NewChatPage.tsx`: remove `canMessage` pre-check gate.
+- `src/lib/xmtp/client.ts`: create DMs with `newDmWithIdentifier` for addresses; fetch conversation by id before `send`.
+- `src/app/Router.tsx`: skip identity restore when already authenticated (prevents WalletConnect loops).
+- `check_deploy.sh`: convenience deploy watcher.
+
+**Status**: ✅ Outgoing DM creation and first-message send working end-to-end on v5.
