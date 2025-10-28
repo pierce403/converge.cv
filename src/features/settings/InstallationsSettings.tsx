@@ -77,7 +77,14 @@ export function InstallationsSettings() {
   }, []);
 
   const handleRevoke = async (installationBytes: Uint8Array, installationId: string) => {
-    if (!confirm('Are you sure you want to revoke this installation? This device will no longer be able to send/receive messages.')) {
+    const identity = useAuthStore.getState().identity;
+    const isCurrentDevice = installationId === identity?.installationId;
+    
+    const confirmMessage = isCurrentDevice
+      ? 'Are you sure you want to revoke THIS device? You will be logged out and need to reconnect.'
+      : 'Are you sure you want to revoke this installation? That device will no longer be able to send/receive messages.';
+    
+    if (!confirm(confirmMessage)) {
       return;
     }
 
@@ -85,8 +92,20 @@ export function InstallationsSettings() {
     setError(null);
     try {
       const xmtp = getXmtpClient();
+      
+      console.log('[Installations] Revoking installation:', installationId);
       await xmtp.revokeInstallations([installationBytes]);
-      alert('Installation revoked successfully! Reloading installations...');
+      console.log('[Installations] ✅ Revocation successful');
+      
+      // If we revoked the current device, we need to disconnect and reconnect
+      if (isCurrentDevice) {
+        console.log('[Installations] Revoked current device - disconnecting and will need to reconnect');
+        await xmtp.disconnect();
+        alert('Current installation revoked. You will need to reconnect to create a new installation.');
+      } else {
+        alert('Installation revoked successfully!');
+      }
+      
       await loadInstallations();
     } catch (err) {
       console.error('[Installations] Failed to revoke:', err);

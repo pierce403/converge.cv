@@ -95,6 +95,18 @@ export class XmtpClient {
   async connect(identity: XmtpIdentity): Promise<void> {
     const { setConnectionStatus, setLastConnected, setError } = useXmtpStore.getState();
 
+    // If already connected with the same identity, don't reconnect
+    if (this.client && this.identity?.address === identity.address) {
+      console.log('[XMTP] Already connected with this identity, skipping reconnect');
+      return;
+    }
+
+    // If connected with a different identity, disconnect first
+    if (this.client && this.identity?.address !== identity.address) {
+      console.log('[XMTP] Disconnecting from previous identity before connecting new one');
+      await this.disconnect();
+    }
+
     logNetworkEvent({
       direction: 'outbound',
       event: 'connect',
@@ -214,7 +226,14 @@ export class XmtpClient {
         console.error('[XMTP] Error value:', error);
       }
       
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      let errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Detect the 10/10 installation limit error
+      if (errorMessage.includes('10/10 installations') || errorMessage.includes('already registered 10')) {
+        errorMessage = '⚠️ Installation limit reached (10/10). Please revoke old installations in Settings → XMTP Installations before connecting.';
+        console.error('[XMTP] ⚠️ INSTALLATION LIMIT REACHED - User must revoke old installations');
+      }
+      
       setConnectionStatus('error');
       setError(errorMessage);
       
