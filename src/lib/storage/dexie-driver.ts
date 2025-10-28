@@ -238,7 +238,7 @@ export class DexieDriver implements StorageDriver {
       const opfsRoot = await navigator.storage.getDirectory();
       // XMTP stores databases with names like "xmtp-production-{address}.db3"
       // @ts-expect-error - OPFS API types
-      for await (const [name, handle] of opfsRoot.entries()) {
+      for await (const [name] of opfsRoot.entries()) {
         if (name.startsWith('xmtp-') && name.endsWith('.db3')) {
           await opfsRoot.removeEntry(name);
           console.log('[Storage] ✅ Cleared XMTP database:', name);
