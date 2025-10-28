@@ -9,7 +9,6 @@ import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
-import type { XmtpMessage } from '@/lib/xmtp';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -18,7 +17,7 @@ export function ConversationView() {
 
   const { conversations } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
-  const { sendMessage, loadMessages, receiveMessage } = useMessages();
+  const { sendMessage, loadMessages } = useMessages();
 
   const conversation = conversations.find((c) => c.id === id);
   const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
@@ -29,24 +28,8 @@ export function ConversationView() {
     }
   }, [id, loadMessages]);
 
-  useEffect(() => {
-    // Listen for incoming XMTP messages
-    const handleIncomingMessage = (event: Event) => {
-      const customEvent = event as CustomEvent<{ conversationId: string; message: XmtpMessage }>;
-      const { conversationId, message } = customEvent.detail;
-      
-      // Only handle messages for the currently viewed conversation
-      if (conversationId === id) {
-        console.log('[ConversationView] Received message for current conversation:', message);
-        receiveMessage(conversationId, message);
-      }
-    };
-
-    window.addEventListener('xmtp:message', handleIncomingMessage);
-    return () => {
-      window.removeEventListener('xmtp:message', handleIncomingMessage);
-    };
-  }, [id, receiveMessage]);
+  // Note: Message handling is done globally in Layout.tsx
+  // This component just displays messages from the store
 
   useEffect(() => {
     // Scroll to bottom when messages change
