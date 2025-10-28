@@ -547,7 +547,38 @@ export function SettingsPage() {
             </div>
           </section>
 
-          {/* App section removed - no PWA functionality (following cthulhu.bot) */}
+          {/* App */}
+          <section>
+            <h2 className="text-lg font-semibold mb-3">App</h2>
+            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+              <div className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">Install App</div>
+                    <div className="text-sm text-slate-400">
+                      Add Converge to your home screen for quick access
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      // Trigger install prompt via beforeinstallprompt event
+                      // The browser will handle this natively
+                      if ('standalone' in navigator && !(navigator as any).standalone) {
+                        // iOS Safari - show instructions
+                        alert('To install:\n1. Tap the Share button\n2. Tap "Add to Home Screen"');
+                      } else {
+                        // Android Chrome and others - browser will show native prompt
+                        alert('Use your browser\'s "Add to Home Screen" or "Install" option to install the app.');
+                      }
+                    }}
+                    className="btn-primary text-sm"
+                  >
+                    Install
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
 
           {/* About */}
           <section>
