@@ -2,7 +2,7 @@
  * Wallet selector component for onboarding
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useWalletConnection, type WalletConnectorType } from '@/lib/wagmi';
 
 interface WalletSelectorProps {
@@ -13,6 +13,7 @@ interface WalletSelectorProps {
 export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProps) {
   const { connectWallet, address, chainId, isConnecting } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
+  const hasTriggeredCallback = useRef(false);
 
   const wallets: Array<{ type: WalletConnectorType; name: string; icon: string }> = [
     { type: 'MetaMask', name: 'MetaMask', icon: '🦊' },
@@ -26,6 +27,7 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
     try {
       const result = await connectWallet(walletType);
       if (result && result.accounts && result.accounts[0]) {
+        hasTriggeredCallback.current = true;
         onWalletConnected(result.accounts[0], result.chainId);
       }
     } catch (err) {
@@ -34,11 +36,13 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
     }
   };
 
-  // If already connected, proceed
-  if (address) {
-    onWalletConnected(address, chainId);
-    return null;
-  }
+  // If already connected when component mounts, proceed once
+  useEffect(() => {
+    if (address && !hasTriggeredCallback.current) {
+      hasTriggeredCallback.current = true;
+      onWalletConnected(address, chainId);
+    }
+  }, [address, chainId, onWalletConnected]);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6">
