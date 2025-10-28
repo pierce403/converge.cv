@@ -144,27 +144,19 @@ export class XmtpClient {
       console.log('[XMTP] Client.create options:', {
         env: 'production',
         loggingLevel: 'debug',
-        structuredLogging: false,
-        performanceLogging: false,
       });
       
-      // Use a consistent dbPath to ensure we reuse the same installation
-      // The SDK will automatically create this in OPFS
-      const dbPath = `xmtp-production-${identity.address}.db3`;
-      
+      // Note: We don't specify dbPath - let SDK use its default location in OPFS
+      // This lets the SDK manage database connections properly for background workers
       const client = await Client.create(signer, {
         env: 'production',
         loggingLevel: 'debug',
-        structuredLogging: false,
-        performanceLogging: false,
-        dbPath, // Ensure we reuse the same database and installation
       });
 
       console.log('[XMTP] ✅ Client created successfully');
       console.log('[XMTP] Client properties:', {
         inboxId: client.inboxId,
         installationId: client.installationId,
-        dbPath,
         isReady: client.isReady,
       });
       this.client = client;
