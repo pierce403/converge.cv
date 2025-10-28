@@ -13,7 +13,39 @@ export default defineConfig({
   // },
   plugins: [
     react(),
-    // TEMPORARILY DISABLED PWA: Testing if our SW is blocking XMTP worker
+    VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      registerType: 'prompt',
+      injectManifest: {
+        injectionPoint: undefined,
+      },
+      manifest: {
+        name: 'Converge',
+        short_name: 'Converge',
+        description: 'Secure, local-first messaging with XMTP v3',
+        theme_color: '#0f172a',
+        background_color: '#0f172a',
+        display: 'standalone',
+        icons: [
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: '/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+          },
+        ],
+      },
+      devOptions: {
+        enabled: true,
+        type: 'module',
+      },
+    }),
   ],
   resolve: {
     alias: {
