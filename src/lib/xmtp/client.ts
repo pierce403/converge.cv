@@ -162,14 +162,14 @@ export class XmtpClient {
         
       console.log('[XMTP] Calling Client.create() with signer...');
       console.log('[XMTP] Client.create options:', {
-        env: 'dev',
+        env: 'production',
         loggingLevel: 'debug',
         structuredLogging: false,
         performanceLogging: false,
       });
       
       const client = await Client.create(signer, {
-        env: 'dev',
+        env: 'production',
         loggingLevel: 'debug',
         structuredLogging: false,
         performanceLogging: false,
