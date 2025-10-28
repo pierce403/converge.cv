@@ -361,6 +361,57 @@ if (!isRegistered) {
 
 ---
 
-**Last Updated**: 2025-10-27 (XMTP v3 fully working - fixed wallet generation and message streaming)
-**Updated By**: AI Agent after completing XMTP integration
+**Last Updated**: 2025-10-28 (Added wallet connection support with wagmi)
+**Updated By**: AI Agent after adding multi-wallet support
+
+## Latest Changes (2025-10-28)
+
+### Wallet Connection Integration
+
+**Problem**: App only supported random wallet generation, limiting users to a single device/identity.
+
+**Solution**: Integrated `wagmi` (v2.16.9) for professional wallet management:
+
+1. **Multiple Wallet Support**:
+   - MetaMask
+   - Coinbase Wallet
+   - WalletConnect  
+   - Injected wallets (browser-based)
+
+2. **Three Signer Types** (from xmtp.chat):
+   - `createEOASigner` - Normal wallets (EOA = Externally Owned Account)
+   - `createSCWSigner` - Smart Contract Wallets (includes chainId for Base, etc.)
+   - `createEphemeralSigner` - Generated wallets (existing flow)
+
+3. **Onboarding Flow Enhanced**:
+   - Welcome screen
+   - Choice screen: Connect wallet OR Generate new
+   - Wallet selector with visual wallet options
+   - Creating/loading screen
+
+4. **Configuration**:
+   - Added WagmiProvider and QueryClientProvider to app
+   - Configured for mainnet, Base, and Base Sepolia
+   - Used exact versions from xmtp.chat for compatibility
+
+**Files Added**:
+- `src/lib/wagmi/config.ts` - Wagmi configuration
+- `src/lib/wagmi/hooks.ts` - Wallet connection hooks
+- `src/lib/wagmi/signers.ts` - XMTP signer creation utilities
+- `src/features/auth/WalletSelector.tsx` - Wallet selection UI
+
+**Files Modified**:
+- `src/app/Providers.tsx` - Added WagmiProvider
+- `src/features/auth/OnboardingPage.tsx` - Added wallet choice flow
+- `package.json` - Added wagmi, @tanstack/react-query
+
+**Key Learning**: xmtp.chat uses wagmi for wallet management, which provides a robust, battle-tested solution for connecting multiple wallet types. Using their exact version numbers (wagmi@2.16.9, @wagmi/core@2.20.3, @wagmi/connectors@5.9.9, viem@2.37.6) prevents version conflicts.
+
+**Still TODO**:
+- Identity manager UI in settings (for switching between identities)
+- Enhanced installations table with key package status and expiry
+- Multi-identity support (store multiple identities, switch between them)
+
+**Last Updated**: 2025-10-28 (Added wallet connection support with wagmi)
+**Updated By**: AI Agent after adding multi-wallet support
 
