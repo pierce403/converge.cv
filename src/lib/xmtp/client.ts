@@ -207,9 +207,13 @@ export class XmtpClient {
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
       await this.syncConversations();
-      
-      setSyncProgress(50);
-      setSyncStatus('syncing-messages');
+
+      setSyncStatus('syncing-history');
+      setSyncProgress(40);
+      await this.syncHistory();
+
+      setSyncStatus('streaming');
+      setSyncProgress(85);
       await this.startMessageStream();
       
       setSyncProgress(100);
@@ -323,6 +327,58 @@ export class XmtpClient {
     } catch (error) {
       console.error('[XMTP] Failed to sync conversations:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Sync historical messages into the local DB and surface them to the app
+   * so they appear in the UI like live messages.
+   */
+  async syncHistory(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    try {
+      console.log('[XMTP] Syncing full history (conversations + messages)...');
+      await this.client.conversations.syncAll();
+
+      // Backfill DMs into our app store by dispatching the same custom events
+      // we use for live streaming messages.
+      const dms = await this.client.conversations.listDms();
+      console.log(`[XMTP] Backfilling messages for ${dms.length} DM conversations`);
+
+      for (const dm of dms) {
+        try {
+          const decodedMessages = await dm.messages();
+          // Oldest first so previews/unreads evolve naturally
+          decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
+
+          for (const m of decodedMessages) {
+            const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
+            const xmsg = {
+              id: m.id,
+              conversationTopic: m.conversationId,
+              senderAddress: m.senderInboxId,
+              content,
+              sentAt: Number(m.sentAtNs / 1000000n),
+            } as XmtpMessage;
+
+            window.dispatchEvent(
+              new CustomEvent('xmtp:message', {
+                detail: { conversationId: m.conversationId, message: xmsg },
+              })
+            );
+          }
+        } catch (dmErr) {
+          console.warn('[XMTP] Failed to backfill messages for DM:', dm.id, dmErr);
+        }
+      }
+
+      console.log('[XMTP] ✅ History sync + backfill complete');
+    } catch (error) {
+      console.error('[XMTP] History sync failed:', error);
+      // Non-fatal — continue with live streaming
     }
   }
 
