@@ -340,6 +340,16 @@ export class XmtpClient {
               continue;
             }
             
+            // Skip messages sent by us (they're already in the UI from sendMessage)
+            if (this.client && message.senderInboxId === this.client.inboxId) {
+              console.log('[XMTP] ⏭️  Skipping our own message:', {
+                id: message.id,
+                ourInboxId: this.client.inboxId,
+                senderInboxId: message.senderInboxId,
+              });
+              continue;
+            }
+            
             // Log the full message object to see what we're getting
             console.log('[XMTP] Full message object:');
             console.log(message);
