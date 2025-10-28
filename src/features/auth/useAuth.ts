@@ -17,10 +17,15 @@ import {
 import { getXmtpClient } from '@/lib/xmtp';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { VaultSecrets, Identity } from '@/types';
+import { useAccount, useSignMessage } from 'wagmi';
 
 export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
+  
+  // Get wagmi account info for wallet-based identities
+  const { address: walletAddress, chainId: walletChainId } = useAccount();
+  const { signMessageAsync } = useSignMessage();
 
   const connectXmtpSafely = useCallback(
     async (
@@ -376,14 +381,29 @@ export function useAuth() {
       // Keep vault unlocked by default - user can manually lock from settings
       setVaultUnlocked(true);
 
-      await connectXmtpSafely(identity.address, identity.privateKey ?? undefined);
+      // Reconnect to XMTP
+      if (identity.privateKey) {
+        // Generated wallet - has private key
+        await connectXmtpSafely(identity.address, identity.privateKey);
+      } else if (walletAddress && walletAddress.toLowerCase() === identity.address.toLowerCase()) {
+        // Wallet-based identity and wallet is connected - get signMessage from wagmi
+        console.log('[Auth] Reconnecting wallet-based identity with wagmi signer');
+        const signMessage = async (message: string) => {
+          return await signMessageAsync({ message });
+        };
+        await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage);
+      } else {
+        // Wallet-based identity but wallet not connected
+        console.log('[Auth] Wallet-based identity found but wallet not connected - skipping XMTP connection');
+        // Don't throw - just skip XMTP connection. User can reconnect wallet from settings.
+      }
 
       return true;
     } catch (error) {
       console.error('Failed to check existing identity:', error);
       return false;
     }
-  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]);
+  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress, walletChainId, signMessageAsync]);
 
   return {
     ...authStore,
