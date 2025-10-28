@@ -157,9 +157,6 @@ export class XmtpClient {
       const signer = this.createSigner(identity.address, identity.privateKey);
 
         // Add timeout to detect hanging
-        console.log('[XMTP] Calling Client.create() with signer...');
-        console.log('[XMTP] Using dev environment (matching cthulhu.bot)');
-        
       console.log('[XMTP] Calling Client.create() with signer...');
       console.log('[XMTP] Client.create options:', {
         env: 'production',
