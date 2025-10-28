@@ -23,14 +23,20 @@ export function useAuth() {
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
 
   const connectXmtpSafely = useCallback(
-    async (address: string, privateKey?: string) => {
+    async (
+      address: string,
+      privateKey?: string,
+      chainId?: number,
+      signMessage?: (message: string) => Promise<string>
+    ) => {
       try {
         const xmtp = getXmtpClient();
-        if (privateKey) {
-          await xmtp.connect({ address, privateKey });
-        } else {
-          await xmtp.connect({ address });
-        }
+        await xmtp.connect({
+          address,
+          privateKey,
+          chainId,
+          signMessage,
+        });
         
         // After successful connection, save inboxId and installationId to identity
         const inboxId = xmtp.getInboxId();
@@ -65,7 +71,12 @@ export function useAuth() {
    * Create a new identity without passphrase (simplified flow)
    */
   const createIdentity = useCallback(
-    async (walletAddress: string, privateKey?: string) => {
+    async (
+      walletAddress: string,
+      privateKey?: string,
+      chainId?: number,
+      signMessage?: (message: string) => Promise<string>
+    ) => {
       try {
         const storage = await getStorage();
 
@@ -95,9 +106,13 @@ export function useAuth() {
         setAuthenticated(true);
         setVaultUnlocked(true);
 
-        // Connect XMTP
-        // Only pass privateKey if we have a valid one
-        await connectXmtpSafely(identity.address, privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? privateKey : undefined);
+        // Connect XMTP with appropriate signer
+        await connectXmtpSafely(
+          identity.address,
+          privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? privateKey : undefined,
+          chainId,
+          signMessage
+        );
 
         return true;
       } catch (error) {

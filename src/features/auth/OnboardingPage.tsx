@@ -7,10 +7,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from './useAuth';
 import { privateKeyToAccount } from 'viem/accounts';
 import { WalletSelector } from './WalletSelector';
+import { useSignMessage } from 'wagmi';
 
 export function OnboardingPage() {
   const navigate = useNavigate();
   const { createIdentity } = useAuth();
+  const { signMessageAsync } = useSignMessage();
 
   const [step, setStep] = useState<'welcome' | 'wallet-choice' | 'wallet-connect' | 'creating'>('welcome');
   const [error, setError] = useState('');
@@ -65,8 +67,12 @@ export function OnboardingPage() {
       
       // For wallet-based identities, we don't have the private key
       // The wallet keeps it secure and will handle signing through wagmi
-      // Pass undefined for privateKey - XMTP will use the wallet's signer
-      const success = await createIdentity(address, undefined);
+      // We pass a signMessage function that uses wagmi to sign
+      const signMessage = async (message: string) => {
+        return await signMessageAsync({ message });
+      };
+      
+      const success = await createIdentity(address, undefined, chainId, signMessage);
 
       if (success) {
         navigate('/');

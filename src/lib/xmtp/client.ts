@@ -7,16 +7,18 @@
  */
 
 import { Client, type Signer } from '@xmtp/browser-sdk';
-import { privateKeyToAccount } from 'viem/accounts';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
+import { createEOASigner, createSCWSigner, createEphemeralSigner } from '@/lib/wagmi/signers';
 
 export interface XmtpIdentity {
   address: string;
   privateKey?: string;
   inboxId?: string;
   installationId?: string;
+  chainId?: number; // For smart contract wallets
+  signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
 }
 
 export interface XmtpConversation {
@@ -61,33 +63,6 @@ export class XmtpClient {
     }
   }
 
-  /**
-   * Create an XMTP Signer from an Ethereum private key (v3 format)
-   */
-  private createSigner(address: string, privateKeyHex: string): Signer {
-    const account = privateKeyToAccount(privateKeyHex as `0x${string}`);
-    
-    return {
-      type: 'EOA', // Externally Owned Account
-      getIdentifier: async () => {
-        // v3 uses: { identifier: "0x...", identifierKind: "Ethereum" }
-        // Must be async to match v3 SDK expectations
-        // NOTE: Do NOT lowercase - use address as-is like cthulhu.bot
-        return {
-          identifier: address,
-          identifierKind: 'Ethereum',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any; // Identifier type from WASM bindings
-      },
-      signMessage: async (message: string) => {
-        const signature = await account.signMessage({ message });
-        // Convert hex signature to Uint8Array
-        return new Uint8Array(
-          signature.replace('0x', '').match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
-        );
-      },
-    };
-  }
 
   /**
    * Connect to XMTP network with an identity
@@ -134,13 +109,35 @@ export class XmtpClient {
       console.log('[XMTP] SDK version: @xmtp/browser-sdk@3.0.5');
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
-      // Create a signer if we have a private key
-      if (!identity.privateKey) {
-        throw new Error('Private key required for XMTP client creation');
+      // Create appropriate signer based on identity type
+      let signer: Signer;
+      
+      if (identity.privateKey) {
+        // Ephemeral signer for generated wallets
+        console.log('[XMTP] Creating ephemeral signer (generated wallet)');
+        signer = createEphemeralSigner(identity.privateKey as `0x${string}`);
+      } else if (identity.signMessage) {
+        // Wallet-based signer using wagmi
+        console.log('[XMTP] Creating wallet-based signer (connected wallet)');
+        
+        // Check if it's a smart contract wallet
+        if (identity.chainId && identity.chainId !== 1) {
+          console.log('[XMTP] Using SCW signer for chain:', identity.chainId);
+          signer = createSCWSigner(
+            identity.address as `0x${string}`,
+            identity.signMessage,
+            identity.chainId
+          );
+        } else {
+          console.log('[XMTP] Using EOA signer');
+          signer = createEOASigner(
+            identity.address as `0x${string}`,
+            identity.signMessage
+          );
+        }
+      } else {
+        throw new Error('Identity must have either privateKey or signMessage function');
       }
-
-      console.log('[XMTP] Creating signer for address:', identity.address);
-      const signer = this.createSigner(identity.address, identity.privateKey);
 
         // Add timeout to detect hanging
       console.log('[XMTP] Calling Client.create() with signer...');
