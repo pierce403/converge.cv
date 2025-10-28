@@ -459,6 +459,17 @@ export class XmtpClient {
   }
 
   /**
+   * Get key package statuses for installations
+   * @param installationIds - Array of installation ID strings
+   */
+  async getKeyPackageStatuses(installationIds: string[]) {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    return await this.client.getKeyPackageStatusesForInstallationIds(installationIds);
+  }
+
+  /**
    * Stream all incoming messages
    */
   streamMessages(_onMessage: MessageCallback): Unsubscribe {

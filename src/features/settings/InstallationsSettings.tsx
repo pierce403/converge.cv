@@ -6,10 +6,19 @@ import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
 
+interface KeyPackageStatus {
+  lifetime?: {
+    notAfter?: bigint;
+    notBefore?: bigint;
+  };
+  validationError?: string;
+}
+
 interface Installation {
   id: string;
   bytes: Uint8Array;
   clientTimestampNs?: bigint;
+  keyPackageStatus?: KeyPackageStatus;
 }
 
 export function InstallationsSettings() {
@@ -31,7 +40,30 @@ export function InstallationsSettings() {
 
       const inboxState = await xmtp.getInboxState();
       console.log('[Installations] Inbox state:', inboxState);
-      setInstallations(inboxState.installations || []);
+      
+      // Sort installations by creation date (newest first)
+      const sortedInstallations = [...(inboxState.installations || [])].sort((a, b) => {
+        const aTime = a.clientTimestampNs || 0n;
+        const bTime = b.clientTimestampNs || 0n;
+        return aTime > bTime ? -1 : aTime < bTime ? 1 : 0;
+      });
+
+      // Fetch key package statuses for all installations
+      try {
+        const installationIds = sortedInstallations.map((inst) => inst.id);
+        const statuses = await xmtp.getKeyPackageStatuses(installationIds);
+        
+        const installationsWithStatus = sortedInstallations.map((installation) => ({
+          ...installation,
+          keyPackageStatus: statuses.get(installation.id),
+        }));
+        
+        setInstallations(installationsWithStatus);
+      } catch (statusErr) {
+        console.warn('[Installations] Failed to fetch key package statuses:', statusErr);
+        // Still show installations even if status fetch fails
+        setInstallations(sortedInstallations);
+      }
     } catch (err) {
       console.error('[Installations] Failed to load:', err);
       setError(err instanceof Error ? err.message : 'Failed to load installations');
@@ -74,9 +106,46 @@ export function InstallationsSettings() {
     try {
       const ms = Number(timestampNs) / 1_000_000;
       const date = new Date(ms);
-      return date.toLocaleString();
+      const now = Date.now();
+      const diff = now - ms;
+      
+      // Show relative time if within last 30 days
+      if (diff < 30 * 24 * 60 * 60 * 1000) {
+        const seconds = Math.floor(diff / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+        
+        if (days > 0) return `${days}d ago`;
+        if (hours > 0) return `${hours}h ago`;
+        if (minutes > 0) return `${minutes}m ago`;
+        return 'Just now';
+      }
+      
+      return date.toLocaleDateString();
     } catch {
       return 'Unknown';
+    }
+  };
+
+  const formatExpiry = (notAfter?: bigint) => {
+    if (!notAfter) return null;
+    try {
+      const ms = Number(notAfter) * 1000; // notAfter is in seconds
+      const now = Date.now();
+      const diff = ms - now;
+      
+      if (diff < 0) return 'Expired';
+      
+      const days = Math.floor(diff / (24 * 60 * 60 * 1000));
+      if (days > 365) return `${Math.floor(days / 365)}y`;
+      if (days > 30) return `${Math.floor(days / 30)}mo`;
+      if (days > 0) return `${days}d`;
+      
+      const hours = Math.floor(diff / (60 * 60 * 1000));
+      return `${hours}h`;
+    } catch {
+      return null;
     }
   };
 
@@ -131,6 +200,9 @@ export function InstallationsSettings() {
             {installations.map((installation) => {
               const isCurrentDevice = installation.id === currentInstallationId;
               const isRevoking = revokingId === installation.id;
+              const hasError = !!installation.keyPackageStatus?.validationError;
+              const expiry = formatExpiry(installation.keyPackageStatus?.lifetime?.notAfter);
+              const isExpired = expiry === 'Expired';
 
               return (
                 <div
@@ -138,12 +210,14 @@ export function InstallationsSettings() {
                   className={`p-3 rounded border ${
                     isCurrentDevice
                       ? 'bg-blue-500/10 border-blue-500/30'
+                      : hasError || isExpired
+                      ? 'bg-red-500/10 border-red-500/30'
                       : 'bg-slate-900 border-slate-700'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium text-slate-200">
                           {formatInstallationId(installation.id)}
                         </span>
@@ -152,9 +226,29 @@ export function InstallationsSettings() {
                             This Device
                           </span>
                         )}
+                        {hasError && (
+                          <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-400 rounded">
+                            Error
+                          </span>
+                        )}
+                        {isExpired && (
+                          <span className="text-xs px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded">
+                            Expired
+                          </span>
+                        )}
+                        {expiry && !isExpired && (
+                          <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">
+                            Expires in {expiry}
+                          </span>
+                        )}
                       </div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Created: {formatTimestamp(installation.clientTimestampNs)}
+                      <div className="text-xs text-slate-400 mt-1 space-y-0.5">
+                        <div>Created: {formatTimestamp(installation.clientTimestampNs)}</div>
+                        {hasError && (
+                          <div className="text-red-400 font-mono text-xs break-all">
+                            {installation.keyPackageStatus?.validationError}
+                          </div>
+                        )}
                       </div>
                     </div>
                     {!isCurrentDevice && (
