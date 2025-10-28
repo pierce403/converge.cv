@@ -52,6 +52,9 @@ export interface StorageDriver {
   getVaultSecrets(): Promise<VaultSecrets | undefined>;
   deleteVaultSecrets(): Promise<void>;
 
+  // Clear all data
+  clearAllData(): Promise<void>;
+
   // Search
   searchMessages(query: string, limit?: number): Promise<Message[]>;
 

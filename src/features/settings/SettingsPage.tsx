@@ -31,14 +31,7 @@ export function SettingsPage() {
       )
     ) {
       try {
-        const storage = await getStorage();
-        await storage.deleteIdentity();
-        await storage.deleteVaultSecrets();
-        
-        // Disconnect from XMTP
-        const xmtp = getXmtpClient();
-        await xmtp.disconnect();
-        
+        // Use logout which now clears everything properly (IndexedDB + OPFS)
         await logout();
         navigate('/onboarding');
       } catch (error) {
@@ -139,14 +132,13 @@ export function SettingsPage() {
   const handleClearData = async () => {
     if (
       confirm(
-        'This will delete ALL your local data including messages. This action cannot be undone. Continue?'
+        'This will delete ALL your local data including messages, conversations, and XMTP databases. This action cannot be undone. Continue?'
       )
     ) {
       try {
         const storage = await getStorage();
-        // Clear all data
-        await storage.deleteIdentity();
-        await storage.deleteVaultSecrets();
+        // Clear ALL data (IndexedDB + XMTP OPFS)
+        await storage.clearAllData();
         // Reload to reset state
         window.location.reload();
       } catch (error) {

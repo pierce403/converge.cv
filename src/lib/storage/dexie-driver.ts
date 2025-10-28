@@ -214,6 +214,42 @@ export class DexieDriver implements StorageDriver {
     await this.db.vaultSecrets.clear();
   }
 
+  // Clear ALL data
+  async clearAllData(): Promise<void> {
+    await this.db.transaction('rw', [
+      this.db.conversations,
+      this.db.messages,
+      this.db.attachments,
+      this.db.attachmentData,
+      this.db.identity,
+      this.db.vaultSecrets,
+    ], async () => {
+      await this.db.conversations.clear();
+      await this.db.messages.clear();
+      await this.db.attachments.clear();
+      await this.db.attachmentData.clear();
+      await this.db.identity.clear();
+      await this.db.vaultSecrets.clear();
+      console.log('[Storage] ✅ All IndexedDB data cleared');
+    });
+
+    // Also clear XMTP OPFS database
+    try {
+      const opfsRoot = await navigator.storage.getDirectory();
+      // XMTP stores databases with names like "xmtp-production-{address}.db3"
+      // @ts-expect-error - OPFS API types
+      for await (const [name, handle] of opfsRoot.entries()) {
+        if (name.startsWith('xmtp-') && name.endsWith('.db3')) {
+          await opfsRoot.removeEntry(name);
+          console.log('[Storage] ✅ Cleared XMTP database:', name);
+        }
+      }
+    } catch (error) {
+      console.warn('[Storage] Could not clear XMTP OPFS databases:', error);
+      // Non-fatal - continue anyway
+    }
+  }
+
   // Search - basic prefix search on Dexie
   async searchMessages(query: string, limit = 50): Promise<Message[]> {
     const queryLower = query.toLowerCase();

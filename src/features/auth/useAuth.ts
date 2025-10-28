@@ -348,17 +348,25 @@ export function useAuth() {
    */
   const logout = useCallback(async () => {
     try {
-      // Disconnect XMTP
+      console.log('[Auth] Logging out - clearing all data...');
+      
+      // Disconnect XMTP first
       const xmtp = getXmtpClient();
       await xmtp.disconnect();
+
+      // Clear ALL local storage (IndexedDB + XMTP OPFS)
+      const storage = await getStorage();
+      await storage.clearAllData();
 
       // Lock vault
       lockVault();
 
-      // Clear state
+      // Clear Zustand state
       authStore.logout();
+      
+      console.log('[Auth] ✅ Logout complete - all data cleared');
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('[Auth] Logout error:', error);
     }
   }, [authStore]);
 
