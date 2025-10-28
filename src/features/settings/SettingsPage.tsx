@@ -564,7 +564,8 @@ export function SettingsPage() {
                     onClick={() => {
                       // Trigger install prompt via beforeinstallprompt event
                       // The browser will handle this natively
-                      if ('standalone' in navigator && !(navigator as any).standalone) {
+                      const nav = navigator as { standalone?: boolean };
+                      if ('standalone' in navigator && !nav.standalone) {
                         // iOS Safari - show instructions
                         alert('To install:\n1. Tap the Share button\n2. Tap "Add to Home Screen"');
                       } else {
