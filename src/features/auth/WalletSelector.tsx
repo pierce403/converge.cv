@@ -47,7 +47,17 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
       }
     } catch (err) {
       console.error('Failed to connect wallet:', err);
-      setError(err instanceof Error ? err.message : 'Failed to connect wallet');
+      
+      // Handle common WalletConnect errors gracefully
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      if (errorMessage.includes('User rejected') || errorMessage.includes('User cancelled')) {
+        setError('Connection cancelled. Please try again.');
+      } else if (errorMessage.includes('session_request') || errorMessage.includes('listeners')) {
+        setError('Connection timeout. Please try again.');
+      } else {
+        setError(errorMessage.includes('Failed') ? errorMessage : 'Failed to connect wallet');
+      }
     }
   };
 
