@@ -24,11 +24,7 @@ This note summarizes how XMTP v5 models wallet identities, inbox records, and de
 - **`Client.findInboxIdByIdentifier`** – Direct lookup that returns the inbox ID (or `undefined`) for a single identifier. Prefers cached state, hits the `get_identity_updates_v2` endpoint on cache miss. [^findInbox]
 - **`Client.getInboxState` / `inboxStateFromInboxIds`** – Provide all identifiers + installations registered to an inbox, which is how xmtp.chat renders the “Installations” table and revocation UI. [^inboxState]
 
-For Converge, the safest way to start a DM from an Ethereum address is:
-
-1. Normalize the address (checksum preserved) and construct `{ identifier, identifierKind: "Ethereum" }`.
-2. Call `client.findInboxIdByIdentifier` and bail if `undefined` (user not registered / wrong network).
-3. Call `client.conversations.newDm(inboxId)` with the returned inbox ID.
+For Converge, the safest way to start a DM from an Ethereum address is to construct the identifier and hand it directly to `client.conversations.newDmWithIdentifier`. The SDK performs the inbox lookup internally and handles any required registration sync, saving us from juggling inbox IDs manually.
 
 ### Installations & Device Limits
 

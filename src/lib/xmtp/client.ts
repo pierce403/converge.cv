@@ -668,22 +668,24 @@ export class XmtpClient {
       let inboxId = peerAddressOrInboxId;
       let displayAddress = peerAddressOrInboxId;
 
-      if (isEthereumAddress(peerAddressOrInboxId)) {
-        console.log('[XMTP] Detected Ethereum address, looking up inbox ID...');
-        const resolvedInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
-        
-        if (!resolvedInboxId) {
-          throw new Error(`Address ${peerAddressOrInboxId} is not registered on XMTP or inbox ID lookup failed`);
-        }
-        
-        inboxId = resolvedInboxId;
-        displayAddress = peerAddressOrInboxId; // Keep the original address for display
-        console.log('[XMTP] ✅ Resolved to inbox ID:', inboxId);
-      }
+      let dmConversation;
 
-      // Create a new DM conversation using the inbox ID
-      console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxId);
-      const dmConversation = await this.client.conversations.newDm(inboxId);
+      if (isEthereumAddress(peerAddressOrInboxId)) {
+        console.log('[XMTP] Detected Ethereum address, creating conversation via identifier...');
+
+        const identifier = {
+          identifier: toIdentifierHex(peerAddressOrInboxId).toLowerCase(),
+          identifierKind: 'Ethereum' as const,
+        };
+
+        dmConversation = await this.client.conversations.newDmWithIdentifier(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          identifier as any
+        );
+      } else {
+        console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxId);
+        dmConversation = await this.client.conversations.newDm(inboxId);
+      }
       
       console.log('[XMTP] ✅ DM conversation created:', {
         id: dmConversation.id,
