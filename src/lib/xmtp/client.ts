@@ -148,7 +148,11 @@ export class XmtpClient {
       // This lets the SDK manage database connections properly for background workers
       const client = await Client.create(signer, {
         env: 'production',
-        loggingLevel: 'debug',
+        // Keep logs minimal in production; disable extra telemetry.
+        loggingLevel: 'warn',
+        structuredLogging: false,
+        performanceLogging: false,
+        debugEventsEnabled: false,
       });
 
       console.log('[XMTP] ✅ Client created successfully');
