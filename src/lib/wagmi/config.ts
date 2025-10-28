@@ -14,8 +14,17 @@ export const wagmiConfig = createConfig({
   connectors: [
     injected(),
     metaMask(),
-    coinbaseWallet({ appName: 'Converge' }),
-    walletConnect({ projectId }),
+    coinbaseWallet({
+      appName: 'Converge',
+      preference: 'all', // Support both EOA and smart wallets
+    }),
+    walletConnect({
+      projectId,
+      showQrModal: true,
+      qrModalOptions: {
+        themeMode: 'dark',
+      },
+    }),
   ],
   transports: {
     [mainnet.id]: http(),

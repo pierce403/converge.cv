@@ -15,9 +15,12 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
   const [error, setError] = useState<string | null>(null);
   const hasTriggeredCallback = useRef(false);
 
-  const wallets: Array<{ type: WalletConnectorType; name: string; icon: string }> = [
+  // Detect if we're on mobile
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  
+  const wallets: Array<{ type: WalletConnectorType; name: string; icon: string; description?: string }> = [
+    { type: 'Coinbase Wallet', name: isMobile ? 'Base Wallet' : 'Coinbase Wallet', icon: '🔵', description: isMobile ? 'Opens Base app' : undefined },
     { type: 'MetaMask', name: 'MetaMask', icon: '🦊' },
-    { type: 'Coinbase Wallet', name: 'Coinbase Wallet', icon: '🔵' },
     { type: 'WalletConnect', name: 'WalletConnect', icon: '🔗' },
     { type: 'Injected', name: 'Browser Wallet', icon: '🌐' },
   ];
@@ -25,6 +28,18 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
   const handleConnect = async (walletType: WalletConnectorType) => {
     setError(null);
     try {
+      // On mobile, if connecting to Coinbase Wallet, try to deep link to Base app
+      if (isMobile && walletType === 'Coinbase Wallet') {
+        console.log('[WalletSelector] Mobile detected, opening Base app...');
+        
+        // Try to open the Coinbase Wallet app
+        const deepLink = 'https://go.cb-w.com/dapp?cb_url=' + encodeURIComponent(window.location.href);
+        window.location.href = deepLink;
+        
+        // Give the deep link a moment to open the app
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
       const result = await connectWallet(walletType);
       if (result && result.accounts && result.accounts[0]) {
         hasTriggeredCallback.current = true;
@@ -65,15 +80,22 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
             key={wallet.type}
             onClick={() => handleConnect(wallet.type)}
             disabled={isConnecting}
-            className="w-full p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg flex items-center justify-between transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <div className="flex items-center gap-3">
-              <span className="text-3xl">{wallet.icon}</span>
-              <span className="font-medium">{wallet.name}</span>
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">{wallet.icon}</span>
+                <div className="text-left">
+                  <div className="font-medium">{wallet.name}</div>
+                  {wallet.description && (
+                    <div className="text-xs text-slate-400">{wallet.description}</div>
+                  )}
+                </div>
+              </div>
+              {isConnecting && (
+                <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
+              )}
             </div>
-            {isConnecting && (
-              <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
-            )}
           </button>
         ))}
       </div>
