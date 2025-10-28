@@ -6,15 +6,21 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './useAuth';
 import { privateKeyToAccount } from 'viem/accounts';
+import { WalletSelector } from './WalletSelector';
 
 export function OnboardingPage() {
   const navigate = useNavigate();
   const { createIdentity } = useAuth();
 
-  const [step, setStep] = useState<'welcome' | 'creating'>('welcome');
+  const [step, setStep] = useState<'welcome' | 'wallet-choice' | 'wallet-connect' | 'creating'>('welcome');
   const [error, setError] = useState('');
 
-  const handleStart = async () => {
+  const handleStart = () => {
+    setError('');
+    setStep('wallet-choice');
+  };
+
+  const handleGenerateWallet = async () => {
     setError('');
     setStep('creating');
 
@@ -47,6 +53,33 @@ export function OnboardingPage() {
       console.error('Identity creation error:', err);
       setError('Failed to create identity. Please try again.');
       setStep('welcome');
+    }
+  };
+
+  const handleWalletConnected = async (address: string, chainId?: number) => {
+    setError('');
+    setStep('creating');
+
+    try {
+      console.log('[Onboarding] Wallet connected:', { address, chainId });
+      
+      // For wallet-based identities, we don't store a private key
+      // The wallet will handle signing through wagmi
+      // We generate a temporary private key just for storage compatibility
+      // but the actual signing will use the wallet's signer
+      const tempPrivateKey = '0x0000000000000000000000000000000000000000000000000000000000000000';
+      const success = await createIdentity(address, tempPrivateKey);
+
+      if (success) {
+        navigate('/');
+      } else {
+        setError('Failed to create identity with wallet. Please try again.');
+        setStep('wallet-connect');
+      }
+    } catch (err) {
+      console.error('Wallet identity creation error:', err);
+      setError('Failed to create identity with wallet. Please try again.');
+      setStep('wallet-connect');
     }
   };
 
@@ -90,6 +123,67 @@ export function OnboardingPage() {
             Get Started
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (step === 'wallet-choice') {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
+        <div className="max-w-md w-full text-center space-y-6">
+          <h2 className="text-3xl font-bold mb-2">Choose How to Connect</h2>
+          <p className="text-slate-400">
+            Connect an existing wallet or create a new one
+          </p>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500 rounded-lg p-4">
+              <p className="text-red-400">{error}</p>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <button
+              onClick={() => setStep('wallet-connect')}
+              className="w-full p-6 bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 hover:border-primary-600 rounded-lg transition-all"
+            >
+              <div className="text-4xl mb-2">🔗</div>
+              <div className="font-semibold text-lg mb-1">Connect Wallet</div>
+              <div className="text-sm text-slate-400">
+                Use MetaMask, WalletConnect, or Coinbase Wallet
+              </div>
+            </button>
+
+            <button
+              onClick={handleGenerateWallet}
+              className="w-full p-6 bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 hover:border-primary-600 rounded-lg transition-all"
+            >
+              <div className="text-4xl mb-2">✨</div>
+              <div className="font-semibold text-lg mb-1">Create New Wallet</div>
+              <div className="text-sm text-slate-400">
+                Generate a random wallet instantly
+              </div>
+            </button>
+          </div>
+
+          <button
+            onClick={() => setStep('welcome')}
+            className="text-slate-400 hover:text-slate-300 text-sm"
+          >
+            ← Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'wallet-connect') {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
+        <WalletSelector 
+          onWalletConnected={handleWalletConnected}
+          onBack={() => setStep('wallet-choice')}
+        />
       </div>
     );
   }
