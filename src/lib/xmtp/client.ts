@@ -118,23 +118,14 @@ export class XmtpClient {
         signer = createEphemeralSigner(identity.privateKey as `0x${string}`);
       } else if (identity.signMessage) {
         // Wallet-based signer using wagmi
-        console.log('[XMTP] Creating wallet-based signer (connected wallet)');
-        
-        // Check if it's a smart contract wallet
-        if (identity.chainId && identity.chainId !== 1) {
-          console.log('[XMTP] Using SCW signer for chain:', identity.chainId);
-          signer = createSCWSigner(
-            identity.address as `0x${string}`,
-            identity.signMessage,
-            identity.chainId
-          );
-        } else {
-          console.log('[XMTP] Using EOA signer');
-          signer = createEOASigner(
-            identity.address as `0x${string}`,
-            identity.signMessage
-          );
-        }
+        // For now, always use EOA signer for wallet connections
+        // TODO: Detect actual smart contract wallets vs EOAs on different chains
+        // The chainId alone doesn't tell us if it's a smart contract wallet
+        console.log('[XMTP] Creating EOA signer for wallet connection');
+        signer = createEOASigner(
+          identity.address as `0x${string}`,
+          identity.signMessage
+        );
       } else {
         throw new Error('Identity must have either privateKey or signMessage function');
       }
