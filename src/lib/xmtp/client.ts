@@ -824,9 +824,7 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
-    const isAddress = isEthereumAddress(addressOrInboxId);
-
-    if (!isAddress) {
+    if (!isEthereumAddress(addressOrInboxId)) {
       console.log('[XMTP] Input is not an Ethereum address, assuming inbox ID is valid');
       return true;
     }
@@ -842,7 +840,7 @@ export class XmtpClient {
     try {
       // In XMTP v5, canMessage expects an array of Identifier objects
       const identifier = {
-        identifier: toIdentifierHex(addressOrInboxId).toLowerCase(),
+        identifier: addressOrInboxId.toLowerCase(),
         identifierKind: 'Ethereum' as const,
       };
       

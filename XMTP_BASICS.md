@@ -54,7 +54,7 @@ The current conversation creation logic in `src/lib/xmtp/client.ts` is still pas
 
 Once the address normalization bug is resolved, the message send path (`conversation.send`) should succeed because the SDK handles encoding and publishing under the hood.
 
-> **Tip:** The XMTP APIs expect the identifier string to be raw hex without the `0x` prefix. Passing the checksummed address directly (with `0x`) leads to the Postgres error above. Strip `0x` and lowercase the remainder before invoking `findInboxIdByIdentifier` or `canMessage`.
+> **Tip:** `findInboxIdByIdentifier` expects raw hex (no `0x` prefix), while `canMessage` happily accepts the checksummed `0x…` address. Strip the prefix only for the direct inbox lookup helpers.
 
 ### References
 
