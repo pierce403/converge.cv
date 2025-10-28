@@ -561,24 +561,81 @@ export class XmtpClient {
   }
 
   /**
-   * Create a new conversation with a peer (by inbox ID)
+   * Get inbox ID from an Ethereum address
+   * In XMTP v3, we use canMessage to discover the inbox ID for an address
    */
-  async createConversation(peerInboxId: string): Promise<XmtpConversation> {
+  async getInboxIdFromAddress(address: string): Promise<string | null> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
-    console.log('[XMTP] Creating conversation with inbox ID:', peerInboxId);
+    console.log('[XMTP] Looking up inbox ID for address:', address);
+
+    try {
+      // Use canMessage to get the inbox ID mapping
+      const identifier = {
+        identifier: address.toLowerCase(),
+        identifierKind: 'Ethereum' as const,
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await this.client.canMessage([identifier as any]);
+      
+      // The canMessage result is a Map<string, boolean>
+      // The key is the inbox ID if the address is registered
+      for (const [key, value] of result) {
+        if (value) {
+          console.log('[XMTP] ✅ Found inbox ID:', key, 'for address:', address);
+          return key;
+        }
+      }
+
+      console.warn('[XMTP] ⚠️  No inbox ID found for address:', address);
+      return null;
+    } catch (error) {
+      console.error('[XMTP] ❌ Failed to get inbox ID:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Create a new conversation with a peer
+   * Accepts either an Ethereum address (0x...) or an inbox ID
+   */
+  async createConversation(peerAddressOrInboxId: string): Promise<XmtpConversation> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    console.log('[XMTP] Creating conversation with:', peerAddressOrInboxId);
 
     logNetworkEvent({
       direction: 'outbound',
       event: 'conversations:create',
-      details: `Creating conversation with ${peerInboxId}`,
+      details: `Creating conversation with ${peerAddressOrInboxId}`,
     });
 
     try {
+      // If it looks like an Ethereum address (starts with 0x and is 42 chars), convert to inbox ID
+      let inboxId = peerAddressOrInboxId;
+      let displayAddress = peerAddressOrInboxId;
+      
+      if (peerAddressOrInboxId.startsWith('0x') && peerAddressOrInboxId.length === 42) {
+        console.log('[XMTP] Detected Ethereum address, looking up inbox ID...');
+        const resolvedInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
+        
+        if (!resolvedInboxId) {
+          throw new Error(`Address ${peerAddressOrInboxId} is not registered on XMTP or inbox ID lookup failed`);
+        }
+        
+        inboxId = resolvedInboxId;
+        displayAddress = peerAddressOrInboxId; // Keep the original address for display
+        console.log('[XMTP] ✅ Resolved to inbox ID:', inboxId);
+      }
+
       // Create a new DM conversation using the inbox ID
-      const dmConversation = await this.client.conversations.newDm(peerInboxId);
+      console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxId);
+      const dmConversation = await this.client.conversations.newDm(inboxId);
       
       console.log('[XMTP] ✅ DM conversation created:', {
         id: dmConversation.id,
@@ -588,7 +645,7 @@ export class XmtpClient {
       const conversation: XmtpConversation = {
         id: dmConversation.id,
         topic: dmConversation.id, // Use conversation ID as topic
-        peerAddress: peerInboxId,
+        peerAddress: displayAddress, // Use the original address for display
         createdAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
       };
 
@@ -601,7 +658,13 @@ export class XmtpClient {
 
       return conversation;
     } catch (error) {
-      console.error('[XMTP] Failed to create conversation:', error);
+      console.error('[XMTP] ❌ Failed to create conversation:', error);
+      if (error instanceof Error) {
+        console.error('[XMTP] Error details:', {
+          message: error.message,
+          stack: error.stack,
+        });
+      }
       logNetworkEvent({
         direction: 'status',
         event: 'conversations:create:error',
