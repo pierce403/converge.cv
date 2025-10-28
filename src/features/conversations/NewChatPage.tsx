@@ -15,7 +15,8 @@ export function NewChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [resolvedAddress, setResolvedAddress] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
+  // We no longer pre-check registration with canMessage to avoid false negatives.
+  // The SDK will validate during DM creation.
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -52,19 +53,7 @@ export function NewChatPage() {
         return;
       }
 
-      // Step 2: Check if address can receive XMTP messages
-      setIsChecking(true);
-      const xmtp = getXmtpClient();
-      const canMessage = await xmtp.canMessage(targetAddress);
-
-      if (!canMessage) {
-        setError(`This ${isENSName(inputValue) ? 'ENS name' : 'address'} is not registered on XMTP`);
-        setIsChecking(false);
-        return;
-      }
-
-      // Step 3: Create conversation
-      setIsChecking(false);
+      // Step 2: Create conversation (SDK validates registration)
       setIsCreating(true);
 
       const conversation = await createConversation(targetAddress);
@@ -79,7 +68,6 @@ export function NewChatPage() {
       console.error('Error creating conversation:', err);
       setError('Failed to create conversation. Please try again.');
       setIsResolving(false);
-      setIsChecking(false);
       setIsCreating(false);
     }
   };
@@ -126,7 +114,7 @@ export function NewChatPage() {
                 placeholder="0x... or example.eth"
                 className="input-primary"
                 autoFocus
-                disabled={isResolving || isChecking || isCreating}
+                disabled={isResolving || isCreating}
               />
               {resolvedAddress && (
                 <p className="text-xs text-green-400 mt-1">
@@ -149,16 +137,16 @@ export function NewChatPage() {
                 type="button"
                 onClick={() => navigate('/')}
                 className="btn-secondary flex-1"
-                disabled={isChecking || isCreating}
+                disabled={isCreating}
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 className="btn-primary flex-1"
-                disabled={isResolving || isChecking || isCreating}
+                disabled={isResolving || isCreating}
               >
-                {isResolving ? 'Resolving ENS...' : isChecking ? 'Checking...' : isCreating ? 'Creating...' : 'Start Chat'}
+                {isResolving ? 'Resolving ENS...' : isCreating ? 'Creating...' : 'Start Chat'}
               </button>
             </div>
           </form>
@@ -173,4 +161,3 @@ export function NewChatPage() {
     </div>
   );
 }
-
