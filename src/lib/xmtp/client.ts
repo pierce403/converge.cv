@@ -39,8 +39,15 @@ export interface XmtpMessage {
 export type MessageCallback = (message: XmtpMessage) => void;
 export type Unsubscribe = () => void;
 
+const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+
+const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(value);
+
+const toIdentifierHex = (address: string): string =>
+  address.startsWith('0x') || address.startsWith('0X') ? address.slice(2) : address;
+
 /**
- * XMTP Client wrapper for v3 SDK
+ * XMTP Client wrapper for v5 SDK
  */
 export class XmtpClient {
   private client: Client | null = null;
@@ -603,8 +610,7 @@ export class XmtpClient {
   }
 
   /**
-   * Get inbox ID from an Ethereum address
-   * In XMTP v3, we use canMessage to discover the inbox ID for an address
+   * Resolve the inbox ID associated with an Ethereum address.
    */
   async getInboxIdFromAddress(address: string): Promise<string | null> {
     if (!this.client) {
@@ -614,22 +620,22 @@ export class XmtpClient {
     console.log('[XMTP] Looking up inbox ID for address:', address);
 
     try {
-      // Use canMessage to get the inbox ID mapping
       const identifier = {
-        identifier: address.toLowerCase(),
+        identifier: toIdentifierHex(address).toLowerCase(),
         identifierKind: 'Ethereum' as const,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await this.client.canMessage([identifier as any]);
-      
-      // The canMessage result is a Map<string, boolean>
-      // The key is the inbox ID if the address is registered
-      for (const [key, value] of result) {
-        if (value) {
-          console.log('[XMTP] ✅ Found inbox ID:', key, 'for address:', address);
-          return key;
-        }
+      console.log('[XMTP] findInboxId identifier payload:', identifier);
+
+      // Directly ask the client for the inbox ID associated to this identifier.
+      const inboxId = await this.client.findInboxIdByIdentifier(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        identifier as any
+      );
+
+      if (inboxId) {
+        console.log('[XMTP] ✅ Found inbox ID:', inboxId, 'for address:', address);
+        return inboxId;
       }
 
       console.warn('[XMTP] ⚠️  No inbox ID found for address:', address);
@@ -658,11 +664,11 @@ export class XmtpClient {
     });
 
     try {
-      // If it looks like an Ethereum address (starts with 0x and is 42 chars), convert to inbox ID
+      // If it looks like an Ethereum address, convert to inbox ID
       let inboxId = peerAddressOrInboxId;
       let displayAddress = peerAddressOrInboxId;
-      
-      if (peerAddressOrInboxId.startsWith('0x') && peerAddressOrInboxId.length === 42) {
+
+      if (isEthereumAddress(peerAddressOrInboxId)) {
         console.log('[XMTP] Detected Ethereum address, looking up inbox ID...');
         const resolvedInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
         
@@ -734,15 +740,17 @@ export class XmtpClient {
     });
 
     try {
-      // Sync conversations to ensure we have the latest
-      await this.client.conversations.sync();
-      
-      // Find the conversation by ID
-      const conversations = await this.client.conversations.list();
-      const conversation = conversations.find((c) => c.id === conversationId);
-      
+      // Try to fetch the conversation directly; fall back to sync if cache misses.
+      let conversation = await this.client.conversations.getConversationById(conversationId);
+
       if (!conversation) {
-        throw new Error(`Conversation ${conversationId} not found`);
+        console.log('[XMTP] Conversation not found in cache, syncing before retry…');
+        await this.client.conversations.sync();
+        conversation = await this.client.conversations.getConversationById(conversationId);
+      }
+
+      if (!conversation) {
+        throw new Error(`Conversation ${conversationId} not found after sync`);
       }
 
       console.log('[XMTP] Found conversation, sending message...');
@@ -816,6 +824,13 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
+    const isAddress = isEthereumAddress(addressOrInboxId);
+
+    if (!isAddress) {
+      console.log('[XMTP] Input is not an Ethereum address, assuming inbox ID is valid');
+      return true;
+    }
+
     console.log('[XMTP] Checking if can receive messages:', addressOrInboxId);
     
     logNetworkEvent({
@@ -827,7 +842,7 @@ export class XmtpClient {
     try {
       // In XMTP v5, canMessage expects an array of Identifier objects
       const identifier = {
-        identifier: addressOrInboxId.toLowerCase(),
+        identifier: toIdentifierHex(addressOrInboxId).toLowerCase(),
         identifierKind: 'Ethereum' as const,
       };
       
@@ -889,4 +904,3 @@ export async function resetXmtpClient(): Promise<void> {
     xmtpClientInstance = null;
   }
 }
-

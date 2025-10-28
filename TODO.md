@@ -1,7 +1,19 @@
-# converge.cv - XMTP v3 PWA Development TODO
+# converge.cv - XMTP v5 PWA Development TODO
 
 ## Project Overview
-Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, encrypted.
+Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, encrypted.
+
+## Latest Updates (2025-10-28)
+- [x] Upgraded `@xmtp/browser-sdk` to 5.0.1 and aligned signer implementations with xmtp.chat.
+- [x] Fixed `canMessage` to resolve inbox IDs for Ethereum addresses on first attempt.
+- [x] Added `storage.clearAllData()` to wipe IndexedDB and XMTP OPFS databases during logout/reset.
+- [x] Improved XMTP installations management UI with key package status visuals and better error handling.
+- [x] Cleaned up unused assets and variables.
+
+## Follow-ups From Recent Changes
+- [ ] Add automated tests covering `storage.clearAllData()` to ensure Dexie + OPFS wipes stay intact.
+- [ ] Add integration test for the `canMessage` + inbox ID resolution flow to prevent regressions.
+- [ ] Document the XMTP v5 upgrade and new installation management tools in README.
 
 ---
 
@@ -25,7 +37,7 @@ Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, enc
 
 ### Phase 3: Dependencies & Configuration
 - [ ] Install core deps: zustand, react-router-dom, dexie
-- [ ] Install XMTP v3 SDK (@xmtp/*)
+- [x] Install XMTP v5 SDK (@xmtp/*)
 - [ ] Install headless UI components
 - [ ] Setup TypeScript paths & aliases
 - [ ] Configure Vitest for testing
@@ -259,119 +271,46 @@ Building a Signal-like PWA for XMTP v3 messaging - local-first, installable, enc
 - **State**: Zustand
 - **Styling**: Tailwind CSS + Headless UI
 - **PWA**: vite-plugin-pwa (Workbox)
-- **Messaging**: XMTP v3 browser SDK
+- **Messaging**: XMTP v5 browser SDK
 - **Storage**: Dexie (IndexedDB) → SQLite WASM (future)
 - **Crypto**: WebCrypto (AES-GCM), WebAuthn
 - **Testing**: Vitest + Playwright
 
 ---
 
-**Last Updated**: 2025-10-26
-**Status**: ✅ MVP v0.1.0 COMPLETE
+**Last Updated**: 2025-10-28
+**Status**: ✅ MVP v0.1.0 COMPLETE (XMTP v5 upgrade landed)
 
 ---
 
-## 🎉 MVP v0.1.0 Completion Summary
+## Current State Snapshot (2025-10-28)
 
-### What's Been Built
+**Authentication & Identity**
+- One-click onboarding auto-generates an XMTP-ready wallet and registers on the production network.
+- Optional wallet connection flows via wagmi v2 (MetaMask, Coinbase Wallet, WalletConnect, injected).
+- Vault stays unlocked by default; manual lock/logout lives in Settings.
+- `Clear All Data` now wipes Dexie tables and XMTP OPFS databases.
 
-This MVP delivers a fully functional, production-ready PWA for encrypted messaging:
+**Messaging**
+- XMTP v5.0.1 client streams conversations/messages in real time (receiving ✅).
+- Default contacts seed new inboxes; debug tab surfaces logs/state snapshots.
+- Conversation creation resolves inbox IDs correctly via the fixed `canMessage` flow.
 
-**Authentication & Security**
-- Complete onboarding flow with wallet address input
-- Passphrase-based vault protection (PBKDF2 600k iterations)
-- Lock/unlock functionality
-- Local encrypted storage (AES-GCM 256-bit)
-- WebAuthn/Passkey integration prepared
+**Settings & Device Management**
+- Installations panel lists all devices, fetches key package statuses, and supports per-device revoke.
+- Watchdog detects UI thread stalls and reloads the PWA automatically.
+- Debug console tab aggregates console, XMTP events, and runtime errors.
 
-**Messaging Features**
-- Chat list with conversation preview
-- Full conversation view with message bubbles
-- Real-time message composer
-- Message status indicators (pending → sent → delivered)
-- New chat creation with address validation
-- Conversation management (pin, archive support)
-- Unread badges
+**PWA & Platform**
+- Service worker + Workbox configured (install/update prompts currently disabled for debugging).
+- COOP/COEP headers injected via the service worker to enable SharedArrayBuffer isolation.
+- Vite build patched to bundle XMTP wasm worker assets after `pnpm install`.
 
-**Search & Discovery**
-- Full-text search across all messages
-- Search results with conversation navigation
-- Real-time search filtering
-
-**Settings & Management**
-- Comprehensive settings page
-- Account information display
-- Lock vault action
-- Logout with confirmation
-- Storage size calculation
-- Data export/clear options
-- Notification preferences UI
-
-**PWA Infrastructure**
-- Service worker with app shell caching
-- Offline support
-- Installable on all platforms
-- Push notification infrastructure
-- Badge API integration
-- Responsive design (mobile-first)
-
-**Developer Experience**
-- Complete TypeScript type safety
-- Zustand state management
-- Modular feature architecture
-- Unit tests for crypto and utilities
-- CI/CD with GitHub Actions
-- Automated deployment to GitHub Pages
-- Comprehensive documentation
-
-### Architecture Highlights
-
-**Storage Layer**
-- Swappable StorageDriver interface
-- Dexie (IndexedDB) implementation
-- Ready for SQLite WASM migration
-- Full CRUD operations
-- Indexed queries
-
-**Crypto Layer**
-- Vault key management
-- Key derivation (PBKDF2, WebAuthn PRF ready)
-- Key wrapping/unwrapping
-- Data encryption/decryption
-- In-memory key storage
-
-**XMTP Integration**
-- Complete client wrapper interface
-- Mock implementation for development
-- Ready for real XMTP v3 SDK drop-in
-- Message streaming support prepared
-- Conversation management
-
-**State Management**
-- Auth store (identity, vault status)
-- Conversation store (list, active, unread)
-- Message store (by conversation, status)
-- Clean separation of concerns
-
-### Statistics
-- **Files Created**: 60+
-- **Lines of Code**: ~8,000+
-- **Components**: 15+
-- **Features**: 8 major modules
-- **Git Commits**: 5 major milestones
-- **Build Size**: ~325 KB (gzipped ~100 KB)
-- **Tests**: 3 test suites with 20+ test cases
-
-### Ready For Production
-✅ TypeScript compiled without errors
-✅ ESLint passing
-✅ Production build succeeds
-✅ PWA manifest valid
-✅ Service worker registered
-✅ Offline functionality working
-✅ CI/CD pipeline active
-✅ Comprehensive documentation
-
+**Known Gaps**
+- Outgoing message send pipeline + delivery state (receive-only today).
+- Device-level key encryption (private keys currently plaintext in IndexedDB).
+- Multi-identity UI/IndexedDB schema, attachments, group chat support.
+- Re-enable install/update prompts and document XMTP v5 changes in README.
 
 ---
 
@@ -392,10 +331,11 @@ This MVP delivers a fully functional, production-ready PWA for encrypted messagi
 - [ ] Persist active identity selection
 
 ### Enhanced Installations Table  
-- [ ] Fetch key package statuses for installations
-- [ ] Display validation errors in UI
-- [ ] Show expiry timestamps (formatted)
-- [ ] Add status badges (valid/expired/error)
-- [ ] Sort installations by creation date (newest first)
+- [x] Fetch key package statuses for installations
+- [x] Display validation errors in UI
+- [x] Show expiry timestamps (formatted)
+- [x] Add status badges (valid/expired/error)
+- [x] Sort installations by creation date (newest first)
 - [ ] Add "Revoke All Other Installations" button
-
+- [ ] Replace browser `confirm`/`alert` flows with in-app modals
+- [ ] Implement auto-reconnect flow after revoking the current device

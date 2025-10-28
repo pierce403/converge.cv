@@ -13,9 +13,12 @@ export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
 
   useEffect(() => {
-    // Check for existing identity on mount
-    checkExistingIdentity();
-  }, [checkExistingIdentity]);
+    // Only attempt to restore identity when user is not yet authenticated.
+    // Prevents double-connect loops after onboarding (e.g., WalletConnect reopening Rainbow).
+    if (!isAuthenticated) {
+      checkExistingIdentity();
+    }
+  }, [isAuthenticated, checkExistingIdentity]);
 
   // Not authenticated - show onboarding
   if (!isAuthenticated) {
@@ -52,4 +55,3 @@ export function AppRouter() {
     </Routes>
   );
 }
-
