@@ -8,6 +8,7 @@ import { useAuth } from '@/features/auth';
 import { getStorage } from '@/lib/storage';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
+import { InstallationsSettings } from './InstallationsSettings';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -579,6 +580,9 @@ export function SettingsPage() {
               </div>
             </div>
           </section>
+
+          {/* XMTP Installations */}
+          <InstallationsSettings />
 
           {/* About */}
           <section>

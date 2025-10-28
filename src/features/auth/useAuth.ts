@@ -31,11 +31,34 @@ export function useAuth() {
         } else {
           await xmtp.connect({ address });
         }
+        
+        // After successful connection, save inboxId and installationId to identity
+        const inboxId = xmtp.getInboxId();
+        const installationId = xmtp.getInstallationId();
+        
+        if (inboxId && installationId) {
+          const storage = await getStorage();
+          const identity = await storage.getIdentity();
+          if (identity && identity.address === address) {
+            // Update identity with XMTP info
+            identity.inboxId = inboxId;
+            identity.installationId = installationId;
+            await storage.putIdentity(identity);
+            
+            // Update state
+            setIdentity(identity);
+            
+            console.log('[Auth] Saved XMTP info to identity:', {
+              inboxId,
+              installationId: installationId.substring(0, 16) + '...',
+            });
+          }
+        }
       } catch (error) {
         console.error('XMTP connection failed (non-blocking):', error);
       }
     },
-    []
+    [setIdentity]
   );
 
   /**

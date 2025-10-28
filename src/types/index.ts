@@ -61,6 +61,8 @@ export interface Identity {
   createdAt: number;
   avatar?: string; // Avatar URL or data URI
   displayName?: string; // Optional display name
+  inboxId?: string; // XMTP inbox ID
+  installationId?: string; // XMTP installation ID for this device
 }
 
 export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'failed';

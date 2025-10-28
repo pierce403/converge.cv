@@ -15,6 +15,8 @@ import buildInfo from '@/build-info.json';
 export interface XmtpIdentity {
   address: string;
   privateKey?: string;
+  inboxId?: string;
+  installationId?: string;
 }
 
 export interface XmtpConversation {
@@ -137,20 +139,37 @@ export class XmtpClient {
         performanceLogging: false,
       });
       
+      // Use a consistent dbPath to ensure we reuse the same installation
+      // The SDK will automatically create this in OPFS
+      const dbPath = `xmtp-production-${identity.address}.db3`;
+      
       const client = await Client.create(signer, {
         env: 'production',
         loggingLevel: 'debug',
         structuredLogging: false,
         performanceLogging: false,
+        dbPath, // Ensure we reuse the same database and installation
       });
 
       console.log('[XMTP] ✅ Client created successfully');
       console.log('[XMTP] Client properties:', {
         inboxId: client.inboxId,
         installationId: client.installationId,
+        dbPath,
         isReady: client.isReady,
       });
       this.client = client;
+      
+      // Save the installation ID to the identity if it's new
+      if (identity.installationId !== client.installationId) {
+        console.log('[XMTP] New installation ID detected, updating identity...');
+        // The caller (useAuth) should handle saving this
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:installation_id',
+          details: `Installation ID: ${client.installationId}`,
+        });
+      }
 
       // Step 2: Check if already registered (v3 auto-registers during Client.create)
       console.log('[XMTP] Checking if identity is registered...');
@@ -395,6 +414,48 @@ export class XmtpClient {
    */
   getAddress(): string | null {
     return this.identity?.address || null;
+  }
+
+  /**
+   * Get the client's inbox ID
+   */
+  getInboxId(): string | null {
+    return this.client?.inboxId || null;
+  }
+
+  /**
+   * Get the client's installation ID
+   */
+  getInstallationId(): string | null {
+    return this.client?.installationId || null;
+  }
+
+  /**
+   * Get the inbox state including all installations
+   */
+  async getInboxState() {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    return await this.client.preferences.inboxState();
+  }
+
+  /**
+   * Revoke specific installations by their IDs
+   * @param installationIds - Array of installation ID bytes to revoke
+   */
+  async revokeInstallations(installationIds: Uint8Array[]) {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    console.log('[XMTP] Revoking installations:', installationIds);
+    await this.client.revokeInstallations(installationIds);
+    console.log('[XMTP] ✅ Installations revoked successfully');
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'installations:revoke',
+      details: `Revoked ${installationIds.length} installation(s)`,
+    });
   }
 
   /**
