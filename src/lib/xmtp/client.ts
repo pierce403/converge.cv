@@ -1,12 +1,12 @@
 /**
- * XMTP v3 client wrapper
+ * XMTP client wrapper (v5.0.1)
  * 
- * NOTE: This is a placeholder implementation.
- * The actual @xmtp/browser-sdk v3 API may differ.
- * This provides the interface we'll use throughout the app.
+ * Production-ready implementation using @xmtp/browser-sdk.
+ * Following xmtp.chat reference implementation.
  */
 
 import { Client, type Signer } from '@xmtp/browser-sdk';
+import xmtpPackage from '@xmtp/browser-sdk/package.json';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
@@ -106,7 +106,7 @@ export class XmtpClient {
       console.log('[XMTP] ═══════════════════════════════════════════════════');
       console.log('[XMTP] Creating client with address:', identity.address);
       console.log('[XMTP] Environment: production');
-      console.log('[XMTP] SDK version: @xmtp/browser-sdk@3.0.5');
+      console.log('[XMTP] SDK version: @xmtp/browser-sdk@' + xmtpPackage.version);
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
       // Create appropriate signer based on identity type
