@@ -239,7 +239,7 @@ MIT License - see [LICENSE](./LICENSE) for details
 
 ## 📧 Contact
 
-Pierce Brantley - [@pierce403](https://github.com/pierce403)
+Dean Pierce - [@pierce403](https://github.com/pierce403)
 
 ---
 
