@@ -208,11 +208,11 @@ export class XmtpClient {
       setSyncProgress(0);
       await this.syncConversations();
 
-      setSyncStatus('syncing-history');
+      // Reuse 'syncing-messages' status for historical backfill to align with store type.
+      setSyncStatus('syncing-messages');
       setSyncProgress(40);
       await this.syncHistory();
 
-      setSyncStatus('streaming');
       setSyncProgress(85);
       await this.startMessageStream();
       
