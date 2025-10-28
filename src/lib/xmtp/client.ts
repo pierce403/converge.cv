@@ -547,12 +547,12 @@ export class XmtpClient {
     try {
       // Use Utils to resolve inboxId & fetch state without creating a full client
       const { Utils } = await import('@xmtp/browser-sdk');
-      const utils = new Utils(false);
+      const utils: InstanceType<typeof Utils> = new Utils(false);
 
-      const identifier = {
+      const identifier: { identifier: string; identifierKind: 'Ethereum' } = {
         identifier: toIdentifierHex(this.identity.address).toLowerCase(),
-        identifierKind: 'Ethereum' as const,
-      } as any;
+        identifierKind: 'Ethereum',
+      };
 
       const inboxId = await withTimeout(utils.getInboxIdForIdentifier(identifier, 'production'));
       if (!inboxId) {
