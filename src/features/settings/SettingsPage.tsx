@@ -146,10 +146,39 @@ export function SettingsPage() {
       )
     ) {
       try {
-        const storage = await getStorage();
-        // Clear ALL data (IndexedDB + XMTP OPFS)
-        await storage.clearAllData();
-        // Reload to reset state
+        // 1) Disconnect wallet to prevent auto-reconnect on next load
+        try {
+          await disconnectWallet();
+          console.log('[Settings] Disconnected wallet via wagmi');
+        } catch (e) {
+          console.warn('[Settings] Wallet disconnect failed (non-fatal):', e);
+        }
+
+        // 2) Fully logout (disconnect XMTP, clear IndexedDB + XMTP OPFS, reset state)
+        try {
+          await logout();
+          console.log('[Settings] Performed app logout and storage cleanup');
+        } catch (e) {
+          console.warn('[Settings] Logout encountered an error (continuing):', e);
+        }
+
+        // 3) Clear service worker caches and unregister SW (force a fresh start)
+        try {
+          if ('caches' in window) {
+            const cacheNames = await caches.keys();
+            await Promise.all(cacheNames.map((name) => caches.delete(name)));
+            console.log('[Settings] Cleared service worker caches');
+          }
+          if ('serviceWorker' in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map((reg) => reg.unregister()));
+            console.log('[Settings] Unregistered service workers');
+          }
+        } catch (e) {
+          console.warn('[Settings] Failed to clear SW caches or unregister SW (non-fatal):', e);
+        }
+
+        // 4) Hard reload the page to ensure a completely clean slate
         window.location.reload();
       } catch (error) {
         console.error('Failed to clear data:', error);
