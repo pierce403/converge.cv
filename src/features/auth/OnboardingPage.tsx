@@ -63,12 +63,10 @@ export function OnboardingPage() {
     try {
       console.log('[Onboarding] Wallet connected:', { address, chainId });
       
-      // For wallet-based identities, we don't store a private key
-      // The wallet will handle signing through wagmi
-      // We generate a temporary private key just for storage compatibility
-      // but the actual signing will use the wallet's signer
-      const tempPrivateKey = '0x0000000000000000000000000000000000000000000000000000000000000000';
-      const success = await createIdentity(address, tempPrivateKey);
+      // For wallet-based identities, we don't have the private key
+      // The wallet keeps it secure and will handle signing through wagmi
+      // Pass undefined for privateKey - XMTP will use the wallet's signer
+      const success = await createIdentity(address, undefined);
 
       if (success) {
         navigate('/');

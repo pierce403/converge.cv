@@ -65,19 +65,24 @@ export function useAuth() {
    * Create a new identity without passphrase (simplified flow)
    */
   const createIdentity = useCallback(
-    async (walletAddress: string, privateKey: string) => {
+    async (walletAddress: string, privateKey?: string) => {
       try {
         const storage = await getStorage();
 
-        // Derive public key from private key for completeness
-        const account = privateKeyToAccount(privateKey as `0x${string}`);
-        const publicKeyHex = account.publicKey;
+        let publicKeyHex = '';
+        
+        // Only derive public key if we have a valid private key (generated wallets)
+        // For connected wallets, we don't have the private key (wallet keeps it secure)
+        if (privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+          const account = privateKeyToAccount(privateKey as `0x${string}`);
+          publicKeyHex = account.publicKey;
+        }
         
         // Create identity
         const identity: Identity = {
           address: walletAddress,
           publicKey: publicKeyHex,
-          privateKey: privateKey, // Store encrypted in production
+          privateKey: privateKey, // Store encrypted in production (or undefined for connected wallets)
           createdAt: Date.now(),
         };
         await storage.putIdentity(identity);
@@ -91,7 +96,8 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        await connectXmtpSafely(identity.address, privateKey);
+        // Only pass privateKey if we have a valid one
+        await connectXmtpSafely(identity.address, privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? privateKey : undefined);
 
         return true;
       } catch (error) {
