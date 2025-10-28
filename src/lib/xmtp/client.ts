@@ -808,38 +808,51 @@ export class XmtpClient {
   }
 
   /**
-   * Check if an inbox ID can receive XMTP messages
+   * Check if an address or inbox ID can receive XMTP messages
+   * Accepts either an Ethereum address (0x...) or an inbox ID
    */
-  async canMessage(inboxId: string): Promise<boolean> {
+  async canMessage(addressOrInboxId: string): Promise<boolean> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
-    console.log('[XMTP] Checking if inbox ID can receive messages:', inboxId);
+    console.log('[XMTP] Checking if can receive messages:', addressOrInboxId);
     
     logNetworkEvent({
       direction: 'outbound',
       event: 'canMessage',
-      details: `Checking if ${inboxId} can receive XMTP messages`,
+      details: `Checking if ${addressOrInboxId} can receive XMTP messages`,
     });
 
     try {
-      // In XMTP v3, canMessage expects an array of Identifier objects
+      // In XMTP v5, canMessage expects an array of Identifier objects
       const identifier = {
-        identifier: inboxId.toLowerCase(),
+        identifier: addressOrInboxId.toLowerCase(),
         identifierKind: 'Ethereum' as const,
       };
       
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const canMsgMap = await this.client.canMessage([identifier as any]);
-      const result = canMsgMap.get(inboxId.toLowerCase()) || false;
       
-      console.log(`[XMTP] canMessage result for ${inboxId}:`, result);
+      // The SDK returns a Map where:
+      // - If input is an address: key = inbox ID (if registered), value = true
+      // - If input is inbox ID: key = inbox ID, value = true
+      // So we need to check if ANY value in the map is true
+      let result = false;
+      for (const [key, value] of canMsgMap) {
+        console.log(`[XMTP] canMessage map entry: ${key} = ${value}`);
+        if (value) {
+          result = true;
+          break;
+        }
+      }
+      
+      console.log(`[XMTP] canMessage result for ${addressOrInboxId}:`, result);
       
       logNetworkEvent({
         direction: 'status',
         event: 'canMessage:result',
-        details: `${inboxId} ${result ? 'can' : 'cannot'} receive messages`,
+        details: `${addressOrInboxId} ${result ? 'can' : 'cannot'} receive messages`,
       });
       
       return result;
