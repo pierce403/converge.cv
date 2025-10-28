@@ -6,9 +6,8 @@ import { http, createConfig } from '@wagmi/core';
 import { mainnet, base, baseSepolia } from '@wagmi/core/chains';
 import { injected, metaMask, coinbaseWallet, walletConnect } from '@wagmi/connectors';
 
-// Get WalletConnect project ID - using a default for now
-// In production, you can set VITE_WALLETCONNECT_PROJECT_ID in .env
-const projectId = 'converge-cv-default';
+// WalletConnect/Reown project ID from https://cloud.reown.com/
+const projectId = 'de49d3fcfa0a614710c571a3484a4d0f';
 
 export const wagmiConfig = createConfig({
   chains: [mainnet, base, baseSepolia],

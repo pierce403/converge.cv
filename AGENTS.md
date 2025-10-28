@@ -39,6 +39,13 @@
 - **No passphrase setup**
 - **No multi-step wizard** unless absolutely necessary
 
+### 🚫 NO FAKE/MOCK DATA OR IDs
+- **NEVER use placeholder, fake, or mock API keys, project IDs, or credentials**
+- If a service requires an API key or project ID, **ASK THE USER** to generate it
+- Do not use placeholder values like `'your-api-key-here'`, `'fake-id'`, `'default-project'`
+- Real production services need real credentials - don't assume defaults will work
+- **Exception**: Development/testing stubs for XMTP message handling are acceptable if clearly marked
+
 ---
 
 ## Architecture Decisions
@@ -393,6 +400,7 @@ if (!isRegistered) {
    - Added WagmiProvider and QueryClientProvider to app
    - Configured for mainnet, Base, and Base Sepolia
    - Used exact versions from xmtp.chat for compatibility
+   - **WalletConnect Project ID**: `de49d3fcfa0a614710c571a3484a4d0f` (from cloud.reown.com)
 
 **Files Added**:
 - `src/lib/wagmi/config.ts` - Wagmi configuration
