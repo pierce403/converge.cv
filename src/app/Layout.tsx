@@ -1,9 +1,6 @@
 import { useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { PWAInstallPrompt } from '@/components/PWAInstallPrompt';
-import { UpdatePrompt } from '@/components/UpdatePrompt';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
-import { CrossOriginIsolationNotice } from '@/components/CrossOriginIsolationNotice';
 import { useConversationStore, useAuthStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
@@ -80,15 +77,6 @@ export function Layout() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* PWA Install Prompt */}
-      <PWAInstallPrompt />
-
-      {/* Update Available Prompt */}
-      <UpdatePrompt />
-
-      {/* Cross-Origin Isolation Status */}
-      <CrossOriginIsolationNotice />
-      
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between">
         <h1 className="text-xl font-bold">Converge</h1>

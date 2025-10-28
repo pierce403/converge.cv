@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 
 // https://vitejs.dev/config/
@@ -13,39 +12,7 @@ export default defineConfig({
   // },
   plugins: [
     react(),
-    VitePWA({
-      strategies: 'injectManifest',
-      srcDir: 'src',
-      filename: 'sw.ts',
-      registerType: 'prompt',
-      injectManifest: {
-        injectionPoint: undefined,
-      },
-      manifest: {
-        name: 'Converge',
-        short_name: 'Converge',
-        description: 'Secure, local-first messaging with XMTP v3',
-        theme_color: '#0f172a',
-        background_color: '#0f172a',
-        display: 'standalone',
-        icons: [
-          {
-            src: '/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: '/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-          },
-        ],
-      },
-      devOptions: {
-        enabled: true,
-        type: 'module',
-      },
-    }),
+    // Service worker disabled - not needed for XMTP v3 (cthulhu.bot works without it)
   ],
   resolve: {
     alias: {
@@ -64,10 +31,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    headers: {
-      'Cross-Origin-Embedder-Policy': 'credentialless',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    },
+    // No COOP/COEP headers needed - cthulhu.bot works without them
   },
   build: {
     outDir: 'dist',

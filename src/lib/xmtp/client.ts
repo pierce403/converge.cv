@@ -101,31 +101,6 @@ export class XmtpClient {
 
     this.identity = identity;
 
-    const globalScope: typeof globalThis | undefined =
-      typeof globalThis !== 'undefined' ? globalThis : undefined;
-    const hasSharedArrayBuffer =
-      !!globalScope &&
-      typeof globalScope.SharedArrayBuffer !== 'undefined' &&
-      globalScope.SharedArrayBuffer !== null;
-    const isCrossOriginIsolated =
-      !!globalScope && typeof globalScope.crossOriginIsolated === 'boolean'
-        ? globalScope.crossOriginIsolated
-        : false;
-
-    if (!hasSharedArrayBuffer || !isCrossOriginIsolated) {
-      const message =
-        'XMTP WebAssembly bindings require SharedArrayBuffer and cross-origin isolation, which are unavailable in this environment.';
-      console.warn('Skipping XMTP connection:', message);
-      setConnectionStatus('error');
-      setError(message);
-      logNetworkEvent({
-        direction: 'status',
-        event: 'connect:unsupported',
-        details: message,
-      });
-      return;
-    }
-
     try {
       setConnectionStatus('connecting');
       setError(null);
@@ -142,9 +117,6 @@ export class XmtpClient {
       console.log('[XMTP] ═══════════════════════════════════════════════════');
       console.log('[XMTP] Creating client with address:', identity.address);
       console.log('[XMTP] Environment: production');
-      console.log('[XMTP] Cross-origin isolated:', isCrossOriginIsolated);
-      console.log('[XMTP] SharedArrayBuffer available:', hasSharedArrayBuffer);
-      console.log('[XMTP] WebAssembly available:', typeof WebAssembly !== 'undefined');
       console.log('[XMTP] SDK version: @xmtp/browser-sdk@3.0.5');
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
