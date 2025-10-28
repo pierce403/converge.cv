@@ -656,6 +656,7 @@ export class XmtpClient {
         identifierKind: 'Ethereum' as const,
       };
       
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const canMsgMap = await this.client.canMessage([identifier as any]);
       const result = canMsgMap.get(inboxId.toLowerCase()) || false;
       

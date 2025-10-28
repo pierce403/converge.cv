@@ -9,6 +9,7 @@ import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
+import type { XmtpMessage } from '@/lib/xmtp';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -31,7 +32,7 @@ export function ConversationView() {
   useEffect(() => {
     // Listen for incoming XMTP messages
     const handleIncomingMessage = (event: Event) => {
-      const customEvent = event as CustomEvent<{ conversationId: string; message: any }>;
+      const customEvent = event as CustomEvent<{ conversationId: string; message: XmtpMessage }>;
       const { conversationId, message } = customEvent.detail;
       
       // Only handle messages for the currently viewed conversation

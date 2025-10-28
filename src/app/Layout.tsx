@@ -8,6 +8,7 @@ import { useConversationStore, useAuthStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
+import type { XmtpMessage } from '@/lib/xmtp';
 
 export function Layout() {
   const location = useLocation();
@@ -18,7 +19,7 @@ export function Layout() {
   // Global message listener - handles ALL incoming XMTP messages
   useEffect(() => {
     const handleIncomingMessage = async (event: Event) => {
-      const customEvent = event as CustomEvent<{ conversationId: string; message: any }>;
+      const customEvent = event as CustomEvent<{ conversationId: string; message: XmtpMessage }>;
       const { conversationId, message } = customEvent.detail;
       
       console.log('[Layout] Global message listener: received message', {

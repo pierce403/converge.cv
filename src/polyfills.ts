@@ -7,11 +7,16 @@ import { Buffer } from 'buffer';
 
 // Attach Node-like globals expected by some libraries (including XMTP)
 if (typeof window !== 'undefined') {
-  if (!window.global) {
-    (window as  any).global = window;
+  interface WindowWithGlobals extends Window {
+    global?: typeof globalThis;
+    Buffer?: typeof Buffer;
   }
-  if (!(window as any).Buffer) {
-    (window as any).Buffer = Buffer;
+  const win = window as WindowWithGlobals;
+  if (!win.global) {
+    win.global = window;
+  }
+  if (!win.Buffer) {
+    win.Buffer = Buffer;
   }
 }
 
