@@ -27,6 +27,7 @@ export function InstallationsSettings() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [isFetchingStatuses, setIsFetchingStatuses] = useState(false);
 
   const loadInstallations = async () => {
     setIsLoading(true);
@@ -85,6 +86,31 @@ export function InstallationsSettings() {
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const refreshStatuses = async () => {
+    setIsFetchingStatuses(true);
+    setError(null);
+    try {
+      const xmtp = getXmtpClient();
+      if (!xmtp.isConnected()) {
+        setError('Must be connected to XMTP to fetch key package statuses.');
+        return;
+      }
+      if (installations.length === 0) return;
+      const installationIds = installations.map((i) => i.id);
+      const statuses = await xmtp.getKeyPackageStatuses(installationIds);
+      const updated = installations.map((inst) => ({
+        ...inst,
+        keyPackageStatus: statuses.get(inst.id),
+      }));
+      setInstallations(updated);
+    } catch (err) {
+      console.error('[Installations] Status refresh failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to refresh statuses');
+    } finally {
+      setIsFetchingStatuses(false);
     }
   };
 
@@ -205,17 +231,28 @@ export function InstallationsSettings() {
           )}
         </div>
 
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h3 className="font-medium text-slate-200">
             All Installations ({installations.length}/10)
           </h3>
-          <button
-            onClick={loadInstallations}
-            disabled={isLoading}
-            className="text-sm text-blue-400 hover:text-blue-300 disabled:opacity-50"
-          >
-            {isLoading ? 'Loading...' : 'Refresh'}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={loadInstallations}
+              disabled={isLoading}
+              className="text-sm text-blue-400 hover:text-blue-300 disabled:opacity-50"
+              title="Fetch latest inbox state from the network"
+            >
+              {isLoading ? 'Refreshing…' : 'Force Network Refresh'}
+            </button>
+            <button
+              onClick={refreshStatuses}
+              disabled={isFetchingStatuses || isLoading || installations.length === 0}
+              className="text-sm text-green-400 hover:text-green-300 disabled:opacity-50"
+              title="Fetch key package statuses for current installations"
+            >
+              {isFetchingStatuses ? 'Fetching Statuses…' : 'Fetch Statuses'}
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -311,4 +348,3 @@ export function InstallationsSettings() {
     </section>
   );
 }
-
