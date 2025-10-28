@@ -664,9 +664,9 @@ export class XmtpClient {
     });
 
     try {
-      // If it looks like an Ethereum address, convert to inbox ID
-      let inboxId = peerAddressOrInboxId;
-      let displayAddress = peerAddressOrInboxId;
+      // If it looks like an Ethereum address, we'll use the identifier path
+      const inboxId = peerAddressOrInboxId;
+      const displayAddress = peerAddressOrInboxId;
 
       let dmConversation;
 
