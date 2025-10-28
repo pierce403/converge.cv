@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConversations } from './useConversations';
-import { getXmtpClient } from '@/lib/xmtp';
+// import { getXmtpClient } from '@/lib/xmtp';
 import { resolveAddressOrENS, isENSName, isEthereumAddress } from '@/lib/utils/ens';
 
 export function NewChatPage() {
