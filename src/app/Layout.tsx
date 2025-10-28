@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
+import { SyncProgressBar } from '@/components/SyncProgressBar';
 import { useConversationStore, useAuthStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
@@ -77,6 +78,9 @@ export function Layout() {
 
   return (
     <div className="flex flex-col h-screen">
+      {/* Sync progress bar */}
+      <SyncProgressBar />
+      
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between">
         <h1 className="text-xl font-bold">Converge</h1>

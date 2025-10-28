@@ -208,8 +208,24 @@ export class XmtpClient {
 
       // Start syncing conversations and streaming messages
       console.log('[XMTP] Starting conversation sync and message streaming...');
+      const { setSyncStatus, setSyncProgress } = useXmtpStore.getState();
+      
+      setSyncStatus('syncing-conversations');
+      setSyncProgress(0);
       await this.syncConversations();
+      
+      setSyncProgress(50);
+      setSyncStatus('syncing-messages');
       await this.startMessageStream();
+      
+      setSyncProgress(100);
+      setSyncStatus('complete');
+      
+      // Hide the sync indicator after a brief delay
+      setTimeout(() => {
+        setSyncStatus('idle');
+        setSyncProgress(0);
+      }, 2000);
     } catch (error) {
       console.error('[XMTP] Connection failed:', error);
       console.error('[XMTP] Error type:', typeof error);
