@@ -276,6 +276,16 @@ export class XmtpClient {
         details: `Disconnecting client for ${this.identity?.address ?? 'unknown identity'}`,
       });
 
+      try {
+        // CRITICAL: Must await client.close() to properly release OPFS database locks
+        console.log('[XMTP] Closing client and releasing database locks...');
+        await this.client.close();
+        console.log('[XMTP] ✅ Client closed successfully');
+      } catch (error) {
+        console.error('[XMTP] Error closing client:', error);
+        // Continue cleanup even if close fails
+      }
+
       this.client = null;
       this.identity = null;
       setConnectionStatus('disconnected');
@@ -285,7 +295,7 @@ export class XmtpClient {
         event: 'disconnect:success',
         details: 'XMTP client disconnected',
       });
-      console.log('XMTP client disconnected');
+      console.log('[XMTP] XMTP client fully disconnected');
     }
   }
 
@@ -764,9 +774,9 @@ export function getXmtpClient(): XmtpClient {
   return xmtpClientInstance;
 }
 
-export function resetXmtpClient(): void {
+export async function resetXmtpClient(): Promise<void> {
   if (xmtpClientInstance) {
-    xmtpClientInstance.disconnect();
+    await xmtpClientInstance.disconnect();
     xmtpClientInstance = null;
   }
 }
