@@ -45,13 +45,14 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
 // Patch once
 (() => {
   if (typeof window === 'undefined') return;
-  if ((window as any).__workerTrackerPatched) return;
-  (window as any).__workerTrackerPatched = true;
+  const flagWin = window as unknown as { __workerTrackerPatched?: boolean };
+  if (flagWin.__workerTrackerPatched) return;
+  flagWin.__workerTrackerPatched = true;
 
   const OriginalWorker = window.Worker;
   if (!OriginalWorker) return;
 
-  const anyWindow = window as unknown as { __workerTracker?: unknown; Worker: typeof Worker };
+  const anyWindow = window as unknown as { __workerTracker?: WorkerTrackerApi; Worker: typeof Worker };
   const tracker: WorkerTrackerApi = (anyWindow.__workerTracker as WorkerTrackerApi | undefined) ?? {
     workers: new Map<number, WorkerInfo>(),
     nextId: 1,
@@ -75,7 +76,7 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
       return info ? toPublic(info) : undefined;
     },
   };
-  (anyWindow.__workerTracker as any) = tracker;
+  anyWindow.__workerTracker = tracker;
 
   // Override constructor
   const PatchedWorker = function (this: Worker, scriptURL: string | URL, options?: WorkerOptions) {
