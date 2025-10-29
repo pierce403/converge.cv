@@ -2,11 +2,7 @@
 // It monkey-patches window.Worker to capture instances, basic metadata,
 // and provides a small API on window.__workerTracker to enumerate/terminate.
 
-declare global {
-  interface Window {
-    __workerTracker?: WorkerTrackerApi | { list: () => PublicWorkerInfo[]; terminate: (id: number) => boolean };
-  }
-}
+// Avoid augmenting Window typing; store on window as any to prevent TS collisions
 
 type WorkerTrackerApi = {
   workers: Map<number, WorkerInfo>;
@@ -52,7 +48,8 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
   const OriginalWorker = window.Worker;
   if (!OriginalWorker) return;
 
-  const tracker: WorkerTrackerApi = (window.__workerTracker as WorkerTrackerApi | undefined) ?? {
+  const anyWindow = window as unknown as { __workerTracker?: unknown; Worker: typeof Worker };
+  const tracker: WorkerTrackerApi = (anyWindow.__workerTracker as WorkerTrackerApi | undefined) ?? {
     workers: new Map<number, WorkerInfo>(),
     nextId: 1,
     list() {
@@ -75,7 +72,7 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
       return info ? toPublic(info) : undefined;
     },
   };
-  (window.__workerTracker as any) = tracker;
+  (anyWindow.__workerTracker as any) = tracker;
 
   // Override constructor
   const PatchedWorker = function (this: Worker, scriptURL: string | URL, options?: WorkerOptions) {
@@ -126,5 +123,5 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
   } as unknown as typeof Worker;
 
   // Assign patched constructor with correct shape
-  (window as unknown as { Worker: typeof Worker }).Worker = PatchedWorker;
+  anyWindow.Worker = PatchedWorker;
 })();
