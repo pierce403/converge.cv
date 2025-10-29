@@ -215,16 +215,16 @@ export function InstallationsSettings() {
   return (
     <section>
       <h2 className="text-lg font-semibold mb-3">XMTP Installations</h2>
-      <div className="bg-slate-800 rounded-lg p-4 space-y-4">
-        <div className="text-sm text-slate-300">
+      <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg p-4 space-y-4 backdrop-blur">
+        <div className="text-sm text-primary-200">
           <p className="mb-2">
             Each device where you use Converge registers an installation with XMTP.
             You can have up to <strong>10 installations</strong> per inbox.
           </p>
           {currentInstallationId && (
-            <div className="mt-2 p-3 bg-slate-900 rounded border border-slate-700">
-              <div className="font-medium text-slate-200">This Device</div>
-              <div className="text-xs text-slate-400 font-mono mt-1">
+            <div className="mt-2 p-3 bg-primary-950/30 rounded border border-primary-800/60">
+              <div className="font-medium text-primary-100">This Device</div>
+              <div className="text-xs text-primary-200 font-mono mt-1">
                 {formatInstallationId(currentInstallationId)}
               </div>
             </div>
@@ -232,14 +232,14 @@ export function InstallationsSettings() {
         </div>
 
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-medium text-slate-200">
+          <h3 className="font-medium text-primary-100">
             All Installations ({installations.length}/10)
           </h3>
           <div className="flex items-center gap-3">
             <button
               onClick={loadInstallations}
               disabled={isLoading}
-              className="text-sm text-blue-400 hover:text-blue-300 disabled:opacity-50"
+              className="text-sm text-accent-300 hover:text-accent-200 disabled:opacity-50"
               title="Fetch latest inbox state from the network"
             >
               {isLoading ? 'Refreshing…' : 'Force Network Refresh'}
@@ -262,7 +262,7 @@ export function InstallationsSettings() {
         )}
 
         {isLoading && !error && (
-          <div className="text-center py-8 text-slate-400">
+          <div className="text-center py-8 text-primary-200">
             <div className="animate-spin inline-block w-6 h-6 border-2 border-current border-t-transparent rounded-full" />
           </div>
         )}
@@ -281,20 +281,20 @@ export function InstallationsSettings() {
                   key={installation.id}
                   className={`p-3 rounded border ${
                     isCurrentDevice
-                      ? 'bg-blue-500/10 border-blue-500/30'
+                      ? 'bg-accent-500/10 border-accent-400/30'
                       : hasError || isExpired
                       ? 'bg-red-500/10 border-red-500/30'
-                      : 'bg-slate-900 border-slate-700'
+                      : 'bg-primary-950/30 border-primary-800/60'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-slate-200">
+                        <span className="text-sm font-medium text-primary-100">
                           {formatInstallationId(installation.id)}
                         </span>
                         {isCurrentDevice && (
-                          <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">
+                          <span className="text-xs px-2 py-0.5 bg-accent-500/20 text-accent-200 rounded">
                             This Device
                           </span>
                         )}
@@ -314,7 +314,7 @@ export function InstallationsSettings() {
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-400 mt-1 space-y-0.5">
+                      <div className="text-xs text-primary-200 mt-1 space-y-0.5">
                         <div>Created: {formatTimestamp(installation.clientTimestampNs)}</div>
                         {hasError && (
                           <div className="text-red-400 font-mono text-xs break-all">
@@ -340,7 +340,7 @@ export function InstallationsSettings() {
         )}
 
         {!isLoading && installations.length === 0 && !error && (
-          <div className="text-center py-8 text-slate-400 text-sm">
+          <div className="text-center py-8 text-primary-200 text-sm">
             No installations found. Try connecting to XMTP first.
           </div>
         )}

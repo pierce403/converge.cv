@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-slate-900 text-slate-100 antialiased;
+    @apply bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 text-primary-50 antialiased;
   }
 
   * {
@@ -15,25 +15,25 @@
 @layer components {
   /* Message bubbles */
   .message-sent {
-    @apply bg-primary-600 text-white rounded-2xl rounded-tr-sm px-4 py-2 max-w-[80%] ml-auto;
+    @apply bg-accent-500 text-white rounded-2xl rounded-tr-sm px-4 py-2 max-w-[80%] ml-auto shadow-lg;
   }
 
   .message-received {
-    @apply bg-slate-700 text-slate-100 rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%];
+    @apply bg-primary-800/80 text-primary-50 rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] backdrop-blur-sm;
   }
 
   /* Input styles */
   .input-primary {
-    @apply w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-4 py-2 bg-primary-950/60 border border-primary-800 rounded-lg text-primary-100 placeholder-primary-300 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950 focus:border-transparent backdrop-blur;
   }
 
   /* Button styles */
   .btn-primary {
-    @apply px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent-300 focus:ring-offset-2 focus:ring-offset-primary-950 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg;
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply px-4 py-2 bg-primary-900/70 hover:bg-primary-800 text-primary-100 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-primary-950 disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur;
   }
 }
 
@@ -43,15 +43,15 @@
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-slate-800;
+  @apply bg-primary-950;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-slate-600 rounded-full;
+  @apply bg-primary-700 rounded-full;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-slate-500;
+  @apply bg-accent-500;
 }
 
 /* Animation for reduced motion */

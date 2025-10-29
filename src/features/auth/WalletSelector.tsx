@@ -70,10 +70,10 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
   }, [address, chainId, onWalletConnected]);
 
   return (
-    <div className="w-full max-w-md mx-auto p-6 space-y-6">
+    <div className="w-full max-w-md mx-auto p-6 space-y-6 bg-primary-900/60 border border-primary-800/60 rounded-2xl shadow-lg backdrop-blur">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold">Connect Your Wallet</h2>
-        <p className="text-slate-400">
+        <h2 className="text-2xl font-bold text-primary-50">Connect Your Wallet</h2>
+        <p className="text-primary-200">
           Choose a wallet to connect with XMTP
         </p>
       </div>
@@ -90,20 +90,20 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
             key={wallet.type}
             onClick={() => handleConnect(wallet.type)}
             disabled={isConnecting}
-            className="w-full p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
           >
             <div className="flex items-center justify-between w-full">
               <div className="flex items-center gap-3">
                 <span className="text-3xl">{wallet.icon}</span>
                 <div className="text-left">
-                  <div className="font-medium">{wallet.name}</div>
+                  <div className="font-medium text-primary-50">{wallet.name}</div>
                   {wallet.description && (
-                    <div className="text-xs text-slate-400">{wallet.description}</div>
+                    <div className="text-xs text-primary-200">{wallet.description}</div>
                   )}
                 </div>
               </div>
               {isConnecting && (
-                <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
+                <div className="animate-spin w-5 h-5 border-2 border-accent-400 border-t-transparent rounded-full" />
               )}
             </div>
           </button>
@@ -112,21 +112,21 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
 
       <div className="relative">
         <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-slate-700" />
+          <div className="w-full border-t border-primary-800/60" />
         </div>
         <div className="relative flex justify-center text-sm">
-          <span className="px-4 bg-slate-900 text-slate-400">or</span>
+          <span className="px-4 bg-primary-900/80 text-primary-200">or</span>
         </div>
       </div>
 
       <button
         onClick={onBack}
-        className="w-full p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-medium transition-colors"
+        className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg font-medium transition-colors text-primary-100"
       >
         ← Generate Random Wallet
       </button>
 
-      <p className="text-xs text-slate-500 text-center">
+      <p className="text-xs text-primary-300 text-center">
         By connecting, you agree to the XMTP terms and our privacy policy
       </p>
     </div>

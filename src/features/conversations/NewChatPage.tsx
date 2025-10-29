@@ -73,12 +73,12 @@ export function NewChatPage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full text-primary-50">
       {/* Header */}
-      <div className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center gap-3">
+      <div className="bg-primary-950/70 border-b border-primary-800/60 px-4 py-3 flex items-center gap-3 backdrop-blur-md">
         <button
           onClick={() => navigate('/')}
-          className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+          className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -88,11 +88,11 @@ export function NewChatPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4 bg-primary-950/30">
         <div className="max-w-md mx-auto">
           <div className="mb-6">
-            <h2 className="text-lg font-semibold mb-2">Start a conversation</h2>
-            <p className="text-sm text-slate-400">
+            <h2 className="text-lg font-semibold mb-2 text-primary-50">Start a conversation</h2>
+            <p className="text-sm text-primary-200">
               Enter an Ethereum address or ENS name to start chatting via XMTP
             </p>
           </div>
@@ -117,11 +117,11 @@ export function NewChatPage() {
                 disabled={isResolving || isCreating}
               />
               {resolvedAddress && (
-                <p className="text-xs text-green-400 mt-1">
+                <p className="text-xs text-accent-300 mt-1">
                   ✓ Resolved to: {resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}
                 </p>
               )}
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-primary-300 mt-1">
                 Must be a valid Ethereum address or ENS name registered on XMTP
               </p>
             </div>
@@ -153,8 +153,8 @@ export function NewChatPage() {
 
           {/* Recent/suggested contacts would go here */}
           <div className="mt-8">
-            <h3 className="text-sm font-semibold text-slate-400 mb-3">Recent Contacts</h3>
-            <p className="text-sm text-slate-500 text-center py-4">No recent contacts</p>
+            <h3 className="text-sm font-semibold text-primary-300 mb-3">Recent Contacts</h3>
+            <p className="text-sm text-primary-300/80 text-center py-4">No recent contacts</p>
           </div>
         </div>
       </div>
