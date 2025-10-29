@@ -4,7 +4,7 @@
 
 declare global {
   interface Window {
-    __workerTracker?: WorkerTrackerApi;
+    __workerTracker?: WorkerTrackerApi | { list: () => PublicWorkerInfo[]; terminate: (id: number) => boolean };
   }
 }
 
@@ -52,7 +52,7 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
   const OriginalWorker = window.Worker;
   if (!OriginalWorker) return;
 
-  const tracker: WorkerTrackerApi = (window.__workerTracker = (window.__workerTracker as WorkerTrackerApi | undefined) ?? {
+  const tracker: WorkerTrackerApi = (window.__workerTracker as WorkerTrackerApi | undefined) ?? {
     workers: new Map<number, WorkerInfo>(),
     nextId: 1,
     list() {
@@ -74,7 +74,8 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
       const info = this.workers.get(id);
       return info ? toPublic(info) : undefined;
     },
-  });
+  };
+  (window.__workerTracker as any) = tracker;
 
   // Override constructor
   const PatchedWorker = function (this: Worker, scriptURL: string | URL, options?: WorkerOptions) {

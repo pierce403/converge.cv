@@ -42,7 +42,7 @@ export function WebWorkersPanel() {
     try {
       if ('serviceWorker' in navigator) {
         const regs = await navigator.serviceWorker.getRegistrations();
-        setSwRegs(regs);
+        setSwRegs(Array.from(regs));
       } else {
         setSwRegs([]);
       }
@@ -182,4 +182,3 @@ export function WebWorkersPanel() {
     </section>
   );
 }
-
