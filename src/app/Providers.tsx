@@ -2,6 +2,8 @@ import { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { wagmiConfig } from '@/lib/wagmi';
+// Initialize the worker tracker early so we capture workers created during app bootstrap
+import '@/lib/debug/worker-tracker';
 
 const queryClient = new QueryClient();
 
@@ -22,4 +24,3 @@ export function AppProviders({ children }: AppProvidersProps) {
     </WagmiProvider>
   );
 }
-

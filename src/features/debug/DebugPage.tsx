@@ -6,6 +6,7 @@ import {
   useXmtpStore,
 } from '@/lib/stores';
 import { formatDistanceToNow } from '@/lib/utils/date';
+import { WebWorkersPanel } from './WebWorkersPanel';
 
 export function DebugPage() {
   const consoleEntries = useDebugStore((state) => state.consoleEntries);
@@ -114,6 +115,8 @@ export function DebugPage() {
             {xmtpError && <p className="mt-1 text-sm text-red-400">{xmtpError}</p>}
           </article>
         </section>
+
+        <WebWorkersPanel />
 
         <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
           <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
