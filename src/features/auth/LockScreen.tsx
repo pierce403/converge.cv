@@ -32,12 +32,12 @@ export function LockScreen() {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
-      <div className="max-w-md w-full">
-        <div className="text-center mb-8">
-          <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+      <div className="max-w-md w-full bg-primary-900/60 border border-primary-800/60 rounded-2xl p-6 shadow-lg backdrop-blur">
+        <div className="text-center mb-8 space-y-2">
+          <div className="w-20 h-20 bg-primary-900/60 rounded-full flex items-center justify-center mx-auto">
             <svg
-              className="w-10 h-10 text-slate-400"
+              className="w-10 h-10 text-accent-300"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -50,8 +50,8 @@ export function LockScreen() {
               />
             </svg>
           </div>
-          <h2 className="text-2xl font-bold mb-2">Unlock Converge</h2>
-          <p className="text-slate-400">
+          <h2 className="text-2xl font-bold text-primary-50">Unlock Converge</h2>
+          <p className="text-primary-200">
             {vaultSecrets?.method === 'passkey'
               ? 'Use your passkey to unlock'
               : 'Enter your passphrase to unlock'}

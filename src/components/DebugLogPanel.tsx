@@ -26,7 +26,7 @@ export function DebugLogPanel() {
     <Link
       to="/debug"
       className={`relative flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
-        isActive ? 'text-primary-500 bg-slate-700' : 'text-slate-400 hover:text-slate-200'
+        isActive ? 'text-accent-300 bg-primary-900/70' : 'text-primary-300 hover:text-primary-100'
       }`}
     >
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -41,7 +41,7 @@ export function DebugLogPanel() {
       {badgeLabel && (
         <span
           className={`absolute -top-1 -right-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-            errorCount > 0 ? 'bg-red-500 text-white' : 'bg-slate-700 text-slate-200'
+            errorCount > 0 ? 'bg-red-500 text-white' : 'bg-primary-900/70 text-primary-100'
           }`}
         >
           {badgeLabel}

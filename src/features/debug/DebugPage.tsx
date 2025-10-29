@@ -35,29 +35,29 @@ export function DebugPage() {
 
 
   return (
-    <div className="min-h-full bg-slate-950 text-slate-100">
+    <div className="min-h-full bg-primary-950/90 text-primary-50">
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-bold">Debug Console</h1>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-primary-200">
               Inspect application state, XMTP activity, and runtime issues captured in the app.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-            <span className="rounded-full bg-slate-800 px-3 py-1">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-primary-200">
+            <span className="rounded-full bg-primary-900/60 px-3 py-1">
               {consoleEntries.length} console log{consoleEntries.length === 1 ? '' : 's'}
             </span>
-            <span className="rounded-full bg-slate-800 px-3 py-1">
+            <span className="rounded-full bg-primary-900/60 px-3 py-1">
               {networkEntries.length} network event{networkEntries.length === 1 ? '' : 's'}
             </span>
-            <span className="rounded-full bg-slate-800 px-3 py-1">
+            <span className="rounded-full bg-primary-900/60 px-3 py-1">
               {errorEntries.length} error{errorEntries.length === 1 ? '' : 's'}
             </span>
             <button
               type="button"
               onClick={clearAll}
-              className="ml-auto rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-slate-200 hover:border-slate-500"
+              className="ml-auto rounded-full border border-primary-800/60 bg-primary-950/30 px-3 py-1 text-primary-100 hover:border-primary-700"
             >
               Clear all logs
             </button>
@@ -65,27 +65,27 @@ export function DebugPage() {
         </header>
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <article className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Auth</h2>
+          <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-primary-200">Auth</h2>
             <p className="mt-2 text-lg font-semibold">
               {isAuthenticated ? 'Authenticated' : 'Not authenticated'}
             </p>
-            <p className="text-sm text-slate-400">{isVaultUnlocked ? 'Vault unlocked' : 'Vault locked'}</p>
+            <p className="text-sm text-primary-200">{isVaultUnlocked ? 'Vault unlocked' : 'Vault locked'}</p>
           </article>
 
-          <article className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Identity</h2>
+          <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-primary-200">Identity</h2>
             <p className="mt-2 text-lg font-semibold truncate" title={identity?.address || '—'}>
               {identity?.address ?? '—'}
             </p>
-            <p className="text-sm text-slate-400 truncate" title={identity?.displayName || 'No display name'}>
+            <p className="text-sm text-primary-200 truncate" title={identity?.displayName || 'No display name'}>
               {identity?.displayName ?? 'No display name'}
             </p>
           </article>
 
-          <article className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Conversations</h2>
-            <dl className="mt-2 space-y-1 text-sm text-slate-300">
+          <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-primary-200">Conversations</h2>
+            <dl className="mt-2 space-y-1 text-sm text-primary-100">
               <div className="flex items-center justify-between">
                 <dt>Total</dt>
                 <dd>{conversationSummary.total}</dd>
@@ -105,56 +105,56 @@ export function DebugPage() {
             </dl>
           </article>
 
-          <article className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">XMTP</h2>
+          <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-primary-200">XMTP</h2>
             <p className="mt-2 text-lg font-semibold capitalize">{connectionStatus}</p>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-primary-200">
               Last connected {lastConnected ? formatDistanceToNow(lastConnected) : 'never'}
             </p>
             {xmtpError && <p className="mt-1 text-sm text-red-400">{xmtpError}</p>}
           </article>
         </section>
 
-        <section className="rounded-xl border border-slate-800 bg-slate-900">
-          <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">Network Log</h2>
+        <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
+          <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-primary-100">Network Log</h2>
             <button
               type="button"
               onClick={clearNetwork}
-              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-slate-500"
+              className="rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700"
             >
               Clear network log
             </button>
           </header>
           <div className="max-h-80 overflow-y-auto">
             {reversedNetwork.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-slate-500">
+              <p className="px-4 py-6 text-center text-sm text-primary-300">
                 XMTP requests and responses will appear here.
               </p>
             ) : (
-              <ul className="divide-y divide-slate-800">
+              <ul className="divide-y divide-primary-800/60">
                 {reversedNetwork.map((entry) => (
                   <li key={entry.id} className="px-4 py-3 text-sm">
                     <div className="flex items-center justify-between text-xs uppercase tracking-wide">
                       <span
                         className={
                           entry.direction === 'outbound'
-                            ? 'font-semibold text-blue-400'
+                            ? 'font-semibold text-accent-300'
                             : entry.direction === 'inbound'
                               ? 'font-semibold text-emerald-400'
-                              : 'font-semibold text-slate-400'
+                              : 'font-semibold text-primary-200'
                         }
                       >
                         {entry.direction}
                       </span>
-                      <span className="text-slate-500">
+                      <span className="text-primary-300">
                         {new Date(entry.timestamp).toLocaleTimeString()}
                       </span>
                     </div>
-                    <p className="mt-1 text-base font-medium text-slate-200">{entry.event}</p>
-                    {entry.details && <p className="mt-1 text-xs text-slate-400">{entry.details}</p>}
+                    <p className="mt-1 text-base font-medium text-primary-100">{entry.event}</p>
+                    {entry.details && <p className="mt-1 text-xs text-primary-200">{entry.details}</p>}
                     {entry.payload && (
-                      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-800/80 p-3 text-[11px] leading-relaxed text-slate-200">
+                      <pre className="mt-2 overflow-x-auto rounded-lg bg-primary-900/70 p-3 text-[11px] leading-relaxed text-primary-100">
                         {entry.payload}
                       </pre>
                     )}
@@ -165,24 +165,24 @@ export function DebugPage() {
           </div>
         </section>
 
-        <section className="rounded-xl border border-slate-800 bg-slate-900">
-          <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">Console Log</h2>
+        <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
+          <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-primary-100">Console Log</h2>
             <button
               type="button"
               onClick={clearConsole}
-              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-slate-500"
+              className="rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700"
             >
               Clear console log
             </button>
           </header>
           <div className="max-h-80 overflow-y-auto">
             {reversedConsole.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-slate-500">
+              <p className="px-4 py-6 text-center text-sm text-primary-300">
                 Console output from the running app will appear here.
               </p>
             ) : (
-              <ul className="divide-y divide-slate-800">
+              <ul className="divide-y divide-primary-800/60">
                 {reversedConsole.map((entry) => (
                   <li key={entry.id} className="px-4 py-3 text-sm">
                     <div className="flex items-center justify-between text-xs uppercase tracking-wide">
@@ -193,19 +193,19 @@ export function DebugPage() {
                             : entry.level === 'warn'
                               ? 'font-semibold text-yellow-400'
                               : entry.level === 'info'
-                                ? 'font-semibold text-blue-400'
-                                : 'font-semibold text-slate-400'
+                                ? 'font-semibold text-accent-300'
+                                : 'font-semibold text-primary-200'
                         }
                       >
                         {entry.level}
                       </span>
-                      <span className="text-slate-500">
+                      <span className="text-primary-300">
                         {new Date(entry.timestamp).toLocaleTimeString()}
                       </span>
                     </div>
-                    <p className="mt-2 text-slate-200 whitespace-pre-wrap break-words">{entry.message}</p>
+                    <p className="mt-2 text-primary-100 whitespace-pre-wrap break-words">{entry.message}</p>
                     {entry.details && (
-                      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-800/80 p-3 text-[11px] leading-relaxed text-slate-200">
+                      <pre className="mt-2 overflow-x-auto rounded-lg bg-primary-900/70 p-3 text-[11px] leading-relaxed text-primary-100">
                         {entry.details}
                       </pre>
                     )}
@@ -216,34 +216,34 @@ export function DebugPage() {
           </div>
         </section>
 
-        <section className="rounded-xl border border-slate-800 bg-slate-900">
-          <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">Error Log</h2>
+        <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
+          <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-primary-100">Error Log</h2>
             <button
               type="button"
               onClick={clearErrors}
-              className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:border-slate-500"
+              className="rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700"
             >
               Clear error log
             </button>
           </header>
           <div className="max-h-80 overflow-y-auto">
             {reversedErrors.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-slate-500">
+              <p className="px-4 py-6 text-center text-sm text-primary-300">
                 Runtime errors, stack traces, and unhandled rejections will be captured here.
               </p>
             ) : (
-              <ul className="divide-y divide-slate-800">
+              <ul className="divide-y divide-primary-800/60">
                 {reversedErrors.map((entry) => (
                   <li key={entry.id} className="px-4 py-3 text-sm">
                     <div className="flex items-center justify-between text-xs uppercase tracking-wide">
                       <span className="font-semibold text-red-400">{entry.source}</span>
-                      <span className="text-slate-500">
+                      <span className="text-primary-300">
                         {new Date(entry.timestamp).toLocaleTimeString()}
                       </span>
                     </div>
-                    <p className="mt-2 text-base font-semibold text-slate-200">{entry.message}</p>
-                    {entry.details && <p className="mt-1 text-xs text-slate-400">{entry.details}</p>}
+                    <p className="mt-2 text-base font-semibold text-primary-100">{entry.message}</p>
+                    {entry.details && <p className="mt-1 text-xs text-primary-200">{entry.details}</p>}
                     {entry.stack && (
                       <pre className="mt-2 overflow-x-auto rounded-lg bg-red-950/40 p-3 text-[11px] leading-relaxed text-red-100">
                         {entry.stack}

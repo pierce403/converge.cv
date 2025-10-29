@@ -77,16 +77,16 @@ export function Layout() {
   }, [conversations, addConversation, receiveMessage, identity]);
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-screen text-primary-50">
       {/* Sync progress bar */}
       <SyncProgressBar />
-      
+
       {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between">
-        <h1 className="text-xl font-bold">Converge</h1>
+      <header className="bg-primary-950/80 border-b border-primary-800/60 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-lg">
+        <h1 className="text-xl font-bold text-primary-50">Converge</h1>
         <Link
           to="/search"
-          className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+          className="p-2 text-primary-200 hover:text-white border border-primary-800/60 hover:border-primary-700 rounded-lg transition-colors bg-primary-900/40 hover:bg-primary-800/60"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
@@ -100,19 +100,19 @@ export function Layout() {
       </header>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto bg-primary-950/20">
         <Outlet />
       </main>
 
       {/* Bottom navigation */}
-      <nav className="bg-slate-800 border-t border-slate-700 px-4 py-3">
+      <nav className="bg-primary-950/80 border-t border-primary-800/60 px-4 py-3 backdrop-blur-md shadow-inner">
         <div className="flex justify-around max-w-lg mx-auto">
           <Link
             to="/"
             className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
               location.pathname === '/'
-                ? 'text-primary-500 bg-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'text-accent-300 bg-primary-900/70 shadow-lg'
+                : 'text-primary-300 hover:text-primary-100'
             }`}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -125,8 +125,8 @@ export function Layout() {
             to="/settings"
             className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
               location.pathname === '/settings'
-                ? 'text-primary-500 bg-slate-700'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'text-accent-300 bg-primary-900/70 shadow-lg'
+                : 'text-primary-300 hover:text-primary-100'
             }`}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">

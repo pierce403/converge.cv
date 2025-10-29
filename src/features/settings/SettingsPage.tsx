@@ -217,7 +217,7 @@ export function SettingsPage() {
       case 'error':
         return 'text-red-500';
       default:
-        return 'text-slate-500';
+        return 'text-primary-300';
     }
   };
 
@@ -235,12 +235,12 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full text-primary-50">
       {/* Header */}
-      <div className="bg-slate-800 border-b border-slate-700 p-4">
+      <div className="bg-primary-950/70 border-b border-primary-800/60 p-4 backdrop-blur-md">
         <div className="flex items-center justify-between max-w-2xl mx-auto">
           <h1 className="text-xl font-semibold">Settings</h1>
-          <button onClick={() => navigate('/')} className="text-slate-400 hover:text-slate-300">
+          <button onClick={() => navigate('/')} className="text-primary-200 hover:text-primary-100">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -249,21 +249,21 @@ export function SettingsPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto bg-slate-900">
+      <div className="flex-1 overflow-y-auto bg-primary-950/20">
         <div className="max-w-2xl mx-auto p-4 space-y-6">
-          
+
           {/* Profile Section */}
           <section>
             <h2 className="text-lg font-semibold mb-3">Profile</h2>
-            <div className="bg-slate-800 rounded-lg p-4 space-y-4">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg p-4 space-y-4 backdrop-blur">
               {/* Avatar */}
               <div className="flex items-center gap-4">
                 <div className="relative">
-                  <div className="w-20 h-20 rounded-full bg-slate-700 flex items-center justify-center overflow-hidden">
+                  <div className="w-20 h-20 rounded-full bg-primary-950/60 border border-primary-800/60 flex items-center justify-center overflow-hidden">
                     {identity?.avatar ? (
                       <img src={identity.avatar} alt="Avatar" className="w-full h-full object-cover" />
                     ) : (
-                      <svg className="w-10 h-10 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <svg className="w-10 h-10 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -275,7 +275,7 @@ export function SettingsPage() {
                   </div>
                   <button
                     onClick={() => avatarInputRef.current?.click()}
-                    className="absolute bottom-0 right-0 bg-primary-600 hover:bg-primary-700 rounded-full p-1.5 transition-colors"
+                    className="absolute bottom-0 right-0 bg-accent-500 hover:bg-accent-600 rounded-full p-1.5 transition-colors shadow-lg"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path
@@ -296,14 +296,14 @@ export function SettingsPage() {
                   />
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm text-slate-400 mb-1">Avatar</div>
-                  <div className="text-sm text-slate-500">Click camera icon to change</div>
+                  <div className="text-sm text-primary-200 mb-1">Avatar</div>
+                  <div className="text-sm text-primary-300">Click camera icon to change</div>
                 </div>
               </div>
 
               {/* Display Name */}
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">Display Name (Optional)</label>
+                <label className="block text-sm font-medium text-primary-200 mb-2">Display Name (Optional)</label>
                 {isEditingName ? (
                   <div className="flex gap-2">
                     <input
@@ -311,7 +311,7 @@ export function SettingsPage() {
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
                       placeholder="Enter display name"
-                      className="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      className="flex-1 bg-primary-950/60 border border-primary-800/60 rounded-lg px-3 py-2 text-sm text-primary-100 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950"
                       maxLength={50}
                     />
                     <button onClick={handleSaveDisplayName} className="btn-primary text-sm px-3">
@@ -330,9 +330,9 @@ export function SettingsPage() {
                 ) : (
                   <div className="flex items-center justify-between">
                     <span className="text-sm">
-                      {identity?.displayName || <span className="text-slate-500">Not set</span>}
+                      {identity?.displayName || <span className="text-primary-300">Not set</span>}
                     </span>
-                    <button onClick={() => setIsEditingName(true)} className="text-sm text-primary-500 hover:text-primary-400">
+                    <button onClick={() => setIsEditingName(true)} className="text-sm text-accent-300 hover:text-accent-200">
                       Edit
                     </button>
                   </div>
@@ -344,13 +344,13 @@ export function SettingsPage() {
           {/* Identity & Connection */}
           <section>
             <h2 className="text-lg font-semibold mb-3">Identity & Connection</h2>
-            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
               {/* XMTP Connection Status */}
               <div className="p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex-1">
                     <div className="font-medium">XMTP Network</div>
-                    <div className="text-sm text-slate-400">Connection status</div>
+                    <div className="text-sm text-primary-200">Connection status</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${getConnectionStatusColor()}`} />
@@ -360,7 +360,7 @@ export function SettingsPage() {
                   </div>
                 </div>
                 {lastConnected && connectionStatus === 'connected' && (
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-primary-300">
                     Connected since {new Date(lastConnected).toLocaleTimeString()}
                   </div>
                 )}
@@ -383,14 +383,14 @@ export function SettingsPage() {
                           }
                         }
                       }}
-                      className="text-xs text-blue-400 hover:text-blue-300 underline"
+                      className="text-xs text-accent-300 hover:text-accent-200 underline"
                     >
                       Retry Connection
                     </button>
                   </div>
                 )}
                 {connectionStatus === 'connecting' && (
-                  <div className="mt-2 text-xs text-slate-400">
+                  <div className="mt-2 text-xs text-primary-200">
                     <div className="flex items-center gap-2">
                       <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -398,8 +398,8 @@ export function SettingsPage() {
                       </svg>
                       <span>Registering identity on XMTP network...</span>
                     </div>
-                    <div className="mt-1 text-slate-500">
-                      Check the <button onClick={() => navigate('/debug')} className="underline hover:text-slate-400">Debug tab</button> for details
+                    <div className="mt-1 text-primary-300">
+                      Check the <button onClick={() => navigate('/debug')} className="underline hover:text-primary-200">Debug tab</button> for details
                     </div>
                   </div>
                 )}
@@ -408,11 +408,11 @@ export function SettingsPage() {
               {/* Current Identity */}
               <div className="p-4">
                 <div className="font-medium mb-1">Current Identity</div>
-                <div className="text-sm text-slate-400 mb-2">Ethereum Address</div>
-                <div className="font-mono text-sm bg-slate-900 rounded px-3 py-2 break-all">
+                <div className="text-sm text-primary-200 mb-2">Ethereum Address</div>
+                <div className="font-mono text-sm bg-primary-950/20 rounded px-3 py-2 break-all">
                   {identity?.address}
                 </div>
-                <div className="mt-2 text-xs text-slate-500">
+                <div className="mt-2 text-xs text-primary-300">
                   This is your primary identity for sending and receiving messages
                 </div>
               </div>
@@ -420,13 +420,13 @@ export function SettingsPage() {
               {/* Add Identity */}
               <button
                 onClick={handleAddIdentity}
-                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between"
+                className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between"
               >
                 <div>
                   <div className="font-medium">Add Identity</div>
-                  <div className="text-sm text-slate-400">Associate another address with this inbox</div>
+                  <div className="text-sm text-primary-200">Associate another address with this inbox</div>
                 </div>
-                <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
               </button>
@@ -436,16 +436,16 @@ export function SettingsPage() {
           {/* Account Actions */}
           <section>
             <h2 className="text-lg font-semibold mb-3">Account</h2>
-            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
               <button
                 onClick={handleLockVault}
-                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between"
+                className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between"
               >
                 <div>
                   <div className="font-medium">Lock Vault</div>
-                  <div className="text-sm text-slate-400">Require authentication to access</div>
+                  <div className="text-sm text-primary-200">Require authentication to access</div>
                 </div>
-                <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -457,11 +457,11 @@ export function SettingsPage() {
 
               <button
                 onClick={handleRemoveIdentity}
-                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between text-red-400"
+                className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between text-red-400"
               >
                 <div>
                   <div className="font-medium">Remove Identity</div>
-                  <div className="text-sm text-slate-400">Delete this identity and all local data</div>
+                  <div className="text-sm text-primary-200">Delete this identity and all local data</div>
                 </div>
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
@@ -478,12 +478,12 @@ export function SettingsPage() {
           {/* Privacy & Security */}
           <section>
             <h2 className="text-lg font-semibold mb-3">Privacy & Security</h2>
-            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-medium">Message Encryption</div>
-                    <div className="text-sm text-slate-400">End-to-end encryption via XMTP</div>
+                    <div className="text-sm text-primary-200">End-to-end encryption via XMTP</div>
                   </div>
                   <span className="text-sm text-green-500">✓ Enabled</span>
                 </div>
@@ -492,7 +492,7 @@ export function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-medium">Local Storage</div>
-                    <div className="text-sm text-slate-400">Data stored on your device only</div>
+                    <div className="text-sm text-primary-200">Data stored on your device only</div>
                   </div>
                   <span className="text-sm text-green-500">✓ Active</span>
                 </div>
@@ -503,21 +503,21 @@ export function SettingsPage() {
           {/* Data Management */}
           <section>
             <h2 className="text-lg font-semibold mb-3">Data Management</h2>
-            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
               <div className="p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div>
                     <div className="font-medium">Storage Usage</div>
-                    <div className="text-sm text-slate-400">Local database size</div>
+                    <div className="text-sm text-primary-200">Local database size</div>
                   </div>
                   {storageSize !== null && (
-                    <span className="text-sm text-slate-300">{formatBytes(storageSize)}</span>
+                    <span className="text-sm text-primary-100">{formatBytes(storageSize)}</span>
                   )}
                 </div>
                 <button
                   onClick={loadStorageSize}
                   disabled={isLoadingSize}
-                  className="text-sm text-primary-500 hover:text-primary-400"
+                  className="text-sm text-accent-300 hover:text-accent-200"
                 >
                   {isLoadingSize ? 'Calculating...' : 'Calculate Size'}
                 </button>
@@ -525,13 +525,13 @@ export function SettingsPage() {
 
               <button
                 onClick={handleExportData}
-                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between"
+                className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between"
               >
                 <div>
                   <div className="font-medium">Export Data</div>
-                  <div className="text-sm text-slate-400">Create encrypted backup</div>
+                  <div className="text-sm text-primary-200">Create encrypted backup</div>
                 </div>
-                <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -543,13 +543,13 @@ export function SettingsPage() {
 
               <button
                 onClick={handleClearCache}
-                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between"
+                className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between"
               >
                 <div>
                   <div className="font-medium">Clear App Cache</div>
-                  <div className="text-sm text-slate-400">Force refresh from server</div>
+                  <div className="text-sm text-primary-200">Force refresh from server</div>
                 </div>
-                <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -561,11 +561,11 @@ export function SettingsPage() {
 
               <button
                 onClick={handleClearData}
-                className="w-full p-4 text-left hover:bg-slate-700 transition-colors flex items-center justify-between text-red-400"
+                className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between text-red-400"
               >
                 <div>
                   <div className="font-medium">Clear All Data</div>
-                  <div className="text-sm text-slate-400">Delete everything locally</div>
+                  <div className="text-sm text-primary-200">Delete everything locally</div>
                 </div>
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
@@ -582,12 +582,12 @@ export function SettingsPage() {
           {/* App */}
           <section>
             <h2 className="text-lg font-semibold mb-3">App</h2>
-            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-medium">Install App</div>
-                    <div className="text-sm text-slate-400">
+                    <div className="text-sm text-primary-200">
                       Add Converge to your home screen for quick access
                     </div>
                   </div>
@@ -619,22 +619,22 @@ export function SettingsPage() {
           {/* About */}
           <section>
             <h2 className="text-lg font-semibold mb-3">About</h2>
-            <div className="bg-slate-800 rounded-lg divide-y divide-slate-700">
+            <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
               <div className="p-4">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Version</span>
+                  <span className="text-primary-200">Version</span>
                   <span>0.1.0 MVP</span>
                 </div>
               </div>
               <div className="p-4">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Protocol</span>
+                  <span className="text-primary-200">Protocol</span>
                   <span>XMTP v3</span>
                 </div>
               </div>
               <div className="p-4">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Storage</span>
+                  <span className="text-primary-200">Storage</span>
                   <span>IndexedDB (Dexie)</span>
                 </div>
               </div>
@@ -643,7 +643,7 @@ export function SettingsPage() {
                   href="https://github.com/pierce403/converge.cv"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-between text-primary-500 hover:text-primary-400"
+                  className="flex items-center justify-between text-accent-300 hover:text-accent-200"
                 >
                   <span>View on GitHub</span>
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -660,7 +660,7 @@ export function SettingsPage() {
           </section>
 
           {/* Footer info */}
-          <div className="text-center text-sm text-slate-500 pb-8">
+          <div className="text-center text-sm text-primary-300 pb-8">
             <p>Converge - Local-first XMTP messaging</p>
             <p className="mt-1">End-to-end encrypted · No server storage</p>
           </div>

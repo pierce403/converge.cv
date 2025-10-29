@@ -36,18 +36,18 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
         {/* Metadata */}
         <div className="flex items-center gap-2 mt-1 px-2">
-          <span className="text-xs text-slate-500">{formatMessageTime(message.sentAt)}</span>
+          <span className="text-xs text-primary-300">{formatMessageTime(message.sentAt)}</span>
 
           {isSent && (
             <span className="text-xs">
               {message.status === 'pending' && (
-                <span className="text-slate-500">○</span>
+                <span className="text-primary-300">○</span>
               )}
               {message.status === 'sent' && (
-                <span className="text-slate-400">✓</span>
+                <span className="text-primary-200">✓</span>
               )}
               {message.status === 'delivered' && (
-                <span className="text-primary-500">✓✓</span>
+                <span className="text-accent-300">✓✓</span>
               )}
               {message.status === 'failed' && (
                 <span className="text-red-500">✗</span>
@@ -60,7 +60,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {message.reactions.length > 0 && (
           <div className="flex gap-1 mt-1">
             {message.reactions.map((reaction, idx) => (
-              <span key={idx} className="text-sm bg-slate-700 px-2 py-0.5 rounded-full">
+              <span key={idx} className="text-sm bg-primary-900/60 px-2 py-0.5 rounded-full">
                 {reaction.emoji}
               </span>
             ))}

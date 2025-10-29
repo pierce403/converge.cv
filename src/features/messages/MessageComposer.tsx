@@ -42,12 +42,12 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
   };
 
   return (
-    <div className="border-t border-slate-700 bg-slate-800 p-4">
+    <div className="border-t border-primary-900/40 bg-primary-950/40 p-4 backdrop-blur-md">
       <div className="flex items-end gap-2">
         {/* Attachment button */}
         <button
           type="button"
-          className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
+          className="p-2 text-primary-300 hover:text-primary-100 hover:bg-primary-900/50 rounded-lg transition-colors flex-shrink-0"
           disabled={disabled}
         >
           <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -68,7 +68,7 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
             onChange={handleInput}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
-            className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none overflow-y-auto"
+            className="w-full px-4 py-2 bg-primary-950/60 border border-primary-800 rounded-lg text-primary-100 placeholder-primary-300 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950 focus:border-transparent resize-none overflow-y-auto backdrop-blur"
             rows={1}
             disabled={disabled}
             style={{ maxHeight: '120px' }}
@@ -80,7 +80,7 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
           type="button"
           onClick={handleSend}
           disabled={disabled || !message.trim()}
-          className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          className="p-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-lg"
         >
           <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
@@ -93,7 +93,7 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
         </button>
       </div>
 
-      <p className="text-xs text-slate-500 mt-2">
+      <p className="text-xs text-primary-300 mt-2">
         Press Enter to send, Shift+Enter for new line
       </p>
     </div>

@@ -89,35 +89,35 @@ export function OnboardingPage() {
 
   if (step === 'welcome') {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
-        <div className="max-w-md w-full text-center">
-          <div className="mb-8">
-            <div className="w-24 h-24 bg-primary-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <span className="text-4xl font-bold text-white">C</span>
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+        <div className="max-w-md w-full text-center space-y-6">
+          <div className="mb-2">
+            <div className="w-24 h-24 bg-primary-900/60 border border-primary-700/60 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <span className="text-4xl font-bold text-accent-300">C</span>
             </div>
-            <h1 className="text-4xl font-bold mb-2">Welcome to Converge</h1>
-            <p className="text-slate-400 text-lg">
+            <h1 className="text-4xl font-bold mb-2 text-primary-50">Welcome to Converge</h1>
+            <p className="text-primary-200 text-lg">
               Secure, local-first messaging with XMTP v3
             </p>
           </div>
 
-          <div className="bg-slate-800 rounded-lg p-6 mb-6 text-left">
-            <h3 className="font-semibold mb-4">Features:</h3>
-            <ul className="space-y-2 text-slate-300">
+          <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg p-6 text-left shadow-lg">
+            <h3 className="font-semibold mb-4 text-primary-50">Features:</h3>
+            <ul className="space-y-2 text-primary-200">
               <li className="flex items-start">
-                <span className="text-primary-500 mr-2">✓</span>
+                <span className="text-accent-400 mr-2">✓</span>
                 <span>End-to-end encrypted messaging</span>
               </li>
               <li className="flex items-start">
-                <span className="text-primary-500 mr-2">✓</span>
+                <span className="text-accent-400 mr-2">✓</span>
                 <span>Your data stays on your device</span>
               </li>
               <li className="flex items-start">
-                <span className="text-primary-500 mr-2">✓</span>
+                <span className="text-accent-400 mr-2">✓</span>
                 <span>No phone number required</span>
               </li>
               <li className="flex items-start">
-                <span className="text-primary-500 mr-2">✓</span>
+                <span className="text-accent-400 mr-2">✓</span>
                 <span>Decentralized protocol</span>
               </li>
             </ul>
@@ -133,38 +133,38 @@ export function OnboardingPage() {
 
   if (step === 'wallet-choice') {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
         <div className="max-w-md w-full text-center space-y-6">
-          <h2 className="text-3xl font-bold mb-2">Choose How to Connect</h2>
-          <p className="text-slate-400">
+          <h2 className="text-3xl font-bold mb-2 text-primary-50">Choose How to Connect</h2>
+          <p className="text-primary-200">
             Connect an existing wallet or create a new one
           </p>
 
           {error && (
             <div className="bg-red-500/10 border border-red-500 rounded-lg p-4">
-              <p className="text-red-400">{error}</p>
+              <p className="text-red-300">{error}</p>
             </div>
           )}
 
           <div className="space-y-4">
             <button
               onClick={() => setStep('wallet-connect')}
-              className="w-full p-6 bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 hover:border-primary-600 rounded-lg transition-all"
+              className="w-full p-6 bg-primary-900/60 hover:bg-primary-800 border-2 border-primary-800/60 hover:border-accent-400 rounded-lg transition-all text-left"
             >
               <div className="text-4xl mb-2">🔗</div>
-              <div className="font-semibold text-lg mb-1">Connect Wallet</div>
-              <div className="text-sm text-slate-400">
+              <div className="font-semibold text-lg mb-1 text-primary-50">Connect Wallet</div>
+              <div className="text-sm text-primary-200">
                 Use MetaMask, WalletConnect, or Coinbase Wallet
               </div>
             </button>
 
             <button
               onClick={handleGenerateWallet}
-              className="w-full p-6 bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 hover:border-primary-600 rounded-lg transition-all"
+              className="w-full p-6 bg-primary-900/60 hover:bg-primary-800 border-2 border-primary-800/60 hover:border-accent-400 rounded-lg transition-all text-left"
             >
               <div className="text-4xl mb-2">✨</div>
-              <div className="font-semibold text-lg mb-1">Create New Wallet</div>
-              <div className="text-sm text-slate-400">
+              <div className="font-semibold text-lg mb-1 text-primary-50">Create New Wallet</div>
+              <div className="text-sm text-primary-200">
                 Generate a random wallet instantly
               </div>
             </button>
@@ -172,7 +172,7 @@ export function OnboardingPage() {
 
           <button
             onClick={() => setStep('welcome')}
-            className="text-slate-400 hover:text-slate-300 text-sm"
+            className="text-primary-200 hover:text-primary-100 text-sm"
           >
             ← Back
           </button>
@@ -183,8 +183,8 @@ export function OnboardingPage() {
 
   if (step === 'wallet-connect') {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
-        <WalletSelector 
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+        <WalletSelector
           onWalletConnected={handleWalletConnected}
           onBack={() => setStep('wallet-choice')}
         />
@@ -194,13 +194,13 @@ export function OnboardingPage() {
 
   if (step === 'creating') {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4">
-        <div className="max-w-md w-full text-center">
-          <div className="w-20 h-20 bg-primary-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
-            <div className="w-10 h-10 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+        <div className="max-w-md w-full text-center space-y-4">
+          <div className="w-20 h-20 bg-primary-900/60 rounded-full flex items-center justify-center mx-auto mb-2">
+            <div className="w-10 h-10 border-4 border-accent-400 border-t-transparent rounded-full animate-spin"></div>
           </div>
-          <h2 className="text-2xl font-bold mb-2">Creating Your Identity</h2>
-          <p className="text-slate-400">
+          <h2 className="text-2xl font-bold mb-2 text-primary-50">Creating Your Identity</h2>
+          <p className="text-primary-200">
             Setting up your secure messaging identity...
           </p>
           {error && (

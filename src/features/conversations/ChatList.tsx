@@ -22,7 +22,7 @@ export function ChatList() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-slate-400">Loading conversations...</div>
+        <div className="text-primary-200">Loading conversations...</div>
       </div>
     );
   }
@@ -30,9 +30,9 @@ export function ChatList() {
   if (activeConversations.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full px-4 text-center">
-        <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mb-4">
+        <div className="w-20 h-20 bg-primary-900/60 rounded-full flex items-center justify-center mb-4">
           <svg
-            className="w-10 h-10 text-slate-600"
+            className="w-10 h-10 text-primary-400"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -45,8 +45,8 @@ export function ChatList() {
             />
           </svg>
         </div>
-        <h3 className="text-lg font-semibold mb-2">No conversations yet</h3>
-        <p className="text-slate-400 mb-4">Start a new chat to begin messaging</p>
+        <h3 className="text-lg font-semibold mb-2 text-primary-50">No conversations yet</h3>
+        <p className="text-primary-200 mb-4">Start a new chat to begin messaging</p>
         <Link to="/new-chat" className="btn-primary">
           New Chat
         </Link>
@@ -64,11 +64,11 @@ export function ChatList() {
             <Link
               key={conversation.id}
               to={`/chat/${conversation.id}`}
-              className="block border-b border-slate-700 hover:bg-slate-800 transition-colors"
+              className="block border-b border-primary-900/40 hover:bg-primary-900/50 transition-colors"
             >
               <div className="flex items-center px-4 py-3">
                 {/* Avatar */}
-                <div className="w-12 h-12 rounded-full bg-primary-600 flex items-center justify-center flex-shrink-0 text-lg">
+                <div className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg">
                   {contactInfo?.avatar ? (
                     <span className="text-white" aria-hidden>
                       {contactInfo.avatar}
@@ -88,16 +88,16 @@ export function ChatList() {
                         ? `${contactInfo.name}`
                         : `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
                     </h3>
-                    <span className="text-xs text-slate-400 ml-2 flex-shrink-0">
+                    <span className="text-xs text-primary-300 ml-2 flex-shrink-0">
                       {formatDistanceToNow(conversation.lastMessageAt)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <p className="text-sm text-slate-400 truncate">
+                    <p className="text-sm text-primary-200 truncate">
                       {conversation.lastMessagePreview || contactInfo?.description || 'No messages yet'}
                     </p>
                     {conversation.unreadCount > 0 && (
-                      <span className="ml-2 bg-primary-600 text-white text-xs font-semibold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">
+                      <span className="ml-2 bg-accent-500 text-white text-xs font-semibold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">
                         {conversation.unreadCount > 9 ? '9+' : conversation.unreadCount}
                       </span>
                     )}
@@ -108,7 +108,7 @@ export function ChatList() {
                 {conversation.pinned && (
                   <div className="ml-2">
                     <svg
-                      className="w-4 h-4 text-slate-400"
+                      className="w-4 h-4 text-accent-400"
                       fill="currentColor"
                       viewBox="0 0 20 20"
                     >
@@ -123,7 +123,7 @@ export function ChatList() {
       </div>
 
       {/* New chat button */}
-      <div className="p-4 border-t border-slate-700">
+      <div className="p-4 border-t border-primary-900/40 bg-primary-950/40">
         <Link to="/new-chat" className="btn-primary w-full">
           + New Chat
         </Link>
