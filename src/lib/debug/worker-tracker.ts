@@ -31,11 +31,14 @@ export type PublicWorkerInfo = Omit<WorkerInfo, 'worker'>;
 function dispatchUpdate() {
   try {
     window.dispatchEvent(new CustomEvent('worker-tracker:update'));
-  } catch {}
+  } catch (_e) {
+    // ignore
+  }
 }
 
 function toPublic(w: WorkerInfo): PublicWorkerInfo {
-  const { worker: _w, ...rest } = w;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { worker: _ignored, ...rest } = w;
   return rest;
 }
 
@@ -76,7 +79,7 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
 
   // Override constructor
   const PatchedWorker = function (this: Worker, scriptURL: string | URL, options?: WorkerOptions) {
-    const worker = new OriginalWorker(scriptURL as any, options as any);
+    const worker = new OriginalWorker(scriptURL, options);
     const id = tracker.nextId++;
     const info: WorkerInfo = {
       id,

@@ -150,9 +150,9 @@ export function WebWorkersPanel() {
           ) : (
             <ul className="space-y-2">
               {swRegs.map((reg, idx) => {
-                const sw = reg.active || reg.waiting || reg.installing;
-                const scriptUrl = (sw && 'scriptURL' in sw && (sw as any).scriptURL) || 'unknown';
-                const state = (sw && 'state' in sw ? (sw as any).state : 'unknown') as string;
+                const sw = reg.active ?? reg.waiting ?? reg.installing;
+                const scriptUrl = sw ? sw.scriptURL : 'unknown';
+                const state = sw ? sw.state : 'unknown';
                 return (
                   <li key={idx} className="rounded-lg border border-primary-800/60 bg-primary-900/30 p-3">
                     <div className="flex items-center justify-between">
