@@ -4,15 +4,17 @@
 
 declare global {
   interface Window {
-    __workerTracker?: {
-      workers: Map<number, WorkerInfo>;
-      nextId: number;
-      list: () => PublicWorkerInfo[];
-      terminate: (id: number) => boolean;
-      get: (id: number) => PublicWorkerInfo | undefined;
-    };
+    __workerTracker?: WorkerTrackerApi;
   }
 }
+
+type WorkerTrackerApi = {
+  workers: Map<number, WorkerInfo>;
+  nextId: number;
+  list: () => PublicWorkerInfo[];
+  terminate: (id: number) => boolean;
+  get: (id: number) => PublicWorkerInfo | undefined;
+};
 
 type WorkerStatus = 'running' | 'terminated';
 
@@ -50,7 +52,7 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
   const OriginalWorker = window.Worker;
   if (!OriginalWorker) return;
 
-  const tracker = (window.__workerTracker = window.__workerTracker ?? {
+  const tracker: WorkerTrackerApi = (window.__workerTracker = (window.__workerTracker as WorkerTrackerApi | undefined) ?? {
     workers: new Map<number, WorkerInfo>(),
     nextId: 1,
     list() {
@@ -75,8 +77,7 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
   });
 
   // Override constructor
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).Worker = function (scriptURL: string | URL, options?: WorkerOptions) {
+  const PatchedWorker = function (this: Worker, scriptURL: string | URL, options?: WorkerOptions) {
     const worker = new OriginalWorker(scriptURL as any, options as any);
     const id = tracker.nextId++;
     const info: WorkerInfo = {
@@ -121,6 +122,8 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
     tracker.workers.set(id, info);
     dispatchUpdate();
     return worker;
-  } as typeof Worker;
-})();
+  } as unknown as typeof Worker;
 
+  // Assign patched constructor with correct shape
+  (window as unknown as { Worker: typeof Worker }).Worker = PatchedWorker;
+})();
