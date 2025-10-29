@@ -3,6 +3,17 @@
 ## Project Overview
 Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, encrypted.
 
+## Latest Updates (2025-10-29)
+- [x] Direct DM creation via identifier: removed `canMessage` gate and now call `conversations.newDmWithIdentifier({ identifier, identifierKind: 'Ethereum' })` for addresses; preserves `0x`/checksum and fixes `invalid hexadecimal digit: "x"` errors.
+- [x] Outgoing messages: fetch conversation by id before `send` and retry after a `conversations.sync()` if needed; sending now works for newly created DMs.
+- [x] First‑connect sync: run `conversations.sync()`, `conversations.syncAll()`, and a history backfill pass before starting `streamAllMessages()` so prior messages appear on first load.
+- [x] Installations: added Force Network Refresh + Fetch Statuses actions, fetch via `client.preferences.inboxState(true)` when connected and via `Utils` when not; added timeouts and improved types.
+- [x] Clear All Data expanded: disconnect wagmi wallet, close XMTP client, clear Dexie tables and XMTP OPFS DBs, purge SW caches, then hard reload.
+- [x] Debug: new Web Workers panel with live worker tracking and Service Worker management; initialized worker tracker early and resolved TS typings.
+- [x] Telemetry: disabled structured/perf/debug telemetry and reduced logging level for production client options.
+- [x] Scripts: added `check_deploy.sh` to watch GitHub Pages deployments with `gh`.
+- [x] Misc: refreshed theme palette and cleaned up lints/unused assets; dynamic SDK version shown in logs.
+
 ## Latest Updates (2025-10-28)
 - [x] Upgraded `@xmtp/browser-sdk` to 5.0.1 and aligned signer implementations with xmtp.chat.
 - [x] Fixed `canMessage` to resolve inbox IDs for Ethereum addresses on first attempt.
@@ -278,12 +289,12 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 
 ---
 
-**Last Updated**: 2025-10-28
+**Last Updated**: 2025-10-29
 **Status**: ✅ MVP v0.1.0 COMPLETE (XMTP v5 upgrade landed)
 
 ---
 
-## Current State Snapshot (2025-10-28)
+## Current State Snapshot (2025-10-29)
 
 **Authentication & Identity**
 - One-click onboarding auto-generates an XMTP-ready wallet and registers on the production network.
@@ -292,9 +303,9 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 - `Clear All Data` now wipes Dexie tables and XMTP OPFS databases.
 
 **Messaging**
-- XMTP v5.0.1 client streams conversations/messages in real time (receiving ✅).
+- XMTP v5.0.1 client streams conversations/messages in real time (send/receive ✅).
 - Default contacts seed new inboxes; debug tab surfaces logs/state snapshots.
-- Conversation creation resolves inbox IDs correctly via the fixed `canMessage` flow.
+- New DM creation uses `newDmWithIdentifier` for Ethereum addresses; no pre‑check gate. SDK performs inbox lookup internally.
 
 **Settings & Device Management**
 - Installations panel lists all devices, fetches key package statuses, and supports per-device revoke.
@@ -305,9 +316,10 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 - Service worker + Workbox configured (install/update prompts currently disabled for debugging).
 - COOP/COEP headers injected via the service worker to enable SharedArrayBuffer isolation.
 - Vite build patched to bundle XMTP wasm worker assets after `pnpm install`.
+- Web Workers debug panel lists active workers and allows SW management.
 
 **Known Gaps**
-- Outgoing message send pipeline + delivery state (receive-only today).
+- Delivery state UI, retries, and offline send queue.
 - Device-level key encryption (private keys currently plaintext in IndexedDB).
 - Multi-identity UI/IndexedDB schema, attachments, group chat support.
 - Re-enable install/update prompts and document XMTP v5 changes in README.
@@ -339,3 +351,15 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 - [ ] Add "Revoke All Other Installations" button
 - [ ] Replace browser `confirm`/`alert` flows with in-app modals
 - [ ] Implement auto-reconnect flow after revoking the current device
+
+---
+
+## Documentation & References
+- [x] Added XMTP_BASICS.md explaining identity, inboxes, and installations with links to official docs and xmtp.chat.
+- [ ] Update README to reference the new debug Web Workers panel and installations tools.
+- [ ] Add a short guide for `check_deploy.sh` usage in DEPLOYMENT.md.
+
+## Testing Follow-ups
+- [ ] Unit test: Utils-based inbox state fetch when disconnected (timeouts, errors).
+- [ ] Integration test: New DM creation and first message send using `newDmWithIdentifier`.
+- [ ] E2E: Clear All Data performs wallet disconnect, client close, DB + cache wipe, and reload.
