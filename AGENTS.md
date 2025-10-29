@@ -381,8 +381,49 @@ if (!isRegistered) {
 
 ---
 
-**Last Updated**: 2025-10-28 (Added wallet connection support with wagmi)
-**Updated By**: AI Agent after adding multi-wallet support
+**Last Updated**: 2025-10-29 (DM creation/send fix, history sync, workers panel)
+**Updated By**: AI Agent after landing DM creation/send fixes and debug tools
+
+## Latest Changes (2025-10-29)
+
+### Messaging: Outgoing DM Creation + First Send
+
+**Problem**: Creating DMs from an Ethereum address sometimes failed ("not registered" / hex parsing errors) and first message wouldn’t send.
+
+**Fixes**:
+1. Removed `canMessage` pre-check gate. Create DMs directly via `conversations.newDmWithIdentifier({ identifier: address, identifierKind: 'Ethereum' })` and let SDK resolve inbox ids internally.
+2. For sending, fetch the conversation by id via `conversations.getConversationById(id)`; if missing, `conversations.sync()` then retry before `send`.
+3. Preserved checksum addresses (keep `0x` for identifier usage) to avoid `invalid hexadecimal digit: "x"` errors.
+
+**Result**: Outgoing DM creation and first-message send work reliably on v5.
+
+### Sync & History
+- On first connect, run `conversations.sync()`, `conversations.syncAll()`, and a history backfill prior to `streamAllMessages()` so prior messages appear immediately.
+
+### Installations & Device Management
+- Added Force Network Refresh and Fetch Statuses actions. When connected, use `client.preferences.inboxState(true)`; when disconnected, use `new Utils(false)` with `getInboxIdForIdentifier`/`inboxStateFromInboxIds` as a fallback. Added timeouts and stricter typing.
+- Clear All Data now disconnects wagmi, closes the XMTP client (important to release OPFS DB locks), wipes Dexie + XMTP OPFS, clears SW caches, and hard reloads.
+
+### Debug: Web Workers Panel
+- Added a live Workers panel: tracks dedicated workers via a patched `Worker` constructor and lists Service Worker registrations with scriptURL/state. Initialized tracker early in `Providers` to catch bootstrap workers.
+- Type-safe tracker with minimal `any` shims where unavoidable.
+
+### Router: WalletConnect Loop Prevention
+- Only call `checkExistingIdentity()` when not authenticated to avoid WalletConnect reopen loops (e.g., Rainbow popping after onboarding).
+
+### Telemetry & Logging
+- Disabled structured/performance/debug telemetry in XMTP client options and reduced logging in production.
+
+**Files Updated**
+- `src/lib/xmtp/client.ts`: DM creation via identifier, fetch conversation by id before send, first-connect sync/backfill, reduced telemetry.
+- `src/features/conversations/NewChatPage.tsx`: removed `canMessage` gate.
+- `src/app/Router.tsx`: guard identity restore to prevent double-connect loops.
+- `src/features/settings/SettingsPage.tsx`: expanded Clear All Data and ensured wallet disconnect.
+- `src/features/settings/InstallationsSettings.tsx`: refresh and status actions; revocation handling.
+- `src/app/Providers.tsx`: initialize worker tracker.
+- `check_deploy.sh`: GitHub Pages deploy watcher.
+
+---
 
 ## Latest Changes (2025-10-28)
 
