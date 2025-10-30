@@ -10,24 +10,34 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string>('');
-  const [isScanning, setIsScanning] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     let animationFrame: number;
+    let mounted = true;
 
     const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }, // Use back camera on mobile
+          video: { 
+            facingMode: 'environment',
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
         });
+        
+        if (!mounted) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
         
         streamRef.current = stream;
         
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play();
-          setIsScanning(true);
+          await videoRef.current.play();
+          // Start scanning after video is playing
+          scanQRCode();
         }
       } catch (err) {
         console.error('Camera access error:', err);
@@ -36,8 +46,7 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
     };
 
     const scanQRCode = () => {
-      if (!videoRef.current || !canvasRef.current || !isScanning) {
-        animationFrame = requestAnimationFrame(scanQRCode);
+      if (!mounted || !videoRef.current || !canvasRef.current) {
         return;
       }
 
@@ -65,10 +74,9 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
         inversionAttempts: 'dontInvert',
       });
 
-      if (code) {
+      if (code && mounted) {
         console.log('[QRScanner] Found QR code:', code.data);
         onScan(code.data);
-        cleanup();
         return;
       }
 
@@ -76,7 +84,10 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
       animationFrame = requestAnimationFrame(scanQRCode);
     };
 
-    const cleanup = () => {
+    startCamera();
+
+    return () => {
+      mounted = false;
       if (animationFrame) {
         cancelAnimationFrame(animationFrame);
       }
@@ -84,14 +95,8 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
-      setIsScanning(false);
     };
-
-    startCamera();
-    animationFrame = requestAnimationFrame(scanQRCode);
-
-    return cleanup;
-  }, [onScan, isScanning]);
+  }, [onScan]);
 
   const handleClose = () => {
     if (streamRef.current) {
@@ -123,9 +128,10 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
       {/* Video element */}
       <video
         ref={videoRef}
-        className="max-w-full max-h-full"
+        className="w-full h-full object-cover"
         playsInline
         muted
+        autoPlay
       />
 
       {/* Hidden canvas for processing */}
