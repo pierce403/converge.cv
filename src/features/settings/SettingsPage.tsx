@@ -10,6 +10,7 @@ import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
+import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -21,6 +22,7 @@ export function SettingsPage() {
   const [displayName, setDisplayName] = useState(identity?.displayName || '');
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const { disconnectWallet } = useWalletConnection();
+  const [showQR, setShowQR] = useState(false);
 
   const handleLockVault = () => {
     lock();
@@ -407,7 +409,18 @@ export function SettingsPage() {
 
               {/* Current Identity */}
               <div className="p-4">
-                <div className="font-medium mb-1">Current Identity</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="font-medium">Current Identity</div>
+                  <button
+                    onClick={() => setShowQR(true)}
+                    className="flex items-center gap-1 text-sm text-accent-300 hover:text-accent-200 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                    </svg>
+                    Show QR Code
+                  </button>
+                </div>
                 <div className="text-sm text-primary-200 mb-2">Ethereum Address</div>
                 <div className="font-mono text-sm bg-primary-950/20 rounded px-3 py-2 break-all">
                   {identity?.address}
@@ -666,6 +679,11 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* QR Code Overlay */}
+      {showQR && identity && (
+        <QRCodeOverlay address={identity.address} onClose={() => setShowQR(false)} />
+      )}
     </div>
   );
 }
