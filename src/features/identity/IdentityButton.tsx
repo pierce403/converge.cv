@@ -67,7 +67,7 @@ export function IdentityModal({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const payload = `xmtp:ethereum:${identity.address}`;
-    QRCode.toDataURL(payload, { margin: 1, width: 240 }).then(setQr).catch(() => setQr(''));
+    QRCode.toDataURL(payload, { margin: 1, width: 160 }).then(setQr).catch(() => setQr(''));
   }, [identity.address]);
 
   const letter = identity.displayName?.[0]?.toUpperCase() ?? identity.address[2]?.toUpperCase() ?? 'I';
@@ -75,21 +75,21 @@ export function IdentityModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-xl border border-primary-800/60 bg-primary-950 p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-primary-100">Identity Information</h3>
+      <div className="relative z-10 w-full max-w-sm rounded-xl border border-primary-800/60 bg-primary-950 p-4 shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-semibold text-primary-100">Identity Information</h3>
           <button onClick={onClose} className="rounded p-1 text-primary-300 hover:text-primary-100" title="Close">
             ✕
           </button>
         </div>
         
-        <div className="space-y-4">
+        <div className="space-y-3">
           {/* Avatar/Display Name Section */}
-          <div className="flex flex-col items-center gap-3 pb-4 border-b border-primary-800/60">
+          <div className="flex flex-col items-center gap-2 pb-3 border-b border-primary-800/60">
             {identity.avatar ? (
-              <img src={identity.avatar} alt="Avatar" className="h-16 w-16 rounded-full" />
+              <img src={identity.avatar} alt="Avatar" className="h-12 w-12 rounded-full" />
             ) : (
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent-600 text-white text-2xl font-semibold">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-600 text-white text-xl font-semibold">
                 {letter}
               </div>
             )}
@@ -104,7 +104,7 @@ export function IdentityModal({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* Identity Details */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             <CopyField label="Ethereum Address" value={identity.address} />
             {identity.displayName && (
               <div className="text-sm">
@@ -125,16 +125,16 @@ export function IdentityModal({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* QR Code Section */}
-          <div className="pt-4 border-t border-primary-800/60">
+          <div className="pt-3 border-t border-primary-800/60">
             <div className="mb-2 text-sm text-primary-300">Share QR Code</div>
             {qr ? (
-              <img src={qr} alt="Identity QR" className="mx-auto h-48 w-48 rounded bg-white p-2" />
+              <img src={qr} alt="Identity QR" className="mx-auto h-32 w-32 rounded bg-white p-1" />
             ) : (
-              <div className="h-48 w-48 mx-auto flex items-center justify-center text-primary-300 rounded bg-primary-900/30">
+              <div className="h-32 w-32 mx-auto flex items-center justify-center text-primary-300 rounded bg-primary-900/30">
                 Generating…
               </div>
             )}
-            <p className="mt-2 text-xs text-primary-300 text-center">
+            <p className="mt-1 text-xs text-primary-300 text-center">
               Scan to message: xmtp:ethereum:{identity.address.slice(0, 10)}…
             </p>
           </div>
