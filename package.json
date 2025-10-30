@@ -28,6 +28,8 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
     "viem": "^2.37.6",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.3",
     "wagmi": "^2.16.9",
     "zustand": "^4.5.5"
   },
