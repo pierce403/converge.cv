@@ -21,16 +21,7 @@
   <rect width="1200" height="630" fill="url(#bg)" rx="40" />
   <g transform="translate(120, 140)" fill="none">
     <rect x="0" y="0" width="340" height="340" rx="32" fill="#0b1120" opacity="0.9" filter="url(#shadow)" />
-    <image
-      xlink:href="/public/icons/icon-512.png"
-      href="/public/icons/icon-512.png"
-      x="40"
-      y="40"
-      width="260"
-      height="260"
-      preserveAspectRatio="xMidYMid meet"
-      clip-path="url(#logo-clip)"
-    />
+    <image id="image0_1_2" width="512" height="512" xlink:href="https://converge.cv/icons/icon-512.png"/>
   </g>
   <g transform="translate(520, 180)" fill="#f8fafc">
     <text font-family="'Inter', 'Segoe UI', Roboto, sans-serif" font-size="72" font-weight="700">Converge</text>
