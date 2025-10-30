@@ -2,13 +2,16 @@
  * Chat list component
  */
 
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
+import { UserInfoModal } from '@/components/UserInfoModal';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
+  const [selectedUser, setSelectedUser] = useState<string | null>(null);
 
   // Sort: pinned first, then by lastMessageAt
   const sortedConversations = [...conversations].sort((a, b) => {
@@ -61,14 +64,19 @@ export function ChatList() {
           const contactInfo = getContactInfo(conversation.peerId);
 
           return (
-            <Link
+            <div
               key={conversation.id}
-              to={`/chat/${conversation.id}`}
-              className="block border-b border-primary-900/40 hover:bg-primary-900/50 transition-colors"
+              className="border-b border-primary-900/40 hover:bg-primary-900/50 transition-colors"
             >
               <div className="flex items-center px-4 py-3">
-                {/* Avatar */}
-                <div className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg">
+                {/* Avatar - clickable */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedUser(conversation.peerId);
+                  }}
+                  className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"
+                >
                   {contactInfo?.avatar ? (
                     <span className="text-white" aria-hidden>
                       {contactInfo.avatar}
@@ -78,10 +86,13 @@ export function ChatList() {
                       {conversation.peerId.slice(2, 4).toUpperCase()}
                     </span>
                   )}
-                </div>
+                </button>
 
-                {/* Content */}
-                <div className="flex-1 min-w-0 ml-3">
+                {/* Content - clickable to open conversation */}
+                <Link
+                  to={`/chat/${conversation.id}`}
+                  className="flex-1 min-w-0 ml-3"
+                >
                   <div className="flex items-baseline justify-between mb-1">
                     <h3 className="text-sm font-semibold truncate">
                       {contactInfo?.name
@@ -102,7 +113,7 @@ export function ChatList() {
                       </span>
                     )}
                   </div>
-                </div>
+                </Link>
 
                 {/* Pin indicator */}
                 {conversation.pinned && (
@@ -117,7 +128,7 @@ export function ChatList() {
                   </div>
                 )}
               </div>
-            </Link>
+            </div>
           );
         })}
       </div>
@@ -128,6 +139,11 @@ export function ChatList() {
           + New Chat
         </Link>
       </div>
+
+      {/* User info modal */}
+      {selectedUser && (
+        <UserInfoModal address={selectedUser} onClose={() => setSelectedUser(null)} />
+      )}
     </div>
   );
 }

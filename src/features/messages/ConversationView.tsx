@@ -2,18 +2,21 @@
  * Conversation view component
  */
 
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMessageStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
+import { UserInfoModal } from '@/components/UserInfoModal';
+import { getContactInfo } from '@/lib/default-contacts';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showUserInfo, setShowUserInfo] = useState(false);
 
   const { conversations } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
@@ -54,6 +57,8 @@ export function ConversationView() {
     await sendMessage(id, content);
   };
 
+  const contactInfo = getContactInfo(conversation.peerId);
+
   return (
     <div className="flex flex-col h-full text-primary-50">
       {/* Header */}
@@ -67,18 +72,30 @@ export function ConversationView() {
           </svg>
         </button>
 
-        <div className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
-          <span className="text-white font-semibold text-sm">
-            {conversation.peerId.slice(2, 4).toUpperCase()}
-          </span>
-        </div>
+        {/* Clickable avatar */}
+        <button
+          onClick={() => setShowUserInfo(true)}
+          className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
+        >
+          {contactInfo?.avatar ? (
+            <span className="text-lg">{contactInfo.avatar}</span>
+          ) : (
+            <span className="text-white font-semibold text-sm">
+              {conversation.peerId.slice(2, 4).toUpperCase()}
+            </span>
+          )}
+        </button>
 
-        <div className="flex-1 min-w-0">
+        {/* User name - also clickable */}
+        <button
+          onClick={() => setShowUserInfo(true)}
+          className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
+        >
           <h2 className="font-semibold truncate text-primary-50">
-            {conversation.peerId.slice(0, 10)}...{conversation.peerId.slice(-8)}
+            {contactInfo?.name || `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
           </h2>
           <p className="text-xs text-primary-300">XMTP messaging</p>
-        </div>
+        </button>
 
         <button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -125,6 +142,11 @@ export function ConversationView() {
 
       {/* Composer */}
       <MessageComposer onSend={handleSend} />
+
+      {/* User info modal */}
+      {showUserInfo && (
+        <UserInfoModal address={conversation.peerId} onClose={() => setShowUserInfo(false)} />
+      )}
     </div>
   );
 }
