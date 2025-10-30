@@ -22,8 +22,8 @@
   <g transform="translate(120, 140)" fill="none">
     <rect x="0" y="0" width="340" height="340" rx="32" fill="#0b1120" opacity="0.9" filter="url(#shadow)" />
     <image
-      xlink:href="/favicon.png"
-      href="/favicon.png"
+      xlink:href="/icons/icon-512.png"
+      href="/icons/icon-512.png"
       x="40"
       y="40"
       width="260"
