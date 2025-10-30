@@ -7,6 +7,8 @@ import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
+import { IdentityButton } from '@/features/identity/IdentityButton';
+import { AddContactButton } from '@/features/contacts/AddContactButton';
 
 export function Layout() {
   const location = useLocation();
@@ -82,21 +84,23 @@ export function Layout() {
       <SyncProgressBar />
 
       {/* Header */}
-      <header className="bg-primary-950/80 border-b border-primary-800/60 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-lg">
-        <h1 className="text-xl font-bold text-primary-50">Converge</h1>
-        <Link
-          to="/search"
-          className="p-2 text-primary-200 hover:text-white border border-primary-800/60 hover:border-primary-700 rounded-lg transition-colors bg-primary-900/40 hover:bg-primary-800/60"
-        >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
-        </Link>
+      <header className="bg-primary-950/80 border-b border-primary-800/60 px-3 py-2 flex items-center justify-between gap-2 backdrop-blur-md shadow-lg">
+        <div className="flex items-center gap-2">
+          <IdentityButton />
+          <h1 className="text-lg font-bold text-primary-50">Converge</h1>
+        </div>
+        <div className="flex items-center gap-1">
+          <Link
+            to="/search"
+            className="p-2 text-primary-200 hover:text-white border border-primary-800/60 hover:border-primary-700 rounded-lg transition-colors bg-primary-900/40 hover:bg-primary-800/60"
+            title="Search"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </Link>
+          <AddContactButton />
+        </div>
       </header>
 
       {/* Main content */}
@@ -142,4 +146,3 @@ export function Layout() {
     </div>
   );
 }
-
