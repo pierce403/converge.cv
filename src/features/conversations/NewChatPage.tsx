@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { useConversations } from './useConversations';
 // import { getXmtpClient } from '@/lib/xmtp';
 import { resolveAddressOrENS, isENSName, isEthereumAddress } from '@/lib/utils/ens';
+import { QRScanner } from '@/components/QRScanner';
 
 export function NewChatPage() {
   const navigate = useNavigate();
@@ -19,6 +20,28 @@ export function NewChatPage() {
   // The SDK will validate during DM creation.
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
+
+  const handleQRScan = (data: string) => {
+    console.log('[NewChat] QR code scanned:', data);
+    setShowScanner(false);
+    
+    // Parse XMTP QR format: xmtp:ethereum:0x...
+    let address = data;
+    if (data.startsWith('xmtp:ethereum:')) {
+      address = data.replace('xmtp:ethereum:', '');
+    } else if (data.startsWith('ethereum:')) {
+      address = data.replace('ethereum:', '');
+    }
+    
+    // Validate and set the address
+    if (isEthereumAddress(address)) {
+      setInputValue(address);
+      setError('');
+    } else {
+      setError('Invalid QR code format. Expected an Ethereum address.');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,27 +125,40 @@ export function NewChatPage() {
               <label htmlFor="address" className="block text-sm font-medium mb-2">
                 Ethereum Address or ENS Name
               </label>
-              <input
-                id="address"
-                type="text"
-                value={inputValue}
-                onChange={(e) => {
-                  setInputValue(e.target.value);
-                  setResolvedAddress(null);
-                  setError('');
-                }}
-                placeholder="0x... or example.eth"
-                className="input-primary"
-                autoFocus
-                disabled={isResolving || isCreating}
-              />
+              <div className="flex gap-2">
+                <input
+                  id="address"
+                  type="text"
+                  value={inputValue}
+                  onChange={(e) => {
+                    setInputValue(e.target.value);
+                    setResolvedAddress(null);
+                    setError('');
+                  }}
+                  placeholder="0x... or example.eth"
+                  className="input-primary flex-1"
+                  autoFocus
+                  disabled={isResolving || isCreating}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowScanner(true)}
+                  className="p-3 bg-primary-900/40 hover:bg-primary-800/60 border border-primary-800/60 hover:border-primary-700 rounded-lg transition-colors text-primary-200 hover:text-white"
+                  title="Scan QR Code"
+                  disabled={isResolving || isCreating}
+                >
+                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                  </svg>
+                </button>
+              </div>
               {resolvedAddress && (
                 <p className="text-xs text-accent-300 mt-1">
                   ✓ Resolved to: {resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}
                 </p>
               )}
               <p className="text-xs text-primary-300 mt-1">
-                Must be a valid Ethereum address or ENS name registered on XMTP
+                Enter an address, ENS name, or scan a QR code
               </p>
             </div>
 
@@ -158,6 +194,14 @@ export function NewChatPage() {
           </div>
         </div>
       </div>
+
+      {/* QR Scanner Modal */}
+      {showScanner && (
+        <QRScanner
+          onScan={handleQRScan}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
     </div>
   );
 }
