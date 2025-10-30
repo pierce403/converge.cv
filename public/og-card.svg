@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">Converge – XMTP Messenger</title>
   <desc id="desc">Open graph artwork for Converge secure, local-first XMTP messaging</desc>
   <defs>
@@ -22,7 +22,8 @@
   <g transform="translate(120, 140)" fill="none">
     <rect x="0" y="0" width="340" height="340" rx="32" fill="#0b1120" opacity="0.9" filter="url(#shadow)" />
     <image
-      href="https://converge.cv/icons/icon-512.png"
+      xlink:href="/favicon.png"
+      href="/favicon.png"
       x="40"
       y="40"
       width="260"
