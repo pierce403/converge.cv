@@ -1,4 +1,4 @@
-# converge.cv - XMTP v5 PWA Development TODO
+# converge.cv - XMTP v3 PWA Development TODO
 
 ## Project Overview
 Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, encrypted.
