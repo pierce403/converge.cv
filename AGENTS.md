@@ -144,7 +144,7 @@ src/
 pnpm dev              # Start dev server (port 3001 currently running)
 pnpm build            # Build for production
 pnpm preview          # Preview production build
-pnpm test             # Run unit tests
+pnpm test --run       # Run Vitest suite once (avoids hanging watch mode)
 pnpm lint             # Run ESLint
 pnpm typecheck        # TypeScript type checking
 ```
@@ -205,7 +205,9 @@ pnpm typecheck        # TypeScript type checking
 - Dev server runs on port 3001 (not 3000)
 - Browser testing done via Playwright MCP tools
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
+- For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
+- Current Vitest status: `pnpm test --run` fails because the XMTP upstream fixtures under `tmp/xmtp-js/**` resolve bare module aliases and because `fix-xmtp-wasm-worker.test.ts` and `crypto/vault.test.ts` need environment shims—expect these failures until the suite is triaged.
 
 ---
 
@@ -358,7 +360,7 @@ if (!isRegistered) {
 3. Document new architectural decisions
 4. Update the "Current State" section
 5. Note any new dependencies or tools added
-6. Always run the full test suite (`pnpm build` and `pnpm test`) before handing work back to the user to keep the deploy pipeline green.
+6. Always run the full test suite (`pnpm build` and `pnpm test --run`) before handing work back to the user to keep the deploy pipeline green.
 7. **COMMIT AND PUSH** your changes to keep the knowledge base synced:
    ```bash
    git add AGENTS.md
@@ -381,8 +383,14 @@ if (!isRegistered) {
 
 ---
 
-**Last Updated**: 2025-10-29 (DM creation/send fix, history sync, workers panel)
-**Updated By**: AI Agent after landing DM creation/send fixes and debug tools
+**Last Updated**: 2025-10-30 (OpenGraph card uses existing logo asset)
+**Updated By**: AI Agent after swapping social preview to use bundled icon
+
+## Latest Changes (2025-10-30)
+
+### OpenGraph Card
+- `public/og-card.svg` now embeds the existing `icon-512.png` app logo so social previews reflect the current branding.
+- Added a rounded clip path around the icon to keep the card layout consistent without maintaining an extra SVG illustration.
 
 ## Latest Changes (2025-10-29)
 
