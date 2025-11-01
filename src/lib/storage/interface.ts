@@ -45,7 +45,11 @@ export interface StorageDriver {
   // Identity
   putIdentity(identity: Identity): Promise<void>;
   getIdentity(): Promise<Identity | undefined>;
+  listIdentities(): Promise<Identity[]>;
+  getIdentityByAddress(address: string): Promise<Identity | undefined>;
+  getIdentityByInboxId(inboxId: string): Promise<Identity | undefined>;
   deleteIdentity(): Promise<void>;
+  deleteIdentityByAddress(address: string): Promise<void>;
 
   // Vault secrets
   putVaultSecrets(secrets: VaultSecrets): Promise<void>;

@@ -72,9 +72,9 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6 bg-primary-900/60 border border-primary-800/60 rounded-2xl shadow-lg backdrop-blur">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-primary-50">Connect Your Wallet</h2>
+        <h2 className="text-2xl font-bold text-primary-50">Connect an Identity</h2>
         <p className="text-primary-200">
-          Choose a wallet to connect with XMTP
+          Choose a wallet or connector to continue
         </p>
       </div>
 
@@ -123,7 +123,7 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
         onClick={onBack}
         className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg font-medium transition-colors text-primary-100"
       >
-        ← Generate Random Wallet
+        ← Generate Local Identity
       </button>
 
       <p className="text-xs text-primary-300 text-center">

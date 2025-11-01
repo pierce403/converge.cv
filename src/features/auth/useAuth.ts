@@ -3,7 +3,7 @@
  */
 
 import { useCallback } from 'react';
-import { useAuthStore } from '@/lib/stores';
+import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import {
   generateVaultKey,
@@ -32,33 +32,61 @@ export function useAuth() {
       address: string,
       privateKey?: string,
       chainId?: number,
-      signMessage?: (message: string) => Promise<string>
+      signMessage?: (message: string) => Promise<string>,
+      options?: {
+        register?: boolean;
+        enableHistorySync?: boolean;
+        labelOverride?: string;
+        skipRegistryUpdate?: boolean;
+      }
     ) => {
       try {
         const xmtp = getXmtpClient();
-        await xmtp.connect({
-          address,
-          privateKey,
-          chainId,
-          signMessage,
-        });
-        
-        // After successful connection, save inboxId and installationId to identity
+        await xmtp.connect(
+          {
+            address,
+            privateKey,
+            chainId,
+            signMessage,
+            displayName: options?.labelOverride,
+          },
+          {
+            register: options?.register !== false,
+            enableHistorySync:
+              options?.enableHistorySync !== undefined ? options.enableHistorySync : true,
+          }
+        );
+
         const inboxId = xmtp.getInboxId();
         const installationId = xmtp.getInstallationId();
-        
+
         if (inboxId && installationId) {
           const storage = await getStorage();
           const identity = await storage.getIdentity();
           if (identity && identity.address === address) {
-            // Update identity with XMTP info
             identity.inboxId = inboxId;
             identity.installationId = installationId;
             await storage.putIdentity(identity);
-            
-            // Update state
+
             setIdentity(identity);
-            
+
+            if (!options?.skipRegistryUpdate) {
+              const registry = useInboxRegistryStore.getState();
+              const label =
+                options?.labelOverride ||
+                identity.displayName ||
+                `${identity.address.slice(0, 6)}…${identity.address.slice(-4)}`;
+
+              registry.upsertEntry({
+                inboxId,
+                displayLabel: label,
+                primaryDisplayIdentity: identity.displayName || identity.address,
+                lastOpenedAt: Date.now(),
+                hasLocalDB: true,
+              });
+              registry.markOpened(inboxId, true);
+            }
+
             console.log('[Auth] Saved XMTP info to identity:', {
               inboxId,
               installationId: installationId.substring(0, 16) + '...',
@@ -80,7 +108,13 @@ export function useAuth() {
       walletAddress: string,
       privateKey?: string,
       chainId?: number,
-      signMessage?: (message: string) => Promise<string>
+      signMessage?: (message: string) => Promise<string>,
+      options?: {
+        register?: boolean;
+        enableHistorySync?: boolean;
+        label?: string;
+        skipRegistryUpdate?: boolean;
+      }
     ) => {
       try {
         const storage = await getStorage();
@@ -100,6 +134,7 @@ export function useAuth() {
           publicKey: publicKeyHex,
           privateKey: privateKey, // Store encrypted in production (or undefined for connected wallets)
           createdAt: Date.now(),
+          displayName: options?.label,
         };
         await storage.putIdentity(identity);
 
@@ -116,7 +151,14 @@ export function useAuth() {
           identity.address,
           privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? privateKey : undefined,
           chainId,
-          signMessage
+          signMessage,
+          {
+            register: options?.register !== false,
+            enableHistorySync:
+              options?.enableHistorySync !== undefined ? options.enableHistorySync : true,
+            labelOverride: options?.label,
+            skipRegistryUpdate: options?.skipRegistryUpdate,
+          }
         );
 
         return true;
@@ -363,7 +405,10 @@ export function useAuth() {
 
       // Clear Zustand state
       authStore.logout();
-      
+
+      // Reset inbox registry
+      useInboxRegistryStore.getState().reset();
+
       console.log('[Auth] ✅ Logout complete - all data cleared');
     } catch (error) {
       console.error('[Auth] Logout error:', error);
@@ -376,34 +421,61 @@ export function useAuth() {
   const checkExistingIdentity = useCallback(async (): Promise<boolean> => {
     try {
       const storage = await getStorage();
-      const identity = await storage.getIdentity();
-      const secrets = await storage.getVaultSecrets();
+      const registry = useInboxRegistryStore.getState();
+      registry.hydrate();
+
+      const identities = await storage.listIdentities();
+      if (!identities.length) {
+        return false;
+      }
+
+      let identity: Identity | undefined;
+      if (registry.currentInboxId) {
+        identity = identities.find((item) => item.inboxId === registry.currentInboxId);
+      }
+
+      if (!identity) {
+        identity = identities[0];
+      }
 
       if (!identity) {
         return false;
       }
 
+      const secrets = await storage.getVaultSecrets();
+
       setIdentity(identity);
       setVaultSecrets(secrets ?? null);
       setAuthenticated(true);
-      // Keep vault unlocked by default - user can manually lock from settings
       setVaultUnlocked(true);
 
-      // Reconnect to XMTP
+      const registryEntry = identity.inboxId
+        ? registry.entries.find((entry) => entry.inboxId === identity!.inboxId)
+        : undefined;
+      const shouldSyncHistory = registryEntry ? !registryEntry.hasLocalDB : true;
+
       if (identity.privateKey) {
-        // Generated wallet - has private key
-        await connectXmtpSafely(identity.address, identity.privateKey);
+        await connectXmtpSafely(identity.address, identity.privateKey, undefined, undefined, {
+          register: true,
+          enableHistorySync: shouldSyncHistory,
+          labelOverride: identity.displayName,
+        });
       } else if (walletAddress && walletAddress.toLowerCase() === identity.address.toLowerCase()) {
-        // Wallet-based identity and wallet is connected - get signMessage from wagmi
         console.log('[Auth] Reconnecting wallet-based identity with wagmi signer');
         const signMessage = async (message: string) => {
           return await signMessageAsync({ message });
         };
-        await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage);
+        await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
+          register: true,
+          enableHistorySync: shouldSyncHistory,
+          labelOverride: identity.displayName,
+        });
       } else {
-        // Wallet-based identity but wallet not connected
         console.log('[Auth] Wallet-based identity found but wallet not connected - skipping XMTP connection');
-        // Don't throw - just skip XMTP connection. User can reconnect wallet from settings.
+      }
+
+      if (identity.inboxId) {
+        registry.markOpened(identity.inboxId, registryEntry?.hasLocalDB ?? true);
       }
 
       return true;
@@ -412,6 +484,24 @@ export function useAuth() {
       return false;
     }
   }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress, walletChainId, signMessageAsync]);
+
+  const probeIdentity = useCallback(
+    async (
+      walletAddress: string,
+      privateKey?: string,
+      chainId?: number,
+      signMessage?: (message: string) => Promise<string>
+    ) => {
+      const xmtp = getXmtpClient();
+      return await xmtp.probeIdentity({
+        address: walletAddress,
+        privateKey,
+        chainId,
+        signMessage,
+      });
+    },
+    []
+  );
 
   return {
     ...authStore,
@@ -424,6 +514,7 @@ export function useAuth() {
     lock,
     logout,
     checkExistingIdentity,
+    probeIdentity,
   };
 }
 

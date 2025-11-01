@@ -5,7 +5,7 @@
  * Following xmtp.chat reference implementation.
  */
 
-import { Client, type Signer } from '@xmtp/browser-sdk';
+import { Client, type Signer, type SafeInboxState } from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
@@ -19,6 +19,19 @@ export interface XmtpIdentity {
   installationId?: string;
   chainId?: number; // For smart contract wallets
   signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
+  displayName?: string;
+}
+
+export interface IdentityProbeResult {
+  isRegistered: boolean;
+  inboxId: string | null;
+  installationCount: number;
+  inboxState?: SafeInboxState;
+}
+
+interface ConnectOptions {
+  register?: boolean;
+  enableHistorySync?: boolean;
 }
 
 export interface XmtpConversation {
@@ -71,10 +84,24 @@ export class XmtpClient {
   }
 
 
+  private async createSigner(identity: XmtpIdentity): Promise<Signer> {
+    if (identity.privateKey) {
+      console.log('[XMTP] Creating ephemeral signer (generated wallet)');
+      return createEphemeralSigner(identity.privateKey as `0x${string}`);
+    }
+
+    if (identity.signMessage) {
+      console.log('[XMTP] Creating EOA signer for wallet connection');
+      return createEOASigner(identity.address as `0x${string}`, identity.signMessage);
+    }
+
+    throw new Error('Identity must have either privateKey or signMessage function');
+  }
+
   /**
    * Connect to XMTP network with an identity
    */
-  async connect(identity: XmtpIdentity): Promise<void> {
+  async connect(identity: XmtpIdentity, options?: ConnectOptions): Promise<void> {
     const { setConnectionStatus, setLastConnected, setError } = useXmtpStore.getState();
 
     // If already connected with the same identity, don't reconnect
@@ -97,6 +124,11 @@ export class XmtpClient {
 
     this.identity = identity;
 
+    const shouldRegister = options?.register !== false;
+    const shouldSyncHistory = options?.enableHistorySync !== false;
+
+    let client: Client | null = null;
+
     try {
       setConnectionStatus('connecting');
       setError(null);
@@ -116,44 +148,50 @@ export class XmtpClient {
       console.log('[XMTP] SDK version: @xmtp/browser-sdk@' + xmtpPackage.version);
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
-      // Create appropriate signer based on identity type
-      let signer: Signer;
-      
-      if (identity.privateKey) {
-        // Ephemeral signer for generated wallets
-        console.log('[XMTP] Creating ephemeral signer (generated wallet)');
-        signer = createEphemeralSigner(identity.privateKey as `0x${string}`);
-      } else if (identity.signMessage) {
-        // Wallet-based signer using wagmi
-        // For now, always use EOA signer for wallet connections
-        // TODO: Detect actual smart contract wallets vs EOAs on different chains
-        // The chainId alone doesn't tell us if it's a smart contract wallet
-        console.log('[XMTP] Creating EOA signer for wallet connection');
-        signer = createEOASigner(
-          identity.address as `0x${string}`,
-          identity.signMessage
-        );
-      } else {
-        throw new Error('Identity must have either privateKey or signMessage function');
-      }
+      const signer = await this.createSigner(identity);
 
-        // Add timeout to detect hanging
       console.log('[XMTP] Calling Client.create() with signer...');
       console.log('[XMTP] Client.create options:', {
         env: 'production',
-        loggingLevel: 'debug',
+        disableAutoRegister: true,
+        loggingLevel: 'warn',
       });
-      
-      // Note: We don't specify dbPath - let SDK use its default location in OPFS
-      // This lets the SDK manage database connections properly for background workers
-      const client = await Client.create(signer, {
+
+      client = await Client.create(signer, {
         env: 'production',
-        // Keep logs minimal in production; disable extra telemetry.
         loggingLevel: 'warn',
         structuredLogging: false,
         performanceLogging: false,
         debugEventsEnabled: false,
+        disableAutoRegister: true,
       });
+
+      if (shouldRegister) {
+        console.log('[XMTP] Registering inbox/installation after probe');
+        await client.register();
+      } else {
+        console.log('[XMTP] Skipping register() per options (probe-only connection)');
+      }
+
+      if (shouldRegister) {
+        try {
+          const inboxState: SafeInboxState = await client.preferences.inboxState(true);
+          const installationCount = inboxState.installations?.length ?? 0;
+          if (installationCount >= 10) {
+            throw new Error('⚠️ Installation limit reached (10/10). Please revoke old installations and retry.');
+          }
+          if (installationCount >= 8) {
+            console.warn('[XMTP] Installation count nearing limit:', installationCount);
+            logNetworkEvent({
+              direction: 'status',
+              event: 'connect:installation_warning',
+              details: `Installation count ${installationCount}/10`,
+            });
+          }
+        } catch (installError) {
+          console.warn('[XMTP] Failed to inspect installation count after register:', installError);
+        }
+      }
 
       console.log('[XMTP] ✅ Client created successfully');
       console.log('[XMTP] Client properties:', {
@@ -162,7 +200,7 @@ export class XmtpClient {
         isReady: client.isReady,
       });
       this.client = client;
-      
+
       // Save the installation ID to the identity if it's new
       if (identity.installationId !== client.installationId) {
         console.log('[XMTP] New installation ID detected, updating identity...');
@@ -174,20 +212,11 @@ export class XmtpClient {
         });
       }
 
-      // Step 2: Check if already registered (v3 auto-registers during Client.create)
-      console.log('[XMTP] Checking if identity is registered...');
-      try {
-        const isRegistered = await client.isRegistered();
-        console.log('[XMTP] isRegistered:', isRegistered);
-        logNetworkEvent({
-          direction: 'status',
-          event: 'connect:registration_check',
-          details: `Identity registered: ${isRegistered}, inbox ID: ${client.inboxId}`,
-        });
-      } catch (e) {
-        console.log('[XMTP] isRegistered() check failed:', e);
-        // Non-fatal - continue anyway
-      }
+      logNetworkEvent({
+        direction: 'status',
+        event: 'connect:registration_check',
+        details: `Register step ${shouldRegister ? 'completed' : 'skipped'}; inbox ID: ${client.inboxId}`,
+      });
 
       setConnectionStatus('connected');
       setLastConnected(Date.now());
@@ -203,22 +232,28 @@ export class XmtpClient {
       // Start syncing conversations and streaming messages
       console.log('[XMTP] Starting conversation sync and message streaming...');
       const { setSyncStatus, setSyncProgress } = useXmtpStore.getState();
-      
+
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
       await this.syncConversations();
 
-      // Reuse 'syncing-messages' status for historical backfill to align with store type.
-      setSyncStatus('syncing-messages');
-      setSyncProgress(40);
-      await this.syncHistory();
+      if (shouldSyncHistory) {
+        console.log('[XMTP] History sync enabled – fetching past messages. This may take time if another device needs to provide history.');
+        setSyncStatus('syncing-messages');
+        setSyncProgress(40);
+        await this.syncHistory();
+        setSyncProgress(85);
+      } else {
+        console.log('[XMTP] Skipping history sync (local XMTP database detected).');
+        setSyncStatus('syncing-messages');
+        setSyncProgress(70);
+      }
 
-      setSyncProgress(85);
       await this.startMessageStream();
-      
+
       setSyncProgress(100);
       setSyncStatus('complete');
-      
+
       // Hide the sync indicator after a brief delay
       setTimeout(() => {
         setSyncStatus('idle');
@@ -253,8 +288,65 @@ export class XmtpClient {
         event: 'connect:error',
         details: errorMessage,
       });
-      
+
+      if (client) {
+        try {
+          await client.close();
+        } catch (closeError) {
+          console.warn('[XMTP] Failed to close client after connect error:', closeError);
+        }
+      }
+
       throw error; // Re-throw the original error
+    }
+  }
+
+  async probeIdentity(identity: XmtpIdentity): Promise<IdentityProbeResult> {
+    const signer = await this.createSigner(identity);
+    let client: Client | null = null;
+
+    try {
+      client = await Client.create(signer, {
+        env: 'production',
+        loggingLevel: 'warn',
+        structuredLogging: false,
+        performanceLogging: false,
+        debugEventsEnabled: false,
+        disableAutoRegister: true,
+      });
+
+      let isRegistered = false;
+      try {
+        isRegistered = await client.isRegistered();
+      } catch (error) {
+        console.warn('[XMTP] probeIdentity: isRegistered check failed:', error);
+      }
+
+      let inboxState: SafeInboxState | undefined;
+      if (isRegistered) {
+        try {
+          inboxState = await client.preferences.inboxState(true);
+        } catch (error) {
+          console.warn('[XMTP] probeIdentity: failed to fetch inbox state:', error);
+        }
+      }
+
+      const installationCount = inboxState?.installations?.length ?? 0;
+
+      return {
+        isRegistered,
+        inboxId: client.inboxId ?? null,
+        installationCount,
+        inboxState,
+      };
+    } finally {
+      if (client) {
+        try {
+          await client.close();
+        } catch (error) {
+          console.warn('[XMTP] probeIdentity: failed to close probe client:', error);
+        }
+      }
     }
   }
 

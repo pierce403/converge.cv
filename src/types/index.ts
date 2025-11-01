@@ -65,6 +65,14 @@ export interface Identity {
   installationId?: string; // XMTP installation ID for this device
 }
 
+export interface InboxRegistryEntry {
+  inboxId: string;
+  displayLabel: string;
+  primaryDisplayIdentity: string;
+  lastOpenedAt: number;
+  hasLocalDB: boolean;
+}
+
 export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'failed';
 export type ConversationType = 'dm' | 'group';
 

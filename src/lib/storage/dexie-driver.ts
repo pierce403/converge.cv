@@ -36,6 +36,24 @@ class ConvergeDB extends Dexie {
       identity: 'address',
       vaultSecrets: 'method',
     });
+
+    this.version(2)
+      .stores({
+        conversations: 'id, lastMessageAt, pinned, archived, peerId',
+        messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+        attachments: 'id, messageId',
+        attachmentData: 'id',
+        identity: 'address, inboxId',
+        vaultSecrets: 'method',
+      })
+      .upgrade(async (transaction) => {
+        const identities = await transaction.table('identity').toArray();
+        await Promise.all(
+          identities.map((identity) =>
+            transaction.table('identity').put({ ...identity })
+          )
+        );
+      });
   }
 }
 
@@ -196,8 +214,24 @@ export class DexieDriver implements StorageDriver {
     return identities[0];
   }
 
+  async listIdentities(): Promise<Identity[]> {
+    return await this.db.identity.toArray();
+  }
+
+  async getIdentityByAddress(address: string): Promise<Identity | undefined> {
+    return await this.db.identity.get(address);
+  }
+
+  async getIdentityByInboxId(inboxId: string): Promise<Identity | undefined> {
+    return await this.db.identity.where('inboxId').equals(inboxId).first();
+  }
+
   async deleteIdentity(): Promise<void> {
     await this.db.identity.clear();
+  }
+
+  async deleteIdentityByAddress(address: string): Promise<void> {
+    await this.db.identity.delete(address);
   }
 
   // Vault secrets
