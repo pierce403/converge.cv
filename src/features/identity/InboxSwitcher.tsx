@@ -1,0 +1,148 @@
+import { Fragment, useEffect } from 'react';
+import { Menu, Transition } from '@headlessui/react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/features/auth';
+import { useAuthStore, useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
+import type { InboxRegistryEntry } from '@/types';
+
+const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
+
+export function InboxSwitcher() {
+  const navigate = useNavigate();
+  const { identity } = useAuthStore();
+  const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
+  const registryEntries = useInboxRegistryStore((state) => state.entries);
+  const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
+  const { checkExistingIdentity } = useAuth();
+
+  useEffect(() => {
+    hydrateRegistry();
+  }, [hydrateRegistry]);
+
+  const sortedEntries = [...registryEntries].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0));
+  const currentInboxId = identity?.inboxId ?? null;
+  const currentEntry = currentInboxId ? sortedEntries.find((entry) => entry.inboxId === currentInboxId) : undefined;
+
+  const currentLabel = currentEntry
+    ? getInboxDisplayLabel(currentEntry)
+    : identity?.displayName || (identity?.address ? shortAddress(identity.address) : 'No identity connected');
+
+  const currentBadge = identity?.displayName ? identity.displayName.charAt(0).toUpperCase() : currentLabel.charAt(0).toUpperCase();
+
+  const handleSwitch = async (entry: InboxRegistryEntry) => {
+    setCurrentInbox(entry.inboxId);
+    await checkExistingIdentity();
+  };
+
+  return (
+    <Menu as="div" className="relative inline-block text-left">
+      <Menu.Button className="flex items-center gap-3 rounded-full border border-primary-700/70 bg-primary-900/80 px-3 py-1.5 text-left text-sm font-medium text-primary-100 shadow hover:border-accent-400 hover:text-white">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent-600 text-sm font-semibold text-white">
+          {currentBadge}
+        </span>
+        <span className="hidden sm:block leading-tight">
+          <span className="block text-xs text-primary-300">Current inbox</span>
+          <span className="block text-sm font-semibold text-primary-100">{currentLabel}</span>
+        </span>
+        <svg
+          className="h-4 w-4 text-primary-300"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 011.08 1.04l-4.25 4.25a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </Menu.Button>
+
+      <Transition
+        as={Fragment}
+        enter="transition ease-out duration-100"
+        enterFrom="transform opacity-0 scale-95"
+        enterTo="transform opacity-100 scale-100"
+        leave="transition ease-in duration-75"
+        leaveFrom="transform opacity-100 scale-100"
+        leaveTo="transform opacity-0 scale-95"
+      >
+        <Menu.Items className="absolute right-0 z-20 mt-2 w-80 origin-top-right rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur">
+          <div className="mb-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
+            {identity?.inboxId ? (
+              <div className="mt-2 rounded-lg border border-primary-800/60 bg-primary-900/60 p-3 text-xs text-primary-200">
+                <div className="font-semibold text-primary-100">{currentLabel}</div>
+                <div className="mt-1 break-all text-primary-300">Inbox ID: {identity.inboxId}</div>
+                <div className="mt-1 text-primary-400">
+                  Address: {identity.address}
+                </div>
+                <div className="mt-2 text-[11px] text-primary-500">
+                  Identities cannot be merged. Moving an identity routes future messages to the destination inbox only.
+                </div>
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-primary-300">
+                Connect an identity to see inbox details and linked devices.
+              </div>
+            )}
+          </div>
+
+          <div className="my-2 h-px bg-primary-800/60" />
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">On this device</div>
+            {sortedEntries.length === 0 ? (
+              <div className="mt-2 text-xs text-primary-300">No inboxes stored locally yet.</div>
+            ) : (
+              <div className="mt-2 space-y-2">
+                {sortedEntries.map((entry) => (
+                  <Menu.Item key={entry.inboxId}>
+                    {({ active }) => (
+                      <button
+                        onClick={() => handleSwitch(entry)}
+                        disabled={entry.inboxId === currentInboxId}
+                        className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition ${
+                          entry.inboxId === currentInboxId
+                            ? 'cursor-default border-accent-500/60 bg-accent-600/20 text-accent-100'
+                            : active
+                            ? 'border-accent-500/60 bg-primary-900/70 text-primary-100'
+                            : 'border-primary-800/60 bg-primary-900/40 text-primary-200 hover:border-accent-500/60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-primary-100">{getInboxDisplayLabel(entry)}</span>
+                          <span className="text-[10px] text-primary-400">{entry.hasLocalDB ? 'Local DB' : 'History sync pending'}</span>
+                        </div>
+                        <div className="mt-1 break-all text-[11px] text-primary-300">{entry.inboxId}</div>
+                        <div className="mt-1 text-[11px] text-primary-400">
+                          Primary identity: {entry.primaryDisplayIdentity}
+                        </div>
+                      </button>
+                    )}
+                  </Menu.Item>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="my-2 h-px bg-primary-800/60" />
+
+          <Menu.Item>
+            {({ active }) => (
+              <button
+                onClick={() => navigate('/onboarding')}
+                className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
+                  active ? 'bg-accent-600/20 text-accent-200' : 'text-accent-300 hover:text-accent-200'
+                }`}
+              >
+                Connect another identity…
+              </button>
+            )}
+          </Menu.Item>
+        </Menu.Items>
+      </Transition>
+    </Menu>
+  );
+}

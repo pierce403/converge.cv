@@ -7,7 +7,7 @@ import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
-import { IdentityButton } from '@/features/identity/IdentityButton';
+import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 
 export function Layout() {
@@ -85,9 +85,9 @@ export function Layout() {
 
       {/* Header */}
       <header className="bg-primary-950/80 border-b border-primary-800/60 px-3 py-2 flex items-center justify-between gap-2 backdrop-blur-md shadow-lg">
-        <div className="flex items-center gap-2">
-          <IdentityButton />
-          <h1 className="text-lg font-bold text-primary-50">Converge</h1>
+        <div className="flex items-center gap-3">
+          <InboxSwitcher />
+          <h1 className="hidden text-lg font-bold text-primary-50 sm:block">Converge</h1>
         </div>
         <div className="flex items-center gap-1">
           <Link

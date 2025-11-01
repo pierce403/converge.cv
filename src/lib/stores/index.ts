@@ -7,4 +7,5 @@ export * from './conversation-store';
 export * from './message-store';
 export * from './xmtp-store';
 export * from './debug-store';
+export * from './inbox-registry-store';
 
