@@ -8,9 +8,10 @@ import { useWalletConnection, type WalletConnectorType } from '@/lib/wagmi';
 interface WalletSelectorProps {
   onWalletConnected: (address: string, chainId?: number) => void;
   onBack: () => void;
+  backLabel?: string;
 }
 
-export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProps) {
+export function WalletSelector({ onWalletConnected, onBack, backLabel }: WalletSelectorProps) {
   const { connectWallet, address, chainId, isConnecting } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
   const hasTriggeredCallback = useRef(false);
@@ -123,7 +124,7 @@ export function WalletSelector({ onWalletConnected, onBack }: WalletSelectorProp
         onClick={onBack}
         className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg font-medium transition-colors text-primary-100"
       >
-        ← Generate Local Identity
+        {backLabel ?? '← Back'}
       </button>
 
       <p className="text-xs text-primary-300 text-center">
