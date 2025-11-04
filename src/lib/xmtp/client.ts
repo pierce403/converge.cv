@@ -11,6 +11,7 @@ import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
+import type { Conversation } from '@/types';
 
 export interface XmtpIdentity {
   address: string;
@@ -34,16 +35,18 @@ interface ConnectOptions {
   enableHistorySync?: boolean;
 }
 
-export interface XmtpConversation {
+
+
+export interface XmtpSdkConversation {
   id: string;
-  topic: string;
+  createdAtNs: bigint;
   peerAddress: string;
-  createdAt: number;
+  topic: string;
 }
 
 export interface XmtpMessage {
   id: string;
-  conversationTopic: string;
+  conversationId: string;
   senderAddress: string;
   content: string | Uint8Array;
   sentAt: number;
@@ -450,7 +453,7 @@ export class XmtpClient {
             const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
             const xmsg = {
               id: m.id,
-              conversationTopic: m.conversationId,
+              conversationId: m.conversationId,
               senderAddress: m.senderInboxId,
               content,
               sentAt: Number(m.sentAtNs / 1000000n),
@@ -559,7 +562,7 @@ export class XmtpClient {
                 conversationId: message.conversationId,
                 message: {
                   id: message.id,
-                  conversationTopic: message.conversationId,
+                  conversationId: message.conversationId,
                   senderAddress: message.senderInboxId,
                   content: message.content,
                   sentAt: message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now(),
@@ -719,7 +722,7 @@ export class XmtpClient {
   /**
    * List all conversations
    */
-  async listConversations(): Promise<XmtpConversation[]> {
+  async listConversations(): Promise<Conversation[]> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
@@ -742,7 +745,7 @@ export class XmtpClient {
   /**
    * Get a specific conversation by peer address
    */
-  async getConversation(peerAddress: string): Promise<XmtpConversation | null> {
+  async getConversation(peerAddress: string): Promise<Conversation | null> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
@@ -797,7 +800,7 @@ export class XmtpClient {
    * Create a new conversation with a peer
    * Accepts either an Ethereum address (0x...) or an inbox ID
    */
-  async createConversation(peerAddressOrInboxId: string): Promise<XmtpConversation> {
+  async createConversation(peerAddressOrInboxId: string): Promise<Conversation> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
@@ -839,11 +842,16 @@ export class XmtpClient {
         createdAtNs: dmConversation.createdAtNs,
       });
 
-      const conversation: XmtpConversation = {
+      const conversation: Conversation = {
         id: dmConversation.id,
         topic: dmConversation.id, // Use conversation ID as topic
-        peerAddress: displayAddress, // Use the original address for display
+        peerId: displayAddress, // Use the original address for display
         createdAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
+        lastMessageAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
+        unreadCount: 0,
+        pinned: false,
+        archived: false,
+        isGroup: false, // Explicitly mark as DM
       };
 
       logNetworkEvent({
@@ -874,7 +882,7 @@ export class XmtpClient {
   /**
    * Create a new group conversation with multiple participants
    */
-  async createGroupConversation(participantAddresses: string[]): Promise<XmtpConversation> {
+  async createGroupConversation(participantAddresses: string[]): Promise<Conversation> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
@@ -895,11 +903,19 @@ export class XmtpClient {
         createdAtNs: groupConversation.createdAtNs,
       });
 
-      const conversation: XmtpConversation = {
+      const conversation: Conversation = {
         id: groupConversation.id,
         topic: groupConversation.id, // Use conversation ID as topic
-        peerAddress: groupConversation.id, // For groups, peerAddress can be the group ID
+        peerId: groupConversation.id, // For groups, peerAddress can be the group ID
         createdAt: groupConversation.createdAtNs ? Number(groupConversation.createdAtNs / 1000000n) : Date.now(),
+        lastMessageAt: groupConversation.createdAtNs ? Number(groupConversation.createdAtNs / 1000000n) : Date.now(),
+        unreadCount: 0,
+        pinned: false,
+        archived: false,
+        isGroup: true, // Explicitly mark as group conversation
+        groupName: `Group with ${participantAddresses.length} members`, // Default name
+        members: participantAddresses, // Initial members
+        admins: [this.identity?.address || ''].filter(Boolean), // Creator is admin
       };
 
       logNetworkEvent({
@@ -968,7 +984,7 @@ export class XmtpClient {
       // Create a message object to return
       const message: XmtpMessage = {
         id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        conversationTopic: conversationId,
+        conversationId: conversationId,
         senderAddress: this.identity?.address || 'unknown',
         content,
         sentAt: Date.now(),

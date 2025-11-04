@@ -19,6 +19,12 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
+  ],
+  "protocol_handlers": [
+    {
+      "protocol": "xmtp",
+      "url": "/handle-xmtp-protocol?url=%s"
+    }
   ]
 }
 

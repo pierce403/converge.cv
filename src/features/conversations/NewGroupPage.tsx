@@ -1,16 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useContactStore, useConversationStore } from '@/lib/stores';
-import { getXmtpClient } from '@/lib/xmtp';
-import { getStorage } from '@/lib/storage';
-import type { Conversation } from '@/types';
+import { useContactStore } from '@/lib/stores';
+import { useConversations } from './useConversations';
 
 export function NewGroupPage() {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedContactAddresses, setSelectedContactAddresses] = useState<string[]>([]);
   const { contacts, loadContacts, isLoading } = useContactStore();
-  const { addConversation } = useConversationStore();
+  const { createGroupConversation } = useConversations();
 
   useEffect(() => {
     loadContacts();
@@ -31,27 +29,13 @@ export function NewGroupPage() {
     if (selectedContactAddresses.length === 0) return;
 
     try {
-      const xmtp = getXmtpClient();
-      const newGroupXmtpConversation = await xmtp.createGroupConversation(selectedContactAddresses);
+      const newGroupConversation = await createGroupConversation(selectedContactAddresses);
 
-      // Convert to our internal Conversation type
-      const newGroupConversation: Conversation = {
-        id: newGroupXmtpConversation.id,
-        peerId: newGroupXmtpConversation.peerAddress, // This will be the group ID
-        createdAt: newGroupXmtpConversation.createdAt,
-        lastMessageAt: newGroupXmtpConversation.createdAt,
-        lastMessagePreview: '',
-        unreadCount: 0,
-        pinned: false,
-        archived: false,
-        isGroup: true, // Mark as group conversation
-      };
-
-      addConversation(newGroupConversation); // Add to our store
-      const storage = await getStorage();
-      await storage.putConversation(newGroupConversation);
-
-      navigate(`/chat/${newGroupConversation.id}`); // Navigate to the new group chat
+      if (newGroupConversation) {
+        navigate(`/chat/${newGroupConversation.id}`); // Navigate to the new group chat
+      } else {
+        alert('Failed to create group chat. Please try again.');
+      }
     } catch (error) {
       console.error('Failed to create group chat:', error);
       alert('Failed to create group chat. Please try again.');

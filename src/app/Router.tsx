@@ -10,6 +10,9 @@ import { DebugPage } from '@/features/debug';
 import { SearchPage } from '@/features/search';
 import { ContactsPage } from '@/features/contacts/ContactsPage';
 import { NewGroupPage } from '@/features/conversations/NewGroupPage';
+import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
+import { JoinGroupPage } from '@/features/conversations/JoinGroupPage';
+import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
 
 export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
@@ -48,12 +51,15 @@ export function AppRouter() {
       <Route path="/" element={<Layout />}>
         <Route index element={<ChatList />} />
         <Route path="chat/:id" element={<ConversationView />} />
+        <Route path="chat/:conversationId/settings" element={<GroupSettingsPage />} />
         <Route path="new-chat" element={<NewChatPage />} />
         <Route path="new-group" element={<NewGroupPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="debug" element={<DebugPage />} />
         <Route path="contacts" element={<ContactsPage />} />
+        <Route path="join-group/:conversationId" element={<JoinGroupPage />} />
+        <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

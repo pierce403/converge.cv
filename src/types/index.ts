@@ -5,7 +5,7 @@
 export interface Conversation {
   id: string;
   peerId: string;
-  topic?: string;
+  topic?: string | null; // Nullable for groups, or will be group.id
   lastMessageAt: number;
   lastMessagePreview?: string;
   unreadCount: number;
@@ -14,6 +14,11 @@ export interface Conversation {
   mutedUntil?: number;
   createdAt: number;
   isGroup?: boolean;
+  groupName?: string; // Human-readable name for group chats
+  groupImage?: string; // URL or base64 data for group avatar
+  groupDescription?: string; // Optional description for the group
+  members?: string[]; // List of member addresses
+  admins?: string[]; // List of admin addresses
 }
 
 export interface Message {

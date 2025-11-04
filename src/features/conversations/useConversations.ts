@@ -105,10 +105,12 @@ export function useConversations() {
           peerId: peerAddress,
           topic: xmtpConv.topic,
           lastMessageAt: Date.now(),
+          lastMessagePreview: '',
           unreadCount: 0,
           pinned: false,
           archived: false,
           createdAt: Date.now(),
+          isGroup: false, // Explicitly mark as DM
         };
 
         // Persist
@@ -120,6 +122,55 @@ export function useConversations() {
         return conversation;
       } catch (error) {
         console.error('Failed to create conversation:', error);
+        return null;
+      }
+    },
+    [addConversation]
+  );
+
+  /**
+   * Create a new group conversation
+   */
+  const createGroupConversation = useCallback(
+    async (participantAddresses: string[], groupName?: string): Promise<Conversation | null> => {
+      try {
+        // Ensure current user is included in participants if not already
+        const currentAddress = useAuthStore.getState().identity?.address;
+        const allParticipants = currentAddress && !participantAddresses.includes(currentAddress)
+          ? [currentAddress, ...participantAddresses]
+          : participantAddresses;
+
+        // Create via XMTP
+        const xmtp = getXmtpClient();
+        const xmtpGroupConv = await xmtp.createGroupConversation(allParticipants);
+
+        // Create conversation object
+        const conversation: Conversation = {
+          id: xmtpGroupConv.id,
+          peerId: xmtpGroupConv.peerId, // This will be the group ID
+          topic: xmtpGroupConv.topic,
+          lastMessageAt: Date.now(),
+          lastMessagePreview: '',
+          unreadCount: 0,
+          pinned: false,
+          archived: false,
+          createdAt: Date.now(),
+          isGroup: true, // Explicitly mark as group
+          groupName: groupName || `Group with ${allParticipants.length} members`,
+          members: allParticipants,
+          admins: [currentAddress].filter(Boolean) as string[], // Creator is admin
+        };
+
+        // Persist
+        const storage = await getStorage();
+        await storage.putConversation(conversation);
+
+        // Add to store
+        addConversation(conversation);
+
+        return conversation;
+      } catch (error) {
+        console.error('Failed to create group conversation:', error);
         return null;
       }
     },
@@ -184,6 +235,125 @@ export function useConversations() {
     [clearUnread]
   );
 
+  /**
+   * Update conversation properties and persist to storage
+   */
+  const updateConversationAndPersist = useCallback(
+    async (conversationId: string, updates: Partial<Conversation>) => {
+      try {
+        const storage = await getStorage();
+        const existingConversation = await storage.getConversation(conversationId);
+
+        if (existingConversation) {
+          const updatedConversation = { ...existingConversation, ...updates };
+          await storage.putConversation(updatedConversation);
+          updateConversation(conversationId, updatedConversation);
+        }
+      } catch (error) {
+        console.error('Failed to update conversation and persist:', error);
+      }
+    },
+    [updateConversation]
+  );
+
+  /**
+   * Add members to a group conversation
+   */
+  const addMembersToGroup = useCallback(
+    async (conversationId: string, newMembers: string[]) => {
+      try {
+        const storage = await getStorage();
+        const conversation = await storage.getConversation(conversationId);
+
+        if (conversation && conversation.isGroup) {
+          const currentMembers = new Set(conversation.members || []);
+          newMembers.forEach((member) => currentMembers.add(member));
+          const updatedMembers = Array.from(currentMembers);
+
+          await updateConversationAndPersist(conversationId, { members: updatedMembers });
+        }
+      } catch (error) {
+        console.error('Failed to add members to group:', error);
+      }
+    },
+    [updateConversationAndPersist]
+  );
+
+  /**
+   * Remove members from a group conversation
+   */
+  const removeMembersFromGroup = useCallback(
+    async (conversationId: string, membersToRemove: string[]) => {
+      try {
+        const storage = await getStorage();
+        const conversation = await storage.getConversation(conversationId);
+
+        if (conversation && conversation.isGroup) {
+          const updatedMembers = (conversation.members || []).filter(
+            (member) => !membersToRemove.includes(member)
+          );
+          const updatedAdmins = (conversation.admins || []).filter(
+            (admin) => !membersToRemove.includes(admin)
+          );
+
+          await updateConversationAndPersist(conversationId, {
+            members: updatedMembers,
+            admins: updatedAdmins,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to remove members from group:', error);
+      }
+    },
+    [updateConversationAndPersist]
+  );
+
+  /**
+   * Promote a member to admin in a group conversation
+   */
+  const promoteMemberToAdmin = useCallback(
+    async (conversationId: string, memberAddress: string) => {
+      try {
+        const storage = await getStorage();
+        const conversation = await storage.getConversation(conversationId);
+
+        if (conversation && conversation.isGroup) {
+          const currentAdmins = new Set(conversation.admins || []);
+          currentAdmins.add(memberAddress);
+          const updatedAdmins = Array.from(currentAdmins);
+
+          await updateConversationAndPersist(conversationId, { admins: updatedAdmins });
+        }
+      } catch (error) {
+        console.error('Failed to promote member to admin:', error);
+      }
+    },
+    [updateConversationAndPersist]
+  );
+
+  /**
+   * Demote an admin to member in a group conversation
+   */
+  const demoteAdminToMember = useCallback(
+    async (conversationId: string, adminAddress: string) => {
+      try {
+        const storage = await getStorage();
+        const conversation = await storage.getConversation(conversationId);
+
+        if (conversation && conversation.isGroup) {
+          const updatedAdmins = (conversation.admins || []).filter(
+            (admin) => admin !== adminAddress
+          );
+
+          await updateConversationAndPersist(conversationId, { admins: updatedAdmins });
+        }
+      } catch (error) {
+        console.error('Failed to demote admin to member:', error);
+      }
+    },
+    [updateConversationAndPersist]
+  );
+
   // Load conversations when authenticated and unlocked
   useEffect(() => {
     if (isAuthenticated && isVaultUnlocked) {
@@ -200,9 +370,15 @@ export function useConversations() {
     incrementUnread,
     loadConversations,
     createConversation,
+    createGroupConversation,
     togglePin,
     toggleArchive,
     markAsRead,
+    updateConversationAndPersist,
+    addMembersToGroup,
+    removeMembersFromGroup,
+    promoteMemberToAdmin,
+    demoteAdminToMember,
   };
 }
 
