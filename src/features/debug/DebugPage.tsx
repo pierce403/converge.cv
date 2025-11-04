@@ -58,8 +58,29 @@ export function DebugPage() {
             </span>
             <button
               type="button"
+              onClick={async () => {
+                // Clear all caches
+                if ('caches' in window) {
+                  const cacheNames = await caches.keys();
+                  await Promise.all(cacheNames.map(name => caches.delete(name)));
+                }
+                // Clear service worker and reload
+                if ('serviceWorker' in navigator) {
+                  const registrations = await navigator.serviceWorker.getRegistrations();
+                  await Promise.all(registrations.map(reg => reg.unregister()));
+                }
+                // Hard reload
+                window.location.reload();
+              }}
+              className="ml-auto rounded-full border border-accent-600/60 bg-accent-900/30 px-3 py-1 text-accent-100 hover:border-accent-500 hover:bg-accent-800/40"
+              title="Clear all caches and reload"
+            >
+              Hard Refresh
+            </button>
+            <button
+              type="button"
               onClick={clearAll}
-              className="ml-auto rounded-full border border-primary-800/60 bg-primary-950/30 px-3 py-1 text-primary-100 hover:border-primary-700"
+              className="rounded-full border border-primary-800/60 bg-primary-950/30 px-3 py-1 text-primary-100 hover:border-primary-700"
             >
               Clear all logs
             </button>
