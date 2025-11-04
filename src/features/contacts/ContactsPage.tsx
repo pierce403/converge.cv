@@ -289,17 +289,19 @@ export function ContactsPage() {
         />
       )}
 
-      <FarcasterSyncModal
-        isOpen={showSyncModal}
-        current={syncProgress.current}
-        total={syncProgress.total}
-        status={syncProgress.status}
-        log={syncLog}
-        onClose={() => {
-          setShowSyncModal(false);
-          setSyncLog([]);
-        }}
-      />
+            <FarcasterSyncModal
+              isOpen={showSyncModal}
+              current={syncProgress.current}
+              total={syncProgress.total}
+              status={syncProgress.status}
+              log={syncLog}
+              accountName={farcasterProfile?.displayName || farcasterProfile?.username}
+              accountFid={userFid || farcasterProfile?.fid}
+              onClose={() => {
+                setShowSyncModal(false);
+                setSyncLog([]);
+              }}
+            />
 
       {/* Manual FID Input Modal */}
       {showFidInput && (
@@ -359,6 +361,23 @@ export function ContactsPage() {
                       await storage.putIdentity(updatedIdentity);
                       setIdentity(updatedIdentity);
                     }
+                    
+                    // Fetch profile to get account name
+                    try {
+                      const { fetchFarcasterUserFromAPI } = await import('@/lib/farcaster/service');
+                      const profile = await fetchFarcasterUserFromAPI(fid);
+                      if (profile) {
+                        setFarcasterProfile({
+                          username: profile.username,
+                          displayName: profile.display_name || profile.username,
+                          fid: profile.fid,
+                          pfpUrl: profile.pfp_url,
+                        });
+                      }
+                    } catch (error) {
+                      console.error('Failed to fetch Farcaster profile:', error);
+                    }
+                    
                     setShowFidInput(false);
                     setManualFid('');
                     // Trigger sync
@@ -406,6 +425,23 @@ export function ContactsPage() {
                     await storage.putIdentity(updatedIdentity);
                     setIdentity(updatedIdentity);
                   }
+                  
+                  // Fetch profile to get account name
+                  try {
+                    const { fetchFarcasterUserFromAPI } = await import('@/lib/farcaster/service');
+                    const profile = await fetchFarcasterUserFromAPI(fid);
+                    if (profile) {
+                      setFarcasterProfile({
+                        username: profile.username,
+                        displayName: profile.display_name || profile.username,
+                        fid: profile.fid,
+                        pfpUrl: profile.pfp_url,
+                      });
+                    }
+                  } catch (error) {
+                    console.error('Failed to fetch Farcaster profile:', error);
+                  }
+                  
                   setShowFidInput(false);
                   setManualFid('');
                   // Trigger sync

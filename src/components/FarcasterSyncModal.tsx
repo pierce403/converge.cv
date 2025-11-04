@@ -6,10 +6,12 @@ interface FarcasterSyncModalProps {
   total: number;
   status?: string;
   log?: string[];
+  accountName?: string;
+  accountFid?: number;
   onClose: () => void;
 }
 
-export function FarcasterSyncModal({ isOpen, current, total, status, log = [], onClose }: FarcasterSyncModalProps) {
+export function FarcasterSyncModal({ isOpen, current, total, status, log = [], accountName, accountFid, onClose }: FarcasterSyncModalProps) {
   const [isClosing, setIsClosing] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -48,6 +50,13 @@ export function FarcasterSyncModal({ isOpen, current, total, status, log = [], o
           
           {/* Progress Text */}
           <h3 className="text-xl font-bold mb-2">Syncing Farcaster Contacts</h3>
+          
+          {/* Account Info */}
+          {(accountName || accountFid) && (
+            <p className="text-primary-300 text-sm mb-2">
+              Account: {accountName || 'Unknown'} {accountFid && `(FID: ${accountFid})`}
+            </p>
+          )}
           
           {/* Status Message */}
           {status && (
