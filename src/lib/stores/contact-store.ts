@@ -1,7 +1,11 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getStorage } from '@/lib/storage';
-import { fetchFarcasterUserFollowingFromAPI, resolveXmtpAddressFromFarcasterUser } from '@/lib/farcaster/service';
+import { 
+  fetchFarcasterUserFollowingFromAPI, 
+  resolveXmtpAddressFromFarcasterUser,
+  resolveContactName 
+} from '@/lib/farcaster/service';
 
 export interface Contact {
   address: string;
@@ -10,8 +14,13 @@ export interface Contact {
   description?: string;
   isBlocked?: boolean;
   createdAt: number;
-  preferredName?: string; // New field
-  notes?: string; // New field
+  preferredName?: string;
+  notes?: string;
+  source?: 'farcaster' | 'inbox' | 'manual'; // Origin of contact
+  farcasterUsername?: string; // Farcaster username for profile link
+  farcasterFid?: number; // Farcaster FID
+  inboxId?: string; // XMTP inbox ID
+  isInboxOnly?: boolean; // True if contact only exists from incoming messages
 }
 
 interface ContactState {
@@ -23,7 +32,7 @@ interface ContactState {
   loadContacts: () => Promise<void>;
   isContact: (address: string) => boolean;
   getContactByAddress: (address: string) => Contact | undefined;
-  syncFarcasterContacts: (fid: number) => Promise<void>; // New action
+  syncFarcasterContacts: (fid: number, onProgress?: (current: number, total: number) => void) => Promise<void>;
 }
 
 export const useContactStore = create<ContactState>()(
@@ -80,27 +89,46 @@ export const useContactStore = create<ContactState>()(
         return get().contacts.find(c => c.address.toLowerCase() === address.toLowerCase());
       },
 
-      syncFarcasterContacts: async (fid: number) => {
+      syncFarcasterContacts: async (fid: number, onProgress?: (current: number, total: number) => void) => {
         set({ isLoading: true });
         try {
           const storage = await getStorage();
           const followedUsers = await fetchFarcasterUserFollowingFromAPI(fid);
+          const total = followedUsers.length;
+          let current = 0;
           const newContacts: Contact[] = [];
 
           for (const user of followedUsers) {
             const xmtpAddress = resolveXmtpAddressFromFarcasterUser(user);
             if (xmtpAddress) {
+              current++;
+              onProgress?.(current, total);
+
+              // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
+              const nameResolution = await resolveContactName(user, xmtpAddress);
+              
               const existingContact = get().contacts.find(c => c.address.toLowerCase() === xmtpAddress.toLowerCase());
+              
+              // Check if existing contact is inbox-only and should be merged
+              const isInboxOnly = existingContact?.isInboxOnly === true;
+              
               const contact: Contact = {
                 address: xmtpAddress,
-                name: user.display_name || user.username,
-                preferredName: user.display_name,
-                avatar: user.pfp_url,
-                createdAt: Date.now(),
+                name: nameResolution.name,
+                preferredName: nameResolution.preferredName,
+                // Only use Farcaster avatar if no existing avatar
+                avatar: existingContact?.avatar || user.pfp_url,
+                createdAt: existingContact?.createdAt || Date.now(),
+                source: 'farcaster', // Upgrade from inbox-only to farcaster
+                farcasterUsername: user.username,
+                farcasterFid: user.fid,
+                // Keep existing inbox ID if present
+                inboxId: existingContact?.inboxId,
+                isInboxOnly: false, // No longer inbox-only after merge
               };
 
               if (existingContact) {
-                // Update existing contact
+                // Update existing contact (merge with Farcaster data)
                 await storage.updateContact(xmtpAddress, contact);
                 set((state) => ({
                   contacts: state.contacts.map(c =>
@@ -119,6 +147,7 @@ export const useContactStore = create<ContactState>()(
             set((state) => ({ contacts: [...state.contacts, ...newContacts] }));
           }
           console.log(`Synced ${newContacts.length} new Farcaster contacts.`);
+          onProgress?.(total, total);
         } catch (error) {
           console.error('Failed to sync Farcaster contacts:', error);
         } finally {

@@ -1,20 +1,60 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useContactStore } from '@/lib/stores';
-// import { useAuthStore } from '@/lib/stores'; // Import useAuthStore - not used here
+import { useContactStore, useAuthStore } from '@/lib/stores';
 import { ContactCardModal } from '@/components/ContactCardModal';
+import { FarcasterSyncModal } from '@/components/FarcasterSyncModal';
+import { resolveFidFromAddress } from '@/lib/farcaster/service';
+import { getStorage } from '@/lib/storage';
 import type { Contact } from '@/lib/stores/contact-store';
 
 export function ContactsPage() {
   const [searchTerm, setSearchTerm] = useState('');
-  const { contacts, loadContacts, isLoading, syncFarcasterContacts } = useContactStore(); // Include syncFarcasterContacts
-  // const { identity } = useAuthStore(); // Get current user's identity - not used here
+  const { contacts, loadContacts, isLoading, syncFarcasterContacts } = useContactStore();
+  const { identity, setIdentity } = useAuthStore();
   const [showContactCard, setShowContactCard] = useState(false);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
+  const [userFid, setUserFid] = useState<number | null>(null);
+  const [fidError, setFidError] = useState<string | null>(null);
 
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  // Check for user's Farcaster FID
+  useEffect(() => {
+    const checkFarcasterFid = async () => {
+      if (!identity) return;
+
+      // First check if FID is stored in identity
+      if (identity.farcasterFid) {
+        setUserFid(identity.farcasterFid);
+        return;
+      }
+
+      // Try to resolve FID from address
+      try {
+        const fid = await resolveFidFromAddress(identity.address);
+        if (fid) {
+          setUserFid(fid);
+          // Store FID in identity
+          const storage = await getStorage();
+          const updatedIdentity = { ...identity, farcasterFid: fid };
+          await storage.putIdentity(updatedIdentity);
+          // Update auth store
+          setIdentity(updatedIdentity);
+        } else {
+          setFidError('No Farcaster account found. Please sign up at farcaster.xyz');
+        }
+      } catch (error) {
+        console.error('Failed to resolve Farcaster FID:', error);
+        setFidError('Failed to check Farcaster account. Please try again.');
+      }
+    };
+
+    checkFarcasterFid();
+  }, [identity]);
 
   const filteredContacts = contacts.filter(contact =>
     contact.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -27,17 +67,32 @@ export function ContactsPage() {
         <h2 className="text-xl font-bold text-primary-50">Contacts</h2>
         <div className="flex gap-2">
           <button
-            onClick={() => {
-              // For now, use a hardcoded FID for testing. In a real app, this would come from the user's connected Farcaster identity.
-              const hardcodedFid = 194; // Example FID (e.g., @dwr.eth)
-              if (hardcodedFid) {
-                syncFarcasterContacts(hardcodedFid);
-                alert('Syncing Farcaster contacts...');
-              } else {
-                alert('Could not determine your Farcaster FID.');
+            onClick={async () => {
+              if (fidError) {
+                alert(fidError);
+                return;
+              }
+              
+              if (!userFid) {
+                alert('Please sign up for a Farcaster account at farcaster.xyz');
+                return;
+              }
+
+              setShowSyncModal(true);
+              setSyncProgress({ current: 0, total: 0 });
+              
+              try {
+                await syncFarcasterContacts(userFid, (current, total) => {
+                  setSyncProgress({ current, total });
+                });
+              } catch (error) {
+                console.error('Failed to sync Farcaster contacts:', error);
+                alert('Failed to sync Farcaster contacts. Please try again.');
+                setShowSyncModal(false);
               }
             }}
             className="btn-secondary text-sm px-3 py-1"
+            disabled={isLoading || !userFid}
           >
             Sync Farcaster
           </button>
@@ -76,11 +131,24 @@ export function ContactsPage() {
                   setShowContactCard(true);
                 }}
               >
-                <div>
-                  <p className="text-primary-50 font-medium">{contact.name}</p>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-primary-50 font-medium">
+                      {contact.preferredName || contact.name}
+                    </p>
+                    {contact.source === 'farcaster' && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-accent-900/50 text-accent-300 border border-accent-800/50">
+                        FC
+                      </span>
+                    )}
+                    {contact.isInboxOnly && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-primary-800/50 text-primary-400 border border-primary-700/50">
+                        Inbox
+                      </span>
+                    )}
+                  </div>
                   <p className="text-primary-300 text-sm">{contact.address}</p>
                 </div>
-                {/* Add as Contact button will go here for 1:1 conversations */}
               </li>
             ))}
           </ul>
@@ -93,6 +161,13 @@ export function ContactsPage() {
           onClose={() => setShowContactCard(false)}
         />
       )}
+
+      <FarcasterSyncModal
+        isOpen={showSyncModal}
+        current={syncProgress.current}
+        total={syncProgress.total}
+        onClose={() => setShowSyncModal(false)}
+      />
     </div>
   );
 }

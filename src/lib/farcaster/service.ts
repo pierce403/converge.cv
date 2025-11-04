@@ -85,3 +85,68 @@ export function resolveXmtpAddressFromFarcasterUser(user: FarcasterUser | Farcas
   }
   return null;
 }
+
+/**
+ * Resolves a Farcaster FID from an Ethereum address.
+ * @param address Ethereum address
+ * @returns FID number or null if not found
+ */
+export async function resolveFidFromAddress(address: string): Promise<number | null> {
+  try {
+    // Try to fetch Farcaster user by address
+    // The API endpoint should accept Ethereum addresses
+    const user = await fetchFarcasterUserFromAPI(address.toLowerCase());
+    if (user && user.fid) {
+      return user.fid;
+    }
+    return null;
+  } catch (error) {
+    console.error(`Failed to resolve FID from address ${address}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Resolves contact name with priority: ENS > .fcast.id > .base.eth > Farcaster name
+ * @param user Farcaster user object
+ * @param ethAddress Ethereum address
+ * @returns Object with name and preferredName
+ */
+export async function resolveContactName(
+  user: FarcasterUser | FarcasterFollow,
+  ethAddress: string
+): Promise<{ name: string; preferredName?: string }> {
+  const { resolveENSFromAddress, resolveFcastId, resolveBaseEthName } = await import('@/lib/utils/ens');
+  
+  // Priority 1: Try ENS (.eth)
+  const ensName = await resolveENSFromAddress(ethAddress);
+  if (ensName) {
+    return {
+      name: user.display_name || user.username,
+      preferredName: ensName,
+    };
+  }
+
+  // Priority 2: Try .fcast.id
+  const fcastId = await resolveFcastId(ethAddress);
+  if (fcastId) {
+    return {
+      name: user.display_name || user.username,
+      preferredName: fcastId,
+    };
+  }
+
+  // Priority 3: Try .base.eth
+  const baseEthName = await resolveBaseEthName(ethAddress);
+  if (baseEthName) {
+    return {
+      name: user.display_name || user.username,
+      preferredName: baseEthName,
+    };
+  }
+
+  // Fallback: Use Farcaster name
+  return {
+    name: user.display_name || user.username,
+  };
+}

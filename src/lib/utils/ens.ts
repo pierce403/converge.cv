@@ -72,3 +72,63 @@ export async function resolveAddressOrENS(input: string): Promise<string | null>
   return null;
 }
 
+/**
+ * Reverse lookup: Resolve an Ethereum address to its ENS name
+ */
+export async function resolveENSFromAddress(address: string): Promise<string | null> {
+  try {
+    if (!isEthereumAddress(address)) {
+      return null;
+    }
+
+    console.log('[ENS] Reverse resolving ENS name for address:', address);
+    
+    const ensName = await publicClient.getEnsName({ address: address as `0x${string}` });
+    
+    if (ensName) {
+      console.log('[ENS] ✅ Resolved to:', ensName);
+      return ensName;
+    } else {
+      console.warn('[ENS] ⚠️  No ENS name found for address:', address);
+      return null;
+    }
+  } catch (error) {
+    console.error('[ENS] Failed to reverse resolve ENS name:', error);
+    return null;
+  }
+}
+
+/**
+ * Resolve .fcast.id name from address (if API available)
+ * Note: This is a placeholder - actual implementation depends on Farcaster API
+ */
+export async function resolveFcastId(address: string): Promise<string | null> {
+  try {
+    // TODO: Implement .fcast.id resolution when API is available
+    // This might require calling a Farcaster API endpoint
+    console.log('[Fcast.id] Resolving .fcast.id for address:', address);
+    // For now, return null - can be implemented when API is available
+    return null;
+  } catch (error) {
+    console.error('[Fcast.id] Failed to resolve:', error);
+    return null;
+  }
+}
+
+/**
+ * Resolve basename ending in .base.eth from address (if API available)
+ * Note: This is a placeholder - actual implementation depends on Base API
+ */
+export async function resolveBaseEthName(address: string): Promise<string | null> {
+  try {
+    // TODO: Implement .base.eth resolution when API is available
+    // This might require calling a Base name service API
+    console.log('[Base.eth] Resolving .base.eth for address:', address);
+    // For now, return null - can be implemented when API is available
+    return null;
+  } catch (error) {
+    console.error('[Base.eth] Failed to resolve:', error);
+    return null;
+  }
+}
+

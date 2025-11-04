@@ -368,12 +368,15 @@ if (!isRegistered) {
 4. Update the "Current State" section
 5. Note any new dependencies or tools added
 6. Always run the full test suite (`pnpm build` and `pnpm test --run`) before handing work back to the user to keep the deploy pipeline green.
-7. **COMMIT AND PUSH** your changes to keep the knowledge base synced:
+7. **ALWAYS COMMIT AND PUSH ALL CHANGES** - This is mandatory after completing any work:
    ```bash
-   git add AGENTS.md
-   git commit -m "docs: update AGENTS.md with new learnings"
-   git push
+   git add -A
+   git commit -m "feat: description of changes made"
+   git push origin main
    ```
+   - Commit message should follow conventional commits (feat:, fix:, docs:, etc.)
+   - Include AGENTS.md updates in the same commit if applicable
+   - Never leave uncommitted changes when completing work
 
 ### Communication Style
 - Ask clarifying questions if passphrase/security features are needed

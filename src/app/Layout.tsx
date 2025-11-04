@@ -7,6 +7,7 @@ import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
+import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 
@@ -59,6 +60,22 @@ export function Layout() {
           // Persist to storage
           const storage = await getStorage();
           await storage.putConversation(newConversation);
+          
+          // Create inbox-only contact if not already a contact
+          const { useContactStore } = await import('@/lib/stores');
+          const contactStore = useContactStore.getState();
+          if (!contactStore.isContact(message.senderAddress)) {
+            const inboxOnlyContact: Contact = {
+              address: message.senderAddress,
+              name: message.senderAddress, // Default name, user can edit later
+              createdAt: Date.now(),
+              source: 'inbox',
+              isInboxOnly: true,
+              inboxId: message.senderAddress, // Use sender address as inbox ID initially
+            };
+            await contactStore.addContact(inboxOnlyContact);
+            console.log('[Layout] Created inbox-only contact:', message.senderAddress);
+          }
           
           console.log('[Layout] ✅ New conversation created:', newConversation);
           

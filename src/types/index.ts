@@ -69,6 +69,7 @@ export interface Identity {
   displayName?: string; // Optional display name
   inboxId?: string; // XMTP inbox ID
   installationId?: string; // XMTP installation ID for this device
+  farcasterFid?: number; // Farcaster FID for contact syncing
 }
 
 export interface InboxRegistryEntry {
