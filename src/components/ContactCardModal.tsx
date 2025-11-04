@@ -10,7 +10,7 @@ interface ContactCardModalProps {
 
 interface InboxState {
   inboxId: string;
-  accountAddresses: string[];
+  accountAddresses: string[]; // Extracted from identifiers
 }
 
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
@@ -38,9 +38,16 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const states = await utils.inboxStateFromInboxIds([inboxId], 'production');
       const state = states[0];
       if (state) {
+        // Extract Ethereum addresses from identifiers
+        const accountAddresses = (state.identifiers || [])
+          .filter((id) => id.identifierKind.toLowerCase() === 'ethereum')
+          .map((id) => {
+            const identifier = id.identifier;
+            return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
+          });
         setInboxState({
           inboxId: state.inboxId,
-          accountAddresses: state.accountAddresses || [],
+          accountAddresses,
         });
       }
     } catch (error) {
@@ -62,12 +69,13 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           setIsRefreshing(false);
           return;
         }
-        inboxId = await xmtp.getInboxIdFromAddress(contact.address);
-        if (!inboxId) {
+        const resolvedInboxId = await xmtp.getInboxIdFromAddress(contact.address);
+        if (!resolvedInboxId) {
           setRefreshError('No inbox ID found for this address. They may not be registered on XMTP.');
           setIsRefreshing(false);
           return;
         }
+        inboxId = resolvedInboxId;
         // Update contact with inbox ID
         await updateContact(contact.address, { inboxId });
       }
@@ -79,9 +87,16 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const state = states[0];
       
       if (state) {
+        // Extract Ethereum addresses from identifiers
+        const accountAddresses = (state.identifiers || [])
+          .filter((id) => id.identifierKind.toLowerCase() === 'ethereum')
+          .map((id) => {
+            const identifier = id.identifier;
+            return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
+          });
         const newInboxState = {
           inboxId: state.inboxId,
-          accountAddresses: state.accountAddresses || [],
+          accountAddresses,
         };
         setInboxState(newInboxState);
       } else {

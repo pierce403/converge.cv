@@ -109,9 +109,6 @@ export const useContactStore = create<ContactState>()(
               
               const existingContact = get().contacts.find(c => c.address.toLowerCase() === xmtpAddress.toLowerCase());
               
-              // Check if existing contact is inbox-only and should be merged
-              const isInboxOnly = existingContact?.isInboxOnly === true;
-              
               const contact: Contact = {
                 address: xmtpAddress,
                 name: nameResolution.name,
