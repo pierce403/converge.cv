@@ -36,7 +36,6 @@ coverage
 playwright-report
 test-results
 .playwright-mcp
-tests/
 
 # Build
 build
