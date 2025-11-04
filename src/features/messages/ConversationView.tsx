@@ -80,8 +80,12 @@ export function ConversationView() {
 
         {conversation.isGroup ? (
           <>
-            {/* Group Avatar */}
-            <div className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
+            {/* Clickable Group Avatar */}
+            <button
+              onClick={() => navigate(`/chat/${conversation.id}/settings`)}
+              className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
+              title="Group Settings"
+            >
               {conversation.groupImage ? (
                 <img src={conversation.groupImage} alt="Group Avatar" className="w-full h-full rounded-full object-cover" />
               ) : (
@@ -89,7 +93,7 @@ export function ConversationView() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 3 0 10-6 0 3 3 0 006 0z" />
                 </svg>
               )}
-            </div>
+            </button>
             {/* Group Name and Settings Button */}
             <div className="flex-1 min-w-0 text-left flex items-center justify-between">
               <h2 className="font-semibold truncate text-primary-50">
