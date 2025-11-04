@@ -479,7 +479,37 @@ export function OnboardingPage() {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 shadow-lg space-y-4">
               <div>
-                <h3 className="text-lg font-semibold text-primary-50">XMTP inbox</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-lg font-semibold text-primary-50">XMTP inbox</h3>
+                  {walletCandidate && (
+                    <button
+                      onClick={async () => {
+                        if (!walletCandidate) return;
+                        setStatusMessage('Rechecking XMTP inbox…');
+                        setView('probing');
+                        setError(null);
+                        try {
+                          const result = await auth.probeIdentity(
+                            walletCandidate.address,
+                            undefined,
+                            walletCandidate.chainId,
+                            walletCandidate.signMessage
+                          );
+                          setProbeResult(result);
+                          setView('results');
+                        } catch (err) {
+                          console.error('[Onboarding] Retry probe failed:', err);
+                          setError('Failed to recheck inbox. Please try again.');
+                          setView('results');
+                        }
+                      }}
+                      className="text-xs px-2 py-1 rounded border border-primary-700 bg-primary-900/50 text-primary-300 hover:border-primary-600 hover:text-primary-100 transition-colors"
+                      title="Retry inbox check"
+                    >
+                      🔄 Retry
+                    </button>
+                  )}
+                </div>
                 {hasInbox ? (
                   <>
                     <div className="mt-2 text-sm text-primary-200 break-all">
@@ -498,8 +528,17 @@ export function OnboardingPage() {
                     )}
                   </>
                 ) : (
-                  <div className="mt-2 text-sm text-primary-200">
-                    No XMTP inbox is registered for this wallet yet.
+                  <div className="mt-2 space-y-2">
+                    <div className="text-sm text-primary-200">
+                      {probeResult.isRegistered 
+                        ? 'Inbox detected but ID not found. Try refreshing or check console for details.'
+                        : 'No XMTP inbox is registered for this wallet yet.'}
+                    </div>
+                    {probeResult.isRegistered && !probeResult.inboxId && (
+                      <div className="text-xs text-primary-400">
+                        💡 This may be a temporary network issue. Try clicking Retry or refreshing the page.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
