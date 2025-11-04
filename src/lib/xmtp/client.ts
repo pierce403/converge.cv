@@ -305,10 +305,65 @@ export class XmtpClient {
   }
 
   async probeIdentity(identity: XmtpIdentity): Promise<IdentityProbeResult> {
+    const identityAddress = identity.address.toLowerCase();
+    
+    // If we already have a client connected for this identity, use it instead of creating a new one
+    // This avoids OPFS file handle conflicts
+    if (this.client && this.identity?.address.toLowerCase() === identityAddress) {
+      console.log('[XMTP] probeIdentity: Using existing connected client for same identity');
+      
+      try {
+        const isRegistered = await this.client.isRegistered();
+        let inboxState: SafeInboxState | undefined;
+        let inboxId: string | null = null;
+
+        if (isRegistered) {
+          try {
+            inboxState = await this.client.preferences.inboxState(true);
+            console.log('[XMTP] probeIdentity: Fetched inboxState from existing client:', {
+              inboxId: inboxState?.inboxId,
+              installationCount: inboxState?.installations?.length ?? 0,
+            });
+          } catch (error) {
+            console.warn('[XMTP] probeIdentity: Failed to fetch inbox state from existing client:', error);
+          }
+
+          if (inboxState?.inboxId) {
+            inboxId = inboxState.inboxId;
+          } else if (this.client.inboxId) {
+            inboxId = this.client.inboxId;
+          }
+        }
+
+        return {
+          isRegistered,
+          inboxId,
+          installationCount: inboxState?.installations?.length ?? 0,
+          inboxState,
+        };
+      } catch (error) {
+        console.warn('[XMTP] probeIdentity: Failed to probe using existing client, will create new one:', error);
+        // Fall through to create a new client
+      }
+    }
+
+    // If we have a client for a different identity, disconnect it first
+    if (this.client && this.identity?.address.toLowerCase() !== identityAddress) {
+      console.log('[XMTP] probeIdentity: Disconnecting client for different identity to avoid OPFS conflict');
+      try {
+        await this.disconnect();
+        // Longer delay to ensure OPFS locks are fully released
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        console.warn('[XMTP] probeIdentity: Error disconnecting existing client:', error);
+      }
+    }
+
     const signer = await this.createSigner(identity);
     let client: Client | null = null;
 
     try {
+      console.log('[XMTP] probeIdentity: Creating probe client...');
       client = await Client.create(signer, {
         env: 'production',
         loggingLevel: 'warn',
@@ -317,6 +372,7 @@ export class XmtpClient {
         debugEventsEnabled: false,
         disableAutoRegister: true,
       });
+      console.log('[XMTP] probeIdentity: Probe client created successfully');
 
       let isRegistered = false;
       try {
@@ -396,9 +452,15 @@ export class XmtpClient {
     } finally {
       if (client) {
         try {
+          console.log('[XMTP] probeIdentity: Closing probe client...');
           await client.close();
+          console.log('[XMTP] probeIdentity: ✅ Probe client closed');
+          // Longer delay to ensure OPFS locks are fully released before next operation
+          await new Promise(resolve => setTimeout(resolve, 500));
         } catch (error) {
           console.warn('[XMTP] probeIdentity: failed to close probe client:', error);
+          // Even if close fails, wait a bit to let OPFS clean up
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
     }
@@ -433,9 +495,12 @@ export class XmtpClient {
         console.log('[XMTP] Closing client and releasing database locks...');
         await this.client.close();
         console.log('[XMTP] ✅ Client closed successfully');
+        // Wait a bit to ensure OPFS file handles are fully released
+        await new Promise(resolve => setTimeout(resolve, 300));
       } catch (error) {
         console.error('[XMTP] Error closing client:', error);
-        // Continue cleanup even if close fails
+        // Even if close fails, wait a bit for cleanup
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
 
       this.client = null;
