@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { Layout } from './Layout';
 import { OnboardingPage, LockScreen, useAuth } from '@/features/auth';
@@ -13,9 +13,12 @@ import { NewGroupPage } from '@/features/conversations/NewGroupPage';
 import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
 import { JoinGroupPage } from '@/features/conversations/JoinGroupPage';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
+import { getLastRoute, shouldRestoreLastRoute } from '@/lib/utils/route-persistence';
 
 export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     // Only attempt to restore identity when user is not yet authenticated.
@@ -24,6 +27,24 @@ export function AppRouter() {
       checkExistingIdentity();
     }
   }, [isAuthenticated, checkExistingIdentity]);
+
+  // Restore last route after authentication
+  useEffect(() => {
+    if (isAuthenticated && isVaultUnlocked) {
+      const currentPath = location.pathname;
+      
+      // Only restore if we're on the home page
+      if (shouldRestoreLastRoute(currentPath)) {
+        const lastRoute = getLastRoute();
+        
+        // Restore if we have a saved route and it's not the home page
+        if (lastRoute && lastRoute !== '/' && lastRoute !== currentPath) {
+          console.log('[Router] Restoring last route:', lastRoute);
+          navigate(lastRoute, { replace: true });
+        }
+      }
+    }
+  }, [isAuthenticated, isVaultUnlocked, navigate, location.pathname]);
 
   // Not authenticated - show onboarding
   if (!isAuthenticated) {

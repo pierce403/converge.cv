@@ -8,6 +8,7 @@ import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
+import { saveLastRoute } from '@/lib/utils/route-persistence';
 
 
 export function Layout() {
@@ -15,6 +16,11 @@ export function Layout() {
   const { conversations, addConversation } = useConversationStore();
   const { identity } = useAuthStore();
   const { receiveMessage } = useMessages();
+
+  // Save route for persistence across refreshes
+  useEffect(() => {
+    saveLastRoute(location.pathname);
+  }, [location.pathname]);
 
   // Global message listener - handles ALL incoming XMTP messages
   useEffect(() => {

@@ -18,6 +18,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { VaultSecrets, Identity } from '@/types';
 import { useAccount, useSignMessage } from 'wagmi';
+import { clearLastRoute } from '@/lib/utils/route-persistence';
 
 export function useAuth() {
   const authStore = useAuthStore();
@@ -402,6 +403,9 @@ export function useAuth() {
 
       // Lock vault
       lockVault();
+
+      // Clear route persistence
+      clearLastRoute();
 
       // Clear Zustand state
       authStore.logout();
