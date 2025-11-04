@@ -36,17 +36,25 @@ export interface FarcasterFollow {
  */
 export async function fetchFarcasterUserFromAPI(identifier: number | string): Promise<FarcasterUser | null> {
   try {
-    const response = await fetch(`/api/farcaster/user/${identifier}`);
+    const url = `/api/farcaster/user/${encodeURIComponent(String(identifier))}`;
+    console.log(`[Farcaster API] Fetching: ${url}`);
+    const response = await fetch(url);
+    
     if (!response.ok) {
       if (response.status === 404) {
+        console.log(`[Farcaster API] 404 - User not found: ${identifier}`);
         return null;
       }
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`[Farcaster API] HTTP ${response.status} for ${identifier}:`, errorText);
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
     }
+    
     const data = await response.json();
+    console.log(`[Farcaster API] ✅ Successfully fetched user:`, { fid: data.fid, username: data.username });
     return data as FarcasterUser;
   } catch (error) {
-    console.error(`Failed to fetch Farcaster user ${identifier} from API:`, error);
+    console.error(`[Farcaster API] ❌ Failed to fetch Farcaster user ${identifier}:`, error);
     return null;
   }
 }
@@ -88,37 +96,70 @@ export function resolveXmtpAddressFromFarcasterUser(user: FarcasterUser | Farcas
 
 /**
  * Resolves a Farcaster FID from an Ethereum address.
- * Strategy: ETH address -> ENS name -> Farcaster FID
+ * Strategy: Try multiple lookup methods:
+ * 1. ETH address -> ENS name -> Farcaster FID (by ENS username)
+ * 2. ETH address -> Farcaster API (if supports address lookup)
+ * 3. ETH address -> Try as username (if address format matches)
  * @param address Ethereum address
  * @returns FID number or null if not found
  */
 export async function resolveFidFromAddress(address: string): Promise<number | null> {
+  console.log(`[Farcaster] Resolving FID for address: ${address}`);
+  
   try {
     // Step 1: Reverse lookup ENS name from Ethereum address
     const { resolveENSFromAddress } = await import('@/lib/utils/ens');
     const ensName = await resolveENSFromAddress(address);
     
     if (ensName) {
-      console.log(`[Farcaster] Found ENS name for ${address}: ${ensName}`);
-      // Step 2: Use ENS name to lookup Farcaster FID
-      const user = await fetchFarcasterUserFromAPI(ensName);
-      if (user && user.fid) {
-        console.log(`[Farcaster] ✅ Found FID ${user.fid} via ENS name ${ensName}`);
-        return user.fid;
+      console.log(`[Farcaster] ✅ Found ENS name: ${ensName}`);
+      
+      // Try looking up by ENS name (without .eth suffix, as that's typically the username)
+      const ensUsername = ensName.replace(/\.eth$/, '');
+      console.log(`[Farcaster] Trying to lookup Farcaster user by ENS username: ${ensUsername}`);
+      
+      const userByEns = await fetchFarcasterUserFromAPI(ensUsername);
+      if (userByEns && userByEns.fid) {
+        console.log(`[Farcaster] ✅ Found FID ${userByEns.fid} via ENS username ${ensUsername}`);
+        return userByEns.fid;
+      }
+      
+      // Also try with .eth suffix
+      console.log(`[Farcaster] Trying with .eth suffix: ${ensName}`);
+      const userByEnsFull = await fetchFarcasterUserFromAPI(ensName);
+      if (userByEnsFull && userByEnsFull.fid) {
+        console.log(`[Farcaster] ✅ Found FID ${userByEnsFull.fid} via ENS name ${ensName}`);
+        return userByEnsFull.fid;
+      }
+      
+      console.log(`[Farcaster] ⚠️  No Farcaster user found for ENS name ${ensName}`);
+    } else {
+      console.log(`[Farcaster] ⚠️  No ENS name found for address ${address}`);
+    }
+    
+    // Step 2: Try direct address lookup (API might support it)
+    console.log(`[Farcaster] Trying direct address lookup: ${address.toLowerCase()}`);
+    const userByAddress = await fetchFarcasterUserFromAPI(address.toLowerCase());
+    if (userByAddress && userByAddress.fid) {
+      console.log(`[Farcaster] ✅ Found FID ${userByAddress.fid} via direct address lookup`);
+      return userByAddress.fid;
+    }
+    
+    // Step 3: Try without 0x prefix
+    if (address.startsWith('0x')) {
+      const addressWithoutPrefix = address.slice(2).toLowerCase();
+      console.log(`[Farcaster] Trying address without 0x prefix: ${addressWithoutPrefix}`);
+      const userByAddressNoPrefix = await fetchFarcasterUserFromAPI(addressWithoutPrefix);
+      if (userByAddressNoPrefix && userByAddressNoPrefix.fid) {
+        console.log(`[Farcaster] ✅ Found FID ${userByAddressNoPrefix.fid} via address without prefix`);
+        return userByAddressNoPrefix.fid;
       }
     }
     
-    // Fallback: Try direct address lookup (in case API supports it)
-    console.log(`[Farcaster] Trying direct address lookup for ${address}`);
-    const user = await fetchFarcasterUserFromAPI(address.toLowerCase());
-    if (user && user.fid) {
-      console.log(`[Farcaster] ✅ Found FID ${user.fid} via direct address lookup`);
-      return user.fid;
-    }
-    
+    console.log(`[Farcaster] ❌ Could not resolve FID for address ${address} using any method`);
     return null;
   } catch (error) {
-    console.error(`Failed to resolve FID from address ${address}:`, error);
+    console.error(`[Farcaster] ❌ Error resolving FID from address ${address}:`, error);
     return null;
   }
 }
