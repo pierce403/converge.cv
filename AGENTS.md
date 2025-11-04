@@ -331,6 +331,13 @@ if (!isRegistered) {
 
 ---
 
+### Git Learnings
+
+- When filtering `git log` by date, be mindful of timezone differences and the exact interpretation of date strings by Git.
+- `git log --since="YYYY-MM-DD" --until="YYYY-MM-DD"` should work for specific date ranges.
+- `git log -1 --format=%cd` is reliable for getting the exact commit date of the most recent commit.
+- If initial date-based filtering doesn't yield expected results, consider broader searches or direct commit inspection.
+
 ## Instructions for Future Agents
 
 ### Before Starting Work

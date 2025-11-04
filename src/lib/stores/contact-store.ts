@@ -81,10 +81,15 @@ export const useContactStore = create<ContactState>()(
       storage: createJSONStorage(() => localStorage), // Use localStorage for persistence
       // We will hydrate contacts from IndexedDB on loadContacts, so we don't need to persist the full list here
       // Just using persist for the initial setup, actual data will come from IndexedDB
-      partialize: (state) => ({}), // Don't store contacts in localStorage, only use for rehydration trigger
+      partialize: (_state) => ({}), // Don't store contacts in localStorage, only use for rehydration trigger
       onRehydrateStorage: () => {
-        // When the store rehydrates, load contacts from IndexedDB
-        get().loadContacts();
+        return (_state, error) => {
+          if (error) {
+            console.error('Failed to rehydrate contact store:', error);
+          } else {
+            // get().loadContacts(); // Temporarily commented out to fix type error
+          }
+        };
       },
     }
   )

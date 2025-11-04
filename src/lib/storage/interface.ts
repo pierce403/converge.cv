@@ -41,7 +41,7 @@ export interface StorageDriver {
   // Attachments
   putAttachment(attachment: Attachment, data: ArrayBuffer): Promise<void>;
   getAttachment(id: string): Promise<{ attachment: Attachment; data: ArrayBuffer } | undefined>;
-  deleteAttachment(id: Promise<void>;
+  deleteAttachment(id: string): Promise<void>;
 
   // Identity
   putIdentity(identity: Identity): Promise<void>;

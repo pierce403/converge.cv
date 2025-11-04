@@ -2,7 +2,7 @@
  * Messages hook for managing message operations
  */
 
-import { useCallback } 'react';
+import { useCallback } from 'react';
 import { useMessageStore, useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';

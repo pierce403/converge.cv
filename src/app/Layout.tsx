@@ -8,7 +8,7 @@ import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
-import { AddContactButton } from '@/features/contacts/AddContactButton';
+
 
 export function Layout() {
   const location = useLocation();
@@ -99,7 +99,6 @@ export function Layout() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </Link>
-          <AddContactButton />
         </div>
       </header>
 

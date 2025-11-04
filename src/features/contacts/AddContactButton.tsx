@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useContactStore, Contact } from '@/lib/stores';
 import { getContactInfo } from '@/lib/default-contacts';
 
@@ -9,10 +8,8 @@ interface AddContactButtonProps {
 export function AddContactButton({ address }: AddContactButtonProps) {
   const addContact = useContactStore((state) => state.addContact);
   const isContact = useContactStore((state) => state.isContact);
-  const getContactByAddress = useContactStore((state) => state.getContactByAddress);
 
   const contactExists = isContact(address);
-  const contact = getContactByAddress(address);
 
   const handleAddContact = async () => {
     if (!contactExists) {
