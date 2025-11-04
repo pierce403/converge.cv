@@ -5,6 +5,9 @@
 import { create } from 'zustand';
 import type { Message } from '@/types';
 
+const sortMessagesBySentAt = (messages: Message[]): Message[] =>
+  [...messages].sort((a, b) => a.sentAt - b.sentAt);
+
 interface MessageState {
   // State - messages grouped by conversation ID
   messagesByConversation: Record<string, Message[]>;
@@ -32,17 +35,18 @@ export const useMessageStore = create<MessageState>((set) => ({
     set((state) => ({
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: messages,
+        [conversationId]: sortMessagesBySentAt(messages),
       },
     })),
 
   addMessage: (conversationId, message) =>
     set((state) => {
       const existing = state.messagesByConversation[conversationId] || [];
+      const updated = sortMessagesBySentAt([...existing, message]);
       return {
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: [...existing, message],
+          [conversationId]: updated,
         },
       };
     }),

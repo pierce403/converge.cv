@@ -99,7 +99,8 @@ export class DexieDriver implements StorageDriver {
       );
     }
 
-    return await collection.toArray();
+    const messages = await collection.toArray();
+    return messages.reverse();
   }
 
   async deleteConversation(id: string): Promise<void> {
@@ -153,7 +154,8 @@ export class DexieDriver implements StorageDriver {
       collection = collection.offset(opts.offset);
     }
 
-    return await collection.toArray();
+    const messages = await collection.toArray();
+    return messages.reverse();
   }
 
   async deleteMessage(id: string): Promise<void> {
