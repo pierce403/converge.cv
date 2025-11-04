@@ -74,4 +74,3 @@ export interface StorageDriver {
   vacuum(): Promise<void>;
   getStorageSize(): Promise<number>; // bytes
 }
-
