@@ -7,6 +7,7 @@ import {
 } from '@/lib/stores';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { WebWorkersPanel } from './WebWorkersPanel';
+import buildInfo from '../../build-info.json'; // Import build info
 
 export function DebugPage() {
   const consoleEntries = useDebugStore((state) => state.consoleEntries);
@@ -64,6 +65,40 @@ export function DebugPage() {
             </button>
           </div>
         </header>
+
+        {/* Build Info */}
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-primary-200">Build Info</h2>
+            <dl className="mt-2 space-y-1 text-sm text-primary-100">
+              <div className="flex items-center justify-between">
+                <dt>Version</dt>
+                <dd>{buildInfo.version}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt>Build Time</dt>
+                <dd>{new Date(buildInfo.buildTime).toLocaleString()}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt>Commit</dt>
+                <dd>
+                  <a
+                    href={`https://github.com/pierce403/converge.cv/commit/${buildInfo.gitHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent-300 hover:underline"
+                  >
+                    {buildInfo.gitHash}
+                  </a>
+                </dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt>Branch</dt>
+                <dd>{buildInfo.gitBranch}</dd>
+              </div>
+            </dl>
+          </article>
+        </section>
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">
