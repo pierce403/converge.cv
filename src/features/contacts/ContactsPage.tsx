@@ -15,6 +15,7 @@ export function ContactsPage() {
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0, status: '' });
+  const [syncLog, setSyncLog] = useState<string[]>([]);
   const [userFid, setUserFid] = useState<number | null>(null);
   const [isResolvingFid, setIsResolvingFid] = useState(false);
   const [showFidInput, setShowFidInput] = useState(false);
@@ -82,10 +83,14 @@ export function ContactsPage() {
 
               setShowSyncModal(true);
               setSyncProgress({ current: 0, total: 0, status: 'Starting sync...' });
+              setSyncLog(['Starting Farcaster contact sync...']);
               
               try {
                 await syncFarcasterContacts(userFid, (current, total, status) => {
                   setSyncProgress({ current, total, status: status || '' });
+                  if (status) {
+                    setSyncLog((prev) => [...prev, status]);
+                  }
                 });
               } catch (error) {
                 console.error('Failed to sync Farcaster contacts:', error);
@@ -170,7 +175,11 @@ export function ContactsPage() {
         current={syncProgress.current}
         total={syncProgress.total}
         status={syncProgress.status}
-        onClose={() => setShowSyncModal(false)}
+        log={syncLog}
+        onClose={() => {
+          setShowSyncModal(false);
+          setSyncLog([]);
+        }}
       />
 
       {/* Manual FID Input Modal */}
@@ -218,8 +227,12 @@ export function ContactsPage() {
                     // Trigger sync
                     setShowSyncModal(true);
                     setSyncProgress({ current: 0, total: 0, status: 'Starting sync...' });
+                    setSyncLog(['Starting Farcaster contact sync...']);
                     syncFarcasterContacts(fid, (current, total, status) => {
                       setSyncProgress({ current, total, status: status || '' });
+                      if (status) {
+                        setSyncLog((prev) => [...prev, status]);
+                      }
                     }).catch((error) => {
                       console.error('Failed to sync Farcaster contacts:', error);
                       alert('Failed to sync Farcaster contacts. Please try again.');
@@ -261,9 +274,13 @@ export function ContactsPage() {
                   // Trigger sync
                   setShowSyncModal(true);
                   setSyncProgress({ current: 0, total: 0, status: 'Starting sync...' });
+                  setSyncLog(['Starting Farcaster contact sync...']);
                   try {
                     await syncFarcasterContacts(fid, (current, total, status) => {
                       setSyncProgress({ current, total, status: status || '' });
+                      if (status) {
+                        setSyncLog((prev) => [...prev, status]);
+                      }
                     });
                   } catch (error) {
                     console.error('Failed to sync Farcaster contacts:', error);
