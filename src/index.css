@@ -68,11 +68,14 @@
 /* PWA safe area support for iOS - only bottom padding for navigation bar */
 body {
   padding-bottom: env(safe-area-inset-bottom);
+  overflow: hidden;
+  height: 100vh;
 }
 
 #root {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
