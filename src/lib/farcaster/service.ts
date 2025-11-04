@@ -88,17 +88,34 @@ export function resolveXmtpAddressFromFarcasterUser(user: FarcasterUser | Farcas
 
 /**
  * Resolves a Farcaster FID from an Ethereum address.
+ * Strategy: ETH address -> ENS name -> Farcaster FID
  * @param address Ethereum address
  * @returns FID number or null if not found
  */
 export async function resolveFidFromAddress(address: string): Promise<number | null> {
   try {
-    // Try to fetch Farcaster user by address
-    // The API endpoint should accept Ethereum addresses
+    // Step 1: Reverse lookup ENS name from Ethereum address
+    const { resolveENSFromAddress } = await import('@/lib/utils/ens');
+    const ensName = await resolveENSFromAddress(address);
+    
+    if (ensName) {
+      console.log(`[Farcaster] Found ENS name for ${address}: ${ensName}`);
+      // Step 2: Use ENS name to lookup Farcaster FID
+      const user = await fetchFarcasterUserFromAPI(ensName);
+      if (user && user.fid) {
+        console.log(`[Farcaster] ✅ Found FID ${user.fid} via ENS name ${ensName}`);
+        return user.fid;
+      }
+    }
+    
+    // Fallback: Try direct address lookup (in case API supports it)
+    console.log(`[Farcaster] Trying direct address lookup for ${address}`);
     const user = await fetchFarcasterUserFromAPI(address.toLowerCase());
     if (user && user.fid) {
+      console.log(`[Farcaster] ✅ Found FID ${user.fid} via direct address lookup`);
       return user.fid;
     }
+    
     return null;
   } catch (error) {
     console.error(`Failed to resolve FID from address ${address}:`, error);
