@@ -12,6 +12,8 @@ import { useAuth } from './useAuth';
 import { useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
 import type { IdentityProbeResult } from '@/lib/xmtp/client';
 import type { InboxRegistryEntry } from '@/types';
+import { resetXmtpClient } from '@/lib/xmtp/client';
+import { useWalletConnection } from '@/lib/wagmi';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
@@ -164,6 +166,7 @@ export function OnboardingPage() {
   const navigate = useNavigate();
   const auth = useAuth();
   const { signMessageAsync } = useSignMessage();
+  const { disconnectWallet } = useWalletConnection();
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
@@ -186,10 +189,35 @@ export function OnboardingPage() {
     [registryEntries]
   );
 
-  const resetWalletFlow = () => {
+  const resetWalletFlow = async () => {
+    console.log('[Onboarding] Resetting wallet flow - disconnecting XMTP and wallet...');
+    
+    // Disconnect XMTP client first to release OPFS locks
+    try {
+      await resetXmtpClient();
+      console.log('[Onboarding] ✅ XMTP client disconnected');
+      // Wait for OPFS locks to be fully released
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      console.warn('[Onboarding] Error disconnecting XMTP client:', error);
+      // Still wait even if disconnect failed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Disconnect wallet
+    try {
+      await disconnectWallet();
+      console.log('[Onboarding] ✅ Wallet disconnected');
+    } catch (error) {
+      console.warn('[Onboarding] Error disconnecting wallet:', error);
+    }
+
+    // Clear local state
     setWalletCandidate(null);
     setProbeResult(null);
     setError(null);
+    
+    console.log('[Onboarding] ✅ Wallet flow reset complete');
   };
 
   const handleCreateGeneratedIdentity = async () => {
@@ -222,8 +250,8 @@ export function OnboardingPage() {
     }
   };
 
-  const startConnectFlow = () => {
-    resetWalletFlow();
+  const startConnectFlow = async () => {
+    await resetWalletFlow();
     setView('wallet');
   };
 
@@ -450,8 +478,8 @@ export function OnboardingPage() {
               </div>
               <div className="flex flex-col gap-2 text-right">
                 <button
-                  onClick={() => {
-                    resetWalletFlow();
+                  onClick={async () => {
+                    await resetWalletFlow();
                     setView('wallet');
                   }}
                   className="self-end rounded-md border border-primary-700 bg-primary-900 px-4 py-2 text-sm font-medium text-primary-200 transition hover:border-primary-500 hover:text-primary-100"
@@ -459,8 +487,8 @@ export function OnboardingPage() {
                   Switch identity
                 </button>
                 <button
-                  onClick={() => {
-                    resetWalletFlow();
+                  onClick={async () => {
+                    await resetWalletFlow();
                     setView('landing');
                   }}
                   className="self-end text-xs text-primary-300 hover:text-primary-100"
