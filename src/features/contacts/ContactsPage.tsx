@@ -20,6 +20,17 @@ export function ContactsPage() {
   const [isResolvingFid, setIsResolvingFid] = useState(false);
   const [showFidInput, setShowFidInput] = useState(false);
   const [manualFid, setManualFid] = useState<string>('');
+  const [fidResolutionError, setFidResolutionError] = useState<{
+    type: 'no_ens' | 'no_farcaster' | 'api_error';
+    message: string;
+    ensName?: string;
+  } | null>(null);
+  const [farcasterProfile, setFarcasterProfile] = useState<{
+    username: string;
+    displayName: string;
+    fid: number;
+    pfpUrl?: string;
+  } | null>(null);
 
   useEffect(() => {
     loadContacts();
@@ -38,10 +49,44 @@ export function ContactsPage() {
 
       // Try to resolve FID from address
       setIsResolvingFid(true);
+      setFidResolutionError(null);
       try {
+        // First check for ENS name
+        const { resolveENSFromAddress } = await import('@/lib/utils/ens');
+        const ensName = await resolveENSFromAddress(identity.address);
+        
+        if (!ensName) {
+          // No ENS name found
+          setFidResolutionError({
+            type: 'no_ens',
+            message: 'No ENS name found for your address. Please set up an ENS name (e.g., yourname.eth) to enable automatic Farcaster sync.',
+          });
+          setIsResolvingFid(false);
+          return;
+        }
+        
+        // Try to resolve FID using the ENS name
         const fid = await resolveFidFromAddress(identity.address);
         if (fid) {
           setUserFid(fid);
+          setFidResolutionError(null);
+          
+          // Fetch profile to show preview
+          try {
+            const { fetchFarcasterUserFromAPI } = await import('@/lib/farcaster/service');
+            const profile = await fetchFarcasterUserFromAPI(fid);
+            if (profile) {
+              setFarcasterProfile({
+                username: profile.username,
+                displayName: profile.display_name || profile.username,
+                fid: profile.fid,
+                pfpUrl: profile.pfp_url,
+              });
+            }
+          } catch (error) {
+            console.error('Failed to fetch Farcaster profile:', error);
+          }
+          
           // Store FID in identity
           const storage = await getStorage();
           const updatedIdentity = { ...identity, farcasterFid: fid };
@@ -49,12 +94,48 @@ export function ContactsPage() {
           // Update auth store
           setIdentity(updatedIdentity);
         } else {
-          // Don't set error - allow manual entry
-          console.log('No Farcaster FID found for address, allowing manual entry');
+          // Try to fetch profile by ENS username to show what could be synced
+          try {
+            const { fetchFarcasterUserFromAPI } = await import('@/lib/farcaster/service');
+            const ensUsername = ensName.replace(/\.eth$/, '');
+            const profile = await fetchFarcasterUserFromAPI(ensUsername);
+            if (profile) {
+              setFarcasterProfile({
+                username: profile.username,
+                displayName: profile.display_name || profile.username,
+                fid: profile.fid,
+                pfpUrl: profile.pfp_url,
+              });
+              // Found profile! Use the FID
+              setUserFid(profile.fid);
+              const storage = await getStorage();
+              const updatedIdentity = { ...identity, farcasterFid: profile.fid };
+              await storage.putIdentity(updatedIdentity);
+              setIdentity(updatedIdentity);
+              setFidResolutionError(null);
+            } else {
+              // ENS exists but no Farcaster user found
+              setFidResolutionError({
+                type: 'no_farcaster',
+                message: `No Farcaster account found for ${ensName}. Make sure your Farcaster account is linked to this ENS name.`,
+                ensName,
+              });
+            }
+          } catch (error) {
+            // ENS exists but no Farcaster user found
+            setFidResolutionError({
+              type: 'no_farcaster',
+              message: `No Farcaster account found for ${ensName}. Make sure your Farcaster account is linked to this ENS name.`,
+              ensName,
+            });
+          }
         }
       } catch (error) {
         console.error('Failed to resolve Farcaster FID:', error);
-        // Don't set error - allow manual entry
+        setFidResolutionError({
+          type: 'api_error',
+          message: `Failed to check Farcaster account: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
       } finally {
         setIsResolvingFid(false);
       }
@@ -73,37 +154,75 @@ export function ContactsPage() {
       <header className="bg-primary-950/80 border-b border-primary-800/60 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-lg">
         <h2 className="text-xl font-bold text-primary-50">Contacts</h2>
         <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              // If no FID, show input dialog
-              if (!userFid) {
-                setShowFidInput(true);
-                return;
-              }
-
-              setShowSyncModal(true);
-              setSyncProgress({ current: 0, total: 0, status: 'Starting sync...' });
-              setSyncLog(['Starting Farcaster contact sync...']);
-              
-              try {
-                await syncFarcasterContacts(userFid, (current, total, status) => {
-                  setSyncProgress({ current, total, status: status || '' });
-                  if (status) {
-                    setSyncLog((prev) => [...prev, status]);
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={async () => {
+                // If no FID, show helpful message or manual input
+                if (!userFid) {
+                  if (fidResolutionError?.type === 'no_ens') {
+                    alert('Please set up an ENS name for your address to enable automatic Farcaster sync. Visit ens.domains to register your name.');
+                    return;
                   }
-                });
-              } catch (error) {
-                console.error('Failed to sync Farcaster contacts:', error);
-                alert('Failed to sync Farcaster contacts. Please try again.');
-                setShowSyncModal(false);
-              }
-            }}
-            className="btn-secondary text-sm px-3 py-1"
-            disabled={isLoading || isResolvingFid}
-            title={isResolvingFid ? 'Resolving Farcaster FID...' : userFid ? 'Sync your Farcaster contacts' : 'Enter Farcaster FID to sync contacts'}
-          >
-            {isResolvingFid ? 'Resolving...' : 'Sync Farcaster'}
-          </button>
+                  if (fidResolutionError?.type === 'no_farcaster') {
+                    // Show manual input with helpful context
+                    setShowFidInput(true);
+                    return;
+                  }
+                  // Still resolving or other error - show manual input
+                  setShowFidInput(true);
+                  return;
+                }
+
+                setShowSyncModal(true);
+                setSyncProgress({ current: 0, total: 0, status: 'Starting sync...' });
+                setSyncLog(['Starting Farcaster contact sync...']);
+                
+                try {
+                  await syncFarcasterContacts(userFid, (current, total, status) => {
+                    setSyncProgress({ current, total, status: status || '' });
+                    if (status) {
+                      setSyncLog((prev) => [...prev, status]);
+                    }
+                  });
+                } catch (error) {
+                  console.error('Failed to sync Farcaster contacts:', error);
+                  alert('Failed to sync Farcaster contacts. Please try again.');
+                  setShowSyncModal(false);
+                }
+              }}
+              className="btn-secondary text-sm px-3 py-1"
+              disabled={isLoading || isResolvingFid}
+              title={isResolvingFid ? 'Resolving Farcaster FID...' : userFid ? 'Sync your Farcaster contacts' : fidResolutionError?.type === 'no_ens' ? 'ENS name required' : 'Enter Farcaster FID to sync contacts'}
+            >
+              {isResolvingFid ? 'Resolving...' : 'Sync Farcaster'}
+            </button>
+            {farcasterProfile && (
+              <div className="flex items-center gap-2 p-2 bg-primary-800/30 rounded border border-primary-700/50 max-w-xs">
+                {farcasterProfile.pfpUrl && (
+                  <img 
+                    src={farcasterProfile.pfpUrl} 
+                    alt={farcasterProfile.displayName}
+                    className="w-6 h-6 rounded-full"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-primary-200 truncate">
+                    {farcasterProfile.displayName}
+                  </p>
+                  <p className="text-xs text-primary-400 truncate">
+                    @{farcasterProfile.username}
+                  </p>
+                </div>
+              </div>
+            )}
+            {fidResolutionError && (
+              <p className="text-xs text-primary-400 max-w-xs text-right">
+                {fidResolutionError.type === 'no_ens' && '💡 Get an ENS name at ens.domains'}
+                {fidResolutionError.type === 'no_farcaster' && `💡 Link ${fidResolutionError.ensName} to your Farcaster account`}
+                {fidResolutionError.type === 'api_error' && '⚠️ Lookup failed, try manual entry'}
+              </p>
+            )}
+          </div>
           <Link
             to="/new-group"
             className="btn-primary text-sm px-3 py-1"
@@ -199,9 +318,27 @@ export function ContactsPage() {
             </button>
 
             <h2 className="text-2xl font-bold mb-4">Enter Farcaster FID</h2>
-            <p className="text-primary-300 mb-4 text-sm">
-              Your Farcaster FID is a number. You can find it on your Farcaster profile or by visiting farcaster.xyz
-            </p>
+            {fidResolutionError?.type === 'no_farcaster' && fidResolutionError.ensName ? (
+              <div className="mb-4 p-3 bg-primary-800/50 rounded-lg border border-primary-700/50">
+                <p className="text-primary-200 text-sm mb-2">
+                  We found your ENS name: <strong className="text-accent-400">{fidResolutionError.ensName}</strong>
+                </p>
+                <p className="text-primary-300 text-xs mb-2">
+                  However, no Farcaster account was found linked to this ENS name.
+                </p>
+                <p className="text-primary-300 text-xs">
+                  You can either:
+                </p>
+                <ul className="text-primary-300 text-xs list-disc list-inside mt-2 space-y-1">
+                  <li>Link your Farcaster account to {fidResolutionError.ensName} on farcaster.xyz</li>
+                  <li>Enter your Farcaster FID manually below</li>
+                </ul>
+              </div>
+            ) : (
+              <p className="text-primary-300 mb-4 text-sm">
+                Your Farcaster FID is a number. You can find it on your Farcaster profile or by visiting farcaster.xyz
+              </p>
+            )}
 
             <input
               type="number"
