@@ -30,17 +30,25 @@ export function AppRouter() {
     }
   }, [isAuthenticated, checkExistingIdentity]);
 
-  // Still checking authentication - show nothing to preserve URL
-  if (isCheckingAuth) {
-    return null;
-  }
-
-  // Not authenticated - show onboarding
+  // Not authenticated - checking or onboarding
   if (!isAuthenticated) {
     return (
       <Routes>
         <Route path="/onboarding" element={<OnboardingPage />} />
-        <Route path="*" element={<Navigate to="/onboarding" replace />} />
+        {isCheckingAuth ? (
+          // While checking auth, render all app routes but show loading screen
+          // This preserves the URL so it doesn't redirect
+          <Route path="*" element={
+            <div className="flex items-center justify-center h-screen">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500 mx-auto mb-4"></div>
+                <p className="text-primary-300">Loading...</p>
+              </div>
+            </div>
+          } />
+        ) : (
+          <Route path="*" element={<Navigate to="/onboarding" replace />} />
+        )}
       </Routes>
     );
   }

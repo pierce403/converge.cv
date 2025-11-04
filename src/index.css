@@ -65,8 +65,14 @@
   }
 }
 
-/* PWA safe area support for iOS */
+/* PWA safe area support for iOS - only bottom padding for navigation bar */
 body {
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
