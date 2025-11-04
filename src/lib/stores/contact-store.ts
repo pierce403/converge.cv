@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getStorage } from '@/lib/storage';
+import { fetchFarcasterUserFollowingFromAPI, resolveXmtpAddressFromFarcasterUser } from '@/lib/farcaster/service';
 
 export interface Contact {
   address: string;
@@ -9,6 +10,8 @@ export interface Contact {
   description?: string;
   isBlocked?: boolean;
   createdAt: number;
+  preferredName?: string; // New field
+  notes?: string; // New field
 }
 
 interface ContactState {
@@ -20,6 +23,7 @@ interface ContactState {
   loadContacts: () => Promise<void>;
   isContact: (address: string) => boolean;
   getContactByAddress: (address: string) => Contact | undefined;
+  syncFarcasterContacts: (fid: number) => Promise<void>; // New action
 }
 
 export const useContactStore = create<ContactState>()(
@@ -74,6 +78,52 @@ export const useContactStore = create<ContactState>()(
 
       getContactByAddress: (address) => {
         return get().contacts.find(c => c.address.toLowerCase() === address.toLowerCase());
+      },
+
+      syncFarcasterContacts: async (fid: number) => {
+        set({ isLoading: true });
+        try {
+          const storage = await getStorage();
+          const followedUsers = await fetchFarcasterUserFollowingFromAPI(fid);
+          const newContacts: Contact[] = [];
+
+          for (const user of followedUsers) {
+            const xmtpAddress = resolveXmtpAddressFromFarcasterUser(user);
+            if (xmtpAddress) {
+              const existingContact = get().contacts.find(c => c.address.toLowerCase() === xmtpAddress.toLowerCase());
+              const contact: Contact = {
+                address: xmtpAddress,
+                name: user.display_name || user.username,
+                preferredName: user.display_name,
+                avatar: user.pfp_url,
+                createdAt: Date.now(),
+              };
+
+              if (existingContact) {
+                // Update existing contact
+                await storage.updateContact(xmtpAddress, contact);
+                set((state) => ({
+                  contacts: state.contacts.map(c =>
+                    c.address.toLowerCase() === xmtpAddress.toLowerCase() ? { ...c, ...contact } : c
+                  ),
+                }));
+              } else {
+                // Add new contact
+                await storage.putContact(contact);
+                newContacts.push(contact);
+              }
+            }
+          }
+
+          if (newContacts.length > 0) {
+            set((state) => ({ contacts: [...state.contacts, ...newContacts] }));
+          }
+          console.log(`Synced ${newContacts.length} new Farcaster contacts.`);
+        } catch (error) {
+          console.error('Failed to sync Farcaster contacts:', error);
+        } finally {
+          set({ isLoading: false });
+        }
       },
     }),
     {
