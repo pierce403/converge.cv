@@ -32,7 +32,7 @@ interface ContactState {
   loadContacts: () => Promise<void>;
   isContact: (address: string) => boolean;
   getContactByAddress: (address: string) => Contact | undefined;
-  syncFarcasterContacts: (fid: number, onProgress?: (current: number, total: number) => void) => Promise<void>;
+  syncFarcasterContacts: (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => Promise<void>;
 }
 
 export const useContactStore = create<ContactState>()(
@@ -89,64 +89,90 @@ export const useContactStore = create<ContactState>()(
         return get().contacts.find(c => c.address.toLowerCase() === address.toLowerCase());
       },
 
-      syncFarcasterContacts: async (fid: number, onProgress?: (current: number, total: number) => void) => {
+      syncFarcasterContacts: async (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => {
         set({ isLoading: true });
         try {
+          onProgress?.(0, 0, 'Fetching your Farcaster following list...');
           const storage = await getStorage();
           const followedUsers = await fetchFarcasterUserFollowingFromAPI(fid);
           const total = followedUsers.length;
+          
+          onProgress?.(0, total, `Found ${total} users you follow. Processing contacts...`);
+          
           let current = 0;
           const newContacts: Contact[] = [];
+          const updatedContacts: Contact[] = [];
+          const skippedContacts: number[] = [];
 
-          for (const user of followedUsers) {
+          for (let i = 0; i < followedUsers.length; i++) {
+            const user = followedUsers[i];
+            const userName = user.display_name || user.username || `FID ${user.fid}`;
+            
+            onProgress?.(current, total, `Processing ${userName} (${i + 1}/${total})...`);
+            
             const xmtpAddress = resolveXmtpAddressFromFarcasterUser(user);
-            if (xmtpAddress) {
-              current++;
-              onProgress?.(current, total);
-
-              // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
-              const nameResolution = await resolveContactName(user, xmtpAddress);
-              
-              const existingContact = get().contacts.find(c => c.address.toLowerCase() === xmtpAddress.toLowerCase());
-              
-              const contact: Contact = {
-                address: xmtpAddress,
-                name: nameResolution.name,
-                preferredName: nameResolution.preferredName,
-                // Only use Farcaster avatar if no existing avatar
-                avatar: existingContact?.avatar || user.pfp_url,
-                createdAt: existingContact?.createdAt || Date.now(),
-                source: 'farcaster', // Upgrade from inbox-only to farcaster
-                farcasterUsername: user.username,
-                farcasterFid: user.fid,
-                // Keep existing inbox ID if present
-                inboxId: existingContact?.inboxId,
-                isInboxOnly: false, // No longer inbox-only after merge
-              };
-
-              if (existingContact) {
-                // Update existing contact (merge with Farcaster data)
-                await storage.updateContact(xmtpAddress, contact);
-                set((state) => ({
-                  contacts: state.contacts.map(c =>
-                    c.address.toLowerCase() === xmtpAddress.toLowerCase() ? { ...c, ...contact } : c
-                  ),
-                }));
-              } else {
-                // Add new contact
-                await storage.putContact(contact);
-                newContacts.push(contact);
-              }
+            if (!xmtpAddress) {
+              skippedContacts.push(user.fid);
+              onProgress?.(current, total, `Skipping ${userName} - no verified Ethereum address`);
+              continue;
             }
+
+            current++;
+            onProgress?.(current, total, `Resolving names for ${userName}...`);
+
+            // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
+            const nameResolution = await resolveContactName(user, xmtpAddress);
+            
+            const existingContact = get().contacts.find(c => c.address.toLowerCase() === xmtpAddress.toLowerCase());
+            
+            onProgress?.(current, total, existingContact 
+              ? `Updating existing contact: ${nameResolution.preferredName || nameResolution.name}...`
+              : `Adding new contact: ${nameResolution.preferredName || nameResolution.name}...`);
+            
+            const contact: Contact = {
+              address: xmtpAddress,
+              name: nameResolution.name,
+              preferredName: nameResolution.preferredName,
+              // Only use Farcaster avatar if no existing avatar
+              avatar: existingContact?.avatar || user.pfp_url,
+              createdAt: existingContact?.createdAt || Date.now(),
+              source: 'farcaster', // Upgrade from inbox-only to farcaster
+              farcasterUsername: user.username,
+              farcasterFid: user.fid,
+              // Keep existing inbox ID if present
+              inboxId: existingContact?.inboxId,
+              isInboxOnly: false, // No longer inbox-only after merge
+            };
+
+            if (existingContact) {
+              // Update existing contact (merge with Farcaster data)
+              await storage.updateContact(xmtpAddress, contact);
+              set((state) => ({
+                contacts: state.contacts.map(c =>
+                  c.address.toLowerCase() === xmtpAddress.toLowerCase() ? { ...c, ...contact } : c
+                ),
+              }));
+              updatedContacts.push(contact);
+            } else {
+              // Add new contact
+              await storage.putContact(contact);
+              newContacts.push(contact);
+            }
+            
+            onProgress?.(current, total, `Saved: ${nameResolution.preferredName || nameResolution.name}`);
           }
 
           if (newContacts.length > 0) {
             set((state) => ({ contacts: [...state.contacts, ...newContacts] }));
           }
+          
+          const summary = `Sync complete! ${newContacts.length} new, ${updatedContacts.length} updated, ${skippedContacts.length} skipped`;
           console.log(`Synced ${newContacts.length} new Farcaster contacts.`);
-          onProgress?.(total, total);
+          onProgress?.(total, total, summary);
         } catch (error) {
           console.error('Failed to sync Farcaster contacts:', error);
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          onProgress?.(0, 0, `Error: ${errorMsg}`);
         } finally {
           set({ isLoading: false });
         }

@@ -4,10 +4,11 @@ interface FarcasterSyncModalProps {
   isOpen: boolean;
   current: number;
   total: number;
+  status?: string;
   onClose: () => void;
 }
 
-export function FarcasterSyncModal({ isOpen, current, total, onClose }: FarcasterSyncModalProps) {
+export function FarcasterSyncModal({ isOpen, current, total, status, onClose }: FarcasterSyncModalProps) {
   const [isClosing, setIsClosing] = useState(false);
 
   useEffect(() => {
@@ -37,22 +38,32 @@ export function FarcasterSyncModal({ isOpen, current, total, onClose }: Farcaste
           
           {/* Progress Text */}
           <h3 className="text-xl font-bold mb-2">Syncing Farcaster Contacts</h3>
+          
+          {/* Status Message */}
+          {status && (
+            <p className="text-primary-200 text-sm mb-2 font-medium">{status}</p>
+          )}
+          
           {total > 0 ? (
             <>
-              <p className="text-primary-300 mb-4">
-                Syncing {current} of {total} contacts...
+              <p className="text-primary-300 mb-2">
+                Progress: {current} of {total} contacts processed
               </p>
               
               {/* Progress Bar */}
-              <div className="w-full bg-primary-800 rounded-full h-2 mb-4">
+              <div className="w-full bg-primary-800 rounded-full h-3 mb-4">
                 <div
-                  className="bg-accent-500 h-2 rounded-full transition-all duration-300"
+                  className="bg-accent-500 h-3 rounded-full transition-all duration-300"
                   style={{ width: `${progress}%` }}
                 ></div>
               </div>
+              
+              <p className="text-primary-400 text-xs mb-4">
+                {progress.toFixed(1)}% complete
+              </p>
             </>
           ) : (
-            <p className="text-primary-300 mb-4">Starting sync...</p>
+            <p className="text-primary-300 mb-4">Initializing sync...</p>
           )}
 
           {/* Dismiss Button (sync continues in background) */}
