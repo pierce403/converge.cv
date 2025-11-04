@@ -12,7 +12,10 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const { identity } = useAuthStore();
-  const isSent = message.sender === identity?.address;
+  const identityAddress = identity?.address?.toLowerCase();
+  const isSent =
+    identityAddress !== undefined &&
+    message.sender?.toLowerCase() === identityAddress;
 
   return (
     <div className={`flex mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}>

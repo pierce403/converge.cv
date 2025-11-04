@@ -93,9 +93,6 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
         </button>
       </div>
 
-      <p className="text-xs text-primary-300 mt-2">
-        Press Enter to send, Shift+Enter for new line
-      </p>
     </div>
   );
 }
