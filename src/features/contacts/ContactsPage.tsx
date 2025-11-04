@@ -16,7 +16,9 @@ export function ContactsPage() {
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
   const [userFid, setUserFid] = useState<number | null>(null);
-  const [fidError, setFidError] = useState<string | null>(null);
+  const [isResolvingFid, setIsResolvingFid] = useState(false);
+  const [showFidInput, setShowFidInput] = useState(false);
+  const [manualFid, setManualFid] = useState<string>('');
 
   useEffect(() => {
     loadContacts();
@@ -34,6 +36,7 @@ export function ContactsPage() {
       }
 
       // Try to resolve FID from address
+      setIsResolvingFid(true);
       try {
         const fid = await resolveFidFromAddress(identity.address);
         if (fid) {
@@ -45,11 +48,14 @@ export function ContactsPage() {
           // Update auth store
           setIdentity(updatedIdentity);
         } else {
-          setFidError('No Farcaster account found. Please sign up at farcaster.xyz');
+          // Don't set error - allow manual entry
+          console.log('No Farcaster FID found for address, allowing manual entry');
         }
       } catch (error) {
         console.error('Failed to resolve Farcaster FID:', error);
-        setFidError('Failed to check Farcaster account. Please try again.');
+        // Don't set error - allow manual entry
+      } finally {
+        setIsResolvingFid(false);
       }
     };
 
@@ -68,13 +74,9 @@ export function ContactsPage() {
         <div className="flex gap-2">
           <button
             onClick={async () => {
-              if (fidError) {
-                alert(fidError);
-                return;
-              }
-              
+              // If no FID, show input dialog
               if (!userFid) {
-                alert('Please sign up for a Farcaster account at farcaster.xyz');
+                setShowFidInput(true);
                 return;
               }
 
@@ -92,9 +94,10 @@ export function ContactsPage() {
               }
             }}
             className="btn-secondary text-sm px-3 py-1"
-            disabled={isLoading || !userFid}
+            disabled={isLoading || isResolvingFid}
+            title={isResolvingFid ? 'Resolving Farcaster FID...' : userFid ? 'Sync your Farcaster contacts' : 'Enter Farcaster FID to sync contacts'}
           >
-            Sync Farcaster
+            {isResolvingFid ? 'Resolving...' : 'Sync Farcaster'}
           </button>
           <Link
             to="/new-group"
@@ -168,6 +171,114 @@ export function ContactsPage() {
         total={syncProgress.total}
         onClose={() => setShowSyncModal(false)}
       />
+
+      {/* Manual FID Input Modal */}
+      {showFidInput && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-primary-900 rounded-lg shadow-xl w-full max-w-md p-6 relative text-primary-50">
+            <button
+              onClick={() => {
+                setShowFidInput(false);
+                setManualFid('');
+              }}
+              className="absolute top-3 right-3 p-2 rounded-full hover:bg-primary-800 transition-colors"
+            >
+              <svg className="w-6 h-6 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            <h2 className="text-2xl font-bold mb-4">Enter Farcaster FID</h2>
+            <p className="text-primary-300 mb-4 text-sm">
+              Your Farcaster FID is a number. You can find it on your Farcaster profile or by visiting farcaster.xyz
+            </p>
+
+            <input
+              type="number"
+              value={manualFid}
+              onChange={(e) => setManualFid(e.target.value)}
+              placeholder="Enter your FID (e.g., 194)"
+              className="input-primary w-full mb-4"
+              autoFocus
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && manualFid) {
+                  const fid = parseInt(manualFid, 10);
+                  if (!isNaN(fid) && fid > 0) {
+                    setUserFid(fid);
+                    // Store in identity
+                    if (identity) {
+                      const storage = await getStorage();
+                      const updatedIdentity = { ...identity, farcasterFid: fid };
+                      await storage.putIdentity(updatedIdentity);
+                      setIdentity(updatedIdentity);
+                    }
+                    setShowFidInput(false);
+                    setManualFid('');
+                    // Trigger sync
+                    setShowSyncModal(true);
+                    setSyncProgress({ current: 0, total: 0 });
+                    syncFarcasterContacts(fid, (current, total) => {
+                      setSyncProgress({ current, total });
+                    }).catch((error) => {
+                      console.error('Failed to sync Farcaster contacts:', error);
+                      alert('Failed to sync Farcaster contacts. Please try again.');
+                      setShowSyncModal(false);
+                    });
+                  }
+                }
+              }}
+            />
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setShowFidInput(false);
+                  setManualFid('');
+                }}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const fid = parseInt(manualFid, 10);
+                  if (isNaN(fid) || fid <= 0) {
+                    alert('Please enter a valid FID number');
+                    return;
+                  }
+
+                  setUserFid(fid);
+                  // Store in identity
+                  if (identity) {
+                    const storage = await getStorage();
+                    const updatedIdentity = { ...identity, farcasterFid: fid };
+                    await storage.putIdentity(updatedIdentity);
+                    setIdentity(updatedIdentity);
+                  }
+                  setShowFidInput(false);
+                  setManualFid('');
+                  // Trigger sync
+                  setShowSyncModal(true);
+                  setSyncProgress({ current: 0, total: 0 });
+                  try {
+                    await syncFarcasterContacts(fid, (current, total) => {
+                      setSyncProgress({ current, total });
+                    });
+                  } catch (error) {
+                    console.error('Failed to sync Farcaster contacts:', error);
+                    alert('Failed to sync Farcaster contacts. Please try again.');
+                    setShowSyncModal(false);
+                  }
+                }}
+                className="btn-primary flex-1"
+                disabled={!manualFid}
+              >
+                Sync
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
