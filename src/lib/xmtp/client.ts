@@ -313,25 +313,37 @@ export class XmtpClient {
       console.log('[XMTP] probeIdentity: Using existing connected client for same identity');
       
       try {
-        const isRegistered = await this.client.isRegistered();
+        // Use client.inboxId as source of truth (authoritative from client.init)
+        let inboxId: string | null = this.client.inboxId || null;
+        let isRegistered = false;
         let inboxState: SafeInboxState | undefined;
-        let inboxId: string | null = null;
 
-        if (isRegistered) {
+        if (inboxId) {
+          console.log('[XMTP] probeIdentity: ✅ Found inboxId from existing client:', inboxId);
+          isRegistered = true; // inboxId presence is authoritative
+          
           try {
             inboxState = await this.client.preferences.inboxState(true);
             console.log('[XMTP] probeIdentity: Fetched inboxState from existing client:', {
               inboxId: inboxState?.inboxId,
               installationCount: inboxState?.installations?.length ?? 0,
             });
+            
+            // Use inbox ID from inboxState if available (most reliable)
+            if (inboxState?.inboxId) {
+              inboxId = inboxState.inboxId;
+            }
           } catch (error) {
             console.warn('[XMTP] probeIdentity: Failed to fetch inbox state from existing client:', error);
+            // Still use inboxId from client even if inboxState fetch fails
           }
-
-          if (inboxState?.inboxId) {
-            inboxId = inboxState.inboxId;
-          } else if (this.client.inboxId) {
-            inboxId = this.client.inboxId;
+        } else {
+          // Fallback: only check isRegistered() if no inboxId found
+          try {
+            isRegistered = await this.client.isRegistered();
+            console.log('[XMTP] probeIdentity: isRegistered() fallback =', isRegistered);
+          } catch (error) {
+            console.warn('[XMTP] probeIdentity: isRegistered() check failed:', error);
           }
         }
 
@@ -375,27 +387,28 @@ export class XmtpClient {
       console.log('[XMTP] probeIdentity: Probe client created successfully');
       console.log('[XMTP] probeIdentity: Client inboxId from init:', client.inboxId);
 
-      // Check inbox ID first - if client.inboxId exists, the inbox is registered
-      // Even if isRegistered() returns false, the inbox ID from client.init is authoritative
+      // Check inbox ID first - client.inboxId from client.init is authoritative
+      // If it exists, the user has a registered inbox (regardless of isRegistered() result)
       let inboxId: string | null = client.inboxId || null;
       let isRegistered = false;
       
       if (inboxId) {
-        console.log('[XMTP] probeIdentity: ✅ Found inboxId from client:', inboxId);
-        isRegistered = true; // If inbox ID exists, user is registered
+        console.log('[XMTP] probeIdentity: ✅ Found inboxId from client.init:', inboxId);
+        isRegistered = true; // inboxId presence is authoritative
       } else {
-        // Only check isRegistered if we didn't get an inbox ID from client.init
+        // Only check isRegistered() as fallback if no inboxId from client.init
         try {
           isRegistered = await client.isRegistered();
-          console.log('[XMTP] probeIdentity: isRegistered =', isRegistered);
+          console.log('[XMTP] probeIdentity: isRegistered() fallback =', isRegistered);
         } catch (error) {
-          console.warn('[XMTP] probeIdentity: isRegistered check failed:', error);
+          console.warn('[XMTP] probeIdentity: isRegistered() check failed:', error);
         }
       }
 
       let inboxState: SafeInboxState | undefined;
 
-      if (isRegistered || inboxId) {
+      // Use inboxId as source of truth - if we have it, fetch inbox state
+      if (inboxId) {
         try {
           // Force refresh from network to get full inbox state
           inboxState = await client.preferences.inboxState(true);
@@ -440,7 +453,8 @@ export class XmtpClient {
             console.warn('[XMTP] probeIdentity: findInboxIdByIdentifier failed:', error);
           }
         }
-      } else {
+      } else if (!isRegistered) {
+        // No inboxId found and isRegistered() returned false
         console.log('[XMTP] probeIdentity: User is not registered on XMTP (no inbox ID found)');
       }
 
