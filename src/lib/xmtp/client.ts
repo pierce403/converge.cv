@@ -397,30 +397,29 @@ export class XmtpClient {
 
       if (isRegistered || inboxId) {
         try {
-          // Force refresh from network
+          // Force refresh from network to get full inbox state
           inboxState = await client.preferences.inboxState(true);
           console.log('[XMTP] probeIdentity: fetched inboxState:', {
             inboxId: inboxState?.inboxId,
             hasInstallations: Boolean(inboxState?.installations),
             installationCount: inboxState?.installations?.length ?? 0,
           });
+          
+          // Use inbox ID from inboxState if available (most reliable)
+          if (inboxState?.inboxId) {
+            inboxId = inboxState.inboxId;
+            console.log('[XMTP] probeIdentity: ✅ Confirmed inboxId from inboxState:', inboxId);
+          }
         } catch (error) {
           console.warn('[XMTP] probeIdentity: failed to fetch inbox state:', error);
+          // If inboxState fetch fails but we have inboxId from client, still consider registered
+          if (inboxId) {
+            console.log('[XMTP] probeIdentity: Using inboxId from client.init despite inboxState fetch failure');
+          }
         }
 
-        // Try multiple methods to get inbox ID
-        // 1. From inboxState (most reliable)
-        if (inboxState?.inboxId) {
-          inboxId = inboxState.inboxId;
-          console.log('[XMTP] probeIdentity: ✅ Got inboxId from inboxState:', inboxId);
-        }
-        // 2. From client.inboxId
-        else if (client.inboxId) {
-          inboxId = client.inboxId;
-          console.log('[XMTP] probeIdentity: ✅ Got inboxId from client:', inboxId);
-        }
-        // 3. Fallback: use findInboxIdByIdentifier
-        else {
+        // Fallback: if we still don't have inboxId, try findInboxIdByIdentifier
+        if (!inboxId) {
           try {
             const identifier = {
               identifier: toIdentifierHex(identity.address).toLowerCase(),
@@ -432,7 +431,8 @@ export class XmtpClient {
             );
             if (resolvedInboxId) {
               inboxId = resolvedInboxId;
-              console.log('[XMTP] probeIdentity: ✅ Got inboxId via findInboxIdByIdentifier:', inboxId);
+              isRegistered = true;
+              console.log('[XMTP] probeIdentity: ✅ Got inboxId via findInboxIdByIdentifier:', resolvedInboxId);
             } else {
               console.warn('[XMTP] probeIdentity: ⚠️  No inboxId found via findInboxIdByIdentifier');
             }
@@ -441,7 +441,7 @@ export class XmtpClient {
           }
         }
       } else {
-        console.log('[XMTP] probeIdentity: User is not registered on XMTP');
+        console.log('[XMTP] probeIdentity: User is not registered on XMTP (no inbox ID found)');
       }
 
       const installationCount = inboxState?.installations?.length ?? 0;
