@@ -1,5 +1,5 @@
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { Layout } from './Layout';
 import { OnboardingPage, LockScreen, useAuth } from '@/features/auth';
 import { ChatList } from '@/features/conversations';
@@ -13,38 +13,27 @@ import { NewGroupPage } from '@/features/conversations/NewGroupPage';
 import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
 import { JoinGroupPage } from '@/features/conversations/JoinGroupPage';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
-import { getLastRoute, shouldRestoreLastRoute } from '@/lib/utils/route-persistence';
 
 export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   useEffect(() => {
     // Only attempt to restore identity when user is not yet authenticated.
     // Prevents double-connect loops after onboarding (e.g., WalletConnect reopening Rainbow).
     if (!isAuthenticated) {
-      checkExistingIdentity();
+      checkExistingIdentity().finally(() => {
+        setIsCheckingAuth(false);
+      });
+    } else {
+      setIsCheckingAuth(false);
     }
   }, [isAuthenticated, checkExistingIdentity]);
 
-  // Restore last route after authentication
-  useEffect(() => {
-    if (isAuthenticated && isVaultUnlocked) {
-      const currentPath = location.pathname;
-      
-      // Only restore if we're on the home page
-      if (shouldRestoreLastRoute(currentPath)) {
-        const lastRoute = getLastRoute();
-        
-        // Restore if we have a saved route and it's not the home page
-        if (lastRoute && lastRoute !== '/' && lastRoute !== currentPath) {
-          console.log('[Router] Restoring last route:', lastRoute);
-          navigate(lastRoute, { replace: true });
-        }
-      }
-    }
-  }, [isAuthenticated, isVaultUnlocked, navigate, location.pathname]);
+  // Still checking authentication - show nothing to preserve URL
+  if (isCheckingAuth) {
+    return null;
+  }
 
   // Not authenticated - show onboarding
   if (!isAuthenticated) {
