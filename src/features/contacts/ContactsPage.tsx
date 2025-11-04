@@ -54,7 +54,7 @@ export function ContactsPage() {
     };
 
     checkFarcasterFid();
-  }, [identity]);
+  }, [identity, setIdentity]);
 
   const filteredContacts = contacts.filter(contact =>
     contact.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
