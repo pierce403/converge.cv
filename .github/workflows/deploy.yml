@@ -41,6 +41,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Generate Build Info
+        run: node scripts/generate-build-info.mjs
+
       - name: Build
         run: pnpm build
         env:
