@@ -13,6 +13,7 @@ export interface Conversation {
   archived: boolean;
   mutedUntil?: number;
   createdAt: number;
+  isGroup?: boolean;
 }
 
 export interface Message {

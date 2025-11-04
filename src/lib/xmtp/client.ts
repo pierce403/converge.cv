@@ -872,6 +872,62 @@ export class XmtpClient {
   }
 
   /**
+   * Create a new group conversation with multiple participants
+   */
+  async createGroupConversation(participantAddresses: string[]): Promise<XmtpConversation> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    console.log('[XMTP] Creating group conversation with participants:', participantAddresses);
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'conversations:create_group',
+      details: `Creating group with ${participantAddresses.length} participants`,
+    });
+
+    try {
+      const groupConversation = await this.client.conversations.newGroup(participantAddresses);
+
+      console.log('[XMTP] ✅ Group conversation created:', {
+        id: groupConversation.id,
+        createdAtNs: groupConversation.createdAtNs,
+      });
+
+      const conversation: XmtpConversation = {
+        id: groupConversation.id,
+        topic: groupConversation.id, // Use conversation ID as topic
+        peerAddress: groupConversation.id, // For groups, peerAddress can be the group ID
+        createdAt: groupConversation.createdAtNs ? Number(groupConversation.createdAtNs / 1000000n) : Date.now(),
+      };
+
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:create_group:success',
+        details: `Group conversation ${conversation.id} created`,
+        payload: this.formatPayload(conversation),
+      });
+
+      return conversation;
+    } catch (error) {
+      console.error('[XMTP] ❌ Failed to create group conversation:', error);
+      if (error instanceof Error) {
+        console.error('[XMTP] Error details:', {
+          message: error.message,
+          stack: error.stack,
+        });
+      }
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:create_group:error',
+        details: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Send a message to a conversation
    */
   async sendMessage(conversationId: string, content: string): Promise<XmtpMessage> {

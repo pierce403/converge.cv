@@ -267,6 +267,36 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 - [ ] Message forwarding
 - [ ] Multi-device sync
 
+## Contact List & Group Chats
+
+### Contact Management
+- [x] Create `src/lib/stores/contact-store.ts`
+- [x] Update `src/lib/storage/interface.ts` with contact methods
+- [x] Implement contact methods in `src/lib/storage/dexie-driver.ts`
+- [x] Export `useContactStore` from `src/lib/stores/index.ts`
+- [x] Automatic contact addition when sending a message to a new identity in `src/features/messages/useMessages.ts`
+- [x] Add "Add as Contact" button in 1:1 conversations in `src/features/messages/ConversationView.tsx`
+- [x] Update `AddContactButton.tsx` to use `useContactStore` and check if contact already exists.
+
+### UI - Contacts Tab
+- [x] Add "Contacts" tab to bottom navigation in `src/app/Layout.tsx`
+- [x] Create `src/features/contacts/ContactsPage.tsx`
+- [x] Add route for `/contacts` in `src/app/Router.tsx`
+- [x] Populate `ContactsPage.tsx` with actual contacts from `useContactStore`.
+- [x] Implement search/filter in `ContactsPage.tsx`.
+
+### UI - New Group Flow
+- [x] Add "New Group" button to `src/features/conversations/ChatList.tsx`
+- [x] Create `src/features/conversations/NewGroupPage.tsx`
+- [x] Add route for `/new-group` in `src/app/Router.tsx`
+- [x] Populate `NewGroupPage.tsx` with selectable contacts from `useContactStore`.
+- [x] Implement search/filter in `NewGroupPage.tsx`.
+- [x] Implement group creation logic in `NewGroupPage.tsx`.
+
+### Group Chat Functionality
+- [x] Implement XMTP group chat creation.
+- [x] Implement XMTP group message sending/receiving.
+
 ---
 
 ## Deployment Info

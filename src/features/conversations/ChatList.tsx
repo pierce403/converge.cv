@@ -73,11 +73,17 @@ export function ChatList() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedUser(conversation.peerId);
+                    if (!conversation.isGroup) {
+                      setSelectedUser(conversation.peerId);
+                    }
                   }}
                   className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"
                 >
-                  {contactInfo?.avatar ? (
+                  {conversation.isGroup ? (
+                    <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 3 0 10-6 0 3 3 0 006 0z" />
+                    </svg>
+                  ) : contactInfo?.avatar ? (
                     <span className="text-white" aria-hidden>
                       {contactInfo.avatar}
                     </span>
@@ -95,7 +101,9 @@ export function ChatList() {
                 >
                   <div className="flex items-baseline justify-between mb-1">
                     <h3 className="text-sm font-semibold truncate">
-                      {contactInfo?.name
+                      {conversation.isGroup
+                        ? 'Group Chat' // Placeholder for group name
+                        : contactInfo?.name
                         ? `${contactInfo.name}`
                         : `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
                     </h3>
@@ -133,10 +141,13 @@ export function ChatList() {
         })}
       </div>
 
-      {/* New chat button */}
-      <div className="p-4 border-t border-primary-900/40 bg-primary-950/40">
+      {/* New chat and New Group buttons */}
+      <div className="p-4 border-t border-primary-900/40 bg-primary-950/40 flex gap-2">
         <Link to="/new-chat" className="btn-primary w-full">
           + New Chat
+        </Link>
+        <Link to="/new-group" className="btn-secondary w-full">
+          + New Group
         </Link>
       </div>
 

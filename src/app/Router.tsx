@@ -8,6 +8,8 @@ import { NewChatPage } from '@/features/conversations/NewChatPage';
 import { SettingsPage } from '@/features/settings';
 import { DebugPage } from '@/features/debug';
 import { SearchPage } from '@/features/search';
+import { ContactsPage } from '@/features/contacts/ContactsPage';
+import { NewGroupPage } from '@/features/conversations/NewGroupPage';
 
 export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
@@ -47,9 +49,11 @@ export function AppRouter() {
         <Route index element={<ChatList />} />
         <Route path="chat/:id" element={<ConversationView />} />
         <Route path="new-chat" element={<NewChatPage />} />
+        <Route path="new-group" element={<NewGroupPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="debug" element={<DebugPage />} />
+        <Route path="contacts" element={<ContactsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -11,6 +11,7 @@ import type {
   Identity,
 } from '@/types';
 import type { StorageDriver, PageOpts, Query } from './interface';
+import type { Contact } from '../stores/contact-store';
 
 interface AttachmentData {
   id: string;
@@ -24,6 +25,7 @@ class ConvergeDB extends Dexie {
   attachmentData!: Table<AttachmentData, string>;
   identity!: Table<Identity, string>;
   vaultSecrets!: Table<VaultSecrets, string>;
+  contacts!: Table<Contact, string>;
 
   constructor() {
     super('ConvergeDB');
@@ -35,6 +37,7 @@ class ConvergeDB extends Dexie {
       attachmentData: 'id',
       identity: 'address',
       vaultSecrets: 'method',
+      contacts: 'address',
     });
 
     this.version(2)
@@ -45,6 +48,7 @@ class ConvergeDB extends Dexie {
         attachmentData: 'id',
         identity: 'address, inboxId',
         vaultSecrets: 'method',
+        contacts: 'address',
       })
       .upgrade(async (transaction) => {
         const identities = await transaction.table('identity').toArray();
@@ -236,6 +240,27 @@ export class DexieDriver implements StorageDriver {
     await this.db.identity.delete(address);
   }
 
+  // Contacts
+  async putContact(contact: Contact): Promise<void> {
+    await this.db.contacts.put(contact);
+  }
+
+  async getContact(address: string): Promise<Contact | undefined> {
+    return await this.db.contacts.get(address);
+  }
+
+  async listContacts(): Promise<Contact[]> {
+    return await this.db.contacts.toArray();
+  }
+
+  async deleteContact(address: string): Promise<void> {
+    await this.db.contacts.delete(address);
+  }
+
+  async updateContact(address: string, updates: Partial<Contact>): Promise<void> {
+    await this.db.contacts.update(address, updates);
+  }
+
   // Vault secrets
   async putVaultSecrets(secrets: VaultSecrets): Promise<void> {
     await this.db.vaultSecrets.put(secrets);
@@ -259,6 +284,7 @@ export class DexieDriver implements StorageDriver {
       this.db.attachmentData,
       this.db.identity,
       this.db.vaultSecrets,
+      this.db.contacts,
     ], async () => {
       await this.db.conversations.clear();
       await this.db.messages.clear();
@@ -266,6 +292,7 @@ export class DexieDriver implements StorageDriver {
       await this.db.attachmentData.clear();
       await this.db.identity.clear();
       await this.db.vaultSecrets.clear();
+      await this.db.contacts.clear();
       console.log('[Storage] ✅ All IndexedDB data cleared');
     });
 

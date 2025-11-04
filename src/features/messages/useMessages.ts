@@ -2,11 +2,12 @@
  * Messages hook for managing message operations
  */
 
-import { useCallback } from 'react';
-import { useMessageStore, useConversationStore, useAuthStore } from '@/lib/stores';
+import { useCallback } 'react';
+import { useMessageStore, useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import type { Message } from '@/types';
+import type { Contact } from '@/lib/stores/contact-store';
 
 export function useMessages() {
   const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
@@ -21,7 +22,10 @@ export function useMessages() {
   const clearMessages = useMessageStore((state) => state.clearMessages);
   const updateConversation = useConversationStore((state) => state.updateConversation);
   const incrementUnread = useConversationStore((state) => state.incrementUnread);
+  const conversations = useConversationStore((state) => state.conversations);
   const identity = useAuthStore((state) => state.identity);
+  const addContact = useContactStore((state) => state.addContact);
+  const isContact = useContactStore((state) => state.isContact);
 
   /**
    * Load messages for a conversation
@@ -54,6 +58,25 @@ export function useMessages() {
 
       try {
         setSending(true);
+
+        const conversation = conversations.find((c) => c.id === conversationId);
+        if (!conversation) {
+          console.error('Conversation not found for ID:', conversationId);
+          setSending(false);
+          return;
+        }
+        const recipientAddress = conversation.peerId;
+
+        // Check if recipient is a contact, if not, add them automatically
+        if (!isContact(recipientAddress)) {
+          const newContact: Contact = {
+            address: recipientAddress,
+            name: recipientAddress, // Default name, user can edit later
+            createdAt: Date.now(),
+          };
+          await addContact(newContact);
+          console.log('Automatically added new contact:', recipientAddress);
+        }
 
         // Create message object
         const message: Message = {
@@ -101,7 +124,7 @@ export function useMessages() {
         setSending(false);
       }
     },
-    [identity, addMessage, updateMessage, setSending, updateConversation]
+    [identity, addMessage, updateMessage, setSending, updateConversation, conversations, addContact, isContact]
   );
 
   /**

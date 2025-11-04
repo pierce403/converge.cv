@@ -3,6 +3,7 @@
  */
 
 import type { Conversation, Message, Attachment, VaultSecrets, Identity } from '@/types';
+import type { Contact } from '../stores/contact-store';
 
 export interface PageOpts {
   limit?: number;
@@ -40,7 +41,7 @@ export interface StorageDriver {
   // Attachments
   putAttachment(attachment: Attachment, data: ArrayBuffer): Promise<void>;
   getAttachment(id: string): Promise<{ attachment: Attachment; data: ArrayBuffer } | undefined>;
-  deleteAttachment(id: string): Promise<void>;
+  deleteAttachment(id: Promise<void>;
 
   // Identity
   putIdentity(identity: Identity): Promise<void>;
@@ -50,6 +51,13 @@ export interface StorageDriver {
   getIdentityByInboxId(inboxId: string): Promise<Identity | undefined>;
   deleteIdentity(): Promise<void>;
   deleteIdentityByAddress(address: string): Promise<void>;
+
+  // Contacts
+  putContact(contact: Contact): Promise<void>;
+  getContact(address: string): Promise<Contact | undefined>;
+  listContacts(): Promise<Contact[]>;
+  deleteContact(address: string): Promise<void>;
+  updateContact(address: string, updates: Partial<Contact>): Promise<void>;
 
   // Vault secrets
   putVaultSecrets(secrets: VaultSecrets): Promise<void>;

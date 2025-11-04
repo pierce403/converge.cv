@@ -11,6 +11,7 @@ import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
 import { UserInfoModal } from '@/components/UserInfoModal';
 import { getContactInfo } from '@/lib/default-contacts';
+import { AddContactButton } from '@/features/contacts/AddContactButton';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -72,30 +73,51 @@ export function ConversationView() {
           </svg>
         </button>
 
-        {/* Clickable avatar */}
-        <button
-          onClick={() => setShowUserInfo(true)}
-          className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
-        >
-          {contactInfo?.avatar ? (
-            <span className="text-lg">{contactInfo.avatar}</span>
-          ) : (
-            <span className="text-white font-semibold text-sm">
-              {conversation.peerId.slice(2, 4).toUpperCase()}
-            </span>
-          )}
-        </button>
+        {conversation.isGroup ? (
+          <>
+            {/* Group Avatar */}
+            <div className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
+              <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 3 0 10-6 0 3 3 0 006 0z" />
+              </svg>
+            </div>
+            {/* Group Name */}
+            <div className="flex-1 min-w-0 text-left">
+              <h2 className="font-semibold truncate text-primary-50">Group Chat</h2>
+              <p className="text-xs text-primary-300">Multiple participants</p>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Clickable avatar */}
+            <button
+              onClick={() => setShowUserInfo(true)}
+              className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
+            >
+              {contactInfo?.avatar ? (
+                <span className="text-lg">{contactInfo.avatar}</span>
+              ) : (
+                <span className="text-white font-semibold text-sm">
+                  {conversation.peerId.slice(2, 4).toUpperCase()}
+                </span>
+              )}
+            </button>
 
-        {/* User name - also clickable */}
-        <button
-          onClick={() => setShowUserInfo(true)}
-          className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
-        >
-          <h2 className="font-semibold truncate text-primary-50">
-            {contactInfo?.name || `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
-          </h2>
-          <p className="text-xs text-primary-300">XMTP messaging</p>
-        </button>
+            {/* User name - also clickable */}
+            <button
+              onClick={() => setShowUserInfo(true)}
+              className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
+            >
+              <div className="flex items-center gap-2">
+                <h2 className="font-semibold truncate text-primary-50">
+                  {contactInfo?.name || `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
+                </h2>
+                <AddContactButton address={conversation.peerId} />
+              </div>
+              <p className="text-xs text-primary-300">XMTP messaging</p>
+            </button>
+          </>
+        )}
 
         <button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
