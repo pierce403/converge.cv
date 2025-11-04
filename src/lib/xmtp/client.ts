@@ -373,19 +373,29 @@ export class XmtpClient {
         disableAutoRegister: true,
       });
       console.log('[XMTP] probeIdentity: Probe client created successfully');
+      console.log('[XMTP] probeIdentity: Client inboxId from init:', client.inboxId);
 
+      // Check inbox ID first - if client.inboxId exists, the inbox is registered
+      // Even if isRegistered() returns false, the inbox ID from client.init is authoritative
+      let inboxId: string | null = client.inboxId || null;
       let isRegistered = false;
-      try {
-        isRegistered = await client.isRegistered();
-        console.log('[XMTP] probeIdentity: isRegistered =', isRegistered);
-      } catch (error) {
-        console.warn('[XMTP] probeIdentity: isRegistered check failed:', error);
+      
+      if (inboxId) {
+        console.log('[XMTP] probeIdentity: ✅ Found inboxId from client:', inboxId);
+        isRegistered = true; // If inbox ID exists, user is registered
+      } else {
+        // Only check isRegistered if we didn't get an inbox ID from client.init
+        try {
+          isRegistered = await client.isRegistered();
+          console.log('[XMTP] probeIdentity: isRegistered =', isRegistered);
+        } catch (error) {
+          console.warn('[XMTP] probeIdentity: isRegistered check failed:', error);
+        }
       }
 
       let inboxState: SafeInboxState | undefined;
-      let inboxId: string | null = null;
 
-      if (isRegistered) {
+      if (isRegistered || inboxId) {
         try {
           // Force refresh from network
           inboxState = await client.preferences.inboxState(true);
