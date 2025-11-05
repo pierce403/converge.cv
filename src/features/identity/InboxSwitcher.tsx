@@ -1,4 +1,4 @@
-import { Fragment, useEffect } from 'react';
+import { Fragment, useEffect, useMemo } from 'react';
 import { Menu, Transition } from '@headlessui/react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
@@ -28,6 +28,7 @@ export function InboxSwitcher() {
     : identity?.displayName || (identity?.address ? shortAddress(identity.address) : 'No identity connected');
 
   const currentBadge = identity?.displayName ? identity.displayName.charAt(0).toUpperCase() : currentLabel.charAt(0).toUpperCase();
+  const currentAvatar = useMemo(() => identity?.avatar, [identity?.avatar]);
 
   const handleSwitch = async (entry: InboxRegistryEntry) => {
     setCurrentInbox(entry.inboxId);
@@ -37,9 +38,15 @@ export function InboxSwitcher() {
   return (
     <Menu as="div" className="relative inline-block text-left">
       <Menu.Button className="flex items-center gap-3 rounded-full border border-primary-700/70 bg-primary-900/80 px-3 py-1.5 text-left text-sm font-medium text-primary-100 shadow hover:border-accent-400 hover:text-white">
-        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent-600 text-sm font-semibold text-white">
-          {currentBadge}
-        </span>
+        {currentAvatar ? (
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-primary-800/60">
+            <img src={currentAvatar} alt="Avatar" className="h-full w-full object-cover" />
+          </span>
+        ) : (
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent-600 text-sm font-semibold text-white">
+            {currentBadge}
+          </span>
+        )}
         <span className="hidden sm:block leading-tight">
           <span className="block text-xs text-primary-300">Current inbox</span>
           <span className="block text-sm font-semibold text-primary-100">{currentLabel}</span>
@@ -68,7 +75,8 @@ export function InboxSwitcher() {
         leaveFrom="transform opacity-100 scale-100"
         leaveTo="transform opacity-0 scale-95"
       >
-        <Menu.Items className="absolute right-0 z-20 mt-2 w-80 origin-top-right rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur">
+        {/* Align dropdown under the trigger and ensure it stays on screen */}
+        <Menu.Items className="absolute left-0 z-50 mt-2 w-80 max-w-[90vw] origin-top-left rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur">
           <div className="mb-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
             {identity?.inboxId ? (
