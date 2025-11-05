@@ -350,6 +350,10 @@ if (!isRegistered) {
 3. Check `TODO.md` for planned features
 4. Review `PROJECT_SUMMARY.md` for technical overview
 5. Look at recent git history to understand latest changes
+6. Load XMTP LLM + content-type docs into context for reference:
+   - https://docs.xmtp.org/chat-apps/intro/build-with-llms
+   - https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
+   These links help with content-type handling and message classification; prefer using them when extending system-message support.
 
 ### While Working
 - Keep the no-passphrase principle in mind

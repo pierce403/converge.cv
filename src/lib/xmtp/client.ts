@@ -115,6 +115,66 @@ export class XmtpClient {
   private messageStreamCloser: { close: () => void } | null = null;
   private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
 
+  /**
+   * Best-effort extraction of a content type identifier from a decoded/encoded message object.
+   * Handles both decoded messages (dm.messages()) and raw wasm messages (getMessageById()).
+   */
+  private getContentTypeIdFromAny(msg: unknown): string | undefined {
+    try {
+      if (!msg || typeof msg !== 'object') return undefined;
+      const anyMsg = msg as Record<string, unknown>;
+      // Try decoded shape first: encodedContent?.type?.typeId (or type_id)
+      const encoded = anyMsg['encodedContent'] as Record<string, unknown> | undefined;
+      const typeObj = (encoded && (encoded['type'] as Record<string, unknown> | undefined)) || undefined;
+      const fromEncoded =
+        (typeObj?.['typeId'] as string | undefined) ||
+        (typeObj?.['type_id'] as string | undefined);
+      if (typeof fromEncoded === 'string') return fromEncoded;
+
+      // Some stream message shapes may expose content.type directly
+      const content = anyMsg['content'] as Record<string, unknown> | string | Uint8Array | undefined;
+      if (content && typeof content === 'object') {
+        const cType = (content as Record<string, unknown>)['type'] as Record<string, unknown> | undefined;
+        const fromContent =
+          (cType?.['typeId'] as string | undefined) ||
+          (cType?.['type_id'] as string | undefined);
+        if (typeof fromContent === 'string') return fromContent;
+      }
+
+      // Raw wasm message: content.type.typeId
+      const rawContent = anyMsg['content'] as Record<string, unknown> | undefined;
+      const rawType = rawContent && (rawContent['type'] as Record<string, unknown> | undefined);
+      const fromRaw =
+        (rawType?.['typeId'] as string | undefined) ||
+        (rawType?.['type_id'] as string | undefined);
+      if (typeof fromRaw === 'string') return fromRaw;
+    } catch (err) {
+      console.warn('[XMTP] getContentTypeIdFromAny failed:', err);
+    }
+    return undefined;
+  }
+
+  /**
+   * Produce a user-facing label for known content types.
+   * Unknown types are treated as generic system messages.
+   */
+  private labelForContentType(typeId: string | undefined): string {
+    if (!typeId) return 'System message';
+    const t = typeId.toLowerCase();
+    if (t.includes('text')) return 'Text';
+    if (t.includes('reaction')) return 'Reaction';
+    if (t.includes('reply')) return 'Reply';
+    if (t.includes('read') && t.includes('receipt')) return 'Read receipt';
+    if (t.includes('delivery') && t.includes('receipt')) return 'Delivery receipt';
+    if (t.includes('attachment') || t.includes('file') || t.includes('image') || t.includes('media')) return 'Attachment';
+    if (t.includes('typing')) return 'Typing';
+    if (t.includes('group') && (t.includes('update') || t.includes('updated'))) return 'Group updated';
+    if (t.includes('membership')) return 'Group membership changed';
+    if (t.includes('invite') || t.includes('invitation')) return 'Invitation';
+    if (t.includes('profile')) return 'Profile update';
+    return 'System message';
+  }
+
   private formatPayload(payload: unknown): string {
     if (typeof payload === 'string') {
       return payload;
@@ -1242,6 +1302,7 @@ export class XmtpClient {
 
           for (const m of decodedMessages) {
             const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
+            const typeId = this.getContentTypeIdFromAny(m);
             // Handle profile broadcasts silently (do not surface as chat messages)
             if (typeof content === 'string' && content.startsWith(XmtpClient.PROFILE_PREFIX)) {
               try {
@@ -1275,6 +1336,30 @@ export class XmtpClient {
         console.warn('[XMTP] Failed to process profile backfill message', e);
       }
               continue;
+            }
+            // Treat non-text content types as stylized system messages in history, too
+            try {
+              const isTextLike = typeof content === 'string' && (!typeId || this.labelForContentType(typeId) === 'Text');
+              if (!isTextLike) {
+                const label = this.labelForContentType(typeId);
+                const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                window.dispatchEvent(
+                  new CustomEvent('xmtp:system', {
+                    detail: {
+                      conversationId: m.conversationId,
+                      system: {
+                        id: `sys_${m.id}`,
+                        senderInboxId: m.senderInboxId,
+                        body: label,
+                        sentAt: ts,
+                      },
+                    },
+                  })
+                );
+                continue;
+              }
+            } catch (e) {
+              console.warn('[XMTP] Failed to classify backfill message type', e);
             }
             const xmsg = {
               id: m.id,
@@ -1405,6 +1490,33 @@ export class XmtpClient {
               }
             } catch (err) {
               console.warn('[XMTP] Failed to inspect message kind', err);
+            }
+
+            // If content type is not text, surface as a system message with a friendly label
+            try {
+              const typeId = this.getContentTypeIdFromAny(message);
+              const contentIsString = typeof message.content === 'string';
+              const looksText = contentIsString && (!typeId || this.labelForContentType(typeId) === 'Text');
+              if (!looksText) {
+                const label = this.labelForContentType(typeId);
+                const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                window.dispatchEvent(
+                  new CustomEvent('xmtp:system', {
+                    detail: {
+                      conversationId: message.conversationId,
+                      system: {
+                        id: `sys_${message.id}`,
+                        senderInboxId: message.senderInboxId,
+                        body: label,
+                        sentAt: ts,
+                      },
+                    },
+                  })
+                );
+                continue;
+              }
+            } catch (e) {
+              console.warn('[XMTP] Failed to classify stream message type', e);
             }
 
             console.log('[XMTP] 📨 Parsed message:', {
