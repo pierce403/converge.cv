@@ -83,6 +83,19 @@ export interface GroupDetails {
   superAdminInboxes: string[];
 }
 
+export interface InboxProfile {
+  inboxId: string;
+  displayName?: string;
+  avatarUrl?: string;
+  primaryAddress?: string;
+  addresses: string[];
+  identities: Array<{
+    identifier: string;
+    kind: string;
+    isPrimary?: boolean;
+  }>;
+}
+
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
 const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(value);
@@ -121,6 +134,125 @@ export class XmtpClient {
       console.warn('[XMTP] Invalid Ethereum address supplied:', address, error);
       throw new Error(`Invalid Ethereum address: ${address}`);
     }
+  }
+
+  async deriveInboxIdFromAddress(address: string): Promise<string | null> {
+    try {
+      const normalized = this.normalizeEthereumAddress(address);
+      try {
+        const existing = await this.getInboxIdFromAddress(normalized);
+        if (existing) {
+          return existing;
+        }
+      } catch (error) {
+        console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to Utils', error);
+      }
+
+      const { Utils } = await import('@xmtp/browser-sdk');
+      const utils: InstanceType<typeof Utils> = new Utils(false);
+
+      const identifier = {
+        identifier: toIdentifierHex(normalized).toLowerCase(),
+        identifierKind: 'Ethereum' as const,
+      };
+
+      try {
+        const resolved = await utils.getInboxIdForIdentifier(identifier, 'production');
+        if (resolved) {
+          return resolved;
+        }
+      } catch (error) {
+        console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed, attempting generateInboxId', error);
+      }
+
+      try {
+        const generated = await utils.generateInboxId(identifier);
+        if (generated) {
+          return generated;
+        }
+      } catch (error) {
+        console.warn('[XMTP] deriveInboxIdFromAddress: generateInboxId failed', error);
+      }
+
+      // As a last resort, return the normalized address
+      return normalized;
+    } catch (error) {
+      console.error('[XMTP] deriveInboxIdFromAddress failed:', error);
+      return null;
+    }
+  }
+
+  async fetchInboxProfile(inboxId: string): Promise<InboxProfile> {
+    const normalizedInboxId = inboxId.toLowerCase();
+
+    const toIdentityRecord = (identifier: Identifier, index: number) => ({
+      identifier: identifier.identifier.startsWith('0x')
+        ? identifier.identifier.toLowerCase()
+        : identifier.identifier.toLowerCase(),
+      kind: identifier.identifierKind,
+      isPrimary: index === 0,
+    });
+
+    const addressesFromIdentifiers = (identifiers: Identifier[] = []): string[] => {
+      return identifiers
+        .filter((identifier) => identifier.identifierKind === 'Ethereum')
+        .map((identifier) =>
+          identifier.identifier.startsWith('0x')
+            ? identifier.identifier.toLowerCase()
+            : `0x${identifier.identifier.toLowerCase()}`
+        );
+    };
+
+    const buildProfile = (identifiers: Identifier[] | undefined): InboxProfile => {
+      const identityRecords = (identifiers ?? []).map(toIdentityRecord);
+      const addresses = addressesFromIdentifiers(identifiers);
+      return {
+        inboxId: normalizedInboxId,
+        displayName: addresses[0],
+        avatarUrl: undefined,
+        primaryAddress: addresses[0],
+        addresses,
+        identities: identityRecords,
+      };
+    };
+
+    try {
+      if (this.client) {
+        try {
+          const latest = await this.client.preferences.getLatestInboxState(normalizedInboxId);
+          if (latest) {
+            return buildProfile(latest.identifiers ?? []);
+          }
+        } catch (error) {
+          console.warn('[XMTP] fetchInboxProfile: getLatestInboxState failed, falling back to inboxStateFromInboxIds', error);
+        }
+
+        try {
+          const states = await this.client.preferences.inboxStateFromInboxIds([normalizedInboxId], true);
+          if (states?.length) {
+            return buildProfile(states[0]?.identifiers ?? []);
+          }
+        } catch (error) {
+          console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+        }
+      }
+
+      const { Utils } = await import('@xmtp/browser-sdk');
+      const utils: InstanceType<typeof Utils> = new Utils(false);
+      try {
+        const states = await utils.inboxStateFromInboxIds([normalizedInboxId], 'production');
+        if (states?.length) {
+          const state = states[0] as SafeInboxState;
+          return buildProfile(state.identifiers);
+        }
+      } catch (error) {
+        console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+      }
+    } catch (error) {
+      console.error('[XMTP] fetchInboxProfile unexpected error:', error);
+    }
+
+    return buildProfile([]);
   }
 
   private identifierFromAddress(address: string): Identifier {
@@ -319,8 +451,8 @@ export class XmtpClient {
     }
   }
 
-  async addMembersToGroup(conversationId: string, addresses: string[]): Promise<GroupDetails | null> {
-    if (!addresses.length) {
+  async addMembersToGroup(conversationId: string, members: string[]): Promise<GroupDetails | null> {
+    if (!members.length) {
       return this.fetchGroupDetails(conversationId);
     }
 
@@ -330,17 +462,48 @@ export class XmtpClient {
     }
 
     try {
-      const identifiers = addresses.map((address) => this.identifierFromAddress(address));
-      if (typeof group.addMembersByIdentifiers === 'function') {
-        await group.addMembersByIdentifiers(identifiers);
-      } else {
-        throw new Error('SDK does not support addMembersByIdentifiers');
+      const inboxIds: string[] = [];
+      const identifierPayloads: Identifier[] = [];
+
+      for (const value of members) {
+        if (!value || typeof value !== 'string') {
+          continue;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+          continue;
+        }
+        if (isEthereumAddress(trimmed)) {
+          try {
+            identifierPayloads.push(this.identifierFromAddress(trimmed));
+          } catch (error) {
+            console.warn('[XMTP] Skipping invalid Ethereum address during addMembers:', trimmed, error);
+          }
+        } else {
+          inboxIds.push(trimmed.toLowerCase());
+        }
+      }
+
+      if (identifierPayloads.length) {
+        if (typeof group.addMembersByIdentifiers === 'function') {
+          await group.addMembersByIdentifiers(identifierPayloads);
+        } else {
+          throw new Error('SDK does not support addMembersByIdentifiers');
+        }
+      }
+
+      if (inboxIds.length) {
+        if (typeof group.addMembers === 'function') {
+          await group.addMembers(inboxIds);
+        } else {
+          throw new Error('SDK does not support addMembers');
+        }
       }
 
       logNetworkEvent({
         direction: 'outbound',
         event: 'group:add_members',
-        details: `Added ${addresses.length} member(s) to group ${conversationId}`,
+        details: `Added ${members.length} member(s) to group ${conversationId}`,
       });
 
       return await this.buildGroupDetails(conversationId, group);

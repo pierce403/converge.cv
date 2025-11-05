@@ -393,8 +393,29 @@ if (!isRegistered) {
 
 ---
 
-**Last Updated**: 2025-10-30 (OpenGraph card uses existing logo asset)
-**Updated By**: AI Agent after swapping social preview to use bundled icon
+**Last Updated**: 2025-10-31 (Contacts now keyed by XMTP inbox IDs)
+**Updated By**: AI Agent after refactoring contact storage and group management
+
+## Latest Changes (2025-10-31)
+
+### Inbox-Centric Contacts
+- Reworked `contact-store` to key contacts by XMTP inbox ID, track all linked Ethereum addresses/identifiers, and merge remote profile updates safely.
+- Added Dexie v3 migration (`contacts: '&inboxId, primaryAddress, *addresses'`) to move legacy address-keyed rows and prevent duplicates.
+- `Layout` now fetches inbox profiles for every inbound message and asynchronously enriches contacts with Farcaster metadata when available (name, avatar, bio).
+- `useMessages` auto-upserts recipients into the contact store with inferred primary addresses on first send.
+
+### Group Settings & Picker
+- Group settings page populates members with inbox-aware contacts, surfaces admin roles, and dedupes lookups across inbox IDs and addresses.
+- Contact picker only lists contacts not already in the group, supports multi-select, and adds members via inbox IDs or Ethereum addresses as appropriate.
+- XMTP client wrapper accepts mixed inbox IDs/addresses when adding or removing group members.
+
+### People & UI Polish
+- Conversation headers, chat list entries, and `UserInfoModal` pull preferred name/avatar from the updated contact store and list linked identities.
+- Chat bubbles are capped at two-thirds width for improved readability; add-contact button respects inbox-centric lookups.
+- Contacts page and new-group flow search across inbox IDs, preferred names, and known addresses, while hiding the current identity.
+
+### Tooling
+- Fixed lint failures (`react-hooks/rules-of-hooks`, dependency warnings) and restored `pnpm lint`/`pnpm typecheck` to green.
 
 ## Latest Changes (2025-10-30)
 

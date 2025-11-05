@@ -7,7 +7,7 @@ import { useMessageStore, useConversationStore, useAuthStore, useContactStore } 
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import type { Message } from '@/types';
-import type { Contact } from '@/lib/stores/contact-store';
+import { getAddress, isAddress } from 'viem';
 
 export function useMessages() {
   const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
@@ -24,7 +24,7 @@ export function useMessages() {
   const incrementUnread = useConversationStore((state) => state.incrementUnread);
   const conversations = useConversationStore((state) => state.conversations);
   const identity = useAuthStore((state) => state.identity);
-  const addContact = useContactStore((state) => state.addContact);
+  const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
   const isContact = useContactStore((state) => state.isContact);
 
   /**
@@ -65,17 +65,31 @@ export function useMessages() {
           setSending(false);
           return;
         }
-        const recipientAddress = conversation.peerId;
+        const recipientInboxId = conversation.peerId;
 
         // Check if recipient is a contact, if not, add them automatically
-        if (!isContact(recipientAddress)) {
-          const newContact: Contact = {
-            address: recipientAddress,
-            name: recipientAddress, // Default name, user can edit later
-            createdAt: Date.now(),
-          };
-          await addContact(newContact);
-          console.log('Automatically added new contact:', recipientAddress);
+        if (!isContact(recipientInboxId)) {
+          const normalizedAddress = isAddress(recipientInboxId)
+            ? getAddress(recipientInboxId as `0x${string}`)
+            : undefined;
+          const addressList = normalizedAddress ? [normalizedAddress.toLowerCase()] : [];
+          await upsertContactProfile({
+            inboxId: recipientInboxId,
+            displayName: recipientInboxId,
+            primaryAddress: normalizedAddress?.toLowerCase(),
+            addresses: addressList,
+            identities: normalizedAddress
+              ? [
+                  {
+                    identifier: normalizedAddress.toLowerCase(),
+                    kind: 'Ethereum',
+                    isPrimary: true,
+                  },
+                ]
+              : [],
+            source: 'inbox',
+          });
+          console.log('Automatically added new contact:', recipientInboxId);
         }
 
         // Create message object
@@ -124,7 +138,7 @@ export function useMessages() {
         setSending(false);
       }
     },
-    [identity, addMessage, updateMessage, setSending, updateConversation, conversations, addContact, isContact]
+    [identity, addMessage, updateMessage, setSending, updateConversation, conversations, upsertContactProfile, isContact]
   );
 
   /**

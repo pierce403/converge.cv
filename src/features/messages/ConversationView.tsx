@@ -51,33 +51,25 @@ export function ConversationView() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  if (!conversation) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <p className="text-slate-400 mb-4">Conversation not found</p>
-          <button onClick={() => navigate('/')} className="btn-primary">
-            Back to Chats
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const contact = useMemo(() => {
-    if (conversation.isGroup) {
+    if (!conversation || conversation.isGroup) {
       return undefined;
     }
     const peerLower = conversation.peerId.toLowerCase();
-    return contacts.find((entry) => entry.address.toLowerCase() === peerLower)
-      ?? contacts.find((entry) => entry.inboxId?.toLowerCase() === peerLower);
+    return (
+      contacts.find((entry) => entry.inboxId.toLowerCase() === peerLower) ??
+      contacts.find((entry) =>
+        entry.addresses?.some((address) => address.toLowerCase() === peerLower)
+      )
+    );
   }, [conversation, contacts]);
 
   const defaultContactInfo = useMemo(() => {
-    if (conversation.isGroup) {
+    if (!conversation || conversation.isGroup) {
       return undefined;
     }
-    return getContactInfo(contact?.address ?? conversation.peerId);
+    const lookupKey = contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
+    return getContactInfo(lookupKey);
   }, [conversation, contact]);
 
   const formatIdentifier = (value: string) => {
@@ -94,6 +86,9 @@ export function ConversationView() {
   };
 
   const conversationDisplayName = useMemo(() => {
+    if (!conversation) {
+      return '';
+    }
     if (conversation.isGroup) {
       return conversation.groupName || 'Group Chat';
     }
@@ -101,17 +96,39 @@ export function ConversationView() {
       || contact?.preferredName
       || contact?.name
       || defaultContactInfo?.name
-      || formatIdentifier(contact?.address ?? conversation.peerId);
+      || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
   }, [conversation, contact, defaultContactInfo]);
 
   const conversationAvatar = useMemo(() => {
+    if (!conversation) {
+      return undefined;
+    }
     if (conversation.isGroup) {
       return conversation.groupImage || conversation.displayAvatar;
     }
-    return conversation.displayAvatar || contact?.avatar || defaultContactInfo?.avatar;
+    return (
+      conversation.displayAvatar ||
+      contact?.preferredAvatar ||
+      contact?.avatar ||
+      defaultContactInfo?.avatar
+    );
   }, [conversation, contact, defaultContactInfo]);
 
-  const contactAddressForActions = contact?.address ?? conversation.peerId;
+  if (!conversation) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <p className="text-slate-400 mb-4">Conversation not found</p>
+          <button onClick={() => navigate('/')} className="btn-primary">
+            Back to Chats
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const contactAddressForActions =
+    contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
     if (avatar && avatar.startsWith('http')) {
@@ -190,7 +207,11 @@ export function ConversationView() {
             >
               <div className="flex items-center gap-2">
                 <h2 className="font-semibold truncate text-primary-50">{conversationDisplayName}</h2>
-                <AddContactButton address={contactAddressForActions} />
+                <AddContactButton
+                  inboxId={conversation.peerId}
+                  primaryAddress={contact?.primaryAddress}
+                  fallbackName={conversationDisplayName}
+                />
               </div>
               <p className="text-xs text-primary-300">XMTP messaging</p>
             </button>

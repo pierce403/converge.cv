@@ -25,7 +25,9 @@ export function ChatList() {
   const contactsByAddress = useMemo(() => {
     const map = new Map<string, Contact>();
     contacts.forEach((contact) => {
-      map.set(contact.address.toLowerCase(), contact);
+      contact.addresses?.forEach((address) => {
+        map.set(address.toLowerCase(), contact);
+      });
     });
     return map;
   }, [contacts]);
@@ -33,9 +35,7 @@ export function ChatList() {
   const contactsByInboxId = useMemo(() => {
     const map = new Map<string, Contact>();
     contacts.forEach((contact) => {
-      if (contact.inboxId) {
-        map.set(contact.inboxId.toLowerCase(), contact);
-      }
+      map.set(contact.inboxId.toLowerCase(), contact);
     });
     return map;
   }, [contacts]);
@@ -138,7 +138,7 @@ export function ChatList() {
         {activeConversations.map((conversation) => {
           const contact = getContactForConversation(conversation);
           const defaultContactInfo = !conversation.isGroup
-            ? getContactInfo(contact?.address ?? conversation.peerId)
+            ? getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId)
             : undefined;
 
           const displayName = conversation.isGroup
@@ -147,15 +147,15 @@ export function ChatList() {
               || contact?.preferredName
               || contact?.name
               || defaultContactInfo?.name
-              || formatIdentifier(contact?.address ?? conversation.peerId);
+              || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
 
           const avatarSource = conversation.isGroup
             ? conversation.groupImage || conversation.displayAvatar
-            : conversation.displayAvatar || contact?.avatar || defaultContactInfo?.avatar;
+            : conversation.displayAvatar || contact?.preferredAvatar || contact?.avatar || defaultContactInfo?.avatar;
 
           const fallbackAvatarLabel = conversation.isGroup
             ? conversation.groupName || 'Group'
-            : contact?.address ?? conversation.peerId;
+            : contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
           const subtitle = conversation.lastMessagePreview
             || contact?.description
@@ -173,7 +173,7 @@ export function ChatList() {
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!conversation.isGroup) {
-                      setSelectedUser(contact?.address ?? conversation.peerId);
+                      setSelectedUser(contact?.inboxId ?? conversation.peerId);
                     }
                   }}
                   className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"

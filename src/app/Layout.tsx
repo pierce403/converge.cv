@@ -5,11 +5,17 @@ import { SyncProgressBar } from '@/components/SyncProgressBar';
 import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
+import { getXmtpClient } from '@/lib/xmtp';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
 import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
+import {
+  resolveFidFromAddress,
+  fetchFarcasterUserFromAPI,
+  resolveContactName,
+} from '@/lib/farcaster/service';
 
 
 export function Layout() {
@@ -30,6 +36,62 @@ export function Layout() {
 
   // Global message listener - handles ALL incoming XMTP messages
   useEffect(() => {
+    const shouldRefreshContact = (contact: Contact): boolean => {
+      const now = Date.now();
+      const lastSynced = contact.lastSyncedAt ?? 0;
+      const refreshIntervalMs = 30 * 60 * 1000; // 30 minutes
+      if (!contact.preferredName || !contact.preferredAvatar) {
+        return true;
+      }
+      return now - lastSynced > refreshIntervalMs;
+    };
+
+    const enrichContactProfile = async (contact: Contact) => {
+      try {
+        const primaryAddress = contact.primaryAddress ?? contact.addresses?.[0];
+        if (!primaryAddress) {
+          return;
+        }
+
+        if (!shouldRefreshContact(contact)) {
+          return;
+        }
+
+        let farcasterUser = null;
+        if (contact.farcasterFid) {
+          farcasterUser = await fetchFarcasterUserFromAPI(contact.farcasterFid);
+        }
+
+        if (!farcasterUser) {
+          const fid = await resolveFidFromAddress(primaryAddress);
+          if (!fid) {
+            return;
+          }
+          farcasterUser = await fetchFarcasterUserFromAPI(fid);
+        }
+
+        if (!farcasterUser) {
+          return;
+        }
+
+        const nameResolution = await resolveContactName(farcasterUser, primaryAddress);
+        const updates: Partial<Contact> = {
+          name: contact.name || nameResolution.name,
+          preferredName: nameResolution.preferredName ?? contact.preferredName ?? nameResolution.name,
+          avatar: farcasterUser.pfp_url || contact.avatar,
+          preferredAvatar: farcasterUser.pfp_url || contact.preferredAvatar,
+          description: farcasterUser.profile?.bio?.text ?? contact.description,
+          farcasterUsername: farcasterUser.username ?? contact.farcasterUsername,
+          farcasterFid: farcasterUser.fid ?? contact.farcasterFid,
+          lastSyncedAt: Date.now(),
+        };
+
+        await useContactStore.getState().updateContact(contact.inboxId, updates);
+      } catch (error) {
+        console.warn('[Layout] Failed to enrich contact profile:', error);
+      }
+    };
+
     const handleIncomingMessage = async (event: Event) => {
       const customEvent = event as CustomEvent<{ conversationId: string; message: XmtpMessage }>;
       const { conversationId, message } = customEvent.detail;
@@ -43,34 +105,28 @@ export function Layout() {
       try {
         const senderInboxId = message.senderAddress;
         const contactStore = useContactStore.getState();
-        let contact = contactStore.getContactByInboxId?.(senderInboxId)
-          ?? contactStore.getContactByAddress(senderInboxId);
+        const xmtp = getXmtpClient();
+        const profile = await xmtp.fetchInboxProfile(senderInboxId);
+        const contact = await contactStore.upsertContactProfile({
+          inboxId: senderInboxId,
+          displayName: profile.displayName,
+          avatarUrl: profile.avatarUrl,
+          primaryAddress: profile.primaryAddress,
+          addresses: profile.addresses,
+          identities: profile.identities,
+          source: 'inbox',
+        });
+
+        void enrichContactProfile(contact);
 
         const storage = await getStorage();
-
-        if (!contact) {
-          const inboxOnlyContact: Contact = {
-            address: senderInboxId,
-            name: senderInboxId,
-            createdAt: Date.now(),
-            source: 'inbox',
-            isInboxOnly: true,
-            inboxId: senderInboxId,
-          };
-          await contactStore.addContact(inboxOnlyContact);
-          contact = inboxOnlyContact;
-          console.log('[Layout] Created inbox-only contact:', senderInboxId);
-        } else if (!contact.inboxId) {
-          await contactStore.updateContact(contact.address, { inboxId: senderInboxId });
-          contact = { ...contact, inboxId: senderInboxId };
-        }
 
         let conversation = conversations.find((c) => c.id === conversationId);
 
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
 
-          const peerId = contact?.address ?? senderInboxId;
+          const peerId = contact.inboxId;
           const newConversation: Conversation = {
             id: conversationId,
             peerId,
@@ -80,8 +136,8 @@ export function Layout() {
             unreadCount: 0,
             pinned: false,
             archived: false,
-            displayName: contact?.preferredName ?? contact?.name,
-            displayAvatar: contact?.avatar,
+            displayName: contact.preferredName ?? contact.name,
+            displayAvatar: contact.preferredAvatar ?? contact.avatar,
           };
 
           addConversation(newConversation);
@@ -92,15 +148,13 @@ export function Layout() {
           conversation = newConversation;
         } else {
           const updates: Partial<Conversation> = {};
-          if (contact?.address && conversation.peerId !== contact.address) {
-            updates.peerId = contact.address;
-          }
-          const displayName = contact?.preferredName ?? contact?.name;
+          const displayName = contact.preferredName ?? contact.name;
           if (displayName && conversation.displayName !== displayName) {
             updates.displayName = displayName;
           }
-          if (contact?.avatar && conversation.displayAvatar !== contact.avatar) {
-            updates.displayAvatar = contact.avatar;
+          const avatar = contact.preferredAvatar ?? contact.avatar;
+          if (avatar && conversation.displayAvatar !== avatar) {
+            updates.displayAvatar = avatar;
           }
 
           if (Object.keys(updates).length > 0) {

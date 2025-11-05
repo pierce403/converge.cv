@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { getContactInfo } from '@/lib/default-contacts';
+import { useContactStore } from '@/lib/stores';
+import type { ContactIdentity } from '@/lib/stores/contact-store';
 
 interface UserInfoModalProps {
   address: string;
@@ -9,11 +11,16 @@ interface UserInfoModalProps {
 
 export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
   const [showQR, setShowQR] = useState(false);
-  const contactInfo = getContactInfo(address);
+  const contact = useContactStore((state) => state.getContactByInboxId(address) ?? state.getContactByAddress(address));
+  const contactInfo = getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? address);
 
   const truncate = (addr: string) => {
     return addr.length > 12 ? `${addr.slice(0, 10)}...${addr.slice(-8)}` : addr;
   };
+
+  const displayName = contact?.preferredName || contact?.name || contactInfo?.name || truncate(address);
+  const avatar = contact?.preferredAvatar || contact?.avatar || contactInfo?.avatar;
+  const identities = useMemo(() => contact?.identities ?? [], [contact?.identities]);
 
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -41,24 +48,22 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
           <div className="space-y-4">
             {/* Avatar and name */}
             <div className="flex flex-col items-center text-center">
-              <div className="w-20 h-20 rounded-full bg-primary-700/80 flex items-center justify-center text-3xl mb-3">
-                {contactInfo?.avatar ? (
-                  <span>{contactInfo.avatar}</span>
+              <div className="w-20 h-20 rounded-full bg-primary-700/80 flex items-center justify-center text-3xl mb-3 overflow-hidden">
+                {avatar ? (
+                  avatar.startsWith('http') ? (
+                    <img src={avatar} alt="Contact avatar" className="w-full h-full object-cover" />
+                  ) : (
+                    <span>{avatar}</span>
+                  )
                 ) : (
                   <span className="text-white font-semibold">
-                    {address.slice(2, 4).toUpperCase()}
+                    {address.slice(0, 2).toUpperCase()}
                   </span>
                 )}
               </div>
               
-              {contactInfo?.name ? (
-                <>
-                  <h3 className="text-lg font-semibold text-primary-100">{contactInfo.name}</h3>
-                  <p className="text-sm text-primary-300 mt-1">{truncate(address)}</p>
-                </>
-              ) : (
-                <h3 className="text-lg font-semibold text-primary-100">{truncate(address)}</h3>
-              )}
+              <h3 className="text-lg font-semibold text-primary-100">{displayName}</h3>
+              <p className="text-sm text-primary-300 mt-1">Inbox ID: {truncate(address)}</p>
             </div>
 
             {/* Description */}
@@ -69,22 +74,48 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
             )}
 
             {/* Address */}
-            <div>
-              <div className="text-xs text-primary-300 mb-1">Ethereum Address</div>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 text-xs font-mono bg-primary-900/50 px-3 py-2 rounded border border-primary-800/60 text-primary-100 truncate">
-                  {address}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(address)}
-                  className="p-2 text-primary-200 hover:text-primary-100 hover:bg-primary-900/50 rounded transition-colors"
-                  title="Copy address"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                </button>
+            <div className="space-y-3">
+              <div>
+                <div className="text-xs text-primary-300 mb-1">Inbox ID</div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs font-mono bg-primary-900/50 px-3 py-2 rounded border border-primary-800/60 text-primary-100 truncate">
+                    {address}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(address)}
+                    className="p-2 text-primary-200 hover:text-primary-100 hover:bg-primary-900/50 rounded transition-colors"
+                    title="Copy inbox ID"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
+
+              {identities.length > 0 && (
+                <div>
+                  <div className="text-xs text-primary-300 mb-1">Linked identities</div>
+                  <div className="space-y-1">
+                    {identities.map((identity: ContactIdentity, index: number) => (
+                      <div key={`${identity.kind}-${identity.identifier}-${index}`} className="flex items-center gap-2">
+                        <code className="flex-1 text-xs font-mono bg-primary-900/40 px-3 py-2 rounded border border-primary-800/50 text-primary-100 truncate">
+                          {identity.kind}: {truncate(identity.identifier)}
+                        </code>
+                        <button
+                          onClick={() => copyToClipboard(identity.identifier)}
+                          className="p-2 text-primary-200 hover:text-primary-100 hover:bg-primary-900/50 rounded transition-colors"
+                          title="Copy identifier"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Actions */}
@@ -110,4 +141,3 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
     </>
   );
 }
-

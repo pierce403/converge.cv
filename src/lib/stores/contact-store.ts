@@ -1,40 +1,150 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getStorage } from '@/lib/storage';
-import { 
-  fetchFarcasterUserFollowingFromAPI, 
+import { getXmtpClient } from '@/lib/xmtp';
+import {
+  fetchFarcasterUserFollowingFromAPI,
   resolveXmtpAddressFromFarcasterUser,
-  resolveContactName 
+  resolveContactName,
 } from '@/lib/farcaster/service';
 
+const normalizeInboxId = (inboxId: string): string => inboxId.toLowerCase();
+
+const normalizeAddress = (address: string): string =>
+  address.startsWith('0x') ? address.toLowerCase() : address.toLowerCase();
+
+const dedupe = (values: (string | undefined | null)[]): string[] => {
+  const set = new Set<string>();
+  for (const value of values) {
+    if (value) {
+      set.add(value);
+    }
+  }
+  return Array.from(set);
+};
+
+export interface ContactIdentity {
+  identifier: string;
+  kind: string;
+  displayLabel?: string;
+  isPrimary?: boolean;
+}
+
 export interface Contact {
-  address: string;
+  inboxId: string;
   name: string;
   avatar?: string;
   description?: string;
-  isBlocked?: boolean;
-  createdAt: number;
   preferredName?: string;
+  preferredAvatar?: string;
   notes?: string;
-  source?: 'farcaster' | 'inbox' | 'manual'; // Origin of contact
-  farcasterUsername?: string; // Farcaster username for profile link
-  farcasterFid?: number; // Farcaster FID
-  inboxId?: string; // XMTP inbox ID
-  isInboxOnly?: boolean; // True if contact only exists from incoming messages
+  createdAt: number;
+  source?: 'farcaster' | 'inbox' | 'manual';
+  isBlocked?: boolean;
+  isInboxOnly?: boolean;
+  primaryAddress?: string;
+  addresses?: string[];
+  identities?: ContactIdentity[];
+  farcasterUsername?: string;
+  farcasterFid?: number;
+  lastSyncedAt?: number;
 }
+
+type ContactUpdates = Partial<Omit<Contact, 'inboxId' | 'identities' | 'addresses'>> & {
+  identities?: ContactIdentity[];
+  addresses?: string[];
+};
 
 interface ContactState {
   contacts: Contact[];
   isLoading: boolean;
   addContact: (contact: Contact) => Promise<void>;
-  removeContact: (address: string) => Promise<void>;
-  updateContact: (address: string, updates: Partial<Contact>) => Promise<void>;
+  removeContact: (inboxId: string) => Promise<void>;
+  updateContact: (inboxId: string, updates: ContactUpdates) => Promise<void>;
   loadContacts: () => Promise<void>;
-  isContact: (address: string) => boolean;
-  getContactByAddress: (address: string) => Contact | undefined;
+  isContact: (inboxId: string) => boolean;
   getContactByInboxId: (inboxId: string) => Contact | undefined;
-  syncFarcasterContacts: (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => Promise<void>;
+  getContactByAddress: (address: string) => Contact | undefined;
+  upsertContactProfile: (profile: ContactProfileInput) => Promise<Contact>;
+  syncFarcasterContacts: (
+    fid: number,
+    onProgress?: (current: number, total: number, status?: string) => void
+  ) => Promise<void>;
 }
+
+export interface ContactProfileInput {
+  inboxId: string;
+  displayName?: string;
+  avatarUrl?: string;
+  primaryAddress?: string;
+  addresses?: string[];
+  identities?: ContactIdentity[];
+  source?: 'farcaster' | 'inbox' | 'manual';
+  metadata?: Partial<Contact>;
+}
+
+const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact => {
+  const addresses = dedupe([
+    ...(updates.addresses ?? []),
+    ...(existing.addresses ?? []),
+    existing.primaryAddress,
+    updates.primaryAddress,
+  ]);
+
+  const identities = (() => {
+    const merged = [...(existing.identities ?? [])];
+    const incoming = updates.identities ?? [];
+    for (const identity of incoming) {
+      const idx = merged.findIndex(
+        (entry) =>
+          entry.identifier.toLowerCase() === identity.identifier.toLowerCase() &&
+          entry.kind === identity.kind
+      );
+      if (idx >= 0) {
+        merged[idx] = { ...merged[idx], ...identity };
+      } else {
+        merged.push(identity);
+      }
+    }
+    return merged;
+  })();
+
+  return {
+    ...existing,
+    ...updates,
+    name: updates.name ?? existing.name,
+    avatar: updates.avatar ?? existing.avatar,
+    preferredName: updates.preferredName ?? existing.preferredName,
+    preferredAvatar: updates.preferredAvatar ?? existing.preferredAvatar,
+    addresses,
+    identities,
+    primaryAddress: updates.primaryAddress ?? existing.primaryAddress ?? addresses[0],
+  };
+};
+
+const normaliseContactInput = (contact: Contact): Contact => {
+  const normalizedInboxId = normalizeInboxId(contact.inboxId);
+  const addresses = dedupe([
+    ...(contact.addresses ?? []),
+    contact.primaryAddress,
+  ]).map(normalizeAddress);
+
+  return {
+    ...contact,
+    inboxId: normalizedInboxId,
+    name: contact.name || contact.preferredName || normalizedInboxId,
+    addresses,
+    primaryAddress: contact.primaryAddress ?? addresses[0],
+    identities:
+      contact.identities && contact.identities.length > 0
+        ? contact.identities
+        : addresses.map((address, index) => ({
+            identifier: address,
+            kind: 'Ethereum',
+            isPrimary: index === 0,
+          })),
+  };
+};
 
 export const useContactStore = create<ContactState>()(
   persist(
@@ -42,38 +152,57 @@ export const useContactStore = create<ContactState>()(
       contacts: [],
       isLoading: false,
 
-      addContact: async (contact) => {
+      addContact: async (rawContact) => {
+        const contact = normaliseContactInput(rawContact);
         const storage = await getStorage();
-        const existingContact = get().contacts.find(c => c.address.toLowerCase() === contact.address.toLowerCase());
+        const contacts = get().contacts;
+        const existingContact = contacts.find(
+          (c) => normalizeInboxId(c.inboxId) === normalizeInboxId(contact.inboxId)
+        );
         if (existingContact) {
-          console.warn('Contact already exists:', contact.address);
+          console.warn('Contact already exists:', contact.inboxId);
           return;
         }
         set((state) => ({ contacts: [...state.contacts, contact] }));
         await storage.putContact(contact);
       },
 
-      removeContact: async (address) => {
-        const storage = await getStorage();
-        set((state) => ({ contacts: state.contacts.filter(c => c.address.toLowerCase() !== address.toLowerCase()) }));
-        await storage.deleteContact(address);
-      },
-
-      updateContact: async (address, updates) => {
+      removeContact: async (inboxId) => {
         const storage = await getStorage();
         set((state) => ({
-          contacts: state.contacts.map(c =>
-            c.address.toLowerCase() === address.toLowerCase() ? { ...c, ...updates } : c
+          contacts: state.contacts.filter(
+            (c) => normalizeInboxId(c.inboxId) !== normalizeInboxId(inboxId)
           ),
         }));
-        await storage.updateContact(address, updates);
+        await storage.deleteContact(inboxId);
+      },
+
+      updateContact: async (inboxId, updates) => {
+        const storage = await getStorage();
+        set((state) => {
+          const merged = state.contacts.map((contact) => {
+            if (normalizeInboxId(contact.inboxId) !== normalizeInboxId(inboxId)) {
+              return contact;
+            }
+            return mergeContactData(contact, updates);
+          });
+          return { contacts: merged };
+        });
+        const contact = get().contacts.find(
+          (c) => normalizeInboxId(c.inboxId) === normalizeInboxId(inboxId)
+        );
+        if (contact) {
+          await storage.putContact(contact);
+        }
       },
 
       loadContacts: async () => {
         set({ isLoading: true });
         try {
           const storage = await getStorage();
-          const loadedContacts = await storage.listContacts();
+          const loadedContacts = (await storage.listContacts()).map((contact) =>
+            normaliseContactInput(contact)
+          );
           set({ contacts: loadedContacts });
         } catch (error) {
           console.error('Failed to load contacts:', error);
@@ -82,18 +211,131 @@ export const useContactStore = create<ContactState>()(
         }
       },
 
-      isContact: (address) => {
-        return get().contacts.some(c => c.address.toLowerCase() === address.toLowerCase());
-      },
-
-      getContactByAddress: (address) => {
-        return get().contacts.find(c => c.address.toLowerCase() === address.toLowerCase());
+      isContact: (inboxId) => {
+        const normalized = normalizeInboxId(inboxId);
+        return get().contacts.some((c) => normalizeInboxId(c.inboxId) === normalized);
       },
 
       getContactByInboxId: (inboxId) => {
-        return get().contacts.find(
-          (c) => c.inboxId !== undefined && c.inboxId.toLowerCase() === inboxId.toLowerCase()
+        const normalized = normalizeInboxId(inboxId);
+        return get().contacts.find((c) => normalizeInboxId(c.inboxId) === normalized);
+      },
+
+      getContactByAddress: (address) => {
+        const normalized = normalizeAddress(address);
+        return get().contacts.find((c) =>
+          c.addresses?.some((entry) => normalizeAddress(entry) === normalized)
         );
+      },
+
+      upsertContactProfile: async (profile) => {
+        const storage = await getStorage();
+        const normalizedInboxId = normalizeInboxId(profile.inboxId);
+
+        const computedAddresses = dedupe([
+          ...(profile.addresses ?? []),
+          profile.primaryAddress,
+          profile.metadata?.primaryAddress,
+        ]).map(normalizeAddress);
+        const addressSet = new Set(computedAddresses);
+
+        const existing =
+          get().contacts.find(
+            (contact) => normalizeInboxId(contact.inboxId) === normalizedInboxId
+          ) ??
+          get().contacts.find((contact) => {
+            if (normalizeInboxId(contact.inboxId) === normalizedInboxId) {
+              return true;
+            }
+            const contactAddresses = dedupe([
+              contact.primaryAddress,
+              ...(contact.addresses ?? []),
+            ])
+              .filter(Boolean)
+              .map((address) => normalizeAddress(address!));
+            return contactAddresses.some((address) => addressSet.has(address));
+          });
+
+        const identities: ContactIdentity[] =
+          profile.identities && profile.identities.length > 0
+            ? profile.identities
+            : computedAddresses.map((address, index) => ({
+                identifier: address,
+                kind: 'Ethereum',
+                isPrimary: index === 0,
+              }));
+
+        const baseContact: Contact = existing
+          ? mergeContactData(existing, {
+              name: profile.displayName ?? existing.name,
+              avatar: profile.avatarUrl ?? existing.avatar,
+              primaryAddress: profile.primaryAddress ?? existing.primaryAddress,
+              source: profile.source ?? existing.source,
+              addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
+              identities,
+              lastSyncedAt: Date.now(),
+            })
+          : normaliseContactInput({
+              inboxId: normalizedInboxId,
+              name:
+                profile.displayName ??
+                profile.metadata?.preferredName ??
+                computedAddresses[0] ??
+                normalizedInboxId,
+              avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+              description: profile.metadata?.description,
+              preferredName: profile.metadata?.preferredName,
+              preferredAvatar: profile.metadata?.preferredAvatar,
+              notes: profile.metadata?.notes,
+              source: profile.source ?? profile.metadata?.source ?? 'inbox',
+              createdAt: profile.metadata?.createdAt ?? Date.now(),
+              isBlocked: profile.metadata?.isBlocked ?? false,
+              isInboxOnly: profile.metadata?.isInboxOnly ?? false,
+              primaryAddress: profile.primaryAddress ?? computedAddresses[0],
+              farcasterUsername: profile.metadata?.farcasterUsername,
+              farcasterFid: profile.metadata?.farcasterFid,
+              addresses: computedAddresses,
+              identities,
+              lastSyncedAt: Date.now(),
+            } as Contact);
+
+        const existingNormalizedInboxId = existing ? normalizeInboxId(existing.inboxId) : null;
+        const finalContact: Contact =
+          existing && existingNormalizedInboxId && existingNormalizedInboxId !== normalizedInboxId
+            ? { ...baseContact, inboxId: normalizedInboxId }
+            : baseContact;
+
+        set((state) => {
+          const withoutLegacyId =
+            existing && existingNormalizedInboxId && existingNormalizedInboxId !== normalizedInboxId
+              ? state.contacts.filter(
+                  (contact) => normalizeInboxId(contact.inboxId) !== existingNormalizedInboxId
+                )
+              : state.contacts;
+
+          const replacementIndex = withoutLegacyId.findIndex(
+            (contact) => normalizeInboxId(contact.inboxId) === normalizedInboxId
+          );
+
+          if (replacementIndex >= 0) {
+            const updated = [...withoutLegacyId];
+            updated[replacementIndex] = finalContact;
+            return { contacts: updated };
+          }
+
+          return { contacts: [...withoutLegacyId, finalContact] };
+        });
+
+        if (existing && existingNormalizedInboxId && existingNormalizedInboxId !== normalizedInboxId) {
+          try {
+            await storage.deleteContact(existing.inboxId);
+          } catch (error) {
+            console.warn('Failed to delete legacy contact record during inboxId migration:', error);
+          }
+        }
+
+        await storage.putContact(finalContact);
+        return finalContact;
       },
 
       syncFarcasterContacts: async (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => {
@@ -130,33 +372,43 @@ export const useContactStore = create<ContactState>()(
             // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
             const nameResolution = await resolveContactName(user, xmtpAddress);
             
-            const existingContact = get().contacts.find(c => c.address.toLowerCase() === xmtpAddress.toLowerCase());
+            const existingContact = get().contacts.find(
+              (contact) =>
+                contact.addresses?.some((addr) => normalizeAddress(addr) === normalizeAddress(xmtpAddress))
+            );
             
             onProgress?.(current, total, existingContact 
               ? `Updating existing contact: ${nameResolution.preferredName || nameResolution.name}...`
               : `Adding new contact: ${nameResolution.preferredName || nameResolution.name}...`);
             
-            const contact: Contact = {
-              address: xmtpAddress,
-              name: nameResolution.name,
+            const inboxId =
+              existingContact?.inboxId ??
+              (await getXmtpClient().deriveInboxIdFromAddress?.(xmtpAddress)) ??
+              xmtpAddress;
+
+            const contact: Contact = normaliseContactInput({
+              inboxId,
+              name: nameResolution.preferredName || nameResolution.name || inboxId,
               preferredName: nameResolution.preferredName,
-              // Only use Farcaster avatar if no existing avatar
               avatar: existingContact?.avatar || user.pfp_url,
               createdAt: existingContact?.createdAt || Date.now(),
-              source: 'farcaster', // Upgrade from inbox-only to farcaster
+              source: 'farcaster',
               farcasterUsername: user.username,
               farcasterFid: user.fid,
-              // Keep existing inbox ID if present
-              inboxId: existingContact?.inboxId,
-              isInboxOnly: false, // No longer inbox-only after merge
-            };
+              isInboxOnly: false,
+              addresses: dedupe([xmtpAddress, existingContact?.primaryAddress, ...(existingContact?.addresses ?? [])]),
+              primaryAddress: existingContact?.primaryAddress ?? xmtpAddress,
+              identities: existingContact?.identities ?? [],
+              preferredAvatar: existingContact?.preferredAvatar,
+              notes: existingContact?.notes,
+            } as Contact);
 
             if (existingContact) {
               // Update existing contact (merge with Farcaster data)
-              await storage.updateContact(xmtpAddress, contact);
+              await storage.putContact(contact);
               set((state) => ({
-                contacts: state.contacts.map(c =>
-                  c.address.toLowerCase() === xmtpAddress.toLowerCase() ? { ...c, ...contact } : c
+                contacts: state.contacts.map((c) =>
+                  normalizeInboxId(c.inboxId) === normalizeInboxId(contact.inboxId) ? contact : c
                 ),
               }));
               updatedContacts.push(contact);

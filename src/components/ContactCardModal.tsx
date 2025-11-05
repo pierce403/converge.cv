@@ -14,7 +14,8 @@ interface InboxState {
 }
 
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
-  const { updateContact } = useContactStore();
+  const updateContact = useContactStore((state) => state.updateContact);
+  const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
   const [preferredName, setPreferredName] = useState(contact.preferredName || '');
   const [notes, setNotes] = useState(contact.notes || '');
   const [isSaving, setIsSaving] = useState(false);
@@ -69,15 +70,27 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           setIsRefreshing(false);
           return;
         }
-        const resolvedInboxId = await xmtp.getInboxIdFromAddress(contact.address);
+        const lookupAddress = contact.primaryAddress ?? contact.addresses?.[0];
+        if (!lookupAddress) {
+          setRefreshError('No primary address available to resolve inbox ID.');
+          setIsRefreshing(false);
+          return;
+        }
+        const resolvedInboxId = await xmtp.getInboxIdFromAddress(lookupAddress);
         if (!resolvedInboxId) {
           setRefreshError('No inbox ID found for this address. They may not be registered on XMTP.');
           setIsRefreshing(false);
           return;
         }
         inboxId = resolvedInboxId;
-        // Update contact with inbox ID
-        await updateContact(contact.address, { inboxId });
+        // Update contact with inbox ID and ensure profile stored against new key
+        await upsertContactProfile({
+          inboxId,
+          primaryAddress: lookupAddress.toLowerCase(),
+          addresses: [lookupAddress.toLowerCase()],
+          source: contact.source ?? 'inbox',
+          metadata: contact,
+        });
       }
 
       // Get inbox state with all linked identities using Utils
@@ -99,6 +112,14 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           accountAddresses,
         };
         setInboxState(newInboxState);
+
+        await upsertContactProfile({
+          inboxId,
+          primaryAddress: newInboxState.accountAddresses[0]?.toLowerCase(),
+          addresses: newInboxState.accountAddresses.map((addr) => addr.toLowerCase()),
+          source: contact.source ?? 'inbox',
+          metadata: contact,
+        });
       } else {
         setRefreshError('Failed to load inbox state');
       }
@@ -113,7 +134,11 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await updateContact(contact.address, { preferredName, notes });
+      const targetInboxId = contact.inboxId ?? contact.primaryAddress ?? contact.addresses?.[0];
+      if (!targetInboxId) {
+        throw new Error('Unable to resolve inbox ID for contact update');
+      }
+      await updateContact(targetInboxId, { preferredName, notes });
       onClose();
     } catch (error) {
       console.error('Failed to save contact details:', error);
@@ -227,10 +252,15 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             )}
             <div className="flex items-center bg-primary-800 rounded-lg p-2">
               <span className="flex-1 text-primary-50 text-sm truncate font-mono">
-                {inboxState?.inboxId || contact.inboxId || contact.address}
+                {inboxState?.inboxId || contact.inboxId || contact.primaryAddress || 'Unknown'}
               </span>
               <button
-                onClick={() => handleCopy(inboxState?.inboxId || contact.inboxId || contact.address, 'Inbox ID')}
+                onClick={() =>
+                  handleCopy(
+                    inboxState?.inboxId || contact.inboxId || contact.primaryAddress || '',
+                    'Inbox ID'
+                  )
+                }
                 className="ml-2 p-1 rounded-md hover:bg-primary-700 transition-colors"
                 title="Copy Inbox ID"
               >

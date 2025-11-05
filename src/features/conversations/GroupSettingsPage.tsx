@@ -43,7 +43,7 @@ export function GroupSettingsPage() {
   const [newMemberAddress, setNewMemberAddress] = useState('');
   const [isContactPickerOpen, setIsContactPickerOpen] = useState(false);
   const [contactSearchTerm, setContactSearchTerm] = useState('');
-  const [selectedContactAddresses, setSelectedContactAddresses] = useState<string[]>([]);
+  const [selectedContactInboxIds, setSelectedContactInboxIds] = useState<string[]>([]);
   const [isAddingContacts, setIsAddingContacts] = useState(false);
 
   useEffect(() => {
@@ -53,7 +53,12 @@ export function GroupSettingsPage() {
   const contactsByAddress = useMemo(() => {
     const map = new Map<string, Contact>();
     for (const contact of contacts) {
-      map.set(contact.address.toLowerCase(), contact);
+      if (contact.primaryAddress) {
+        map.set(contact.primaryAddress.toLowerCase(), contact);
+      }
+      contact.addresses?.forEach((address) => {
+        map.set(address.toLowerCase(), contact);
+      });
     }
     return map;
   }, [contacts]);
@@ -61,9 +66,7 @@ export function GroupSettingsPage() {
   const contactsByInboxId = useMemo(() => {
     const map = new Map<string, Contact>();
     for (const contact of contacts) {
-      if (contact.inboxId) {
-        map.set(contact.inboxId.toLowerCase(), contact);
-      }
+      map.set(contact.inboxId.toLowerCase(), contact);
     }
     return map;
   }, [contacts]);
@@ -105,7 +108,7 @@ export function GroupSettingsPage() {
       const contactByInbox = contactsByInboxId.get(inboxLower);
       const contact = contactByAddress ?? contactByInbox;
 
-      const resolvedAddress = normalizedAddress ?? contact?.address;
+      const resolvedAddress = normalizedAddress ?? contact?.primaryAddress;
       const displayName = member.displayName
         ?? contact?.preferredName
         ?? contact?.name
@@ -193,7 +196,7 @@ export function GroupSettingsPage() {
     }
 
     return false;
-  }, [conversation, identity, memberEntries]);
+  }, [conversation, identity, memberEntries, adminAddressSet, adminInboxSet]);
 
   const normalizedNewMemberAddress = useMemo(() => {
     const value = newMemberAddress.trim();
@@ -220,17 +223,20 @@ export function GroupSettingsPage() {
   const availableContacts = useMemo(() => {
     const currentIdentityAddress = identity?.address?.toLowerCase();
     return contacts.filter((contact) => {
-      const addressLower = contact.address.toLowerCase();
-      if (currentIdentityAddress && addressLower === currentIdentityAddress) {
-        return false;
-      }
-      if (existingMemberIdentifiers.has(addressLower)) {
+      const primaryLower = contact.primaryAddress?.toLowerCase();
+      if (currentIdentityAddress && primaryLower && primaryLower === currentIdentityAddress) {
         return false;
       }
       if (contact.inboxId && existingMemberIdentifiers.has(contact.inboxId.toLowerCase())) {
         return false;
       }
-      return true;
+      if (primaryLower && existingMemberIdentifiers.has(primaryLower)) {
+        return false;
+      }
+      const anyAddressAlreadyMember = contact.addresses
+        ?.map((addr) => addr.toLowerCase())
+        .some((addr) => existingMemberIdentifiers.has(addr));
+      return !anyAddressAlreadyMember;
     });
   }, [contacts, existingMemberIdentifiers, identity?.address]);
 
@@ -242,24 +248,30 @@ export function GroupSettingsPage() {
     return availableContacts.filter((contact) => {
       const preferred = contact.preferredName?.toLowerCase() ?? '';
       const name = contact.name?.toLowerCase() ?? '';
-      const address = contact.address.toLowerCase();
-      return preferred.includes(query) || name.includes(query) || address.includes(query);
+      const primary = contact.primaryAddress?.toLowerCase() ?? '';
+      const addresses = contact.addresses?.map((addr) => addr.toLowerCase()) ?? [];
+      return (
+        preferred.includes(query) ||
+        name.includes(query) ||
+        primary.includes(query) ||
+        addresses.some((addr) => addr.includes(query))
+      );
     });
   }, [availableContacts, contactSearchTerm]);
 
-  const toggleContactSelection = (address: string) => {
-    setSelectedContactAddresses((prev) => {
-      const normalized = address.toLowerCase();
+  const toggleContactSelection = (inboxId: string) => {
+    setSelectedContactInboxIds((prev) => {
+      const normalized = inboxId.toLowerCase();
       const has = prev.some((entry) => entry.toLowerCase() === normalized);
       if (has) {
         return prev.filter((entry) => entry.toLowerCase() !== normalized);
       }
-      return [...prev, address];
+      return [...prev, inboxId];
     });
   };
 
   const resetContactSelectionState = () => {
-    setSelectedContactAddresses([]);
+    setSelectedContactInboxIds([]);
     setContactSearchTerm('');
   };
 
@@ -272,7 +284,7 @@ export function GroupSettingsPage() {
   };
 
   const handleConfirmContactSelection = async () => {
-    if (selectedContactAddresses.length === 0) {
+    if (selectedContactInboxIds.length === 0) {
       return;
     }
 
@@ -284,8 +296,18 @@ export function GroupSettingsPage() {
     setIsAddingContacts(true);
     setError('');
     try {
-      const selectionCount = selectedContactAddresses.length;
-      await addMembersToGroup(conversation.id, selectedContactAddresses);
+      const payload = selectedContactInboxIds.map((inboxId) => {
+        const normalized = inboxId.toLowerCase();
+        const contact = contactsByInboxId.get(normalized);
+        const address = contact?.primaryAddress ?? contact?.addresses?.[0];
+        if (address && isEthereumAddress(address)) {
+          return safeNormalizeAddress(address);
+        }
+        return inboxId;
+      });
+      const uniqueMembers = Array.from(new Set(payload));
+      const selectionCount = uniqueMembers.length;
+      await addMembersToGroup(conversation.id, uniqueMembers);
       resetContactSelectionState();
       setIsContactPickerOpen(false);
       alert(selectionCount === 1 ? 'Member added!' : 'Members added!');
@@ -563,15 +585,19 @@ export function GroupSettingsPage() {
                     ) : (
                       <ul className="divide-y divide-primary-900/60">
                         {filteredContacts.map((contact) => {
-                          const isSelected = selectedContactAddresses.some(
-                            (address) => address.toLowerCase() === contact.address.toLowerCase()
+                          const normalizedInboxId = contact.inboxId.toLowerCase();
+                          const isSelected = selectedContactInboxIds.some(
+                            (entry) => entry.toLowerCase() === normalizedInboxId
                           );
-                          const avatarContent = renderContactAvatar(contact.avatar, contact.address);
+                          const avatarContent = renderContactAvatar(
+                            contact.preferredAvatar ?? contact.avatar,
+                            contact.primaryAddress ?? contact.addresses?.[0] ?? contact.inboxId
+                          );
                           return (
-                            <li key={contact.address}>
+                            <li key={contact.inboxId}>
                               <button
                                 type="button"
-                                onClick={() => toggleContactSelection(contact.address)}
+                                onClick={() => toggleContactSelection(contact.inboxId)}
                                 className={`flex items-center gap-3 w-full text-left px-3 py-2 transition-colors ${
                                   isSelected ? 'bg-primary-800/60 border-l-2 border-accent-500' : 'hover:bg-primary-800/40'
                                 }`}
@@ -584,7 +610,7 @@ export function GroupSettingsPage() {
                                   {contact.preferredName && contact.preferredName !== contact.name && (
                                     <p className="text-xs text-primary-400 truncate">{contact.name}</p>
                                   )}
-                                  <p className="text-xs text-primary-300 truncate">{formatIdentifier(contact.address)}</p>
+                                  <p className="text-xs text-primary-300 truncate">{formatIdentifier(contact.primaryAddress ?? contact.addresses?.[0] ?? contact.inboxId)}</p>
                                 </div>
                                 <div className="w-5 h-5 flex items-center justify-center">
                                   {isSelected && (
@@ -599,7 +625,7 @@ export function GroupSettingsPage() {
                     )}
                   </div>
                   <div className="flex items-center justify-between text-sm text-primary-200">
-                    <span>{selectedContactAddresses.length} selected</span>
+                    <span>{selectedContactInboxIds.length} selected</span>
                     <div className="flex gap-2">
                       <button
                         className="btn-secondary"
@@ -611,7 +637,7 @@ export function GroupSettingsPage() {
                       <button
                         className="btn-primary"
                         onClick={handleConfirmContactSelection}
-                        disabled={selectedContactAddresses.length === 0 || isAddingContacts}
+                        disabled={selectedContactInboxIds.length === 0 || isAddingContacts}
                       >
                         {isAddingContacts ? 'Adding…' : 'Add selected'}
                       </button>

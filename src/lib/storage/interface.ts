@@ -54,10 +54,10 @@ export interface StorageDriver {
 
   // Contacts
   putContact(contact: Contact): Promise<void>;
-  getContact(address: string): Promise<Contact | undefined>;
+  getContact(inboxId: string): Promise<Contact | undefined>;
   listContacts(): Promise<Contact[]>;
-  deleteContact(address: string): Promise<void>;
-  updateContact(address: string, updates: Partial<Contact>): Promise<void>;
+  deleteContact(inboxId: string): Promise<void>;
+  updateContact(inboxId: string, updates: Partial<Contact>): Promise<void>;
 
   // Vault secrets
   putVaultSecrets(secrets: VaultSecrets): Promise<void>;

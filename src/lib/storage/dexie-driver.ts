@@ -58,6 +58,64 @@ class ConvergeDB extends Dexie {
           )
         );
       });
+
+    this.version(3)
+      .stores({
+        conversations: 'id, lastMessageAt, pinned, archived, peerId',
+        messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+        attachments: 'id, messageId',
+        attachmentData: 'id',
+        identity: 'address, inboxId',
+        vaultSecrets: 'method',
+        contacts: '&inboxId, primaryAddress, *addresses',
+      })
+      .upgrade(async (transaction) => {
+        const contactsTable = transaction.table('contacts');
+        const existingContacts = await contactsTable.toArray();
+        await contactsTable.clear();
+
+        for (const rawContact of existingContacts as Array<Contact & { address?: string }>) {
+          const fallbackAddress =
+            rawContact.primaryAddress ??
+            rawContact.address ??
+            rawContact.addresses?.[0];
+          const inboxId = rawContact.inboxId ?? rawContact.address;
+
+          if (!inboxId) {
+            continue;
+          }
+
+          const dedupedAddresses = new Set<string>();
+          if (rawContact.addresses) {
+            for (const entry of rawContact.addresses) {
+              if (entry) {
+                dedupedAddresses.add(entry.toLowerCase());
+              }
+            }
+          }
+          if (rawContact.primaryAddress) {
+            dedupedAddresses.add(rawContact.primaryAddress.toLowerCase());
+          }
+          if (fallbackAddress) {
+            dedupedAddresses.add(fallbackAddress.toLowerCase());
+          }
+
+          const migratedContact: Contact = {
+            ...rawContact,
+            inboxId,
+            primaryAddress: rawContact.primaryAddress
+              ? rawContact.primaryAddress.toLowerCase()
+              : fallbackAddress?.toLowerCase(),
+            addresses: Array.from(dedupedAddresses),
+            createdAt: rawContact.createdAt ?? Date.now(),
+          };
+
+          // @ts-expect-error - remove legacy field
+          delete migratedContact.address;
+
+          await contactsTable.put(migratedContact);
+        }
+      });
   }
 }
 
@@ -245,20 +303,20 @@ export class DexieDriver implements StorageDriver {
     await this.db.contacts.put(contact);
   }
 
-  async getContact(address: string): Promise<Contact | undefined> {
-    return await this.db.contacts.get(address);
+  async getContact(inboxId: string): Promise<Contact | undefined> {
+    return await this.db.contacts.get(inboxId);
   }
 
   async listContacts(): Promise<Contact[]> {
     return await this.db.contacts.toArray();
   }
 
-  async deleteContact(address: string): Promise<void> {
-    await this.db.contacts.delete(address);
+  async deleteContact(inboxId: string): Promise<void> {
+    await this.db.contacts.delete(inboxId);
   }
 
-  async updateContact(address: string, updates: Partial<Contact>): Promise<void> {
-    await this.db.contacts.update(address, updates);
+  async updateContact(inboxId: string, updates: Partial<Contact>): Promise<void> {
+    await this.db.contacts.update(inboxId, updates);
   }
 
   // Vault secrets
@@ -347,4 +405,3 @@ export class DexieDriver implements StorageDriver {
     return 0;
   }
 }
-
