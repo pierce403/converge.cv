@@ -7,6 +7,7 @@ import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { getContactInfo } from '@/lib/default-contacts';
+import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
@@ -146,7 +147,7 @@ export function ConversationView() {
   } as ContactType);
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
-    if (avatar && avatar.startsWith('http')) {
+    if (isDisplayableImageSrc(avatar)) {
       return <img src={avatar} alt="Conversation avatar" className="w-full h-full rounded-full object-cover" />;
     }
     if (avatar) {

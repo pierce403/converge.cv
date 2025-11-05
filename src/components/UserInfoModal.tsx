@@ -5,6 +5,7 @@ import { useContactStore } from '@/lib/stores';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import type { ContactIdentity } from '@/lib/stores/contact-store';
 import { getXmtpClient } from '@/lib/xmtp';
+import { isDisplayableImageSrc } from '@/lib/utils/image';
 
 interface UserInfoModalProps {
   inboxId: string;
@@ -83,7 +84,7 @@ export function UserInfoModal({ inboxId, onClose }: UserInfoModalProps) {
             <div className="flex flex-col items-center text-center">
               <div className="w-20 h-20 rounded-full bg-primary-700/80 flex items-center justify-center text-3xl mb-3 overflow-hidden">
                 {avatar ? (
-                  avatar.startsWith('http') ? (
+                  isDisplayableImageSrc(avatar) ? (
                     <img src={avatar} alt="Contact avatar" className="w-full h-full object-cover" />
                   ) : (
                     <span>{avatar}</span>

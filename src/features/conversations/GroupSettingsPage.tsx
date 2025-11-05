@@ -4,6 +4,7 @@ import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
 import { getAddress } from 'viem';
 import type { GroupMember } from '@/types';
+import { isDisplayableImageSrc } from '@/lib/utils/image';
 import type { Contact } from '@/lib/stores/contact-store';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -503,7 +504,7 @@ export function GroupSettingsPage() {
   const getContactDisplayName = (contact: Contact) => contact.preferredName || contact.name;
 
   const renderContactAvatar = (avatar: string | undefined, fallback: string) => {
-    if (avatar && avatar.startsWith('http')) {
+    if (isDisplayableImageSrc(avatar)) {
       return <img src={avatar} alt="Contact avatar" className="w-full h-full rounded-full object-cover" />;
     }
     if (avatar) {
@@ -733,7 +734,7 @@ export function GroupSettingsPage() {
                 const avatar = getMemberAvatar(member);
                 const fallbackLabel = member.address ?? member.inboxId;
                 const avatarContent = avatar
-                  ? avatar.startsWith('http')
+                  ? isDisplayableImageSrc(avatar)
                     ? <img src={avatar} alt="Member avatar" className="w-full h-full rounded-full object-cover" />
                     : <span className="text-lg" aria-hidden>{avatar}</span>
                   : <span className="text-white font-semibold" aria-hidden>{fallbackLabel.slice(0, 2).toUpperCase()}</span>;

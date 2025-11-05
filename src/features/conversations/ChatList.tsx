@@ -10,6 +10,7 @@ import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
+import { isDisplayableImageSrc } from '@/lib/utils/image';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
@@ -52,7 +53,7 @@ export function ChatList() {
   };
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
-    if (avatar && avatar.startsWith('http')) {
+    if (isDisplayableImageSrc(avatar)) {
       return (
         <img
           src={avatar}
