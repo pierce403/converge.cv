@@ -39,7 +39,10 @@ export function InstallationsSettings() {
       // This allows viewing/revoking installations when connection failed due to 10/10 limit
       console.log('[Installations] Loading installations, connected:', xmtp.isConnected());
       
-      const inboxState = await xmtp.getInboxState();
+      type SafeInboxStateLite = {
+        installations?: Array<{ id: string; clientTimestampNs?: bigint }>;
+      };
+      const inboxState = (await xmtp.getInboxState()) as unknown as SafeInboxStateLite;
       console.log('[Installations] Inbox state:', inboxState);
       
       // Sort installations by creation date (newest first)
@@ -62,15 +65,15 @@ export function InstallationsSettings() {
             keyPackageStatus: statuses.get(installation.id),
           }));
           
-          setInstallations(installationsWithStatus);
+          setInstallations(installationsWithStatus as unknown as Installation[]);
         } catch (statusErr) {
           console.warn('[Installations] Failed to fetch key package statuses:', statusErr);
           // Still show installations even if status fetch fails
-          setInstallations(sortedInstallations);
+          setInstallations(sortedInstallations as unknown as Installation[]);
         }
       } else {
         // Show installations without status if not connected
-        setInstallations(sortedInstallations);
+        setInstallations(sortedInstallations as unknown as Installation[]);
       }
     } catch (err) {
       console.error('[Installations] Failed to load:', err);

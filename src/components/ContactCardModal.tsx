@@ -43,9 +43,13 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
   const loadInboxState = async (inboxId: string) => {
     try {
-      const { Utils } = await import('@xmtp/browser-sdk');
-      const utils = new Utils(false);
-      const states = await utils.inboxStateFromInboxIds([inboxId], 'production');
+      type SafeInboxStateLite = {
+        inboxId: string;
+        identifiers?: Array<{ identifierKind: string; identifier: string }>;
+      };
+      const { getXmtpUtils } = await import('@/lib/xmtp/utils-singleton');
+      const utils = await getXmtpUtils();
+      const states = (await utils.inboxStateFromInboxIds([inboxId], 'production')) as unknown as SafeInboxStateLite[];
       const state = states[0];
       if (state) {
         // Extract Ethereum addresses from identifiers
@@ -141,9 +145,13 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       }
 
       // Get inbox state with all linked identities using Utils
-      const { Utils } = await import('@xmtp/browser-sdk');
-      const utils = new Utils(false);
-      const states = await utils.inboxStateFromInboxIds([inboxId], 'production');
+      type SafeInboxStateLite = {
+        inboxId: string;
+        identifiers?: Array<{ identifierKind: string; identifier: string }>;
+      };
+      const { getXmtpUtils } = await import('@/lib/xmtp/utils-singleton');
+      const utils = await getXmtpUtils();
+      const states = (await utils.inboxStateFromInboxIds([inboxId], 'production')) as unknown as SafeInboxStateLite[];
       const state = states[0];
       
       if (state) {

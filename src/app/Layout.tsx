@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
+import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
-import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
+import { useConversationStore, useContactStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
@@ -21,8 +22,7 @@ import type { FarcasterUser } from '@/lib/farcaster/service';
 
 export function Layout() {
   const location = useLocation();
-  const { conversations, addConversation, updateConversation } = useConversationStore();
-  const { identity } = useAuthStore();
+  const { addConversation, updateConversation } = useConversationStore();
   const { receiveMessage } = useMessages();
   const loadContacts = useContactStore((state) => state.loadContacts);
 
@@ -36,6 +36,7 @@ export function Layout() {
   }, [loadContacts]);
 
   // Global message listener - handles ALL incoming XMTP messages
+  // Intentionally register once; store/state is accessed via getState() where needed.
   useEffect(() => {
     const shouldRefreshContact = (contact: Contact): boolean => {
       const now = Date.now();
@@ -132,28 +133,42 @@ export function Layout() {
         const senderInboxId = message.senderAddress;
         const contactStore = useContactStore.getState();
         const xmtp = getXmtpClient();
-        const profile = await xmtp.fetchInboxProfile(senderInboxId);
-        const contact = await contactStore.upsertContactProfile({
+        // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact
+        const existingContact = contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
+        const nowTs = Date.now();
+        const lastSync = existingContact?.lastSyncedAt ?? 0;
+        let profile = undefined as Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | undefined;
+        if (!existingContact || nowTs - lastSync > 5 * 60 * 1000) {
+          profile = await xmtp.fetchInboxProfile(senderInboxId);
+        }
+        const upserted = await contactStore.upsertContactProfile({
           inboxId: senderInboxId,
-          displayName: profile.displayName,
-          avatarUrl: profile.avatarUrl,
-          primaryAddress: profile.primaryAddress,
-          addresses: profile.addresses,
-          identities: profile.identities,
+          displayName: profile?.displayName,
+          avatarUrl: profile?.avatarUrl,
+          primaryAddress: profile?.primaryAddress,
+          addresses: profile?.addresses,
+          identities: profile?.identities,
           source: 'inbox',
         });
+        const contact = upserted;
 
         // Enrich with ENS (and Farcaster if available) asynchronously
         void enrichContactProfile(contact);
 
         const storage = await getStorage();
 
-        let conversation = conversations.find((c) => c.id === conversationId);
+        let conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
 
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
 
-          const peerId = contact.inboxId;
+          const peerId = contact?.inboxId || senderInboxId;
+          // Avoid creating a self-DM conversation
+          const myInbox = getXmtpClient().getInboxId()?.toLowerCase();
+          if (myInbox && peerId.toLowerCase() === myInbox) {
+            console.log('[Layout] Skipping creation of self-DM conversation');
+            return;
+          }
           const newConversation: Conversation = {
             id: conversationId,
             peerId,
@@ -206,12 +221,14 @@ export function Layout() {
       console.log('[Layout] 🔇 Global message listener unregistered');
       window.removeEventListener('xmtp:message', handleIncomingMessage);
     };
-  }, [conversations, addConversation, updateConversation, receiveMessage, identity]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex flex-col h-screen text-primary-50">
       {/* Sync progress bar */}
       <SyncProgressBar />
+      <ToastContainer />
 
       {/* Header */}
       <header className="bg-primary-950/80 border-b border-primary-800/60 px-3 py-2 flex items-center justify-between gap-2 backdrop-blur-md shadow-lg">

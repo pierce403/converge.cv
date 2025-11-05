@@ -205,8 +205,8 @@ export class XmtpClient {
         console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to Utils', error);
       }
 
-      const { Utils } = await import('@xmtp/browser-sdk');
-      const utils: InstanceType<typeof Utils> = new Utils(false);
+      const { getXmtpUtils } = await import('./utils-singleton');
+      const utils = await getXmtpUtils();
 
       const identifier = {
         identifier: toIdentifierHex(normalized).toLowerCase(),
@@ -332,8 +332,8 @@ export class XmtpClient {
         }
       }
 
-      const { Utils } = await import('@xmtp/browser-sdk');
-      const utils: InstanceType<typeof Utils> = new Utils(false);
+      const { getXmtpUtils } = await import('./utils-singleton');
+      const utils = await getXmtpUtils();
       try {
         const states = await utils.inboxStateFromInboxIds([normalizedInboxId], 'production');
         if (states?.length) {
@@ -1255,6 +1255,15 @@ export class XmtpClient {
                     avatarUrl: obj.avatarUrl,
                     source: 'inbox',
                   });
+                  try {
+                    window.dispatchEvent(
+                      new CustomEvent('ui:toast', {
+                        detail: `Profile updated for ${senderInboxId}`,
+                      })
+                    );
+                  } catch (err) {
+                    console.warn('[UI] Toast dispatch failed', err);
+                  }
                   logNetworkEvent({
                     direction: 'inbound',
                     event: 'profile:received',
@@ -1262,9 +1271,9 @@ export class XmtpClient {
                     payload: JSON.stringify(obj),
                   });
                 }
-              } catch (e) {
-                console.warn('[XMTP] Failed to process profile backfill message', e);
-              }
+      } catch (e) {
+        console.warn('[XMTP] Failed to process profile backfill message', e);
+      }
               continue;
             }
             const xmsg = {
@@ -1384,6 +1393,15 @@ export class XmtpClient {
                     avatarUrl: obj.avatarUrl,
                     source: 'inbox',
                   });
+                  try {
+                    window.dispatchEvent(
+                      new CustomEvent('ui:toast', {
+                        detail: `Profile updated for ${senderInboxId}`,
+                      })
+                    );
+                  } catch (err) {
+                    console.warn('[UI] Toast dispatch failed', err);
+                  }
                   logNetworkEvent({
                     direction: 'inbound',
                     event: 'profile:received',
@@ -1595,8 +1613,8 @@ export class XmtpClient {
 
     try {
       // Use Utils to resolve inboxId & fetch state without creating a full client
-      const { Utils } = await import('@xmtp/browser-sdk');
-      const utils: InstanceType<typeof Utils> = new Utils(false);
+      const { getXmtpUtils } = await import('./utils-singleton');
+      const utils = await getXmtpUtils();
 
       const identifier: { identifier: string; identifierKind: 'Ethereum' } = {
         identifier: toIdentifierHex(this.identity.address).toLowerCase(),
