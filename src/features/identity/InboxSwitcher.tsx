@@ -75,8 +75,8 @@ export function InboxSwitcher() {
         leaveFrom="transform opacity-100 scale-100"
         leaveTo="transform opacity-0 scale-95"
       >
-        {/* Align dropdown under the trigger and ensure it stays on screen */}
-        <Menu.Items className="absolute left-0 z-50 mt-2 w-80 max-w-[90vw] origin-top-left rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur">
+        {/* Center dropdown under the trigger and ensure it stays on screen */}
+        <Menu.Items className="absolute left-1/2 -translate-x-1/2 z-50 mt-2 w-80 max-w-[90vw] origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur">
           <div className="mb-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
             {identity?.inboxId ? (

@@ -36,9 +36,16 @@ export interface FarcasterFollow {
  */
 export async function fetchFarcasterUserFromAPI(identifier: number | string): Promise<FarcasterUser | null> {
   try {
-    const url = `/api/farcaster/user/${encodeURIComponent(String(identifier))}`;
+    // Static site note: only call a Farcaster API when a base URL is configured.
+    const apiBase = import.meta.env?.VITE_FARCASTER_API_BASE;
+    if (!apiBase) {
+      console.log('[Farcaster API] Skipping fetch (no VITE_FARCASTER_API_BASE configured)');
+      return null;
+    }
+
+    const url = `${apiBase.replace(/\/$/, '')}/user/${encodeURIComponent(String(identifier))}`;
     console.log(`[Farcaster API] Fetching: ${url}`);
-    const response = await fetch(url);
+    const response = await fetch(url, { credentials: 'omit' });
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -66,7 +73,13 @@ export async function fetchFarcasterUserFromAPI(identifier: number | string): Pr
  */
 export async function fetchFarcasterUserFollowingFromAPI(fid: number): Promise<FarcasterFollow[]> {
   try {
-    const response = await fetch(`/api/farcaster/following/${fid}`);
+    const apiBase = import.meta.env?.VITE_FARCASTER_API_BASE;
+    if (!apiBase) {
+      console.log('[Farcaster API] Skipping following fetch (no VITE_FARCASTER_API_BASE configured)');
+      return [];
+    }
+    const url = `${apiBase.replace(/\/$/, '')}/following/${fid}`;
+    const response = await fetch(url, { credentials: 'omit' });
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
