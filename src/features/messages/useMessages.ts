@@ -164,6 +164,33 @@ export function useMessages() {
           reactions: [],
         };
 
+        // Heuristic de-duplication: if this message is from us (inboxId),
+        // remove a recent optimistic local message with same body.
+        try {
+            const myInbox = identity?.inboxId?.toLowerCase();
+            const senderLower = xmtpMessage.senderAddress?.toLowerCase?.();
+            if (myInbox && senderLower && myInbox === senderLower) {
+              const likely = messagesByConversation[conversationId] || [];
+              const now = Date.now();
+            const myAddr = identity?.address?.toLowerCase();
+            const candidates = likely.filter(
+              (m) =>
+                m.type === 'text' &&
+                m.body === content &&
+                m.sender?.toLowerCase?.() === myAddr &&
+                Math.abs(now - (m.sentAt || now)) < 7000
+            );
+            if (candidates.length > 0) {
+              for (const dup of candidates) {
+                await getStorage().then((s) => s.deleteMessage(dup.id).catch(() => {}));
+                removeMessage(dup.id);
+              }
+            }
+          }
+        } catch (e) {
+          // Non-fatal; continue
+        }
+
         // Add to store
         addMessage(conversationId, message);
 
@@ -184,7 +211,7 @@ export function useMessages() {
         console.error('Failed to receive message:', error);
       }
     },
-    [addMessage, updateConversation, incrementUnread]
+    [addMessage, updateConversation, incrementUnread, messagesByConversation, identity, removeMessage]
   );
 
   /**

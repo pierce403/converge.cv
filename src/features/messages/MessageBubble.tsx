@@ -16,9 +16,12 @@ interface MessageBubbleProps {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const { identity } = useAuthStore();
   const identityAddress = identity?.address?.toLowerCase();
-  const isSent =
-    identityAddress !== undefined &&
-    message.sender?.toLowerCase() === identityAddress;
+  const identityInbox = identity?.inboxId?.toLowerCase();
+  const senderLower = message.sender?.toLowerCase?.();
+  const isSent = Boolean(
+    (identityInbox && senderLower === identityInbox) ||
+      (identityAddress && senderLower === identityAddress)
+  );
 
   const { deleteMessage } = useMessages();
   const [showActions, setShowActions] = useState(false);

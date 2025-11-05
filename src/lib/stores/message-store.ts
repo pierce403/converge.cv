@@ -42,7 +42,12 @@ export const useMessageStore = create<MessageState>((set) => ({
   addMessage: (conversationId, message) =>
     set((state) => {
       const existing = state.messagesByConversation[conversationId] || [];
-      const updated = sortMessagesBySentAt([...existing, message]);
+      // De-dup on message ID (authoritative)
+      const already = existing.find((m) => m.id === message.id);
+      const next = already
+        ? existing.map((m) => (m.id === message.id ? { ...m, ...message } : m))
+        : [...existing, message];
+      const updated = sortMessagesBySentAt(next);
       return {
         messagesByConversation: {
           ...state.messagesByConversation,
@@ -86,4 +91,3 @@ export const useMessageStore = create<MessageState>((set) => ({
       return { messagesByConversation: newMessages };
     }),
 }));
-
