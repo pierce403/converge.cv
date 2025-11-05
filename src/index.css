@@ -15,11 +15,13 @@
 @layer components {
   /* Message bubbles */
   .message-sent {
-    @apply bg-accent-500 text-white rounded-2xl rounded-tr-sm px-4 py-2 max-w-[80%] ml-auto shadow-lg;
+    /* Fill up to parent width; parent controls max (2/3 of chat) */
+    @apply bg-accent-500 text-white rounded-2xl rounded-tr-sm px-4 py-2 max-w-full ml-auto shadow-lg;
   }
 
   .message-received {
-    @apply bg-primary-800/80 text-primary-50 rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] backdrop-blur-sm;
+    /* Fill up to parent width; parent controls max (2/3 of chat) */
+    @apply bg-primary-800/80 text-primary-50 rounded-2xl rounded-tl-sm px-4 py-2 max-w-full backdrop-blur-sm;
   }
 
   /* Input styles */

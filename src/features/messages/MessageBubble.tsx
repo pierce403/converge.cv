@@ -21,7 +21,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     <div className={`flex mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}>
       <div className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[66%]`}>
         {/* Message content */}
-        <div className={isSent ? 'message-sent' : 'message-received'}>
+        <div className={(isSent ? 'message-sent' : 'message-received') + ' w-full'}>
           {message.type === 'text' && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
           {message.type === 'attachment' && (
             <div className="flex items-center gap-2">
