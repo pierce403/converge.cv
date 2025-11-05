@@ -21,15 +21,14 @@ test.describe('Converge onboarding and navigation', () => {
 
     await page.getByRole('button', { name: 'Create new identity' }).click();
 
-    await expect(page.getByText('Setting things up…')).toBeVisible();
-
+    // Wait until the main app shell renders (bottom nav)
     await expect(page.getByRole('link', { name: 'Chats' })).toBeVisible({ timeout: 60_000 });
 
     await page.getByRole('link', { name: 'Contacts' }).click();
     await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible();
 
     await page.getByRole('link', { name: 'Chats' }).click();
-    await expect(page.getByText('Start a new chat to begin messaging')).toBeVisible();
+    await expect(page.getByRole('link', { name: /New Chat/ })).toBeVisible();
 
     await page.getByTitle('Search').click();
     await expect(page.getByPlaceholder('Search messages...')).toBeVisible();

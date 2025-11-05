@@ -25,6 +25,7 @@ export interface Conversation {
   adminInboxes?: string[]; // XMTP inbox IDs for admins
   superAdminInboxes?: string[]; // XMTP inbox IDs for super admins
   groupMembers?: GroupMember[];
+  isLocalOnly?: boolean;
 }
 
 export interface Message {
