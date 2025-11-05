@@ -84,6 +84,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {/* Message content */}
         <div className={(isSent ? 'message-sent' : 'message-received') + ' w-full'}>
           {message.type === 'text' && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
+          {message.type === 'system' && (
+            <div className="w-full flex justify-center">
+              <div className="max-w-full text-center text-xs bg-primary-800/60 border border-primary-700 text-primary-200 px-2 py-1 rounded">
+                {message.body}
+              </div>
+            </div>
+          )}
           {message.type === 'attachment' && (
             <div className="flex items-center gap-2">
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">

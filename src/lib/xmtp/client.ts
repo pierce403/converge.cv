@@ -1366,7 +1366,7 @@ export class XmtpClient {
               return value;
             }, 2));
 
-            // Filter out non-application messages (e.g., group membership changes) from surfacing in chats
+            // Filter out non-application messages (e.g., group membership changes) from surfacing as normal chat
             try {
               const maybeKind = (message as unknown as { kind?: unknown }).kind;
               let isMembershipChange = false;
@@ -1382,7 +1382,25 @@ export class XmtpClient {
                   event: 'group:membership_change',
                   details: `Ignored membership change in ${message.conversationId}`,
                 });
-                // Do not surface as a chat bubble
+                // Surface as a stylized system message via a dedicated event
+                try {
+                  const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:system', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        system: {
+                          id: `sys_${message.id}`,
+                          senderInboxId: message.senderInboxId,
+                          body: 'Group membership changed',
+                          sentAt: ts,
+                        },
+                      },
+                    })
+                  );
+                } catch (err) {
+                  console.warn('[XMTP] Failed to dispatch system message event', err);
+                }
                 continue;
               }
             } catch (err) {

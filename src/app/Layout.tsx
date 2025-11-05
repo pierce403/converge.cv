@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
-import { useConversationStore, useContactStore } from '@/lib/stores';
+import { useConversationStore, useContactStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
@@ -216,10 +216,42 @@ export function Layout() {
 
     console.log('[Layout] 🎧 Global message listener registered');
     window.addEventListener('xmtp:message', handleIncomingMessage);
+    // Also handle system messages (e.g., membership changes)
+    const handleSystemMessage = async (event: Event) => {
+      const custom = event as CustomEvent<{
+        conversationId: string;
+        system: { id: string; senderInboxId?: string; body: string; sentAt?: number };
+      }>;
+      const { conversationId, system } = custom.detail;
+      try {
+        const storage = await getStorage();
+        const msg = {
+          id: system.id,
+          conversationId,
+          sender: system.senderInboxId || 'system',
+          sentAt: system.sentAt || Date.now(),
+          receivedAt: Date.now(),
+          type: 'system' as const,
+          body: system.body,
+          status: 'delivered' as const,
+          reactions: [],
+        };
+        useMessageStore.getState().addMessage(conversationId, msg);
+        await storage.putMessage(msg);
+        useConversationStore.getState().updateConversation(conversationId, {
+          lastMessageAt: msg.sentAt,
+          lastMessagePreview: msg.body.substring(0, 100),
+        });
+      } catch (err) {
+        console.warn('[Layout] Failed to handle system message', err);
+      }
+    };
+    window.addEventListener('xmtp:system', handleSystemMessage);
     
     return () => {
       console.log('[Layout] 🔇 Global message listener unregistered');
       window.removeEventListener('xmtp:message', handleIncomingMessage);
+      window.removeEventListener('xmtp:system', handleSystemMessage);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
