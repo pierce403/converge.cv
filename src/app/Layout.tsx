@@ -16,6 +16,7 @@ import {
   fetchFarcasterUserFromAPI,
   resolveContactName,
 } from '@/lib/farcaster/service';
+import type { FarcasterUser } from '@/lib/farcaster/service';
 
 
 export function Layout() {
@@ -57,36 +58,61 @@ export function Layout() {
           return;
         }
 
-        let farcasterUser = null;
-        if (contact.farcasterFid) {
-          farcasterUser = await fetchFarcasterUserFromAPI(contact.farcasterFid);
-        }
-
-        if (!farcasterUser) {
-          const fid = await resolveFidFromAddress(primaryAddress);
-          if (!fid) {
-            return;
+        // 1) Try ENS reverse lookup first for name + avatar URL via metadata service
+        let updates: Partial<Contact> | null = null;
+        try {
+          const { resolveENSFromAddress } = await import('@/lib/utils/ens');
+          const ensName = await resolveENSFromAddress(primaryAddress);
+          if (ensName) {
+            const ensAvatarUrl = `https://metadata.ens.domains/mainnet/avatar/${encodeURIComponent(ensName)}`;
+            updates = {
+              name: contact.name || ensName,
+              preferredName: contact.preferredName ?? ensName,
+              avatar: contact.avatar || ensAvatarUrl,
+              preferredAvatar: contact.preferredAvatar ?? ensAvatarUrl,
+              lastSyncedAt: Date.now(),
+            };
           }
-          farcasterUser = await fetchFarcasterUserFromAPI(fid);
+        } catch (e) {
+          console.warn('[Layout] ENS fallback failed:', e);
         }
 
-        if (!farcasterUser) {
-          return;
+        // 2) Optionally enhance via Farcaster (if API configured) to get richer pfp and profile text
+        try {
+          let farcasterUser: FarcasterUser | null = null;
+          if (contact.farcasterFid) {
+            farcasterUser = await fetchFarcasterUserFromAPI(contact.farcasterFid);
+          }
+          if (!farcasterUser) {
+            const fid = await resolveFidFromAddress(primaryAddress);
+            if (fid) {
+              farcasterUser = await fetchFarcasterUserFromAPI(fid);
+            }
+          }
+
+          if (farcasterUser) {
+            const nameResolution = await resolveContactName(farcasterUser, primaryAddress);
+            updates = {
+              ...(updates ?? {}),
+              name: updates?.name || contact.name || nameResolution.name,
+              preferredName:
+                updates?.preferredName ?? contact.preferredName ?? nameResolution.preferredName ?? nameResolution.name,
+              avatar: farcasterUser.pfp_url || updates?.avatar || contact.avatar,
+              preferredAvatar: farcasterUser.pfp_url || updates?.preferredAvatar || contact.preferredAvatar,
+              description: farcasterUser.profile?.bio?.text ?? contact.description,
+              farcasterUsername: farcasterUser.username ?? contact.farcasterUsername,
+              farcasterFid: farcasterUser.fid ?? contact.farcasterFid,
+              lastSyncedAt: Date.now(),
+            };
+          }
+        } catch (e) {
+          // Safe to ignore if Farcaster is not configured
+          console.warn('[Layout] Farcaster enrichment skipped/failed:', e);
         }
 
-        const nameResolution = await resolveContactName(farcasterUser, primaryAddress);
-        const updates: Partial<Contact> = {
-          name: contact.name || nameResolution.name,
-          preferredName: nameResolution.preferredName ?? contact.preferredName ?? nameResolution.name,
-          avatar: farcasterUser.pfp_url || contact.avatar,
-          preferredAvatar: farcasterUser.pfp_url || contact.preferredAvatar,
-          description: farcasterUser.profile?.bio?.text ?? contact.description,
-          farcasterUsername: farcasterUser.username ?? contact.farcasterUsername,
-          farcasterFid: farcasterUser.fid ?? contact.farcasterFid,
-          lastSyncedAt: Date.now(),
-        };
-
-        await useContactStore.getState().updateContact(contact.inboxId, updates);
+        if (updates) {
+          await useContactStore.getState().updateContact(contact.inboxId, updates);
+        }
       } catch (error) {
         console.warn('[Layout] Failed to enrich contact profile:', error);
       }
@@ -117,6 +143,7 @@ export function Layout() {
           source: 'inbox',
         });
 
+        // Enrich with ENS (and Farcaster if available) asynchronously
         void enrichContactProfile(contact);
 
         const storage = await getStorage();
