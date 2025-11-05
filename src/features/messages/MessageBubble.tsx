@@ -5,6 +5,9 @@
 import { Message } from '@/types';
 import { formatMessageTime } from '@/lib/utils/date';
 import { useAuthStore } from '@/lib/stores';
+import { useState, useRef, useCallback } from 'react';
+import { MessageActionsModal } from './MessageActionsModal';
+import { useMessages } from './useMessages';
 
 interface MessageBubbleProps {
   message: Message;
@@ -17,9 +20,64 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     identityAddress !== undefined &&
     message.sender?.toLowerCase() === identityAddress;
 
+  const { deleteMessage } = useMessages();
+  const [showActions, setShowActions] = useState(false);
+  const pressTimer = useRef<number | null>(null);
+
+  const openActions = useCallback(() => setShowActions(true), []);
+  const closeActions = useCallback(() => setShowActions(false), []);
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    openActions();
+  };
+
+  const handlePointerDown = () => {
+    if (pressTimer.current) window.clearTimeout(pressTimer.current);
+    // 500ms long-press
+    pressTimer.current = window.setTimeout(() => openActions(), 500);
+  };
+  const clearTimer = () => {
+    if (pressTimer.current) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  };
+
+  const onCopy = async () => {
+    if (message.type === 'text') {
+      try {
+        await navigator.clipboard.writeText(message.body);
+      } catch (e) {
+        console.warn('Clipboard write failed:', e);
+      }
+    }
+    closeActions();
+  };
+  const onDelete = async () => {
+    await deleteMessage(message.id);
+    closeActions();
+  };
+  const onReply = () => {
+    // TODO: wire a real reply action
+    closeActions();
+  };
+  const onForward = () => {
+    // TODO: wire a real forward action
+    closeActions();
+  };
+
   return (
-    <div className={`flex mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[66%]`}>
+    <div
+      className={`flex mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
+      onContextMenu={handleContextMenu}
+    >
+      <div
+        className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[66%]`}
+        onPointerDown={handlePointerDown}
+        onPointerUp={clearTimer}
+        onPointerLeave={clearTimer}
+      >
         {/* Message content */}
         <div className={(isSent ? 'message-sent' : 'message-received') + ' w-full'}>
           {message.type === 'text' && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
@@ -69,6 +127,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             ))}
           </div>
         )}
+        <MessageActionsModal
+          open={showActions}
+          onClose={closeActions}
+          conversationId={message.conversationId}
+          message={message}
+          onCopy={onCopy}
+          onDelete={onDelete}
+          onReply={onReply}
+          onForward={onForward}
+        />
       </div>
     </div>
   );

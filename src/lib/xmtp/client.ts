@@ -2070,6 +2070,53 @@ export class XmtpClient {
     }
   }
 
+  /**
+   * Fetch low-level XMTP message details by ID (best-effort).
+   * Returns null if not connected or not found.
+   */
+  async fetchMessageDetails(messageId: string): Promise<
+    | {
+        id: string;
+        senderInboxId?: string;
+        sentAtNs?: bigint;
+        deliveryStatus?: unknown;
+        kind?: unknown;
+        contentType?: string;
+      }
+    | null
+  > {
+    if (!this.client) {
+      return null;
+    }
+    try {
+      const raw = await this.client.conversations.getMessageById(messageId);
+      if (!raw) return null;
+      // raw is a wasm-bindings Message; pull safe fields
+      // We cannot import types here, so we access known keys defensively.
+      const anyRaw = raw as unknown as { [k: string]: unknown };
+      const sentAtNs: bigint | undefined = anyRaw['sentAtNs'] as bigint | undefined;
+      const senderInboxId: string | undefined = anyRaw['senderInboxId'] as string | undefined;
+      const deliveryStatus = anyRaw['deliveryStatus'];
+      const kind = anyRaw['kind'];
+      const content = anyRaw['content'] as unknown;
+      const typeObj = (content && typeof content === 'object' && (content as Record<string, unknown>)['type']) as
+        | Record<string, unknown>
+        | undefined;
+      const contentType = (typeObj?.['typeId'] as string | undefined) ?? (typeObj?.['type_id'] as string | undefined);
+
+      return {
+        id: messageId,
+        senderInboxId,
+        sentAtNs,
+        deliveryStatus,
+        kind,
+        contentType: typeof contentType === 'string' ? contentType : undefined,
+      };
+    } catch (e) {
+      console.warn('[XMTP] fetchMessageDetails failed:', e);
+      return null;
+    }
+  }
 }
 
 // Singleton instance
