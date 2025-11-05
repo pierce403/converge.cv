@@ -77,6 +77,25 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 - [ ] Disappearing messages timer
 - [ ] Message status (pending/sent/failed)
 
+### Phase 12b: XMTP Content Types — Sending Roadmap
+- [x] Reactions (ContentTypeReaction)
+  - UX: Long press → modal → quick emoji row; optimistic update to bubble reactions
+  - Notes: Inbound reactions currently render as system messages; next step is to aggregate onto target bubble and suppress system line
+- [x] Replies (ContentTypeReply, text only)
+  - UX: Long press → Reply; composer shows "Replying to …" banner; send as reply with inner text content
+  - Notes: Inbound replies currently surface as system messages; next step is to render reply preview/quote and navigate to referenced message
+- [x] Read Receipts (ContentTypeReadReceipt)
+  - UX: Fire-and-forget when viewing messages; no visible UI yet beyond status placeholders
+  - Notes: Map to message.status when SDK exposes delivery/read events consistently
+- [ ] Typing Indicators
+  - UX: Debounced typing start/stop from composer; show inline "User is typing…"
+  - Notes: Confirm official content type availability or recommended approach in v5; add config to disable
+- [ ] Attachments (ContentTypeRemoteAttachment)
+  - UX: Add paperclip → file picker; show upload progress; inline thumbnail for images
+  - Blocker: Requires upload endpoint to host encrypted payload; propose env `VITE_ATTACHMENT_UPLOAD_URL` or Web3.storage integration without placeholder keys
+- [ ] Invitations
+  - UX: Group invite send via share link is available; consider in-protocol invite content type if/when standardized
+
 ### Phase 13: Message Lifecycle
 - [ ] Send queue implementation
 - [ ] Offline message queuing
