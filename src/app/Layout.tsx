@@ -12,12 +12,7 @@ import type { XmtpMessage } from '@/lib/xmtp';
 import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
-import {
-  resolveFidFromAddress,
-  fetchFarcasterUserFromAPI,
-  resolveContactName,
-} from '@/lib/farcaster/service';
-import type { FarcasterUser } from '@/lib/farcaster/service';
+// Do not enrich from ENS/Farcaster for avatars or names. Use XMTP network data only.
 
 
 export function Layout() {
@@ -50,70 +45,19 @@ export function Layout() {
 
     const enrichContactProfile = async (contact: Contact) => {
       try {
-        const primaryAddress = contact.primaryAddress ?? contact.addresses?.[0];
-        if (!primaryAddress) {
-          return;
-        }
-
-        if (!shouldRefreshContact(contact)) {
-          return;
-        }
-
-        // 1) Try ENS reverse lookup first for name + avatar URL via metadata service
-        let updates: Partial<Contact> | null = null;
-        try {
-          const { resolveENSFromAddress } = await import('@/lib/utils/ens');
-          const ensName = await resolveENSFromAddress(primaryAddress);
-          if (ensName) {
-            const ensAvatarUrl = `https://metadata.ens.domains/mainnet/avatar/${encodeURIComponent(ensName)}`;
-            updates = {
-              name: contact.name || ensName,
-              preferredName: contact.preferredName ?? ensName,
-              avatar: contact.avatar || ensAvatarUrl,
-              preferredAvatar: contact.preferredAvatar ?? ensAvatarUrl,
-              lastSyncedAt: Date.now(),
-            };
-          }
-        } catch (e) {
-          console.warn('[Layout] ENS fallback failed:', e);
-        }
-
-        // 2) Optionally enhance via Farcaster (if API configured) to get richer pfp and profile text
-        try {
-          let farcasterUser: FarcasterUser | null = null;
-          if (contact.farcasterFid) {
-            farcasterUser = await fetchFarcasterUserFromAPI(contact.farcasterFid);
-          }
-          if (!farcasterUser) {
-            const fid = await resolveFidFromAddress(primaryAddress);
-            if (fid) {
-              farcasterUser = await fetchFarcasterUserFromAPI(fid);
-            }
-          }
-
-          if (farcasterUser) {
-            const nameResolution = await resolveContactName(farcasterUser, primaryAddress);
-            updates = {
-              ...(updates ?? {}),
-              name: updates?.name || contact.name || nameResolution.name,
-              preferredName:
-                updates?.preferredName ?? contact.preferredName ?? nameResolution.preferredName ?? nameResolution.name,
-              avatar: farcasterUser.pfp_url || updates?.avatar || contact.avatar,
-              preferredAvatar: farcasterUser.pfp_url || updates?.preferredAvatar || contact.preferredAvatar,
-              description: farcasterUser.profile?.bio?.text ?? contact.description,
-              farcasterUsername: farcasterUser.username ?? contact.farcasterUsername,
-              farcasterFid: farcasterUser.fid ?? contact.farcasterFid,
-              lastSyncedAt: Date.now(),
-            };
-          }
-        } catch (e) {
-          // Safe to ignore if Farcaster is not configured
-          console.warn('[Layout] Farcaster enrichment skipped/failed:', e);
-        }
-
-        if (updates) {
-          await useContactStore.getState().updateContact(contact.inboxId, updates);
-        }
+        if (!shouldRefreshContact(contact)) return;
+        const xmtp = getXmtpClient();
+        const profile = await xmtp.fetchInboxProfile(contact.inboxId);
+        await useContactStore.getState().upsertContactProfile({
+          inboxId: profile.inboxId,
+          displayName: profile.displayName,
+          avatarUrl: profile.avatarUrl,
+          primaryAddress: profile.primaryAddress,
+          addresses: profile.addresses,
+          identities: profile.identities,
+          source: 'inbox',
+          metadata: { ...contact, lastSyncedAt: Date.now() },
+        });
       } catch (error) {
         console.warn('[Layout] Failed to enrich contact profile:', error);
       }
@@ -254,6 +198,40 @@ export function Layout() {
       window.removeEventListener('xmtp:system', handleSystemMessage);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Proactively enrich all loaded contacts from XMTP (no ENS/Farcaster)
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const state = useContactStore.getState();
+        for (const c of state.contacts) {
+          const now = Date.now();
+          const last = c.lastSyncedAt ?? 0;
+          if (!c.preferredName || !c.preferredAvatar || now - last > 30 * 60 * 1000) {
+            try {
+              const xmtp = getXmtpClient();
+              const profile = await xmtp.fetchInboxProfile(c.inboxId);
+              await state.upsertContactProfile({
+                inboxId: profile.inboxId,
+                displayName: profile.displayName,
+                avatarUrl: profile.avatarUrl,
+                primaryAddress: profile.primaryAddress,
+                addresses: profile.addresses,
+                identities: profile.identities,
+                source: 'inbox',
+                metadata: { ...c, lastSyncedAt: Date.now() },
+              });
+            } catch {
+              // non-fatal
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    run();
   }, []);
 
   return (
