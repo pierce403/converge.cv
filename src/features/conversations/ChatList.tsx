@@ -2,16 +2,91 @@
  * Chat list component
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
+import { useContactStore } from '@/lib/stores';
+import type { Contact } from '@/lib/stores/contact-store';
 import { UserInfoModal } from '@/components/UserInfoModal';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  type ConversationItem = typeof conversations[number];
+  const contacts = useContactStore((state) => state.contacts);
+  const loadContacts = useContactStore((state) => state.loadContacts);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
+
+  const contactsByAddress = useMemo(() => {
+    const map = new Map<string, Contact>();
+    contacts.forEach((contact) => {
+      map.set(contact.address.toLowerCase(), contact);
+    });
+    return map;
+  }, [contacts]);
+
+  const contactsByInboxId = useMemo(() => {
+    const map = new Map<string, Contact>();
+    contacts.forEach((contact) => {
+      if (contact.inboxId) {
+        map.set(contact.inboxId.toLowerCase(), contact);
+      }
+    });
+    return map;
+  }, [contacts]);
+
+  const getContactForConversation = (conversation: ConversationItem) => {
+    if (conversation.isGroup) {
+      return undefined;
+    }
+    const peerId = conversation.peerId?.toLowerCase?.();
+    if (!peerId) {
+      return undefined;
+    }
+    return contactsByAddress.get(peerId) ?? contactsByInboxId.get(peerId);
+  };
+
+  const renderAvatar = (avatar: string | undefined, fallback: string) => {
+    if (avatar && avatar.startsWith('http')) {
+      return (
+        <img
+          src={avatar}
+          alt="Conversation avatar"
+          className="w-full h-full rounded-full object-cover"
+        />
+      );
+    }
+    if (avatar) {
+      return (
+        <span className="text-lg" aria-hidden>
+          {avatar}
+        </span>
+      );
+    }
+    return (
+      <span className="text-white font-semibold" aria-hidden>
+        {fallback.slice(0, 2).toUpperCase()}
+      </span>
+    );
+  };
+
+  const formatIdentifier = (value: string) => {
+    if (!value) {
+      return '';
+    }
+    if (value.startsWith('0x') && value.length > 10) {
+      return `${value.slice(0, 6)}...${value.slice(-4)}`;
+    }
+    if (value.length > 18) {
+      return `${value.slice(0, 10)}...${value.slice(-4)}`;
+    }
+    return value;
+  };
 
   // Sort: pinned first, then by lastMessageAt
   const sortedConversations = [...conversations].sort((a, b) => {
@@ -61,7 +136,31 @@ export function ChatList() {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto">
         {activeConversations.map((conversation) => {
-          const contactInfo = getContactInfo(conversation.peerId);
+          const contact = getContactForConversation(conversation);
+          const defaultContactInfo = !conversation.isGroup
+            ? getContactInfo(contact?.address ?? conversation.peerId)
+            : undefined;
+
+          const displayName = conversation.isGroup
+            ? conversation.groupName || 'Group Chat'
+            : conversation.displayName
+              || contact?.preferredName
+              || contact?.name
+              || defaultContactInfo?.name
+              || formatIdentifier(contact?.address ?? conversation.peerId);
+
+          const avatarSource = conversation.isGroup
+            ? conversation.groupImage || conversation.displayAvatar
+            : conversation.displayAvatar || contact?.avatar || defaultContactInfo?.avatar;
+
+          const fallbackAvatarLabel = conversation.isGroup
+            ? conversation.groupName || 'Group'
+            : contact?.address ?? conversation.peerId;
+
+          const subtitle = conversation.lastMessagePreview
+            || contact?.description
+            || defaultContactInfo?.description
+            || 'No messages yet';
 
           return (
             <div
@@ -74,23 +173,17 @@ export function ChatList() {
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!conversation.isGroup) {
-                      setSelectedUser(conversation.peerId);
+                      setSelectedUser(contact?.address ?? conversation.peerId);
                     }
                   }}
                   className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"
                 >
-                  {conversation.isGroup ? (
+                  {conversation.isGroup && !avatarSource ? (
                     <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 3 0 10-6 0 3 3 0 006 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 0 016 0zm-6 0a3 0 10-6 0 3 3 0 006 0z" />
                     </svg>
-                  ) : contactInfo?.avatar ? (
-                    <span className="text-white" aria-hidden>
-                      {contactInfo.avatar}
-                    </span>
                   ) : (
-                    <span className="text-white font-semibold">
-                      {conversation.peerId.slice(2, 4).toUpperCase()}
-                    </span>
+                    renderAvatar(avatarSource, fallbackAvatarLabel)
                   )}
                 </button>
 
@@ -100,20 +193,14 @@ export function ChatList() {
                   className="flex-1 min-w-0 ml-3"
                 >
                   <div className="flex items-baseline justify-between mb-1">
-                    <h3 className="text-sm font-semibold truncate">
-                      {conversation.isGroup
-                        ? 'Group Chat' // Placeholder for group name
-                        : contactInfo?.name
-                        ? `${contactInfo.name}`
-                        : `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
-                    </h3>
+                    <h3 className="text-sm font-semibold truncate">{displayName}</h3>
                     <span className="text-xs text-primary-300 ml-2 flex-shrink-0">
                       {formatDistanceToNow(conversation.lastMessageAt)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-primary-200 truncate">
-                      {conversation.lastMessagePreview || contactInfo?.description || 'No messages yet'}
+                      {subtitle}
                     </p>
                     {conversation.unreadCount > 0 && (
                       <span className="ml-2 bg-accent-500 text-white text-xs font-semibold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">
@@ -158,4 +245,3 @@ export function ChatList() {
     </div>
   );
 }
-

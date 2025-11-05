@@ -1,6 +1,6 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useMessageStore, useAuthStore } from '@/lib/stores';
+import { useMessageStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
@@ -20,6 +20,8 @@ export function ConversationView() {
   const { messagesByConversation, isLoading } = useMessageStore();
   const { sendMessage, loadMessages } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
+  const contacts = useContactStore((state) => state.contacts);
+  const loadContacts = useContactStore((state) => state.loadContacts);
 
   const conversation = conversations.find((c) => c.id === id);
   const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
@@ -36,6 +38,10 @@ export function ConversationView() {
       loadMessages(id);
     }
   }, [id, loadMessages]);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
 
   // Note: Message handling is done globally in Layout.tsx
   // This component just displays messages from the store
@@ -58,12 +64,72 @@ export function ConversationView() {
     );
   }
 
+  const contact = useMemo(() => {
+    if (conversation.isGroup) {
+      return undefined;
+    }
+    const peerLower = conversation.peerId.toLowerCase();
+    return contacts.find((entry) => entry.address.toLowerCase() === peerLower)
+      ?? contacts.find((entry) => entry.inboxId?.toLowerCase() === peerLower);
+  }, [conversation, contacts]);
+
+  const defaultContactInfo = useMemo(() => {
+    if (conversation.isGroup) {
+      return undefined;
+    }
+    return getContactInfo(contact?.address ?? conversation.peerId);
+  }, [conversation, contact]);
+
+  const formatIdentifier = (value: string) => {
+    if (!value) {
+      return '';
+    }
+    if (value.startsWith('0x') && value.length > 10) {
+      return `${value.slice(0, 6)}...${value.slice(-4)}`;
+    }
+    if (value.length > 18) {
+      return `${value.slice(0, 10)}...${value.slice(-4)}`;
+    }
+    return value;
+  };
+
+  const conversationDisplayName = useMemo(() => {
+    if (conversation.isGroup) {
+      return conversation.groupName || 'Group Chat';
+    }
+    return conversation.displayName
+      || contact?.preferredName
+      || contact?.name
+      || defaultContactInfo?.name
+      || formatIdentifier(contact?.address ?? conversation.peerId);
+  }, [conversation, contact, defaultContactInfo]);
+
+  const conversationAvatar = useMemo(() => {
+    if (conversation.isGroup) {
+      return conversation.groupImage || conversation.displayAvatar;
+    }
+    return conversation.displayAvatar || contact?.avatar || defaultContactInfo?.avatar;
+  }, [conversation, contact, defaultContactInfo]);
+
+  const contactAddressForActions = contact?.address ?? conversation.peerId;
+
+  const renderAvatar = (avatar: string | undefined, fallback: string) => {
+    if (avatar && avatar.startsWith('http')) {
+      return <img src={avatar} alt="Conversation avatar" className="w-full h-full rounded-full object-cover" />;
+    }
+    if (avatar) {
+      return <span className="text-lg" aria-hidden>{avatar}</span>;
+    }
+    const label = fallback.startsWith('0x') && fallback.length > 6
+      ? fallback.slice(2, 4).toUpperCase()
+      : fallback.slice(0, 2).toUpperCase();
+    return <span className="text-white font-semibold" aria-hidden>{label}</span>;
+  };
+
   const handleSend = async (content: string) => {
     if (!id) return;
     await sendMessage(id, content);
   };
-
-  const contactInfo = getContactInfo(conversation.peerId);
 
   return (
     <div className="flex flex-col h-full text-primary-50">
@@ -80,25 +146,21 @@ export function ConversationView() {
 
         {conversation.isGroup ? (
           <>
-            {/* Clickable Group Avatar */}
             <button
               onClick={() => navigate(`/chat/${conversation.id}/settings`)}
               className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
               title="Group Settings"
             >
-              {conversation.groupImage ? (
-                <img src={conversation.groupImage} alt="Group Avatar" className="w-full h-full rounded-full object-cover" />
+              {conversationAvatar ? (
+                renderAvatar(conversationAvatar, conversation.groupName || 'Group')
               ) : (
                 <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 3 0 10-6 0 3 3 0 006 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 0 10-6 0 3 3 0 6 0z" />
                 </svg>
               )}
             </button>
-            {/* Group Name and Settings Button */}
             <div className="flex-1 min-w-0 text-left flex items-center justify-between">
-              <h2 className="font-semibold truncate text-primary-50">
-                {conversation.groupName || 'Group Chat'}
-              </h2>
+              <h2 className="font-semibold truncate text-primary-50">{conversationDisplayName}</h2>
               {isCurrentUserAdmin && (
                 <button
                   onClick={() => navigate(`/chat/${conversation.id}/settings`)}
@@ -115,36 +177,25 @@ export function ConversationView() {
           </>
         ) : (
           <>
-            {/* Clickable avatar */}
             <button
               onClick={() => setShowUserInfo(true)}
               className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
             >
-              {contactInfo?.avatar ? (
-                <span className="text-lg">{contactInfo.avatar}</span>
-              ) : (
-                <span className="text-white font-semibold text-sm">
-                  {conversation.peerId.slice(2, 4).toUpperCase()}
-                </span>
-              )}
+              {renderAvatar(conversationAvatar, contactAddressForActions)}
             </button>
 
-            {/* User name - also clickable */}
             <button
               onClick={() => setShowUserInfo(true)}
               className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
             >
               <div className="flex items-center gap-2">
-                <h2 className="font-semibold truncate text-primary-50">
-                  {contactInfo?.name || `${conversation.peerId.slice(0, 10)}...${conversation.peerId.slice(-8)}`}
-                </h2>
-                <AddContactButton address={conversation.peerId} />
+                <h2 className="font-semibold truncate text-primary-50">{conversationDisplayName}</h2>
+                <AddContactButton address={contactAddressForActions} />
               </div>
               <p className="text-xs text-primary-300">XMTP messaging</p>
             </button>
           </>
         )}
-
         <button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
@@ -193,9 +244,8 @@ export function ConversationView() {
 
       {/* User info modal */}
       {showUserInfo && (
-        <UserInfoModal address={conversation.peerId} onClose={() => setShowUserInfo(false)} />
+        <UserInfoModal address={contactAddressForActions} onClose={() => setShowUserInfo(false)} />
       )}
     </div>
   );
 }
-

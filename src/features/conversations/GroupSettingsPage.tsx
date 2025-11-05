@@ -4,6 +4,7 @@ import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
 import { getAddress } from 'viem';
 import type { GroupMember } from '@/types';
+import type { Contact } from '@/lib/stores/contact-store';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
@@ -29,7 +30,9 @@ export function GroupSettingsPage() {
     refreshGroupDetails,
   } = useConversations();
   const { identity } = useAuthStore();
-  const { contacts } = useContactStore();
+  const contacts = useContactStore((state) => state.contacts);
+  const loadContacts = useContactStore((state) => state.loadContacts);
+  const contactsLoading = useContactStore((state) => state.isLoading);
 
   const conversation = conversations.find((c) => c.id === conversationId);
   const [groupName, setGroupName] = useState(conversation?.groupName || '');
@@ -38,50 +41,122 @@ export function GroupSettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [newMemberAddress, setNewMemberAddress] = useState('');
+  const [isContactPickerOpen, setIsContactPickerOpen] = useState(false);
+  const [contactSearchTerm, setContactSearchTerm] = useState('');
+  const [selectedContactAddresses, setSelectedContactAddresses] = useState<string[]>([]);
+  const [isAddingContacts, setIsAddingContacts] = useState(false);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
+
+  const contactsByAddress = useMemo(() => {
+    const map = new Map<string, Contact>();
+    for (const contact of contacts) {
+      map.set(contact.address.toLowerCase(), contact);
+    }
+    return map;
+  }, [contacts]);
+
+  const contactsByInboxId = useMemo(() => {
+    const map = new Map<string, Contact>();
+    for (const contact of contacts) {
+      if (contact.inboxId) {
+        map.set(contact.inboxId.toLowerCase(), contact);
+      }
+    }
+    return map;
+  }, [contacts]);
+
+  const adminInboxSet = useMemo(() => {
+    if (!conversation) {
+      return new Set<string>();
+    }
+    return new Set((conversation.adminInboxes ?? []).map((value) => value.toLowerCase()));
+  }, [conversation]);
+
+  const adminAddressSet = useMemo(() => {
+    if (!conversation) {
+      return new Set<string>();
+    }
+    return new Set((conversation.admins ?? []).map((value) => value.toLowerCase()));
+  }, [conversation]);
+
+  const superAdminInboxSet = useMemo(() => {
+    if (!conversation) {
+      return new Set<string>();
+    }
+    return new Set((conversation.superAdminInboxes ?? []).map((value) => value.toLowerCase()));
+  }, [conversation]);
 
   const memberEntries = useMemo<GroupMember[]>(() => {
     if (!conversation?.isGroup) {
       return [];
     }
 
+    const enrichMember = (member: GroupMember): GroupMember => {
+      const inboxLower = member.inboxId.toLowerCase();
+      const normalizedAddress = member.address && isEthereumAddress(member.address)
+        ? safeNormalizeAddress(member.address)
+        : member.address;
+      const addressLower = normalizedAddress?.toLowerCase();
+
+      const contactByAddress = addressLower ? contactsByAddress.get(addressLower) : undefined;
+      const contactByInbox = contactsByInboxId.get(inboxLower);
+      const contact = contactByAddress ?? contactByInbox;
+
+      const resolvedAddress = normalizedAddress ?? contact?.address;
+      const displayName = member.displayName
+        ?? contact?.preferredName
+        ?? contact?.name
+        ?? resolvedAddress
+        ?? member.inboxId;
+      const avatar = member.avatar ?? contact?.avatar;
+
+      const isAdmin = (member.isAdmin ?? false)
+        || adminInboxSet.has(inboxLower)
+        || (resolvedAddress ? adminAddressSet.has(resolvedAddress.toLowerCase()) : false);
+      const isSuperAdmin = (member.isSuperAdmin ?? false) || superAdminInboxSet.has(inboxLower);
+
+      return {
+        ...member,
+        inboxId: member.inboxId,
+        address: resolvedAddress,
+        displayName,
+        avatar,
+        isAdmin,
+        isSuperAdmin,
+      };
+    };
+
     if (conversation.groupMembers && conversation.groupMembers.length > 0) {
-      return conversation.groupMembers;
+      return conversation.groupMembers.map(enrichMember);
     }
 
     const fallbackAddresses = conversation.members ?? [];
     const fallbackInboxes = conversation.memberInboxes ?? [];
     const maxLength = Math.max(fallbackAddresses.length, fallbackInboxes.length);
-    const adminInboxes = (conversation.adminInboxes ?? []).map((entry) => entry.toLowerCase());
-    const adminAddresses = (conversation.admins ?? []).map((entry) => entry.toLowerCase());
-    const superAdminInboxes = (conversation.superAdminInboxes ?? []).map((entry) => entry.toLowerCase());
 
     const members: GroupMember[] = [];
     for (let index = 0; index < maxLength; index++) {
       const rawInbox = fallbackInboxes[index] ?? fallbackAddresses[index] ?? '';
       const rawAddress = fallbackAddresses[index];
       const normalizedAddress =
-        rawAddress && isEthereumAddress(rawAddress) ? safeNormalizeAddress(rawAddress) : undefined;
-      const inboxId = rawInbox || normalizedAddress || rawAddress || '';
+        rawAddress && isEthereumAddress(rawAddress) ? safeNormalizeAddress(rawAddress) : rawAddress;
+      const inboxId = rawInbox || normalizedAddress || '';
       if (!inboxId) {
         continue;
       }
 
-      const inboxLower = inboxId.toLowerCase();
-      const addressLower = normalizedAddress?.toLowerCase();
-      const isAdmin = adminInboxes.includes(inboxLower) || (addressLower ? adminAddresses.includes(addressLower) : false);
-      const isSuperAdmin = superAdminInboxes.includes(inboxLower);
-
-      members.push({
+      const baseMember: GroupMember = {
         inboxId,
         address: normalizedAddress,
-        permissionLevel: undefined,
-        isAdmin,
-        isSuperAdmin,
-      });
+      };
+      members.push(enrichMember(baseMember));
     }
 
     return members;
-  }, [conversation]);
+  }, [conversation, contactsByAddress, contactsByInboxId, adminInboxSet, adminAddressSet, superAdminInboxSet]);
 
   const isCurrentUserAdmin = useMemo(() => {
     if (!conversation?.isGroup || !identity) {
@@ -90,14 +165,12 @@ export function GroupSettingsPage() {
 
     const identityAddress = identity.address?.toLowerCase();
     const identityInbox = identity.inboxId?.toLowerCase();
-    const adminAddresses = (conversation.admins ?? []).map((entry) => entry.toLowerCase());
-    const adminInboxes = (conversation.adminInboxes ?? []).map((entry) => entry.toLowerCase());
 
-    if (identityAddress && adminAddresses.includes(identityAddress)) {
+    if (identityAddress && adminAddressSet.has(identityAddress)) {
       return true;
     }
 
-    if (identityInbox && adminInboxes.includes(identityInbox)) {
+    if (identityInbox && adminInboxSet.has(identityInbox)) {
       return true;
     }
 
@@ -133,12 +206,96 @@ export function GroupSettingsPage() {
     return safeNormalizeAddress(value);
   }, [newMemberAddress]);
 
-  const existingMemberAddresses = useMemo(() => {
-    const addresses = memberEntries
-      .map((member) => member.address?.toLowerCase())
-      .filter((address): address is string => Boolean(address));
-    return new Set(addresses);
+  const existingMemberIdentifiers = useMemo(() => {
+    const identifiers = new Set<string>();
+    for (const member of memberEntries) {
+      identifiers.add(member.inboxId.toLowerCase());
+      if (member.address) {
+        identifiers.add(member.address.toLowerCase());
+      }
+    }
+    return identifiers;
   }, [memberEntries]);
+
+  const availableContacts = useMemo(() => {
+    const currentIdentityAddress = identity?.address?.toLowerCase();
+    return contacts.filter((contact) => {
+      const addressLower = contact.address.toLowerCase();
+      if (currentIdentityAddress && addressLower === currentIdentityAddress) {
+        return false;
+      }
+      if (existingMemberIdentifiers.has(addressLower)) {
+        return false;
+      }
+      if (contact.inboxId && existingMemberIdentifiers.has(contact.inboxId.toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+  }, [contacts, existingMemberIdentifiers, identity?.address]);
+
+  const filteredContacts = useMemo(() => {
+    if (!contactSearchTerm.trim()) {
+      return availableContacts;
+    }
+    const query = contactSearchTerm.trim().toLowerCase();
+    return availableContacts.filter((contact) => {
+      const preferred = contact.preferredName?.toLowerCase() ?? '';
+      const name = contact.name?.toLowerCase() ?? '';
+      const address = contact.address.toLowerCase();
+      return preferred.includes(query) || name.includes(query) || address.includes(query);
+    });
+  }, [availableContacts, contactSearchTerm]);
+
+  const toggleContactSelection = (address: string) => {
+    setSelectedContactAddresses((prev) => {
+      const normalized = address.toLowerCase();
+      const has = prev.some((entry) => entry.toLowerCase() === normalized);
+      if (has) {
+        return prev.filter((entry) => entry.toLowerCase() !== normalized);
+      }
+      return [...prev, address];
+    });
+  };
+
+  const resetContactSelectionState = () => {
+    setSelectedContactAddresses([]);
+    setContactSearchTerm('');
+  };
+
+  const handleCloseContactPicker = () => {
+    if (isAddingContacts) {
+      return;
+    }
+    setIsContactPickerOpen(false);
+    resetContactSelectionState();
+  };
+
+  const handleConfirmContactSelection = async () => {
+    if (selectedContactAddresses.length === 0) {
+      return;
+    }
+
+    if (!conversation) {
+      setError('Group conversation not available.');
+      return;
+    }
+
+    setIsAddingContacts(true);
+    setError('');
+    try {
+      const selectionCount = selectedContactAddresses.length;
+      await addMembersToGroup(conversation.id, selectedContactAddresses);
+      resetContactSelectionState();
+      setIsContactPickerOpen(false);
+      alert(selectionCount === 1 ? 'Member added!' : 'Members added!');
+    } catch (err) {
+      console.error('Failed to add selected contacts:', err);
+      setError('Failed to add selected contacts. Please try again.');
+    } finally {
+      setIsAddingContacts(false);
+    }
+  };
 
   useEffect(() => {
     if (conversation?.id && conversation.isGroup) {
@@ -199,7 +356,7 @@ export function GroupSettingsPage() {
       return;
     }
 
-    if (existingMemberAddresses.has(normalizedNewMemberAddress.toLowerCase())) {
+    if (existingMemberIdentifiers.has(normalizedNewMemberAddress.toLowerCase())) {
       setError('This member is already part of the group.');
       return;
     }
@@ -273,20 +430,64 @@ export function GroupSettingsPage() {
     }
   };
 
-  const getContactName = (address: string) => {
-    const contact = contacts.find((c) => c.address.toLowerCase() === address.toLowerCase());
-    return contact ? contact.name : '';
+  const getContactForMember = (member: GroupMember): Contact | undefined => {
+    if (member.address) {
+      const match = contactsByAddress.get(member.address.toLowerCase());
+      if (match) {
+        return match;
+      }
+    }
+    return contactsByInboxId.get(member.inboxId.toLowerCase());
   };
 
   const getMemberDisplayName = (member: GroupMember) => {
+    if (member.displayName) {
+      return member.displayName;
+    }
+    const contact = getContactForMember(member);
+    if (contact?.preferredName) {
+      return contact.preferredName;
+    }
+    if (contact?.name) {
+      return contact.name;
+    }
     if (member.address) {
-      const name = getContactName(member.address);
-      if (name) {
-        return name;
-      }
       return `${member.address.slice(0, 6)}...${member.address.slice(-4)}`;
     }
     return `${member.inboxId.slice(0, 6)}...${member.inboxId.slice(-4)}`;
+  };
+
+  const getMemberAvatar = (member: GroupMember) => {
+    if (member.avatar) {
+      return member.avatar;
+    }
+    const contact = getContactForMember(member);
+    return contact?.avatar;
+  };
+
+  const formatIdentifier = (value: string) => {
+    if (!value) {
+      return '';
+    }
+    if (value.startsWith('0x') && value.length > 10) {
+      return `${value.slice(0, 6)}...${value.slice(-4)}`;
+    }
+    if (value.length > 18) {
+      return `${value.slice(0, 8)}...${value.slice(-4)}`;
+    }
+    return value;
+  };
+
+  const getContactDisplayName = (contact: Contact) => contact.preferredName || contact.name;
+
+  const renderContactAvatar = (avatar: string | undefined, fallback: string) => {
+    if (avatar && avatar.startsWith('http')) {
+      return <img src={avatar} alt="Contact avatar" className="w-full h-full rounded-full object-cover" />;
+    }
+    if (avatar) {
+      return <span className="text-lg" aria-hidden>{avatar}</span>;
+    }
+    return <span className="text-white font-semibold" aria-hidden>{fallback.slice(0, 2).toUpperCase()}</span>;
   };
 
   return (
@@ -333,6 +534,93 @@ export function GroupSettingsPage() {
               disabled={!isCurrentUserAdmin}
             />
           </div>
+          {isCurrentUserAdmin && isContactPickerOpen && (
+            <div className="fixed inset-0 z-40 flex items-center justify-center bg-primary-950/80 backdrop-blur-sm">
+              <div className="bg-primary-900/95 border border-primary-700 rounded-2xl shadow-2xl w-full max-w-md mx-4">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-primary-700/60">
+                  <h3 className="text-lg font-semibold text-primary-50">Add members from contacts</h3>
+                  <button
+                    className="text-primary-300 hover:text-primary-50"
+                    onClick={handleCloseContactPicker}
+                    aria-label="Close contact picker"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="px-4 py-3 flex flex-col gap-3">
+                  <input
+                    type="text"
+                    value={contactSearchTerm}
+                    onChange={(event) => setContactSearchTerm(event.target.value)}
+                    placeholder="Search contacts..."
+                    className="input-primary w-full"
+                  />
+                  <div className="max-h-64 overflow-y-auto rounded-lg border border-primary-800/60 bg-primary-950/50">
+                    {contactsLoading && availableContacts.length === 0 ? (
+                      <div className="py-6 text-center text-primary-300 text-sm">Loading contacts…</div>
+                    ) : filteredContacts.length === 0 ? (
+                      <div className="py-6 text-center text-primary-300 text-sm">No contacts available.</div>
+                    ) : (
+                      <ul className="divide-y divide-primary-900/60">
+                        {filteredContacts.map((contact) => {
+                          const isSelected = selectedContactAddresses.some(
+                            (address) => address.toLowerCase() === contact.address.toLowerCase()
+                          );
+                          const avatarContent = renderContactAvatar(contact.avatar, contact.address);
+                          return (
+                            <li key={contact.address}>
+                              <button
+                                type="button"
+                                onClick={() => toggleContactSelection(contact.address)}
+                                className={`flex items-center gap-3 w-full text-left px-3 py-2 transition-colors ${
+                                  isSelected ? 'bg-primary-800/60 border-l-2 border-accent-500' : 'hover:bg-primary-800/40'
+                                }`}
+                              >
+                                <div className="w-10 h-10 rounded-full bg-primary-700/80 flex items-center justify-center overflow-hidden">
+                                  {avatarContent}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-primary-50 font-semibold truncate">{getContactDisplayName(contact)}</p>
+                                  {contact.preferredName && contact.preferredName !== contact.name && (
+                                    <p className="text-xs text-primary-400 truncate">{contact.name}</p>
+                                  )}
+                                  <p className="text-xs text-primary-300 truncate">{formatIdentifier(contact.address)}</p>
+                                </div>
+                                <div className="w-5 h-5 flex items-center justify-center">
+                                  {isSelected && (
+                                    <span className="text-accent-400" aria-hidden>✓</span>
+                                  )}
+                                </div>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-primary-200">
+                    <span>{selectedContactAddresses.length} selected</span>
+                    <div className="flex gap-2">
+                      <button
+                        className="btn-secondary"
+                        onClick={handleCloseContactPicker}
+                        disabled={isAddingContacts}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn-primary"
+                        onClick={handleConfirmContactSelection}
+                        disabled={selectedContactAddresses.length === 0 || isAddingContacts}
+                      >
+                        {isAddingContacts ? 'Adding…' : 'Add selected'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Group Image */}
           <div>
@@ -374,28 +662,40 @@ export function GroupSettingsPage() {
           <div>
             <h2 className="text-lg font-semibold mb-2">Member Management</h2>
             {isCurrentUserAdmin && (
-              <div className="flex gap-2 mb-4">
-                <input
-                  type="text"
-                  value={newMemberAddress}
-                  onChange={(e) => {
-                    setNewMemberAddress(e.target.value);
-                    if (error) {
-                      setError('');
+              <div className="flex flex-col gap-2 mb-4">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newMemberAddress}
+                    onChange={(e) => {
+                      setNewMemberAddress(e.target.value);
+                      if (error) {
+                        setError('');
+                      }
+                    }}
+                    placeholder="Add member address (0x...)"
+                    className="input-primary flex-1"
+                  />
+                  <button
+                    className="btn-primary"
+                    onClick={handleAddMember}
+                    disabled={
+                      !normalizedNewMemberAddress ||
+                      existingMemberIdentifiers.has(normalizedNewMemberAddress.toLowerCase())
                     }
-                  }}
-                  placeholder="Add member address (0x...)"
-                  className="input-primary flex-1"
-                />
+                  >
+                    Add
+                  </button>
+                </div>
                 <button
-                  className="btn-primary"
-                  onClick={handleAddMember}
-                  disabled={
-                    !normalizedNewMemberAddress ||
-                    existingMemberAddresses.has(normalizedNewMemberAddress.toLowerCase())
-                  }
+                  className="btn-secondary"
+                  onClick={() => {
+                    setError('');
+                    setIsContactPickerOpen(true);
+                  }}
+                  disabled={contactsLoading && availableContacts.length === 0}
                 >
-                  Add
+                  Select from contacts
                 </button>
               </div>
             )}
@@ -404,21 +704,24 @@ export function GroupSettingsPage() {
                 const isSelf =
                   (identity?.address && member.address?.toLowerCase() === identity.address.toLowerCase()) ||
                   (identity?.inboxId && member.inboxId.toLowerCase() === identity.inboxId.toLowerCase());
+                const avatar = getMemberAvatar(member);
+                const fallbackLabel = member.address ?? member.inboxId;
+                const avatarContent = avatar
+                  ? avatar.startsWith('http')
+                    ? <img src={avatar} alt="Member avatar" className="w-full h-full rounded-full object-cover" />
+                    : <span className="text-lg" aria-hidden>{avatar}</span>
+                  : <span className="text-white font-semibold" aria-hidden>{fallbackLabel.slice(0, 2).toUpperCase()}</span>;
+                const secondaryLine = member.address ?? member.inboxId;
 
                 return (
                   <li key={member.inboxId} className="flex items-center justify-between py-2 px-3 rounded-md hover:bg-primary-800/50 transition-colors">
                     <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary-700 flex items-center justify-center text-sm font-semibold">
-                      {(member.address ?? member.inboxId).slice(2, 4).toUpperCase()}
+                    <div className="w-8 h-8 rounded-full bg-primary-700 flex items-center justify-center text-sm font-semibold overflow-hidden">
+                      {avatarContent}
                     </div>
                     <div className="flex flex-col">
                       <span className="text-primary-50">{getMemberDisplayName(member)}</span>
-                      {member.address && (
-                        <span className="text-xs text-primary-400">{member.address}</span>
-                      )}
-                      {!member.address && (
-                        <span className="text-xs text-primary-400">{member.inboxId}</span>
-                      )}
+                      <span className="text-xs text-primary-400">{formatIdentifier(secondaryLine)}</span>
                     </div>
                     {member.isSuperAdmin ? (
                       <span className="text-accent-300 text-xs px-2 py-0.5 bg-accent-900 rounded-full">Super Admin</span>

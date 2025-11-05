@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
-import { useConversationStore, useAuthStore } from '@/lib/stores';
+import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import type { Conversation } from '@/types';
@@ -14,14 +14,19 @@ import { saveLastRoute } from '@/lib/utils/route-persistence';
 
 export function Layout() {
   const location = useLocation();
-  const { conversations, addConversation } = useConversationStore();
+  const { conversations, addConversation, updateConversation } = useConversationStore();
   const { identity } = useAuthStore();
   const { receiveMessage } = useMessages();
+  const loadContacts = useContactStore((state) => state.loadContacts);
 
   // Save route for persistence across refreshes
   useEffect(() => {
     saveLastRoute(location.pathname);
   }, [location.pathname]);
+
+  useEffect(() => {
+    loadContacts();
+  }, [loadContacts]);
 
   // Global message listener - handles ALL incoming XMTP messages
   useEffect(() => {
@@ -36,53 +41,74 @@ export function Layout() {
       });
 
       try {
-        // Check if conversation exists
+        const senderInboxId = message.senderAddress;
+        const contactStore = useContactStore.getState();
+        let contact = contactStore.getContactByInboxId?.(senderInboxId)
+          ?? contactStore.getContactByAddress(senderInboxId);
+
+        const storage = await getStorage();
+
+        if (!contact) {
+          const inboxOnlyContact: Contact = {
+            address: senderInboxId,
+            name: senderInboxId,
+            createdAt: Date.now(),
+            source: 'inbox',
+            isInboxOnly: true,
+            inboxId: senderInboxId,
+          };
+          await contactStore.addContact(inboxOnlyContact);
+          contact = inboxOnlyContact;
+          console.log('[Layout] Created inbox-only contact:', senderInboxId);
+        } else if (!contact.inboxId) {
+          await contactStore.updateContact(contact.address, { inboxId: senderInboxId });
+          contact = { ...contact, inboxId: senderInboxId };
+        }
+
         let conversation = conversations.find((c) => c.id === conversationId);
-        
+
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
-          
-          // Create a new conversation
+
+          const peerId = contact?.address ?? senderInboxId;
           const newConversation: Conversation = {
             id: conversationId,
-            peerId: message.senderAddress, // Use sender's inbox ID as peer ID
+            peerId,
             createdAt: Date.now(),
             lastMessageAt: message.sentAt || Date.now(),
             lastMessagePreview: '',
             unreadCount: 0,
             pinned: false,
             archived: false,
+            displayName: contact?.preferredName ?? contact?.name,
+            displayAvatar: contact?.avatar,
           };
-          
-          // Add to store
+
           addConversation(newConversation);
-          
-          // Persist to storage
-          const storage = await getStorage();
           await storage.putConversation(newConversation);
-          
-          // Create inbox-only contact if not already a contact
-          const { useContactStore } = await import('@/lib/stores');
-          const contactStore = useContactStore.getState();
-          if (!contactStore.isContact(message.senderAddress)) {
-            const inboxOnlyContact: Contact = {
-              address: message.senderAddress,
-              name: message.senderAddress, // Default name, user can edit later
-              createdAt: Date.now(),
-              source: 'inbox',
-              isInboxOnly: true,
-              inboxId: message.senderAddress, // Use sender address as inbox ID initially
-            };
-            await contactStore.addContact(inboxOnlyContact);
-            console.log('[Layout] Created inbox-only contact:', message.senderAddress);
-          }
-          
+
           console.log('[Layout] ✅ New conversation created:', newConversation);
-          
+
           conversation = newConversation;
+        } else {
+          const updates: Partial<Conversation> = {};
+          if (contact?.address && conversation.peerId !== contact.address) {
+            updates.peerId = contact.address;
+          }
+          const displayName = contact?.preferredName ?? contact?.name;
+          if (displayName && conversation.displayName !== displayName) {
+            updates.displayName = displayName;
+          }
+          if (contact?.avatar && conversation.displayAvatar !== contact.avatar) {
+            updates.displayAvatar = contact.avatar;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            updateConversation(conversation.id, updates);
+            await storage.putConversation({ ...conversation, ...updates });
+            conversation = { ...conversation, ...updates } as Conversation;
+          }
         }
-        
-        // Process the message (adds to store, updates conversation, increments unread)
         console.log('[Layout] Processing message with receiveMessage()');
         await receiveMessage(conversationId, message);
         
@@ -99,7 +125,7 @@ export function Layout() {
       console.log('[Layout] 🔇 Global message listener unregistered');
       window.removeEventListener('xmtp:message', handleIncomingMessage);
     };
-  }, [conversations, addConversation, receiveMessage, identity]);
+  }, [conversations, addConversation, updateConversation, receiveMessage, identity]);
 
   return (
     <div className="flex flex-col h-screen text-primary-50">

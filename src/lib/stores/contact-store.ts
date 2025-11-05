@@ -32,6 +32,7 @@ interface ContactState {
   loadContacts: () => Promise<void>;
   isContact: (address: string) => boolean;
   getContactByAddress: (address: string) => Contact | undefined;
+  getContactByInboxId: (inboxId: string) => Contact | undefined;
   syncFarcasterContacts: (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => Promise<void>;
 }
 
@@ -87,6 +88,12 @@ export const useContactStore = create<ContactState>()(
 
       getContactByAddress: (address) => {
         return get().contacts.find(c => c.address.toLowerCase() === address.toLowerCase());
+      },
+
+      getContactByInboxId: (inboxId) => {
+        return get().contacts.find(
+          (c) => c.inboxId !== undefined && c.inboxId.toLowerCase() === inboxId.toLowerCase()
+        );
       },
 
       syncFarcasterContacts: async (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => {

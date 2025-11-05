@@ -13,6 +13,8 @@ export interface Conversation {
   archived: boolean;
   mutedUntil?: number;
   createdAt: number;
+  displayName?: string;
+  displayAvatar?: string;
   isGroup?: boolean;
   groupName?: string; // Human-readable name for group chats
   groupImage?: string; // URL or base64 data for group avatar
@@ -70,6 +72,8 @@ export interface GroupMember {
   permissionLevel?: number;
   isAdmin?: boolean;
   isSuperAdmin?: boolean;
+  displayName?: string;
+  avatar?: string;
 }
 
 export interface Identity {
