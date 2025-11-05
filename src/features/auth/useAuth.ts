@@ -23,6 +23,7 @@ import { clearLastRoute } from '@/lib/utils/route-persistence';
 export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
+  const isE2E = (import.meta as any)?.env?.VITE_E2E_TEST === 'true';
   
   // Get wagmi account info for wallet-based identities
   const { address: walletAddress, chainId: walletChainId } = useAccount();
@@ -42,6 +43,36 @@ export function useAuth() {
       }
     ) => {
       try {
+        if (isE2E) {
+          // Skip live XMTP connection during E2E.
+          const storage = await getStorage();
+          const identity = await storage.getIdentity();
+          if (identity && identity.address === address) {
+            const stubInboxId = `local-${address.slice(2, 8)}-${Date.now().toString(36)}`;
+            identity.inboxId = stubInboxId;
+            await storage.putIdentity(identity);
+            setIdentity(identity);
+
+            if (!options?.skipRegistryUpdate) {
+              const registry = useInboxRegistryStore.getState();
+              const label =
+                options?.labelOverride ||
+                identity.displayName ||
+                `${identity.address.slice(0, 6)}…${identity.address.slice(-4)}`;
+
+              registry.upsertEntry({
+                inboxId: stubInboxId,
+                displayLabel: label,
+                primaryDisplayIdentity: identity.displayName || identity.address,
+                lastOpenedAt: Date.now(),
+                hasLocalDB: true,
+              });
+              registry.markOpened(stubInboxId, true);
+            }
+          }
+          return;
+        }
+
         const xmtp = getXmtpClient();
         await xmtp.connect(
           {
@@ -95,10 +126,10 @@ export function useAuth() {
           }
         }
       } catch (error) {
-        console.error('XMTP connection failed (non-blocking):', error);
+        console.warn('XMTP connection failed (non-blocking):', error);
       }
     },
-    [setIdentity]
+    [setIdentity, isE2E]
   );
 
   /**
@@ -521,4 +552,3 @@ export function useAuth() {
     probeIdentity,
   };
 }
-

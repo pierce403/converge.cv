@@ -25,7 +25,10 @@ class ConvergeDB extends Dexie {
   attachmentData!: Table<AttachmentData, string>;
   identity!: Table<Identity, string>;
   vaultSecrets!: Table<VaultSecrets, string>;
-  contacts!: Table<Contact, string>;
+  // Legacy contacts table keyed by address (v1/v2)
+  contacts!: Table<Contact & { address?: string }, string>;
+  // New contacts table keyed by inboxId (v3)
+  contacts_v3!: Table<Contact, string>;
 
   constructor() {
     super('ConvergeDB');
@@ -59,6 +62,8 @@ class ConvergeDB extends Dexie {
         );
       });
 
+    // IMPORTANT: Dexie does not support changing the primary key of an existing table.
+    // Instead of altering 'contacts', create a new store 'contacts_v3' and migrate data.
     this.version(3)
       .stores({
         conversations: 'id, lastMessageAt, pinned, archived, peerId',
@@ -67,10 +72,12 @@ class ConvergeDB extends Dexie {
         attachmentData: 'id',
         identity: 'address, inboxId',
         vaultSecrets: 'method',
-        contacts: '&inboxId, primaryAddress, *addresses',
+        contacts: 'address',
+        contacts_v3: '&inboxId, primaryAddress, *addresses',
       })
       .upgrade(async (transaction) => {
         const contactsTable = transaction.table('contacts');
+        const contactsV3 = transaction.table('contacts_v3');
         try {
           const legacyContacts = await contactsTable.toArray();
 
@@ -158,13 +165,12 @@ class ConvergeDB extends Dexie {
             }
           }
 
-          await contactsTable.clear();
           if (migrated.size > 0) {
-            await contactsTable.bulkPut(Array.from(migrated.values()));
+            await contactsV3.bulkPut(Array.from(migrated.values()));
           }
         } catch (error) {
           console.error('[Storage] Failed to migrate contacts store to inboxId schema. Clearing legacy contacts.', error);
-          await contactsTable.clear();
+          // Don't throw; leave legacy table as-is to avoid blocking DB open
         }
       });
   }
@@ -351,23 +357,23 @@ export class DexieDriver implements StorageDriver {
 
   // Contacts
   async putContact(contact: Contact): Promise<void> {
-    await this.db.contacts.put(contact);
+    await this.db.contacts_v3.put(contact);
   }
 
   async getContact(inboxId: string): Promise<Contact | undefined> {
-    return await this.db.contacts.get(inboxId);
+    return await this.db.contacts_v3.get(inboxId);
   }
 
   async listContacts(): Promise<Contact[]> {
-    return await this.db.contacts.toArray();
+    return await this.db.contacts_v3.toArray();
   }
 
   async deleteContact(inboxId: string): Promise<void> {
-    await this.db.contacts.delete(inboxId);
+    await this.db.contacts_v3.delete(inboxId);
   }
 
   async updateContact(inboxId: string, updates: Partial<Contact>): Promise<void> {
-    await this.db.contacts.update(inboxId, updates);
+    await this.db.contacts_v3.update(inboxId, updates);
   }
 
   // Vault secrets
@@ -394,6 +400,7 @@ export class DexieDriver implements StorageDriver {
       this.db.identity,
       this.db.vaultSecrets,
       this.db.contacts,
+      this.db.contacts_v3,
     ], async () => {
       await this.db.conversations.clear();
       await this.db.messages.clear();
@@ -402,6 +409,7 @@ export class DexieDriver implements StorageDriver {
       await this.db.identity.clear();
       await this.db.vaultSecrets.clear();
       await this.db.contacts.clear();
+      await this.db.contacts_v3.clear();
       console.log('[Storage] ✅ All IndexedDB data cleared');
     });
 
