@@ -57,9 +57,9 @@ export function SettingsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check file size (max 2MB)
-    if (file.size > 2 * 1024 * 1024) {
-      alert('Avatar image must be less than 2MB');
+    // Check file size (max 256KB to keep XMTP messages small)
+    if (file.size > 256 * 1024) {
+      alert('Avatar image must be less than 256KB');
       return;
     }
 
@@ -80,6 +80,15 @@ export function SettingsPage() {
           const storage = await getStorage();
           const updatedIdentity = { ...identity, avatar: dataUri };
           await storage.putIdentity(updatedIdentity);
+
+          // Persist to XMTP so it survives clear-all
+          try {
+            const xmtp = getXmtpClient();
+            await xmtp.saveProfile(updatedIdentity.displayName, dataUri);
+          } catch (err) {
+            console.warn('[Settings] Failed to save avatar to network (non-fatal):', err);
+          }
+
           window.location.reload(); // Refresh to show new avatar
         }
       };
@@ -96,6 +105,13 @@ export function SettingsPage() {
         const storage = await getStorage();
         const updatedIdentity = { ...identity, displayName: displayName.trim() };
         await storage.putIdentity(updatedIdentity);
+        // Persist to XMTP so it survives clear-all
+        try {
+          const xmtp = getXmtpClient();
+          await xmtp.saveProfile(updatedIdentity.displayName, updatedIdentity.avatar);
+        } catch (err) {
+          console.warn('[Settings] Failed to save display name to network (non-fatal):', err);
+        }
         setIsEditingName(false);
         window.location.reload(); // Refresh to show new name
       }

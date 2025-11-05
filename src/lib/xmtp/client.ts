@@ -113,6 +113,7 @@ export class XmtpClient {
   private client: Client | null = null;
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
+  private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
 
   private formatPayload(payload: unknown): string {
     if (typeof payload === 'string') {
@@ -1339,6 +1340,90 @@ export class XmtpClient {
       console.error('[XMTP] Failed to start message stream:', error);
       throw error;
     }
+  }
+
+  /**
+   * Persist profile to the XMTP network by sending a small JSON record to a self-DM.
+   * This makes display name/avatar retrievable on any device after local data is cleared.
+   */
+  async saveProfile(displayName?: string, avatarUrl?: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    const inboxId = this.client.inboxId;
+    if (!inboxId) {
+      throw new Error('No inbox ID available');
+    }
+
+    // Ensure payload stays reasonably small
+    const payload = {
+      type: 'profile',
+      v: 1,
+      displayName: displayName?.trim() || undefined,
+      avatarUrl: avatarUrl && avatarUrl.length <= 256 * 1024 ? avatarUrl : undefined,
+      ts: Date.now(),
+    };
+
+    const content = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
+
+    try {
+      // Reuse self-DM if present, otherwise create it
+      let dm = await this.client.conversations.getDmByInboxId(inboxId);
+      if (!dm) {
+        dm = await this.client.conversations.newDm(inboxId);
+      }
+      await dm.send(content);
+      console.log('[XMTP] ✅ Saved profile to network');
+
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'profile:save',
+        details: 'Profile saved to self-DM',
+      });
+    } catch (error) {
+      console.error('[XMTP] Failed to save profile to network:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Load latest profile from the network (self-DM) and return values if found.
+   */
+  async loadOwnProfile(): Promise<{ displayName?: string; avatarUrl?: string } | null> {
+    if (!this.client) {
+      return null;
+    }
+    const inboxId = this.client.inboxId;
+    if (!inboxId) {
+      return null;
+    }
+    try {
+      const dm = await this.client.conversations.getDmByInboxId(inboxId);
+      if (!dm) {
+        return null;
+      }
+      const msgs = await dm.messages();
+      // Scan newest → oldest for a profile record
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        const raw = typeof m.content === 'string' ? m.content : m.encodedContent?.content;
+        if (typeof raw !== 'string') continue;
+        if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
+        try {
+          const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
+          const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
+          console.log('[XMTP] ✅ Loaded profile from network');
+          logNetworkEvent({ direction: 'inbound', event: 'profile:load', details: 'Profile loaded from self-DM' });
+          return { displayName: obj.displayName, avatarUrl: obj.avatarUrl };
+        } catch (e) {
+          console.warn('[XMTP] Failed to parse profile message', e);
+        }
+      }
+    } catch (error) {
+      console.warn('[XMTP] No profile found on network:', error);
+    }
+    return null;
   }
 
   /**

@@ -123,6 +123,21 @@ export function useAuth() {
               inboxId,
               installationId: installationId.substring(0, 16) + '...',
             });
+
+            // Try to load profile (display name/avatar) from network and persist locally
+            try {
+              const profile = await xmtp.loadOwnProfile();
+              if (profile && (profile.displayName || profile.avatarUrl)) {
+                const updated = { ...identity } as Identity;
+                if (profile.displayName) updated.displayName = profile.displayName;
+                if (profile.avatarUrl) (updated as Identity & { avatar?: string }).avatar = profile.avatarUrl;
+                await storage.putIdentity(updated);
+                setIdentity(updated);
+                console.log('[Auth] Applied profile from network');
+              }
+            } catch (e) {
+              console.warn('[Auth] Failed to load profile from network (non-fatal):', e);
+            }
           }
         }
       } catch (error) {
