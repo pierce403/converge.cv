@@ -1414,7 +1414,15 @@ export class XmtpClient {
 
       const inboxId = await withTimeout(utils.getInboxIdForIdentifier(identifier, 'production'));
       if (!inboxId) {
-        throw new Error('Inbox not found for this identity');
+        console.warn('[XMTP] No inbox registered for this identity; returning empty inbox state');
+        const stub: SafeInboxState = {
+          // As per SafeInboxState type mapping
+          identifiers: [identifier as unknown as Identifier],
+          inboxId: this.identity?.inboxId ?? '',
+          installations: [],
+          recoveryIdentifier: identifier as unknown as Identifier,
+        } as unknown as SafeInboxState;
+        return stub;
       }
 
       const states = (await withTimeout(utils.inboxStateFromInboxIds([inboxId], 'production')))
@@ -1422,8 +1430,17 @@ export class XmtpClient {
       // Utils worker doesn't need explicit close; it dies with page lifecycle.
       return states[0];
     } catch (error) {
-      console.error('[XMTP] Failed to fetch inbox state via Utils:', error);
-      throw error instanceof Error ? error : new Error(String(error));
+      console.warn('[XMTP] Failed to fetch inbox state via Utils; returning empty inbox state:', error);
+      const identifier: { identifier: string; identifierKind: 'Ethereum' } | null = this.identity
+        ? { identifier: toIdentifierHex(this.identity.address).toLowerCase(), identifierKind: 'Ethereum' }
+        : null;
+      const stub: SafeInboxState = {
+        identifiers: identifier ? [identifier as unknown as Identifier] : [],
+        inboxId: this.identity?.inboxId ?? '',
+        installations: [],
+        recoveryIdentifier: (identifier ?? { identifier: '', identifierKind: 'Ethereum' }) as unknown as Identifier,
+      } as unknown as SafeInboxState;
+      return stub;
     }
   }
 

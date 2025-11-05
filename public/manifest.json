@@ -22,9 +22,8 @@
   ],
   "protocol_handlers": [
     {
-      "protocol": "xmtp",
+      "protocol": "web+xmtp",
       "url": "/handle-xmtp-protocol?url=%s"
     }
   ]
 }
-
