@@ -19,7 +19,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   return (
     <div className={`flex mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[80%]`}>
+      <div className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[66%]`}>
         {/* Message content */}
         <div className={isSent ? 'message-sent' : 'message-received'}>
           {message.type === 'text' && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
@@ -73,4 +73,3 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     </div>
   );
 }
-
