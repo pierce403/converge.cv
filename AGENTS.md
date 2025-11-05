@@ -538,3 +538,31 @@ if (!isRegistered) {
 - `check_deploy.sh`: convenience deploy watcher.
 
 **Status**: ✅ Outgoing DM creation and first-message send working end-to-end on v5.
+
+## Latest Changes (2025-11-05)
+
+### Contacts & Storage
+- Added Dexie migration to `contacts_v3` (keyed by inboxId) to avoid primary-key change errors. Legacy contacts are migrated safely without blocking DB open.
+- `useContactStore` is now inbox-first and merges identities/addresses; `upsertContactProfile` consumes XMTP inbox profiles and Farcaster data.
+
+### Group Settings UI
+- Implemented full group settings: name, image, description, membership list with admin badges, and actions to add/remove/promote/demote members.
+- Contact picker allows adding members from existing contacts; excludes current members and self.
+- Group member resolution prefers contact preferredName/avatar, falls back to addresses/inbox IDs.
+
+### Messaging UI
+- Message bubble width set to 2/3 screen via `MessageBubble` container (`max-w-[66%]`) for better readability.
+
+### Identity Updates on Incoming Messages
+- Global listener in `src/app/Layout.tsx` fetches XMTP inbox profiles on incoming messages and upserts contact display name/avatar/addresses/identities, then enriches via Farcaster when available.
+
+### XMTP Debugging & Stability
+- Expanded structured logs across connect, sync, history backfill, stream, and group operations.
+- Installations panel tolerates disconnected state: uses `getInboxState()` fallback and shows helpful errors; avoids hard failures when not registered.
+
+### Tooling & CI
+- Playwright E2E added (headed): `tests/e2e/onboarding.spec.ts` navigates onboarding, tabs, and sends a message. `playwright.config.ts` uses build+preview for stability.
+- Lint rule fixes: removed unsafe `any` casts for `import.meta`; CI back to green.
+- GitHub Pages deploy verified with `gh run list` (latest runs successful).
+
+Updated By: AI Agent (2025-11-05)

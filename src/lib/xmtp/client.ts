@@ -20,6 +20,8 @@ import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
 import type { Conversation } from '@/types';
 import { getAddress } from 'viem';
 
+// Intentionally no runtime debug flag here to avoid lint/type issues.
+
 export interface XmtpIdentity {
   address: string;
   privateKey?: string;
