@@ -301,7 +301,9 @@ export const useContactStore = create<ContactState>()(
         const baseContact: Contact = existing
           ? mergeContactData(existing, {
               name: profile.displayName ?? existing.name,
+              preferredName: profile.displayName ?? existing.preferredName,
               avatar: profile.avatarUrl ?? existing.avatar,
+              preferredAvatar: profile.avatarUrl ?? existing.preferredAvatar,
               primaryAddress: profile.primaryAddress ?? existing.primaryAddress,
               source: profile.source ?? existing.source,
               addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
@@ -316,9 +318,9 @@ export const useContactStore = create<ContactState>()(
                 computedAddresses[0] ??
                 normalizedInboxId,
               avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+              preferredName: profile.displayName ?? profile.metadata?.preferredName,
+              preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
               description: profile.metadata?.description,
-              preferredName: profile.metadata?.preferredName,
-              preferredAvatar: profile.metadata?.preferredAvatar,
               notes: profile.metadata?.notes,
               source: profile.source ?? profile.metadata?.source ?? 'inbox',
               createdAt: profile.metadata?.createdAt ?? Date.now(),

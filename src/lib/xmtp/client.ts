@@ -260,13 +260,16 @@ export class XmtpClient {
         );
     };
 
-    const buildProfile = (identifiers: Identifier[] | undefined): InboxProfile => {
+    const buildProfile = (
+      identifiers: Identifier[] | undefined,
+      overrides?: { displayName?: string; avatarUrl?: string }
+    ): InboxProfile => {
       const identityRecords = (identifiers ?? []).map(toIdentityRecord);
       const addresses = addressesFromIdentifiers(identifiers);
       return {
         inboxId: normalizedInboxId,
-        displayName: addresses[0],
-        avatarUrl: undefined,
+        displayName: overrides?.displayName || addresses[0],
+        avatarUrl: overrides?.avatarUrl,
         primaryAddress: addresses[0],
         addresses,
         identities: identityRecords,
@@ -274,6 +277,41 @@ export class XmtpClient {
     };
 
     try {
+      // Prefer profile message embedded in DM (our convention) if available
+      if (this.client) {
+        try {
+          // Look for a DM with this inbox and scan recent messages for profile payload
+          const dm = await this.client.conversations.getDmByInboxId(normalizedInboxId);
+          if (dm) {
+            const msgs = await dm.messages();
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              const raw = typeof m.content === 'string' ? m.content : m.encodedContent?.content;
+              if (typeof raw !== 'string') continue;
+              if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
+              try {
+                const obj = JSON.parse(raw.slice(XmtpClient.PROFILE_PREFIX.length)) as {
+                  displayName?: string;
+                  avatarUrl?: string;
+                };
+                // Build with overrides from profile message + identifiers from preferences if possible
+                try {
+                  const latest = await this.client.preferences.getLatestInboxState(normalizedInboxId);
+                  if (latest) return buildProfile(latest.identifiers ?? [], obj);
+                } catch {
+                  // fallthrough
+                }
+                return buildProfile([], obj);
+              } catch {
+                // ignore malformed profile messages
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[XMTP] fetchInboxProfile: DM profile scan failed', err);
+        }
+      }
+
       if (this.client) {
         try {
           const latest = await this.client.preferences.getLatestInboxState(normalizedInboxId);
