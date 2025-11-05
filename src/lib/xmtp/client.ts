@@ -1365,7 +1365,30 @@ export class XmtpClient {
               }
               return value;
             }, 2));
-            
+
+            // Filter out non-application messages (e.g., group membership changes) from surfacing in chats
+            try {
+              const maybeKind = (message as unknown as { kind?: unknown }).kind;
+              let isMembershipChange = false;
+              if (typeof maybeKind === 'number') {
+                // In XMTP v5, GroupMessageKind.MembershipChange is 1, Application is 0
+                isMembershipChange = maybeKind === 1;
+              } else if (typeof maybeKind === 'string') {
+                isMembershipChange = maybeKind.toLowerCase().includes('membership');
+              }
+              if (isMembershipChange) {
+                logNetworkEvent({
+                  direction: 'inbound',
+                  event: 'group:membership_change',
+                  details: `Ignored membership change in ${message.conversationId}`,
+                });
+                // Do not surface as a chat bubble
+                continue;
+              }
+            } catch (err) {
+              console.warn('[XMTP] Failed to inspect message kind', err);
+            }
+
             console.log('[XMTP] 📨 Parsed message:', {
               id: message.id,
               conversationId: message.conversationId,
