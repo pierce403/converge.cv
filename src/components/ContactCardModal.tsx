@@ -61,6 +61,26 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     setRefreshError(null);
     try {
       const xmtp = getXmtpClient();
+      // Always try to fetch XMTP profile first to refresh display name + avatar
+      try {
+        const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
+        if (targetInbox) {
+          const profile = await xmtp.fetchInboxProfile(String(targetInbox));
+          await upsertContactProfile({
+            inboxId: profile.inboxId,
+            displayName: profile.displayName,
+            avatarUrl: profile.avatarUrl,
+            primaryAddress: profile.primaryAddress,
+            addresses: profile.addresses,
+            identities: profile.identities,
+            source: 'inbox',
+            metadata: contact,
+          });
+        }
+      } catch (e) {
+        // Profile fetch failures are non-fatal for refresh
+        console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
+      }
       
       // Get inbox ID from address
       let inboxId = contact.inboxId;
@@ -205,10 +225,10 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             </a>
           )}
 
-          {/* Preferred Name Input */}
+          {/* Display Name Input */}
           <div className="w-full mb-4">
             <label htmlFor="preferredName" className="block text-sm font-medium text-primary-300 mb-1">
-              Preferred Name
+              Display Name
             </label>
             <input
               id="preferredName"
@@ -216,7 +236,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
               value={preferredName}
               onChange={(e) => setPreferredName(e.target.value)}
               className="input-primary w-full"
-              placeholder="Enter preferred name"
+              placeholder="Enter display name"
             />
           </div>
 

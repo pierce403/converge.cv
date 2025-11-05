@@ -9,6 +9,8 @@ export function ContactsPage() {
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
   const isLoading = useContactStore((state) => state.isLoading);
+  const removeContact = useContactStore((state) => state.removeContact);
+  const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
   const [showContactCard, setShowContactCard] = useState(false);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
 
@@ -40,6 +42,41 @@ export function ContactsPage() {
       <header className="bg-primary-950/80 border-b border-primary-800/60 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-lg">
         <h2 className="text-xl font-bold text-primary-50">Contacts</h2>
         <div className="flex gap-2">
+          <button
+            onClick={async () => {
+              // Refresh all contacts' display name + avatar from XMTP
+              try {
+                const xmtp = (await import('@/lib/xmtp')).getXmtpClient();
+                for (const c of contacts) {
+                  const key = c.inboxId || c.primaryAddress || c.addresses?.[0];
+                  if (!key) continue;
+                  try {
+                    const profile = await xmtp.fetchInboxProfile(String(key));
+                    await upsertContactProfile({
+                      inboxId: profile.inboxId,
+                      displayName: profile.displayName,
+                      avatarUrl: profile.avatarUrl,
+                      primaryAddress: profile.primaryAddress,
+                      addresses: profile.addresses,
+                      identities: profile.identities,
+                      source: 'inbox',
+                      metadata: c,
+                    });
+                  } catch (e) {
+                    console.warn('[Contacts] Refresh failed for', key, e);
+                  }
+                }
+                alert('Contacts refreshed.');
+              } catch (e) {
+                console.error('Failed to refresh contacts:', e);
+                alert('Failed to refresh contacts');
+              }
+            }}
+            className="btn-secondary text-sm px-3 py-1"
+            title="Refresh avatars and display names"
+          >
+            Refresh
+          </button>
           <Link
             to="/new-group"
             className="btn-primary text-sm px-3 py-1"
@@ -104,6 +141,18 @@ export function ContactsPage() {
                   </div>
                   <p className="text-primary-300 text-sm">{secondary}</p>
                 </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm('Delete this contact?')) {
+                      removeContact(contact.inboxId);
+                    }
+                  }}
+                  className="ml-3 text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 border border-red-800/60"
+                  title="Delete contact"
+                >
+                  Delete
+                </button>
               </li>
             );
           })}
