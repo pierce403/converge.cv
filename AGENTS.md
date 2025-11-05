@@ -391,6 +391,15 @@ if (!isRegistered) {
 - **Live App**: https://converge.cv
 - **XMTP Docs**: https://xmtp.org
 
+### XMTP + LLMs (Always Load in Context)
+- Build-with-LLMs overview: https://docs.xmtp.org/chat-apps/intro/build-with-llms
+- Full reference text (raw): https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
+
+Guidance:
+- Before starting related work, open and keep these two docs in your session context. If needed, fetch the raw text locally for quick grep:
+  - `curl -L https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt -o tmp/xmtp-llms-full.txt`
+- Treat these as required context when implementing or debugging anything that involves LLMs, assistants, or message flows that may be model-driven.
+
 ---
 
 **Last Updated**: 2025-10-31 (Contacts now keyed by XMTP inbox IDs)
