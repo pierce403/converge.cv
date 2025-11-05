@@ -13,7 +13,7 @@ import {
   type Identifier,
 } from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
-import { logNetworkEvent } from '@/lib/stores';
+import { logNetworkEvent, useContactStore } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
@@ -1242,6 +1242,31 @@ export class XmtpClient {
 
           for (const m of decodedMessages) {
             const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
+            // Handle profile broadcasts silently (do not surface as chat messages)
+            if (typeof content === 'string' && content.startsWith(XmtpClient.PROFILE_PREFIX)) {
+              try {
+                const json = content.slice(XmtpClient.PROFILE_PREFIX.length);
+                const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
+                const senderInboxId = m.senderInboxId;
+                if (senderInboxId) {
+                  await useContactStore.getState().upsertContactProfile({
+                    inboxId: senderInboxId,
+                    displayName: obj.displayName,
+                    avatarUrl: obj.avatarUrl,
+                    source: 'inbox',
+                  });
+                  logNetworkEvent({
+                    direction: 'inbound',
+                    event: 'profile:received',
+                    details: `Profile update from ${senderInboxId}`,
+                    payload: JSON.stringify(obj),
+                  });
+                }
+              } catch (e) {
+                console.warn('[XMTP] Failed to process profile backfill message', e);
+              }
+              continue;
+            }
             const xmsg = {
               id: m.id,
               conversationId: m.conversationId,
@@ -1345,6 +1370,32 @@ export class XmtpClient {
               event: 'message:received',
               details: `From ${message.senderInboxId}`,
             });
+
+            // Handle profile broadcasts silently (do not surface as chat messages)
+            if (typeof message.content === 'string' && message.content.startsWith(XmtpClient.PROFILE_PREFIX)) {
+              try {
+                const payload = message.content.slice(XmtpClient.PROFILE_PREFIX.length);
+                const obj = JSON.parse(payload) as { displayName?: string; avatarUrl?: string };
+                const senderInboxId = message.senderInboxId;
+                if (senderInboxId) {
+                  await useContactStore.getState().upsertContactProfile({
+                    inboxId: senderInboxId,
+                    displayName: obj.displayName,
+                    avatarUrl: obj.avatarUrl,
+                    source: 'inbox',
+                  });
+                  logNetworkEvent({
+                    direction: 'inbound',
+                    event: 'profile:received',
+                    details: `Profile update from ${senderInboxId}`,
+                    payload: JSON.stringify(obj),
+                  });
+                }
+              } catch (e) {
+                console.warn('[XMTP] Failed to process profile message', e);
+              }
+              continue;
+            }
 
             // Dispatch to message store
             console.log('[XMTP] Dispatching custom event xmtp:message');
