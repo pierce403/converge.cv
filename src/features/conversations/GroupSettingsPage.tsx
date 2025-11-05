@@ -1,13 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
-import type { Conversation } from '@/types';
+import { getAddress } from 'viem';
 
 export function GroupSettingsPage() {
   const navigate = useNavigate();
   const { conversationId } = useParams<{ conversationId: string }>();
-  const { conversations, updateConversationAndPersist, addMembersToGroup, removeMembersFromGroup, promoteMemberToAdmin, demoteAdminToMember } = useConversations();
+  const {
+    conversations,
+    updateGroupMetadata,
+    addMembersToGroup,
+    removeMembersFromGroup,
+    promoteMemberToAdmin,
+    demoteAdminToMember,
+    refreshGroupDetails,
+  } = useConversations();
   const { identity } = useAuthStore();
   const { contacts } = useContactStore();
 
@@ -20,6 +28,22 @@ export function GroupSettingsPage() {
   const [newMemberAddress, setNewMemberAddress] = useState('');
 
   const isCurrentUserAdmin = conversation?.admins?.includes(identity?.address || '');
+  const normalizedNewMemberAddress = useMemo(() => {
+    try {
+      if (!newMemberAddress.trim()) return null;
+      return getAddress(newMemberAddress.trim() as `0x${string}`);
+    } catch {
+      return null;
+    }
+  }, [newMemberAddress]);
+
+  useEffect(() => {
+    if (conversation?.id && conversation.isGroup) {
+      refreshGroupDetails(conversation.id).catch((err) => {
+        console.warn('Failed to refresh group details on settings load:', err);
+      });
+    }
+  }, [conversation?.id, conversation?.isGroup, refreshGroupDetails]);
 
   useEffect(() => {
     if (conversation) {
@@ -48,13 +72,11 @@ export function GroupSettingsPage() {
     setError('');
 
     try {
-      const updatedConversation: Partial<Conversation> = {
-        groupName,
-        groupImage,
-        groupDescription,
-      };
-
-      await updateConversationAndPersist(conversation.id, updatedConversation);
+      await updateGroupMetadata(conversation.id, {
+        groupName: groupName || undefined,
+        groupImage: groupImage || undefined,
+        groupDescription: groupDescription || undefined,
+      });
 
       alert('Group settings saved!');
       navigate(-1);
@@ -67,14 +89,25 @@ export function GroupSettingsPage() {
   };
 
   const handleAddMember = async () => {
-    if (!newMemberAddress || conversation.members?.includes(newMemberAddress)) return;
+    setError('');
+
+    if (!normalizedNewMemberAddress) {
+      setError('Enter a valid Ethereum address (0x…) before adding.');
+      return;
+    }
+
+    if (conversation.members?.some((member) => member.toLowerCase() === normalizedNewMemberAddress.toLowerCase())) {
+      setError('This member is already part of the group.');
+      return;
+    }
+
     if (!isCurrentUserAdmin) {
       setError('Only group admins can add members.');
       return;
     }
 
     try {
-      await addMembersToGroup(conversation.id, [newMemberAddress]);
+      await addMembersToGroup(conversation.id, [normalizedNewMemberAddress]);
       setNewMemberAddress('');
       alert('Member added!');
     } catch (err) {
@@ -84,6 +117,8 @@ export function GroupSettingsPage() {
   };
 
   const handleRemoveMember = async (memberAddress: string) => {
+    setError('');
+
     if (!isCurrentUserAdmin) {
       setError('Only group admins can remove members.');
       return;
@@ -100,6 +135,8 @@ export function GroupSettingsPage() {
   };
 
   const handlePromoteToAdmin = async (memberAddress: string) => {
+    setError('');
+
     if (!isCurrentUserAdmin) {
       setError('Only group admins can promote members.');
       return;
@@ -114,6 +151,8 @@ export function GroupSettingsPage() {
   };
 
   const handleDemoteFromAdmin = async (adminAddress: string) => {
+    setError('');
+
     if (!isCurrentUserAdmin) {
       setError('Only group admins can demote admins.');
       return;
@@ -223,14 +262,24 @@ export function GroupSettingsPage() {
                 <input
                   type="text"
                   value={newMemberAddress}
-                  onChange={(e) => setNewMemberAddress(e.target.value)}
+                  onChange={(e) => {
+                    setNewMemberAddress(e.target.value);
+                    if (error) {
+                      setError('');
+                    }
+                  }}
                   placeholder="Add member address (0x...)"
                   className="input-primary flex-1"
                 />
                 <button
                   className="btn-primary"
                   onClick={handleAddMember}
-                  disabled={!newMemberAddress || conversation.members?.includes(newMemberAddress)}
+                  disabled={
+                    !normalizedNewMemberAddress ||
+                    conversation.members?.some(
+                      (member) => member.toLowerCase() === normalizedNewMemberAddress.toLowerCase()
+                    )
+                  }
                 >
                   Add
                 </button>

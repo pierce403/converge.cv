@@ -5,13 +5,20 @@
  * Following xmtp.chat reference implementation.
  */
 
-import { Client, type Signer, type SafeInboxState } from '@xmtp/browser-sdk';
+import {
+  Client,
+  type Signer,
+  type SafeInboxState,
+  type SafeGroupMember,
+  type Identifier,
+} from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
 import { logNetworkEvent } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
 import type { Conversation } from '@/types';
+import { getAddress } from 'viem';
 
 export interface XmtpIdentity {
   address: string;
@@ -55,6 +62,22 @@ export interface XmtpMessage {
 export type MessageCallback = (message: XmtpMessage) => void;
 export type Unsubscribe = () => void;
 
+export interface GroupMemberSummary {
+  inboxId: string;
+  address: string;
+  permissionLevel: number;
+}
+
+export interface GroupDetails {
+  id: string;
+  name: string;
+  imageUrl?: string;
+  description?: string;
+  members: GroupMemberSummary[];
+  adminAddresses: string[];
+  superAdminAddresses: string[];
+}
+
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
 const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(value);
@@ -83,6 +106,324 @@ export class XmtpClient {
       return JSON.stringify(payload, null, 2);
     } catch (error) {
       return String(payload);
+    }
+  }
+
+  private normalizeEthereumAddress(address: string): `0x${string}` {
+    try {
+      return getAddress(address as `0x${string}`);
+    } catch (error) {
+      console.warn('[XMTP] Invalid Ethereum address supplied:', address, error);
+      throw new Error(`Invalid Ethereum address: ${address}`);
+    }
+  }
+
+  private identifierFromAddress(address: string): Identifier {
+    const normalized = this.normalizeEthereumAddress(address);
+    return {
+      identifier: toIdentifierHex(normalized).toLowerCase(),
+      identifierKind: 'Ethereum',
+    };
+  }
+
+  private extractAddressFromMember(member: SafeGroupMember): string | null {
+    if (!member.accountIdentifiers) {
+      return null;
+    }
+
+    for (const identifier of member.accountIdentifiers) {
+      if (identifier.identifierKind !== 'Ethereum' || !identifier.identifier) {
+        continue;
+      }
+
+      try {
+        const segments = identifier.identifier.split(':');
+        const raw = segments.length > 1 ? segments[segments.length - 1] : identifier.identifier;
+        const withPrefix = raw.startsWith('0x') || raw.startsWith('0X') ? raw : `0x${raw}`;
+        return getAddress(withPrefix as `0x${string}`);
+      } catch (error) {
+        console.warn('[XMTP] Failed to normalize member identifier:', identifier.identifier, error);
+        return identifier.identifier;
+      }
+    }
+
+    return null;
+  }
+
+  private async getGroupConversation(conversationId: string) {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    const conversation = await this.client.conversations.getConversationById(conversationId);
+    if (!conversation) {
+      console.warn('[XMTP] Group conversation not found:', conversationId);
+      return null;
+    }
+
+    if (typeof (conversation as { members?: () => Promise<SafeGroupMember[]> }).members !== 'function') {
+      console.warn('[XMTP] Conversation is not a group:', conversationId);
+      return null;
+    }
+
+    return conversation as unknown as {
+      id: string;
+      name?: string;
+      imageUrl?: string;
+      description?: string;
+      sync?: () => Promise<unknown>;
+      members: () => Promise<SafeGroupMember[]>;
+      listAdmins?: () => Promise<string[]>;
+      listSuperAdmins?: () => Promise<string[]>;
+      updateName?: (name: string) => Promise<void>;
+      updateImageUrl?: (imageUrl: string) => Promise<void>;
+      updateDescription?: (description: string) => Promise<void>;
+      addMembersByIdentifiers?: (identifiers: Identifier[]) => Promise<void>;
+      removeMembersByIdentifiers?: (identifiers: Identifier[]) => Promise<void>;
+      addAdmin?: (inboxId: string) => Promise<void>;
+      removeAdmin?: (inboxId: string) => Promise<void>;
+    };
+  }
+
+  private async buildGroupDetails(conversationId: string, group: Awaited<ReturnType<typeof this.getGroupConversation>>): Promise<GroupDetails> {
+    const safeGroup = group;
+    if (!safeGroup) {
+      throw new Error(`Group ${conversationId} unavailable`);
+    }
+
+    try {
+      await safeGroup.sync?.();
+    } catch (error) {
+      console.warn('[XMTP] Failed to sync group before reading metadata:', conversationId, error);
+    }
+
+    let members: SafeGroupMember[] = [];
+    try {
+      members = await safeGroup.members();
+    } catch (error) {
+      console.warn('[XMTP] Failed to load group members:', conversationId, error);
+    }
+
+    const memberSummaries: GroupMemberSummary[] = members.map((member) => {
+      const address = this.extractAddressFromMember(member) ?? member.inboxId;
+      return {
+        inboxId: member.inboxId,
+        address,
+        permissionLevel: member.permissionLevel,
+      };
+    });
+
+    const adminInboxIds = await (async () => {
+      if (typeof safeGroup.listAdmins !== 'function') return [] as string[];
+      try {
+        return await safeGroup.listAdmins();
+      } catch (error) {
+        console.warn('[XMTP] Failed to list group admins:', conversationId, error);
+        return [] as string[];
+      }
+    })();
+
+    const superAdminInboxIds = await (async () => {
+      if (typeof safeGroup.listSuperAdmins !== 'function') return [] as string[];
+      try {
+        return await safeGroup.listSuperAdmins();
+      } catch (error) {
+        console.warn('[XMTP] Failed to list group super admins:', conversationId, error);
+        return [] as string[];
+      }
+    })();
+
+    const toAddress = (inboxId: string) => {
+      const match = memberSummaries.find((member) => member.inboxId === inboxId);
+      return match?.address ?? inboxId;
+    };
+
+    const adminAddresses = Array.from(new Set(adminInboxIds.map(toAddress)));
+    const superAdminAddresses = Array.from(new Set(superAdminInboxIds.map(toAddress)));
+
+    return {
+      id: conversationId,
+      name: safeGroup.name ?? '',
+      imageUrl: safeGroup.imageUrl ?? '',
+      description: safeGroup.description ?? '',
+      members: memberSummaries,
+      adminAddresses,
+      superAdminAddresses,
+    };
+  }
+
+  async fetchGroupDetails(conversationId: string): Promise<GroupDetails | null> {
+    try {
+      const group = await this.getGroupConversation(conversationId);
+      if (!group) {
+        return null;
+      }
+      const details = await this.buildGroupDetails(conversationId, group);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'group:details_fetched',
+        details: `Fetched metadata for group ${conversationId}`,
+      });
+      return details;
+    } catch (error) {
+      console.error('[XMTP] Failed to fetch group details:', error);
+      return null;
+    }
+  }
+
+  async updateGroupMetadata(
+    conversationId: string,
+    updates: { name?: string; imageUrl?: string; description?: string }
+  ): Promise<GroupDetails | null> {
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    try {
+      if (updates.name !== undefined && typeof group.updateName === 'function') {
+        await group.updateName(updates.name);
+      }
+      if (updates.imageUrl !== undefined && typeof group.updateImageUrl === 'function') {
+        await group.updateImageUrl(updates.imageUrl);
+      }
+      if (updates.description !== undefined && typeof group.updateDescription === 'function') {
+        await group.updateDescription(updates.description);
+      }
+
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'group:metadata_updated',
+        details: `Updated metadata for group ${conversationId}`,
+        payload: this.formatPayload(updates),
+      });
+
+      return await this.buildGroupDetails(conversationId, group);
+    } catch (error) {
+      console.error('[XMTP] Failed to update group metadata:', error);
+      throw error;
+    }
+  }
+
+  async addMembersToGroup(conversationId: string, addresses: string[]): Promise<GroupDetails | null> {
+    if (!addresses.length) {
+      return this.fetchGroupDetails(conversationId);
+    }
+
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    try {
+      const identifiers = addresses.map((address) => this.identifierFromAddress(address));
+      if (typeof group.addMembersByIdentifiers === 'function') {
+        await group.addMembersByIdentifiers(identifiers);
+      } else {
+        throw new Error('SDK does not support addMembersByIdentifiers');
+      }
+
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'group:add_members',
+        details: `Added ${addresses.length} member(s) to group ${conversationId}`,
+      });
+
+      return await this.buildGroupDetails(conversationId, group);
+    } catch (error) {
+      console.error('[XMTP] Failed to add members to group:', error);
+      throw error;
+    }
+  }
+
+  async removeMembersFromGroup(conversationId: string, addresses: string[]): Promise<GroupDetails | null> {
+    if (!addresses.length) {
+      return this.fetchGroupDetails(conversationId);
+    }
+
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    try {
+      const identifiers = addresses.map((address) => this.identifierFromAddress(address));
+      if (typeof group.removeMembersByIdentifiers === 'function') {
+        await group.removeMembersByIdentifiers(identifiers);
+      } else {
+        throw new Error('SDK does not support removeMembersByIdentifiers');
+      }
+
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'group:remove_members',
+        details: `Removed ${addresses.length} member(s) from group ${conversationId}`,
+      });
+
+      return await this.buildGroupDetails(conversationId, group);
+    } catch (error) {
+      console.error('[XMTP] Failed to remove members from group:', error);
+      throw error;
+    }
+  }
+
+  async promoteMemberToAdmin(conversationId: string, address: string): Promise<GroupDetails | null> {
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    if (typeof group.addAdmin !== 'function') {
+      throw new Error('SDK does not support admin promotion');
+    }
+
+    const inboxId = await this.getInboxIdFromAddress(address);
+    if (!inboxId) {
+      throw new Error(`Unable to resolve XMTP inbox for ${address}`);
+    }
+
+    try {
+      await group.addAdmin(inboxId);
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'group:promote_admin',
+        details: `Promoted ${address} (${inboxId}) to admin for group ${conversationId}`,
+      });
+
+      return await this.buildGroupDetails(conversationId, group);
+    } catch (error) {
+      console.error('[XMTP] Failed to promote member to admin:', error);
+      throw error;
+    }
+  }
+
+  async demoteAdminToMember(conversationId: string, address: string): Promise<GroupDetails | null> {
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    if (typeof group.removeAdmin !== 'function') {
+      throw new Error('SDK does not support admin demotion');
+    }
+
+    const inboxId = await this.getInboxIdFromAddress(address);
+    if (!inboxId) {
+      throw new Error(`Unable to resolve XMTP inbox for ${address}`);
+    }
+
+    try {
+      await group.removeAdmin(inboxId);
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'group:demote_admin',
+        details: `Demoted ${address} (${inboxId}) from admin for group ${conversationId}`,
+      });
+
+      return await this.buildGroupDetails(conversationId, group);
+    } catch (error) {
+      console.error('[XMTP] Failed to demote admin to member:', error);
+      throw error;
     }
   }
 

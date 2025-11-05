@@ -156,6 +156,18 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 
 ---
 
+## Things We Don't Know How to Do Cleanly Yet
+
+### Farcaster Contact Sync
+- FID resolution from ENS addresses - The API endpoint for resolving Farcaster FIDs from Ethereum addresses via ENS names is unreliable and has unclear error handling
+- API endpoint reliability - The `/api/farcaster/user/{identifier}` and `/api/farcaster/following/{fid}` endpoints may fail or return inconsistent data
+- Contact merging logic - Merging inbox-only contacts (from incoming messages) with Farcaster-synced contacts requires careful handling of inbox IDs and identity resolution
+- Clean UX for sync progress and errors - The sync process involves multiple API calls and ENS lookups that can fail at various stages, making it difficult to provide clear feedback to users
+
+**Note**: The underlying infrastructure (FarcasterSyncModal component, syncFarcasterContacts function, Contact fields) remains in place for future implementation when we have a cleaner approach.
+
+---
+
 ## Future Enhancements (Post-MVP)
 
 ### SQLite WASM Migration
