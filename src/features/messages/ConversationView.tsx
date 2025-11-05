@@ -5,10 +5,11 @@ import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
-import { UserInfoModal } from '@/components/UserInfoModal';
+import { ContactCardModal } from '@/components/ContactCardModal';
 import { getContactInfo } from '@/lib/default-contacts';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import type { Message } from '@/types';
+import type { Contact as ContactType } from '@/lib/stores/contact-store';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -128,6 +129,16 @@ export function ConversationView() {
   }
 
   const inboxIdForActions = contact?.inboxId ?? conversation.peerId;
+  const contactForModal: ContactType = contact ?? ({
+    inboxId: inboxIdForActions.toLowerCase(),
+    name: conversationDisplayName,
+    createdAt: Date.now(),
+    primaryAddress: undefined,
+    addresses: [],
+    identities: [],
+    isInboxOnly: true,
+    source: 'inbox',
+  } as ContactType);
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
     if (avatar && avatar.startsWith('http')) {
@@ -264,7 +275,7 @@ export function ConversationView() {
 
       {/* User info modal */}
       {showUserInfo && (
-        <UserInfoModal inboxId={inboxIdForActions} onClose={() => setShowUserInfo(false)} />
+        <ContactCardModal contact={contactForModal} onClose={() => setShowUserInfo(false)} />
       )}
     </div>
   );

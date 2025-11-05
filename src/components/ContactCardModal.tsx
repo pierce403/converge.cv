@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { useContactStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { Contact } from '@/lib/stores/contact-store';
+import { QRCodeOverlay } from './QRCodeOverlay';
+import { useConversations } from '@/features/conversations/useConversations';
+import { useNavigate } from 'react-router-dom';
 
 interface ContactCardModalProps {
   contact: Contact;
@@ -16,12 +19,18 @@ interface InboxState {
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const updateContact = useContactStore((state) => state.updateContact);
   const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
+  const addContact = useContactStore((s) => s.addContact);
+  const removeContact = useContactStore((s) => s.removeContact);
+  const isContact = useContactStore((s) => s.isContact);
+  const [showQR, setShowQR] = useState(false);
   const [preferredName, setPreferredName] = useState(contact.preferredName || '');
   const [notes, setNotes] = useState(contact.notes || '');
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [inboxState, setInboxState] = useState<InboxState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const { createConversation } = useConversations();
+  const navigate = useNavigate();
 
   useEffect(() => {
     setPreferredName(contact.preferredName || '');
@@ -53,6 +62,24 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       }
     } catch (error) {
       console.error('Failed to load inbox state:', error);
+    }
+  };
+
+  const handleToggleContact = async () => {
+    const inContacts = isContact(contact.inboxId);
+    if (inContacts) {
+      if (confirm('Remove this contact?')) {
+        await removeContact(contact.inboxId);
+        alert('Removed from contacts');
+      }
+    } else {
+      await addContact({
+        ...contact,
+        createdAt: contact.createdAt || Date.now(),
+        isInboxOnly: true,
+        source: contact.source ?? 'inbox',
+      } as Contact);
+      alert('Added to contacts');
     }
   };
 
@@ -173,6 +200,18 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     alert(`${label} copied to clipboard!`);
   };
 
+  const handleMessage = async () => {
+    try {
+      const conv = await createConversation(contact.inboxId);
+      if (conv) {
+        navigate(`/chat/${conv.id}`);
+        onClose();
+      }
+    } catch (error) {
+      console.error('Failed to open conversation:', error);
+    }
+  };
+
   // Determine display name with priority
   const displayName = contact.preferredName || contact.name;
   
@@ -180,6 +219,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const avatarUrl = contact.avatar;
 
   return (
+    <>
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
       <div className="bg-primary-900 rounded-lg shadow-xl w-full max-w-md p-6 relative text-primary-50 my-8">
         {/* Close Button */}
@@ -337,16 +377,40 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             />
           </div>
 
-          {/* Save Button */}
-          <button
-            onClick={handleSave}
-            className="btn-primary w-full"
-            disabled={isSaving}
-          >
-            {isSaving ? 'Saving...' : 'Save Changes'}
-          </button>
+          {/* Actions */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={handleSave}
+              className="btn-primary w-full"
+              disabled={isSaving}
+            >
+              {isSaving ? 'Saving...' : 'Save Changes'}
+            </button>
+            <button
+              onClick={() => setShowQR(true)}
+              className="btn-secondary w-full"
+            >
+              Show QR Code
+            </button>
+            <button
+              onClick={handleToggleContact}
+              className="btn-secondary w-full"
+            >
+              {isContact(contact.inboxId) ? 'Remove from Contacts' : 'Add to Contacts'}
+            </button>
+            <button
+              onClick={handleMessage}
+              className="btn-secondary w-full"
+            >
+              Message
+            </button>
+          </div>
         </div>
       </div>
     </div>
+    {showQR && (
+      <QRCodeOverlay address={contact.inboxId} onClose={() => setShowQR(false)} />
+    )}
+  </>
   );
 }

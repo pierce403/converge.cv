@@ -9,11 +9,11 @@ import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
-import { UserInfoModal } from '@/components/UserInfoModal';
+import { ContactCardModal } from '@/components/ContactCardModal';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
-  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   type ConversationItem = typeof conversations[number];
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
@@ -173,7 +173,22 @@ export function ChatList() {
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!conversation.isGroup) {
-                      setSelectedUser(contact?.inboxId ?? conversation.peerId);
+                      if (contact) {
+                        setSelectedContact(contact);
+                      } else {
+                        // Create a minimal placeholder contact for the modal
+                        const placeholder: Contact = {
+                          inboxId: conversation.peerId.toLowerCase(),
+                          name: displayName,
+                          createdAt: Date.now(),
+                          primaryAddress: undefined,
+                          addresses: [],
+                          identities: [],
+                          isInboxOnly: true,
+                          source: 'inbox',
+                        } as Contact;
+                        setSelectedContact(placeholder);
+                      }
                     }
                   }}
                   className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"
@@ -239,8 +254,8 @@ export function ChatList() {
       </div>
 
       {/* User info modal */}
-      {selectedUser && (
-        <UserInfoModal inboxId={selectedUser} onClose={() => setSelectedUser(null)} />
+      {selectedContact && (
+        <ContactCardModal contact={selectedContact} onClose={() => setSelectedContact(null)} />
       )}
     </div>
   );
