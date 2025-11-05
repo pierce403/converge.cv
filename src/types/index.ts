@@ -19,6 +19,10 @@ export interface Conversation {
   groupDescription?: string; // Optional description for the group
   members?: string[]; // List of member addresses
   admins?: string[]; // List of admin addresses
+  memberInboxes?: string[]; // XMTP inbox IDs for members
+  adminInboxes?: string[]; // XMTP inbox IDs for admins
+  superAdminInboxes?: string[]; // XMTP inbox IDs for super admins
+  groupMembers?: GroupMember[];
 }
 
 export interface Message {
@@ -60,6 +64,14 @@ export interface VaultSecrets {
   passkeyCredentialId?: string;
 }
 
+export interface GroupMember {
+  inboxId: string;
+  address?: string;
+  permissionLevel?: number;
+  isAdmin?: boolean;
+  isSuperAdmin?: boolean;
+}
+
 export interface Identity {
   address: string;
   publicKey: string;
@@ -96,4 +108,3 @@ declare global {
     ethereum?: EthereumProvider;
   }
 }
-

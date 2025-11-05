@@ -6,14 +6,41 @@ import { useCallback, useEffect } from 'react';
 import { useConversationStore, useAuthStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupDetails } from '@/lib/xmtp';
-import type { Conversation } from '@/types';
+import type { Conversation, GroupMember } from '@/types';
 import { DEFAULT_CONTACTS } from '@/lib/default-contacts';
 import { getAddress } from 'viem';
 
+const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
+
+const normalizeIdentifier = (value: string): string => {
+  const trimmed = value.trim();
+  if (isEthereumAddress(trimmed)) {
+    try {
+      return getAddress(trimmed as `0x${string}`);
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+};
+
 const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conversation> => {
-  const memberAddresses = details.members.map((member) => member.address);
-  const uniqueMembers = Array.from(new Set(memberAddresses));
-  const uniqueAdmins = Array.from(new Set(details.adminAddresses));
+  const memberIdentifiers = details.members.map((member) =>
+    member.address ? normalizeIdentifier(member.address) : member.inboxId
+  );
+  const uniqueMembers = Array.from(new Set(memberIdentifiers.filter((value) => Boolean(value))));
+  const uniqueAdmins = Array.from(new Set(details.adminAddresses.map(normalizeIdentifier)));
+  const memberInboxes = details.members.map((member) => member.inboxId).filter(Boolean);
+  const adminInboxes = Array.from(new Set(details.adminInboxes));
+  const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
+  const groupMembers: GroupMember[] = details.members.map((member) => ({
+    inboxId: member.inboxId,
+    address: member.address ? normalizeIdentifier(member.address) : undefined,
+    permissionLevel: member.permissionLevel,
+    isAdmin: member.isAdmin,
+    isSuperAdmin: member.isSuperAdmin,
+  }));
 
   return {
     groupName: details.name?.trim() || undefined,
@@ -21,6 +48,10 @@ const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conve
     groupDescription: details.description?.trim() || undefined,
     members: uniqueMembers,
     admins: uniqueAdmins,
+    memberInboxes,
+    adminInboxes,
+    superAdminInboxes,
+    groupMembers,
   };
 };
 
@@ -298,19 +329,12 @@ export function useConversations() {
         const existingMembers = new Set((conversation.members || []).map((member) => member.toLowerCase()));
 
         const normalizedCandidates = newMembers
-          .map((member) => {
-            try {
-              return getAddress(member.trim() as `0x${string}`);
-            } catch (error) {
-              console.warn('Skipping invalid address while adding to group:', member, error);
-              return null;
-            }
-          })
-          .filter((value): value is `0x${string}` => Boolean(value));
+          .map((member) => member.trim())
+          .filter((member) => member.length > 0)
+          .map(normalizeIdentifier)
+          .filter((member) => isEthereumAddress(member));
 
-        const membersToAdd = normalizedCandidates.filter(
-          (member) => !existingMembers.has(member.toLowerCase())
-        );
+        const membersToAdd = normalizedCandidates.filter((member) => !existingMembers.has(member.toLowerCase()));
 
         if (membersToAdd.length === 0) {
           console.info('No new members to add for conversation', conversationId);
@@ -345,22 +369,17 @@ export function useConversations() {
           return;
         }
 
-        const normalizedAddresses = membersToRemove
-          .map((member) => {
-            try {
-              return getAddress(member.trim() as `0x${string}`);
-            } catch {
-              return member;
-            }
-          })
-          .filter((value) => Boolean(value));
+        const normalizedEntries = membersToRemove
+          .map((member) => member.trim())
+          .filter((member) => member.length > 0)
+          .map(normalizeIdentifier);
 
-        if (normalizedAddresses.length === 0) {
+        if (normalizedEntries.length === 0) {
           return;
         }
 
         const xmtp = getXmtpClient();
-        const details = await xmtp.removeMembersFromGroup(conversationId, normalizedAddresses);
+        const details = await xmtp.removeMembersFromGroup(conversationId, normalizedEntries);
 
         if (details) {
           const updates = groupDetailsToConversationUpdates(details);
@@ -380,7 +399,7 @@ export function useConversations() {
   const promoteMemberToAdmin = useCallback(
     async (conversationId: string, memberAddress: string) => {
       try {
-        const normalizedAddress = getAddress(memberAddress as `0x${string}`);
+        const normalizedAddress = normalizeIdentifier(memberAddress);
         const xmtp = getXmtpClient();
         const details = await xmtp.promoteMemberToAdmin(conversationId, normalizedAddress);
 
@@ -402,7 +421,7 @@ export function useConversations() {
   const demoteAdminToMember = useCallback(
     async (conversationId: string, adminAddress: string) => {
       try {
-        const normalizedAddress = getAddress(adminAddress as `0x${string}`);
+        const normalizedAddress = normalizeIdentifier(adminAddress);
         const xmtp = getXmtpClient();
         const details = await xmtp.demoteAdminToMember(conversationId, normalizedAddress);
 

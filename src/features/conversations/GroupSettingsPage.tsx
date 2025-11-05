@@ -3,6 +3,18 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
 import { getAddress } from 'viem';
+import type { GroupMember } from '@/types';
+
+const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
+
+const safeNormalizeAddress = (value: string) => {
+  try {
+    return getAddress(value.trim() as `0x${string}`);
+  } catch {
+    return value.trim();
+  }
+};
 
 export function GroupSettingsPage() {
   const navigate = useNavigate();
@@ -27,15 +39,106 @@ export function GroupSettingsPage() {
   const [error, setError] = useState('');
   const [newMemberAddress, setNewMemberAddress] = useState('');
 
-  const isCurrentUserAdmin = conversation?.admins?.includes(identity?.address || '');
+  const memberEntries = useMemo<GroupMember[]>(() => {
+    if (!conversation?.isGroup) {
+      return [];
+    }
+
+    if (conversation.groupMembers && conversation.groupMembers.length > 0) {
+      return conversation.groupMembers;
+    }
+
+    const fallbackAddresses = conversation.members ?? [];
+    const fallbackInboxes = conversation.memberInboxes ?? [];
+    const maxLength = Math.max(fallbackAddresses.length, fallbackInboxes.length);
+    const adminInboxes = (conversation.adminInboxes ?? []).map((entry) => entry.toLowerCase());
+    const adminAddresses = (conversation.admins ?? []).map((entry) => entry.toLowerCase());
+    const superAdminInboxes = (conversation.superAdminInboxes ?? []).map((entry) => entry.toLowerCase());
+
+    const members: GroupMember[] = [];
+    for (let index = 0; index < maxLength; index++) {
+      const rawInbox = fallbackInboxes[index] ?? fallbackAddresses[index] ?? '';
+      const rawAddress = fallbackAddresses[index];
+      const normalizedAddress =
+        rawAddress && isEthereumAddress(rawAddress) ? safeNormalizeAddress(rawAddress) : undefined;
+      const inboxId = rawInbox || normalizedAddress || rawAddress || '';
+      if (!inboxId) {
+        continue;
+      }
+
+      const inboxLower = inboxId.toLowerCase();
+      const addressLower = normalizedAddress?.toLowerCase();
+      const isAdmin = adminInboxes.includes(inboxLower) || (addressLower ? adminAddresses.includes(addressLower) : false);
+      const isSuperAdmin = superAdminInboxes.includes(inboxLower);
+
+      members.push({
+        inboxId,
+        address: normalizedAddress,
+        permissionLevel: undefined,
+        isAdmin,
+        isSuperAdmin,
+      });
+    }
+
+    return members;
+  }, [conversation]);
+
+  const isCurrentUserAdmin = useMemo(() => {
+    if (!conversation?.isGroup || !identity) {
+      return false;
+    }
+
+    const identityAddress = identity.address?.toLowerCase();
+    const identityInbox = identity.inboxId?.toLowerCase();
+    const adminAddresses = (conversation.admins ?? []).map((entry) => entry.toLowerCase());
+    const adminInboxes = (conversation.adminInboxes ?? []).map((entry) => entry.toLowerCase());
+
+    if (identityAddress && adminAddresses.includes(identityAddress)) {
+      return true;
+    }
+
+    if (identityInbox && adminInboxes.includes(identityInbox)) {
+      return true;
+    }
+
+    const currentMember = memberEntries.find((member) => {
+      const matchesAddress = identityAddress && member.address?.toLowerCase() === identityAddress;
+      const matchesInbox = identityInbox && member.inboxId.toLowerCase() === identityInbox;
+      return Boolean(matchesAddress || matchesInbox);
+    });
+
+    if (!currentMember) {
+      return false;
+    }
+
+    if (currentMember.isSuperAdmin || currentMember.isAdmin) {
+      return true;
+    }
+
+    if (typeof currentMember.permissionLevel === 'number' && currentMember.permissionLevel >= 1) {
+      return true;
+    }
+
+    return false;
+  }, [conversation, identity, memberEntries]);
+
   const normalizedNewMemberAddress = useMemo(() => {
-    try {
-      if (!newMemberAddress.trim()) return null;
-      return getAddress(newMemberAddress.trim() as `0x${string}`);
-    } catch {
+    const value = newMemberAddress.trim();
+    if (!value) {
       return null;
     }
+    if (!isEthereumAddress(value)) {
+      return null;
+    }
+    return safeNormalizeAddress(value);
   }, [newMemberAddress]);
+
+  const existingMemberAddresses = useMemo(() => {
+    const addresses = memberEntries
+      .map((member) => member.address?.toLowerCase())
+      .filter((address): address is string => Boolean(address));
+    return new Set(addresses);
+  }, [memberEntries]);
 
   useEffect(() => {
     if (conversation?.id && conversation.isGroup) {
@@ -96,7 +199,7 @@ export function GroupSettingsPage() {
       return;
     }
 
-    if (conversation.members?.some((member) => member.toLowerCase() === normalizedNewMemberAddress.toLowerCase())) {
+    if (existingMemberAddresses.has(normalizedNewMemberAddress.toLowerCase())) {
       setError('This member is already part of the group.');
       return;
     }
@@ -116,16 +219,17 @@ export function GroupSettingsPage() {
     }
   };
 
-  const handleRemoveMember = async (memberAddress: string) => {
+  const handleRemoveMember = async (member: GroupMember) => {
     setError('');
 
     if (!isCurrentUserAdmin) {
       setError('Only group admins can remove members.');
       return;
     }
-    if (window.confirm(`Are you sure you want to remove ${memberAddress}?`)) {
+    const label = member.address ?? member.inboxId;
+    if (window.confirm(`Are you sure you want to remove ${label}?`)) {
       try {
-        await removeMembersFromGroup(conversation.id, [memberAddress]);
+        await removeMembersFromGroup(conversation.id, [member.inboxId]);
         alert('Member removed!');
       } catch (err) {
         console.error('Failed to remove member:', err);
@@ -134,7 +238,7 @@ export function GroupSettingsPage() {
     }
   };
 
-  const handlePromoteToAdmin = async (memberAddress: string) => {
+  const handlePromoteToAdmin = async (member: GroupMember) => {
     setError('');
 
     if (!isCurrentUserAdmin) {
@@ -142,7 +246,7 @@ export function GroupSettingsPage() {
       return;
     }
     try {
-      await promoteMemberToAdmin(conversation.id, memberAddress);
+      await promoteMemberToAdmin(conversation.id, member.inboxId);
       alert('Member promoted to admin!');
     } catch (err) {
       console.error('Failed to promote member:', err);
@@ -150,16 +254,17 @@ export function GroupSettingsPage() {
     }
   };
 
-  const handleDemoteFromAdmin = async (adminAddress: string) => {
+  const handleDemoteFromAdmin = async (member: GroupMember) => {
     setError('');
 
     if (!isCurrentUserAdmin) {
       setError('Only group admins can demote admins.');
       return;
     }
-    if (window.confirm(`Are you sure you want to demote ${adminAddress}?`)) {
+    const label = member.address ?? member.inboxId;
+    if (window.confirm(`Are you sure you want to demote ${label}?`)) {
       try {
-        await demoteAdminToMember(conversation.id, adminAddress);
+        await demoteAdminToMember(conversation.id, member.inboxId);
         alert('Admin demoted to member!');
       } catch (err) {
         console.error('Failed to demote admin:', err);
@@ -169,8 +274,19 @@ export function GroupSettingsPage() {
   };
 
   const getContactName = (address: string) => {
-    const contact = contacts.find(c => c.address === address);
-    return contact ? contact.name : `${address.slice(0, 6)}...${address.slice(-4)}`;
+    const contact = contacts.find((c) => c.address.toLowerCase() === address.toLowerCase());
+    return contact ? contact.name : '';
+  };
+
+  const getMemberDisplayName = (member: GroupMember) => {
+    if (member.address) {
+      const name = getContactName(member.address);
+      if (name) {
+        return name;
+      }
+      return `${member.address.slice(0, 6)}...${member.address.slice(-4)}`;
+    }
+    return `${member.inboxId.slice(0, 6)}...${member.inboxId.slice(-4)}`;
   };
 
   return (
@@ -276,9 +392,7 @@ export function GroupSettingsPage() {
                   onClick={handleAddMember}
                   disabled={
                     !normalizedNewMemberAddress ||
-                    conversation.members?.some(
-                      (member) => member.toLowerCase() === normalizedNewMemberAddress.toLowerCase()
-                    )
+                    existingMemberAddresses.has(normalizedNewMemberAddress.toLowerCase())
                   }
                 >
                   Add
@@ -286,20 +400,35 @@ export function GroupSettingsPage() {
               </div>
             )}
             <ul className="bg-primary-900/70 rounded-lg p-3 space-y-2">
-              {conversation.members?.map((member) => (
-                <li key={member} className="flex items-center justify-between py-2 px-3 rounded-md hover:bg-primary-800/50 transition-colors">
-                  <div className="flex items-center gap-3">
+              {memberEntries.map((member) => {
+                const isSelf =
+                  (identity?.address && member.address?.toLowerCase() === identity.address.toLowerCase()) ||
+                  (identity?.inboxId && member.inboxId.toLowerCase() === identity.inboxId.toLowerCase());
+
+                return (
+                  <li key={member.inboxId} className="flex items-center justify-between py-2 px-3 rounded-md hover:bg-primary-800/50 transition-colors">
+                    <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-primary-700 flex items-center justify-center text-sm font-semibold">
-                      {member.slice(2, 4).toUpperCase()}
+                      {(member.address ?? member.inboxId).slice(2, 4).toUpperCase()}
                     </div>
-                    <span className="text-primary-50">{getContactName(member)}</span>
-                    {conversation.admins?.includes(member) && (
+                    <div className="flex flex-col">
+                      <span className="text-primary-50">{getMemberDisplayName(member)}</span>
+                      {member.address && (
+                        <span className="text-xs text-primary-400">{member.address}</span>
+                      )}
+                      {!member.address && (
+                        <span className="text-xs text-primary-400">{member.inboxId}</span>
+                      )}
+                    </div>
+                    {member.isSuperAdmin ? (
+                      <span className="text-accent-300 text-xs px-2 py-0.5 bg-accent-900 rounded-full">Super Admin</span>
+                    ) : member.isAdmin ? (
                       <span className="text-accent-300 text-xs px-2 py-0.5 bg-accent-900 rounded-full">Admin</span>
-                    )}
+                    ) : null}
                   </div>
-                  {isCurrentUserAdmin && ( // Only show management buttons if current user is admin
+                  {isCurrentUserAdmin && (
                     <div className="flex gap-2">
-                      {!conversation.admins?.includes(member) && (
+                      {!member.isAdmin && (
                         <button
                           className="btn-secondary btn-xs"
                           onClick={() => handlePromoteToAdmin(member)}
@@ -307,7 +436,7 @@ export function GroupSettingsPage() {
                           Promote
                         </button>
                       )}
-                      {conversation.admins?.includes(member) && member !== identity?.address && (
+                      {member.isAdmin && !isSelf && (
                         <button
                           className="btn-secondary btn-xs"
                           onClick={() => handleDemoteFromAdmin(member)}
@@ -315,7 +444,7 @@ export function GroupSettingsPage() {
                           Demote
                         </button>
                       )}
-                      {member !== identity?.address && (
+                      {!isSelf && (
                         <button
                           className="btn-danger btn-xs"
                           onClick={() => handleRemoveMember(member)}
@@ -326,7 +455,8 @@ export function GroupSettingsPage() {
                     </div>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </div>
 

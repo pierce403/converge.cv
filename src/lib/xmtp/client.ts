@@ -64,8 +64,11 @@ export type Unsubscribe = () => void;
 
 export interface GroupMemberSummary {
   inboxId: string;
-  address: string;
-  permissionLevel: number;
+  address?: string;
+  permissionLevel?: number;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+  identifiers: Identifier[];
 }
 
 export interface GroupDetails {
@@ -76,6 +79,8 @@ export interface GroupDetails {
   members: GroupMemberSummary[];
   adminAddresses: string[];
   superAdminAddresses: string[];
+  adminInboxes: string[];
+  superAdminInboxes: string[];
 }
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -180,6 +185,8 @@ export class XmtpClient {
       updateDescription?: (description: string) => Promise<void>;
       addMembersByIdentifiers?: (identifiers: Identifier[]) => Promise<void>;
       removeMembersByIdentifiers?: (identifiers: Identifier[]) => Promise<void>;
+      addMembers?: (inboxIds: string[]) => Promise<void>;
+      removeMembers?: (inboxIds: string[]) => Promise<void>;
       addAdmin?: (inboxId: string) => Promise<void>;
       removeAdmin?: (inboxId: string) => Promise<void>;
     };
@@ -204,15 +211,6 @@ export class XmtpClient {
       console.warn('[XMTP] Failed to load group members:', conversationId, error);
     }
 
-    const memberSummaries: GroupMemberSummary[] = members.map((member) => {
-      const address = this.extractAddressFromMember(member) ?? member.inboxId;
-      return {
-        inboxId: member.inboxId,
-        address,
-        permissionLevel: member.permissionLevel,
-      };
-    });
-
     const adminInboxIds = await (async () => {
       if (typeof safeGroup.listAdmins !== 'function') return [] as string[];
       try {
@@ -233,6 +231,20 @@ export class XmtpClient {
       }
     })();
 
+    const memberSummaries: GroupMemberSummary[] = members.map((member) => {
+      const address = this.extractAddressFromMember(member) ?? undefined;
+      const isAdmin = adminInboxIds.includes(member.inboxId);
+      const isSuperAdmin = superAdminInboxIds.includes(member.inboxId);
+      return {
+        inboxId: member.inboxId,
+        address,
+        permissionLevel: member.permissionLevel,
+        isAdmin,
+        isSuperAdmin,
+        identifiers: member.accountIdentifiers ?? [],
+      };
+    });
+
     const toAddress = (inboxId: string) => {
       const match = memberSummaries.find((member) => member.inboxId === inboxId);
       return match?.address ?? inboxId;
@@ -249,6 +261,8 @@ export class XmtpClient {
       members: memberSummaries,
       adminAddresses,
       superAdminAddresses,
+      adminInboxes: Array.from(new Set(adminInboxIds)),
+      superAdminInboxes: Array.from(new Set(superAdminInboxIds)),
     };
   }
 
@@ -336,8 +350,8 @@ export class XmtpClient {
     }
   }
 
-  async removeMembersFromGroup(conversationId: string, addresses: string[]): Promise<GroupDetails | null> {
-    if (!addresses.length) {
+  async removeMembersFromGroup(conversationId: string, identifiersOrInboxes: string[]): Promise<GroupDetails | null> {
+    if (!identifiersOrInboxes.length) {
       return this.fetchGroupDetails(conversationId);
     }
 
@@ -347,17 +361,37 @@ export class XmtpClient {
     }
 
     try {
-      const identifiers = addresses.map((address) => this.identifierFromAddress(address));
-      if (typeof group.removeMembersByIdentifiers === 'function') {
-        await group.removeMembersByIdentifiers(identifiers);
-      } else {
-        throw new Error('SDK does not support removeMembersByIdentifiers');
+      const inboxIds: string[] = [];
+      const identifierPayloads: Identifier[] = [];
+
+      for (const value of identifiersOrInboxes) {
+        if (typeof value !== 'string' || value.trim() === '') {
+          continue;
+        }
+        const trimmed = value.trim();
+        if (isEthereumAddress(trimmed)) {
+          try {
+            identifierPayloads.push(this.identifierFromAddress(trimmed));
+          } catch (error) {
+            console.warn('[XMTP] Skipping invalid Ethereum address during remove:', trimmed, error);
+          }
+        } else {
+          inboxIds.push(trimmed);
+        }
+      }
+
+      if (identifierPayloads.length && typeof group.removeMembersByIdentifiers === 'function') {
+        await group.removeMembersByIdentifiers(identifierPayloads);
+      }
+
+      if (inboxIds.length && typeof group.removeMembers === 'function') {
+        await group.removeMembers(inboxIds);
       }
 
       logNetworkEvent({
         direction: 'outbound',
         event: 'group:remove_members',
-        details: `Removed ${addresses.length} member(s) from group ${conversationId}`,
+        details: `Removed ${identifiersOrInboxes.length} member(s) from group ${conversationId}`,
       });
 
       return await this.buildGroupDetails(conversationId, group);
@@ -367,7 +401,7 @@ export class XmtpClient {
     }
   }
 
-  async promoteMemberToAdmin(conversationId: string, address: string): Promise<GroupDetails | null> {
+  async promoteMemberToAdmin(conversationId: string, identifierOrInbox: string): Promise<GroupDetails | null> {
     const group = await this.getGroupConversation(conversationId);
     if (!group) {
       return null;
@@ -377,9 +411,13 @@ export class XmtpClient {
       throw new Error('SDK does not support admin promotion');
     }
 
-    const inboxId = await this.getInboxIdFromAddress(address);
+    const target = identifierOrInbox.trim();
+    const inboxId = isEthereumAddress(target)
+      ? await this.getInboxIdFromAddress(target)
+      : target;
+
     if (!inboxId) {
-      throw new Error(`Unable to resolve XMTP inbox for ${address}`);
+      throw new Error(`Unable to resolve XMTP inbox for ${identifierOrInbox}`);
     }
 
     try {
@@ -387,7 +425,7 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'outbound',
         event: 'group:promote_admin',
-        details: `Promoted ${address} (${inboxId}) to admin for group ${conversationId}`,
+        details: `Promoted ${identifierOrInbox} (${inboxId}) to admin for group ${conversationId}`,
       });
 
       return await this.buildGroupDetails(conversationId, group);
@@ -397,7 +435,7 @@ export class XmtpClient {
     }
   }
 
-  async demoteAdminToMember(conversationId: string, address: string): Promise<GroupDetails | null> {
+  async demoteAdminToMember(conversationId: string, identifierOrInbox: string): Promise<GroupDetails | null> {
     const group = await this.getGroupConversation(conversationId);
     if (!group) {
       return null;
@@ -407,9 +445,13 @@ export class XmtpClient {
       throw new Error('SDK does not support admin demotion');
     }
 
-    const inboxId = await this.getInboxIdFromAddress(address);
+    const target = identifierOrInbox.trim();
+    const inboxId = isEthereumAddress(target)
+      ? await this.getInboxIdFromAddress(target)
+      : target;
+
     if (!inboxId) {
-      throw new Error(`Unable to resolve XMTP inbox for ${address}`);
+      throw new Error(`Unable to resolve XMTP inbox for ${identifierOrInbox}`);
     }
 
     try {
@@ -417,7 +459,7 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'outbound',
         event: 'group:demote_admin',
-        details: `Demoted ${address} (${inboxId}) from admin for group ${conversationId}`,
+        details: `Demoted ${identifierOrInbox} (${inboxId}) from admin for group ${conversationId}`,
       });
 
       return await this.buildGroupDetails(conversationId, group);
