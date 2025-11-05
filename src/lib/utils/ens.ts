@@ -6,6 +6,31 @@ import { normalize } from 'viem/ens';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 
+const isE2ETest = import.meta.env?.VITE_E2E_TEST === 'true';
+
+const TEST_ENS_OVERRIDES: Record<string, string> = {
+  'deanpierce.eth': '0x1111111111111111111111111111111111111111',
+};
+
+const createDeterministicTestAddress = (input: string): string => {
+  const normalized = input.toLowerCase();
+  const bytes = new Uint8Array(20);
+  for (let index = 0; index < normalized.length; index++) {
+    const code = normalized.charCodeAt(index);
+    bytes[index % 20] = (bytes[index % 20] + code + index) % 256;
+  }
+  if (Array.from(bytes).every((byte) => byte === 0)) {
+    bytes[0] = 1;
+  }
+  return `0x${Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+};
+
+const resolveTestEns = (ensName: string): string => {
+  const lower = ensName.toLowerCase();
+  const override = TEST_ENS_OVERRIDES[lower];
+  return override ?? createDeterministicTestAddress(lower);
+};
+
 // Create a public client for ENS resolution
 const publicClient = createPublicClient({
   chain: mainnet,
@@ -31,8 +56,12 @@ export function isEthereumAddress(address: string): boolean {
  */
 export async function resolveENS(ensName: string): Promise<string | null> {
   try {
+    if (isE2ETest) {
+      return resolveTestEns(ensName);
+    }
+
     console.log('[ENS] Resolving ENS name:', ensName);
-    
+
     // Normalize the ENS name (handles unicode, etc.)
     const normalized = normalize(ensName);
     console.log('[ENS] Normalized name:', normalized);
@@ -64,6 +93,9 @@ export async function resolveAddressOrENS(input: string): Promise<string | null>
   
   // Try to resolve as ENS name
   if (isENSName(input)) {
+    if (isE2ETest) {
+      return resolveTestEns(input);
+    }
     return await resolveENS(input);
   }
   
@@ -78,6 +110,10 @@ export async function resolveAddressOrENS(input: string): Promise<string | null>
 export async function resolveENSFromAddress(address: string): Promise<string | null> {
   try {
     if (!isEthereumAddress(address)) {
+      return null;
+    }
+
+    if (isE2ETest) {
       return null;
     }
 
@@ -131,4 +167,3 @@ export async function resolveBaseEthName(address: string): Promise<string | null
     return null;
   }
 }
-
