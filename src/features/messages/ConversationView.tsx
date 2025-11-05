@@ -127,8 +127,7 @@ export function ConversationView() {
     );
   }
 
-  const contactAddressForActions =
-    contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
+  const inboxIdForActions = contact?.inboxId ?? conversation.peerId;
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
     if (avatar && avatar.startsWith('http')) {
@@ -198,7 +197,7 @@ export function ConversationView() {
               onClick={() => setShowUserInfo(true)}
               className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
             >
-              {renderAvatar(conversationAvatar, contactAddressForActions)}
+              {renderAvatar(conversationAvatar, inboxIdForActions)}
             </button>
 
             <button
@@ -265,7 +264,7 @@ export function ConversationView() {
 
       {/* User info modal */}
       {showUserInfo && (
-        <UserInfoModal address={contactAddressForActions} onClose={() => setShowUserInfo(false)} />
+        <UserInfoModal inboxId={inboxIdForActions} onClose={() => setShowUserInfo(false)} />
       )}
     </div>
   );

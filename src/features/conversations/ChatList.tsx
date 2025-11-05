@@ -240,7 +240,7 @@ export function ChatList() {
 
       {/* User info modal */}
       {selectedUser && (
-        <UserInfoModal address={selectedUser} onClose={() => setSelectedUser(null)} />
+        <UserInfoModal inboxId={selectedUser} onClose={() => setSelectedUser(null)} />
       )}
     </div>
   );

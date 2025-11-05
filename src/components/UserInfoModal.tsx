@@ -2,25 +2,29 @@ import { useMemo, useState } from 'react';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore } from '@/lib/stores';
+import { AddContactButton } from '@/features/contacts/AddContactButton';
 import type { ContactIdentity } from '@/lib/stores/contact-store';
 
 interface UserInfoModalProps {
-  address: string;
+  inboxId: string;
   onClose: () => void;
 }
 
-export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
+export function UserInfoModal({ inboxId, onClose }: UserInfoModalProps) {
   const [showQR, setShowQR] = useState(false);
-  const contact = useContactStore((state) => state.getContactByInboxId(address) ?? state.getContactByAddress(address));
-  const contactInfo = getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? address);
+  const contact = useContactStore((state) => state.getContactByInboxId(inboxId) ?? state.getContactByAddress(inboxId));
+  const contactInfo = getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? inboxId);
 
   const truncate = (addr: string) => {
     return addr.length > 12 ? `${addr.slice(0, 10)}...${addr.slice(-8)}` : addr;
   };
 
-  const displayName = contact?.preferredName || contact?.name || contactInfo?.name || truncate(address);
+  const displayName = contact?.preferredName || contact?.name || contactInfo?.name || truncate(inboxId);
   const avatar = contact?.preferredAvatar || contact?.avatar || contactInfo?.avatar;
   const identities = useMemo(() => contact?.identities ?? [], [contact?.identities]);
+
+  const isContactFn = useContactStore((s) => s.isContact);
+  const isAlreadyContact = isContactFn(inboxId);
 
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -57,13 +61,13 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
                   )
                 ) : (
                   <span className="text-white font-semibold">
-                    {address.slice(0, 2).toUpperCase()}
+                    {inboxId.slice(0, 2).toUpperCase()}
                   </span>
                 )}
               </div>
               
               <h3 className="text-lg font-semibold text-primary-100">{displayName}</h3>
-              <p className="text-sm text-primary-300 mt-1">Inbox ID: {truncate(address)}</p>
+              <p className="text-sm text-primary-300 mt-1">Inbox ID: {truncate(inboxId)}</p>
             </div>
 
             {/* Description */}
@@ -79,10 +83,10 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
                 <div className="text-xs text-primary-300 mb-1">Inbox ID</div>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 text-xs font-mono bg-primary-900/50 px-3 py-2 rounded border border-primary-800/60 text-primary-100 truncate">
-                    {address}
+                    {inboxId}
                   </code>
                   <button
-                    onClick={() => copyToClipboard(address)}
+                    onClick={() => copyToClipboard(inboxId)}
                     className="p-2 text-primary-200 hover:text-primary-100 hover:bg-primary-900/50 rounded transition-colors"
                     title="Copy inbox ID"
                   >
@@ -120,6 +124,13 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
 
             {/* Actions */}
             <div className="pt-2 space-y-2">
+              {!isAlreadyContact && (
+                <AddContactButton
+                  inboxId={inboxId}
+                  primaryAddress={contact?.primaryAddress}
+                  fallbackName={displayName}
+                />
+              )}
               <button
                 onClick={() => setShowQR(true)}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-900/40 hover:bg-primary-800/60 border border-primary-800/60 hover:border-primary-700 rounded-lg transition-colors text-primary-200 hover:text-white"
@@ -136,7 +147,7 @@ export function UserInfoModal({ address, onClose }: UserInfoModalProps) {
 
       {/* QR Code Overlay */}
       {showQR && (
-        <QRCodeOverlay address={address} onClose={() => setShowQR(false)} />
+        <QRCodeOverlay address={inboxId} onClose={() => setShowQR(false)} />
       )}
     </>
   );
