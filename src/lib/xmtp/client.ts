@@ -1373,7 +1373,7 @@ export class XmtpClient {
    * - If not connected, use Utils worker to resolve inboxId & fetch state without a client.
    */
   async getInboxState() {
-    const isE2E = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_E2E_TEST === 'true');
+    const isE2E = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_E2E_TEST === 'true');
     if (isE2E) {
       // Return a stubbed inbox state for E2E to avoid network calls
       const inboxId = this.identity?.inboxId ?? `local-${Date.now().toString(36)}`;

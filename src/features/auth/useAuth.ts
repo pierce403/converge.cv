@@ -23,7 +23,7 @@ import { clearLastRoute } from '@/lib/utils/route-persistence';
 export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
-  const isE2E = (import.meta as any)?.env?.VITE_E2E_TEST === 'true';
+  const isE2E = import.meta?.env?.VITE_E2E_TEST === 'true';
   
   // Get wagmi account info for wallet-based identities
   const { address: walletAddress, chainId: walletChainId } = useAccount();
