@@ -1406,18 +1406,33 @@ export class XmtpClient {
     const content = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
 
     try {
-      // Reuse self-DM if present, otherwise create it
+      // 1) Save to self-DM for same-inbox multi-device sync
       let dm = await this.client.conversations.getDmByInboxId(inboxId);
       if (!dm) {
         dm = await this.client.conversations.newDm(inboxId);
       }
       await dm.send(content);
-      console.log('[XMTP] ✅ Saved profile to network');
+      console.log('[XMTP] ✅ Saved profile to self-DM');
+
+      // 2) Broadcast to all DM peers so contacts can discover latest profile
+      try {
+        const dms = await this.client.conversations.listDms();
+        for (const peerDm of dms) {
+          try {
+            await peerDm.send(content);
+          } catch (e) {
+            console.warn('[XMTP] profile broadcast failed for DM', peerDm.id, e);
+          }
+        }
+        console.log('[XMTP] ✅ Broadcasted profile to', dms.length, 'DMs');
+      } catch (e) {
+        console.warn('[XMTP] profile broadcast skipped/failed:', e);
+      }
 
       logNetworkEvent({
         direction: 'outbound',
         event: 'profile:save',
-        details: 'Profile saved to self-DM',
+        details: 'Profile saved and broadcast to DMs',
       });
     } catch (error) {
       console.error('[XMTP] Failed to save profile to network:', error);
