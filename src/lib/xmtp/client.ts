@@ -19,6 +19,11 @@ import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
 import type { Conversation } from '@/types';
 import { getAddress } from 'viem';
+import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
+import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
+import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-read-receipt';
+import { RemoteAttachmentCodec } from '@xmtp/content-type-remote-attachment';
+import { ContentTypeText } from '@xmtp/content-type-text';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
 
@@ -110,7 +115,7 @@ const toIdentifierHex = (address: string): string =>
  * XMTP Client wrapper for v5 SDK
  */
 export class XmtpClient {
-  private client: Client | null = null;
+  private client: Client<unknown> | null = null;
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
   private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
@@ -152,6 +157,64 @@ export class XmtpClient {
       console.warn('[XMTP] getContentTypeIdFromAny failed:', err);
     }
     return undefined;
+  }
+
+  /**
+   * Send a reaction to a specific message within a conversation (DM or group).
+   */
+  async sendReaction(
+    conversationId: string,
+    targetMessageId: string,
+    emoji: string,
+    action: 'added' | 'removed' = 'added',
+    schema: 'unicode' | 'shortcode' | 'custom' = 'unicode',
+    referenceInboxId?: string,
+  ): Promise<void> {
+    if (!this.client) throw new Error('Client not connected');
+    const conv = await this.client.conversations.getConversationById(conversationId);
+    if (!conv) throw new Error('Conversation not found');
+    const content: XmtpReaction = {
+      action,
+      content: emoji,
+      reference: targetMessageId,
+      referenceInboxId,
+      schema,
+    };
+    await conv.send(content, ContentTypeReaction);
+    logNetworkEvent({ direction: 'outbound', event: 'message:reaction', details: `Reacted ${emoji}` });
+  }
+
+  /**
+   * Reply to a specific message with text content using ContentTypeReply.
+   */
+  async sendReply(
+    conversationId: string,
+    targetMessageId: string,
+    text: string,
+    referenceInboxId?: string,
+  ): Promise<void> {
+    if (!this.client) throw new Error('Client not connected');
+    const conv = await this.client.conversations.getConversationById(conversationId);
+    if (!conv) throw new Error('Conversation not found');
+    const replyContent = {
+      reference: targetMessageId,
+      referenceInboxId,
+      content: text,
+      contentType: ContentTypeText,
+    };
+    await conv.send(replyContent, ContentTypeReply);
+    logNetworkEvent({ direction: 'outbound', event: 'message:reply', details: `Reply sent` });
+  }
+
+  /**
+   * Send a read receipt (lightweight signal, not pushed) to the peer.
+   */
+  async sendReadReceipt(conversationId: string): Promise<void> {
+    if (!this.client) throw new Error('Client not connected');
+    const conv = await this.client.conversations.getConversationById(conversationId);
+    if (!conv) throw new Error('Conversation not found');
+    await conv.send({}, ContentTypeReadReceipt);
+    logNetworkEvent({ direction: 'outbound', event: 'message:read_receipt', details: `Read receipt sent` });
   }
 
   /**
@@ -841,7 +904,7 @@ export class XmtpClient {
     const shouldRegister = options?.register !== false;
     const shouldSyncHistory = options?.enableHistorySync !== false;
 
-    let client: Client | null = null;
+    let client: Client<unknown> | null = null;
 
     try {
       setConnectionStatus('connecting');
@@ -878,6 +941,12 @@ export class XmtpClient {
         performanceLogging: false,
         debugEventsEnabled: false,
         disableAutoRegister: true,
+        codecs: [
+          new ReactionCodec(),
+          new ReplyCodec(),
+          new ReadReceiptCodec(),
+          new RemoteAttachmentCodec(),
+        ],
       });
 
       if (shouldRegister) {
@@ -1083,7 +1152,7 @@ export class XmtpClient {
     }
 
     const signer = await this.createSigner(identity);
-    let client: Client | null = null;
+    let client: Client<unknown> | null = null;
 
     try {
       console.log('[XMTP] probeIdentity: Creating probe client...');
@@ -1094,6 +1163,12 @@ export class XmtpClient {
         performanceLogging: false,
         debugEventsEnabled: false,
         disableAutoRegister: true,
+        codecs: [
+          new ReactionCodec(),
+          new ReplyCodec(),
+          new ReadReceiptCodec(),
+          new RemoteAttachmentCodec(),
+        ],
       });
       console.log('[XMTP] probeIdentity: Probe client created successfully');
       console.log('[XMTP] probeIdentity: Client inboxId from init:', client.inboxId);

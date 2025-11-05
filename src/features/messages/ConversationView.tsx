@@ -16,10 +16,11 @@ export function ConversationView() {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [showUserInfo, setShowUserInfo] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
 
   const { conversations } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
-  const { sendMessage, loadMessages } = useMessages();
+  const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
@@ -50,7 +51,11 @@ export function ConversationView() {
   useEffect(() => {
     // Scroll to bottom when messages change
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (id && messages.length > 0) {
+      // Fire-and-forget; read receipts are best-effort
+      void sendReadReceiptFor(id);
+    }
+  }, [messages, id, sendReadReceiptFor]);
 
   const contact = useMemo(() => {
     if (!conversation || conversation.isGroup) {
@@ -155,7 +160,7 @@ export function ConversationView() {
 
   const handleSend = async (content: string) => {
     if (!id) return;
-    await sendMessage(id, content);
+    await sendMessage(id, content, replyTo ? { replyToId: replyTo.id } : undefined);
   };
 
   return (
@@ -263,7 +268,7 @@ export function ConversationView() {
         ) : (
           <>
             {messages.map((message: Message) => (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble key={message.id} message={message} onReplyRequest={(m) => setReplyTo(m)} />
             ))}
             <div ref={messagesEndRef} />
           </>
@@ -271,7 +276,7 @@ export function ConversationView() {
       </div>
 
       {/* Composer */}
-      <MessageComposer onSend={handleSend} />
+      <MessageComposer onSend={handleSend} replyToMessage={replyTo ?? undefined} onCancelReply={() => setReplyTo(null)} onSent={() => setReplyTo(null)} />
 
       {/* User info modal */}
       {showUserInfo && (

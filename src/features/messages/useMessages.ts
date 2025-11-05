@@ -47,10 +47,10 @@ export function useMessages() {
   );
 
   /**
-   * Send a message
+   * Send a message (optionally as a reply)
    */
   const sendMessage = useCallback(
-    async (conversationId: string, content: string) => {
+    async (conversationId: string, content: string, opts?: { replyToId?: string }) => {
       if (!identity) {
         console.error('No identity available');
         return;
@@ -102,6 +102,7 @@ export function useMessages() {
           body: content,
           status: 'pending',
           reactions: [],
+          replyTo: opts?.replyToId,
         };
 
         // Add to store immediately
@@ -114,7 +115,11 @@ export function useMessages() {
         // Send via XMTP
         try {
           const xmtp = getXmtpClient();
-          await xmtp.sendMessage(conversationId, content);
+          if (opts?.replyToId) {
+            await xmtp.sendReply(conversationId, opts.replyToId, content);
+          } else {
+            await xmtp.sendMessage(conversationId, content);
+          }
 
           // Update status to sent
           message.status = 'sent';
@@ -139,6 +144,44 @@ export function useMessages() {
       }
     },
     [identity, addMessage, updateMessage, setSending, updateConversation, conversations, upsertContactProfile, isContact]
+  );
+
+  /**
+   * React to a message with an emoji
+   */
+  const reactToMessage = useCallback(
+    async (conversationId: string, messageId: string, emoji: string) => {
+      if (!identity) return;
+      try {
+        await getXmtpClient().sendReaction(conversationId, messageId, emoji, 'added', 'unicode');
+        // Optimistically update local store
+        const current = messagesByConversation[conversationId] || [];
+        const idx = current.findIndex((m) => m.id === messageId);
+        if (idx >= 0) {
+          const msg = current[idx];
+          updateMessage(messageId, {
+            reactions: [...(msg.reactions || []), { emoji, sender: identity.address, timestamp: Date.now() }],
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to send reaction:', e);
+      }
+    },
+    [identity, messagesByConversation, updateMessage]
+  );
+
+  /**
+   * Send a lightweight read receipt for this conversation
+   */
+  const sendReadReceiptFor = useCallback(
+    async (conversationId: string) => {
+      try {
+        await getXmtpClient().sendReadReceipt(conversationId);
+      } catch {
+        // non-fatal
+      }
+    },
+    []
   );
 
   /**
@@ -237,6 +280,8 @@ export function useMessages() {
     clearMessages,
     loadMessages,
     sendMessage,
+    reactToMessage,
+    sendReadReceiptFor,
     receiveMessage,
     deleteMessage,
   };

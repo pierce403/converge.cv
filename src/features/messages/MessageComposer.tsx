@@ -3,13 +3,17 @@
  */
 
 import { useState, useRef, KeyboardEvent } from 'react';
+import type { Message } from '@/types';
 
 interface MessageComposerProps {
   onSend: (content: string) => void;
   disabled?: boolean;
+  replyToMessage?: Message;
+  onCancelReply?: () => void;
+  onSent?: () => void;
 }
 
-export function MessageComposer({ onSend, disabled = false }: MessageComposerProps) {
+export function MessageComposer({ onSend, disabled = false, replyToMessage, onCancelReply, onSent }: MessageComposerProps) {
   const [message, setMessage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -18,6 +22,7 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
     if (!trimmed || disabled) return;
 
     onSend(trimmed);
+    onSent?.();
     setMessage('');
 
     // Reset textarea height
@@ -43,7 +48,16 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
 
   return (
     <div className="border-t border-primary-900/40 bg-primary-950/40 p-4 backdrop-blur-md">
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col gap-2">
+        {replyToMessage && (
+          <div className="flex items-center justify-between text-xs bg-primary-900/60 border border-primary-800/60 text-primary-200 px-3 py-1 rounded">
+            <div className="truncate">
+              Replying to: <span className="text-primary-100">{replyToMessage.body?.slice(0, 80) || 'message'}</span>
+            </div>
+            <button onClick={onCancelReply} className="ml-2 px-2 py-0.5 text-primary-200 hover:text-primary-50 hover:bg-primary-800/60 rounded">✕</button>
+          </div>
+        )}
+        <div className="flex items-end gap-2">
         {/* Attachment button */}
         <button
           type="button"
@@ -91,9 +105,9 @@ export function MessageComposer({ onSend, disabled = false }: MessageComposerPro
             />
           </svg>
         </button>
+        </div>
       </div>
 
     </div>
   );
 }
-

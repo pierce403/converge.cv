@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getXmtpClient } from '@/lib/xmtp';
+import { useMessages } from './useMessages';
 import type { Message } from '@/types';
 
 interface MessageActionsModalProps {
@@ -23,6 +24,7 @@ export function MessageActionsModal({
   onReply,
   onForward,
 }: MessageActionsModalProps) {
+  const { reactToMessage } = useMessages();
   const [details, setDetails] = useState<{
     id: string;
     senderInboxId?: string;
@@ -80,6 +82,26 @@ export function MessageActionsModal({
           <button onClick={onDelete} className="btn-danger text-sm">Delete</button>
         </div>
 
+        {/* Quick Reactions */}
+        <div className="mb-3">
+          <div className="text-xs text-primary-300 mb-1">React</div>
+          <div className="flex gap-2">
+            {['😀','👍','❤️','🔥','🎉','👀','😮','😅'].map((emoji) => (
+              <button
+                key={emoji}
+                className="px-2 py-1 rounded bg-primary-900/60 hover:bg-primary-800/70 border border-primary-800/60"
+                onClick={async () => {
+                  await reactToMessage(conversationId, message.id, emoji);
+                  onClose();
+                }}
+                aria-label={`React ${emoji}`}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Info */}
         <div className="bg-primary-900/50 border border-primary-800/60 rounded-lg p-3 text-sm space-y-1">
           <div><span className="text-primary-300">Message ID:</span> <code className="font-mono break-all">{message.id}</code></div>
@@ -113,4 +135,3 @@ export function MessageActionsModal({
     </div>
   );
 }
-

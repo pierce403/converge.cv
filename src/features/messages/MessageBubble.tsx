@@ -11,9 +11,10 @@ import { useMessages } from './useMessages';
 
 interface MessageBubbleProps {
   message: Message;
+  onReplyRequest?: (message: Message) => void;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
   const { identity } = useAuthStore();
   const identityAddress = identity?.address?.toLowerCase();
   const identityInbox = identity?.inboxId?.toLowerCase();
@@ -62,7 +63,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     closeActions();
   };
   const onReply = () => {
-    // TODO: wire a real reply action
+    onReplyRequest?.(message);
     closeActions();
   };
   const onForward = () => {
