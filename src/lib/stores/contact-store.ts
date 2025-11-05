@@ -122,12 +122,45 @@ const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact =
   };
 };
 
-const normaliseContactInput = (contact: Contact): Contact => {
-  const normalizedInboxId = normalizeInboxId(contact.inboxId);
+type LegacyContact = Contact & { address?: string };
+
+const deriveInboxId = (contact: LegacyContact): string | null => {
+  if (contact.inboxId) {
+    return contact.inboxId;
+  }
+
+  if (typeof contact.address === 'string' && contact.address.trim().length > 0) {
+    return contact.address;
+  }
+
+  if (contact.primaryAddress && contact.primaryAddress.trim().length > 0) {
+    return contact.primaryAddress;
+  }
+
+  const firstAddress = contact.addresses?.find((entry) => Boolean(entry?.trim()));
+  if (firstAddress) {
+    return firstAddress;
+  }
+
+  return null;
+};
+
+const normaliseContactInput = (contact: LegacyContact): Contact => {
+  const derivedInboxId = deriveInboxId(contact);
+  let effectiveInboxId = derivedInboxId;
+  if (!effectiveInboxId) {
+    console.warn('[Contacts] Generating placeholder inbox ID for legacy contact without identifiers:', contact);
+    effectiveInboxId = `legacy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  const normalizedInboxId = normalizeInboxId(effectiveInboxId);
   const addresses = dedupe([
     ...(contact.addresses ?? []),
     contact.primaryAddress,
-  ]).map(normalizeAddress);
+    contact.address,
+  ])
+    .filter(Boolean)
+    .map((value) => normalizeAddress(value as string));
 
   return {
     ...contact,

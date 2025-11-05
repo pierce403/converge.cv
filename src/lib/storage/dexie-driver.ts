@@ -71,49 +71,100 @@ class ConvergeDB extends Dexie {
       })
       .upgrade(async (transaction) => {
         const contactsTable = transaction.table('contacts');
-        const existingContacts = await contactsTable.toArray();
-        await contactsTable.clear();
+        try {
+          const legacyContacts = await contactsTable.toArray();
 
-        for (const rawContact of existingContacts as Array<Contact & { address?: string }>) {
-          const fallbackAddress =
-            rawContact.primaryAddress ??
-            rawContact.address ??
-            rawContact.addresses?.[0];
-          const inboxId = rawContact.inboxId ?? rawContact.address;
-
-          if (!inboxId) {
-            continue;
-          }
-
-          const dedupedAddresses = new Set<string>();
-          if (rawContact.addresses) {
-            for (const entry of rawContact.addresses) {
-              if (entry) {
-                dedupedAddresses.add(entry.toLowerCase());
-              }
+          const normalizeIdentifier = (value: string): string => value.trim().toLowerCase();
+          const normalizeCandidate = (value?: string | null): string | null => {
+            if (!value || typeof value !== 'string') {
+              return null;
             }
-          }
-          if (rawContact.primaryAddress) {
-            dedupedAddresses.add(rawContact.primaryAddress.toLowerCase());
-          }
-          if (fallbackAddress) {
-            dedupedAddresses.add(fallbackAddress.toLowerCase());
-          }
-
-          const migratedContact: Contact = {
-            ...rawContact,
-            inboxId,
-            primaryAddress: rawContact.primaryAddress
-              ? rawContact.primaryAddress.toLowerCase()
-              : fallbackAddress?.toLowerCase(),
-            addresses: Array.from(dedupedAddresses),
-            createdAt: rawContact.createdAt ?? Date.now(),
+            const trimmed = value.trim();
+            if (!trimmed) {
+              return null;
+            }
+            return normalizeIdentifier(trimmed);
           };
 
-          // @ts-expect-error - remove legacy field
-          delete migratedContact.address;
+          const collectAddresses = (record: Contact & { address?: string }): string[] => {
+            const deduped = new Set<string>();
+            const sources = [
+              record.address,
+              record.primaryAddress,
+              ...(Array.isArray(record.addresses) ? record.addresses : []),
+            ];
+            for (const entry of sources) {
+              const normalised = normalizeCandidate(entry);
+              if (normalised) {
+                deduped.add(normalised);
+              }
+            }
+            return Array.from(deduped);
+          };
 
-          await contactsTable.put(migratedContact);
+          const deriveInboxId = (record: Contact & { address?: string }): string | null => {
+            const candidates = [
+              record.inboxId,
+              record.address,
+              record.primaryAddress,
+              ...(Array.isArray(record.addresses) ? record.addresses : []),
+            ];
+            for (const candidate of candidates) {
+              const normalised = normalizeCandidate(candidate);
+              if (normalised) {
+                return normalised;
+              }
+            }
+            return null;
+          };
+
+          const migrated = new Map<string, Contact>();
+
+          for (const legacy of legacyContacts as Array<Contact & { address?: string }>) {
+            const inboxId = deriveInboxId(legacy);
+            if (!inboxId) {
+              console.warn('[Storage] Skipping contact without identifiable inbox during migration:', legacy);
+              continue;
+            }
+
+            const addresses = collectAddresses(legacy);
+            const primaryAddress = addresses[0];
+
+            const baseContact: Contact = {
+              ...legacy,
+              inboxId,
+              addresses,
+              primaryAddress,
+              createdAt: legacy.createdAt ?? Date.now(),
+            };
+
+            // @ts-expect-error - remove legacy field if present
+            delete baseContact.address;
+
+            const existing = migrated.get(inboxId);
+            if (existing) {
+              migrated.set(inboxId, {
+                ...existing,
+                ...baseContact,
+                addresses: Array.from(new Set([...(existing.addresses ?? []), ...(baseContact.addresses ?? [])])),
+                primaryAddress: baseContact.primaryAddress ?? existing.primaryAddress,
+                avatar: baseContact.avatar ?? existing.avatar,
+                preferredAvatar: baseContact.preferredAvatar ?? existing.preferredAvatar,
+                name: baseContact.name ?? existing.name,
+                preferredName: baseContact.preferredName ?? existing.preferredName,
+              });
+            } else {
+              migrated.set(inboxId, baseContact);
+            }
+          }
+
+          await contactsTable.clear();
+          if (migrated.size > 0) {
+            await contactsTable.bulkPut(Array.from(migrated.values()));
+          }
+        } catch (error) {
+          console.error('[Storage] Failed to migrate contacts store to inboxId schema. Clearing legacy contacts.', error);
+          await contactsTable.clear();
         }
       });
   }

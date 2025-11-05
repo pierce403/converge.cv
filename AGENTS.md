@@ -400,7 +400,7 @@ if (!isRegistered) {
 
 ### Inbox-Centric Contacts
 - Reworked `contact-store` to key contacts by XMTP inbox ID, track all linked Ethereum addresses/identifiers, and merge remote profile updates safely.
-- Added Dexie v3 migration (`contacts: '&inboxId, primaryAddress, *addresses'`) to move legacy address-keyed rows and prevent duplicates.
+- Added Dexie v3 migration (`contacts: '&inboxId, primaryAddress, *addresses'`) to move legacy address-keyed rows and prevent duplicates; migration now tolerates missing inbox IDs and merges duplicates before writing.
 - `Layout` now fetches inbox profiles for every inbound message and asynchronously enriches contacts with Farcaster metadata when available (name, avatar, bio).
 - `useMessages` auto-upserts recipients into the contact store with inferred primary addresses on first send.
 
