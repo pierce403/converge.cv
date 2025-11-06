@@ -254,11 +254,23 @@ export function Layout() {
         if ((action || 'added').toLowerCase() === 'removed') {
           const filtered = current.filter((r) => !(r.emoji === emoji && r.sender?.toLowerCase?.() === sender));
           state.updateMessage(referenceMessageId, { reactions: filtered });
+          try {
+            const storage = await getStorage();
+            await storage.updateMessageReactions(referenceMessageId, filtered);
+          } catch {
+            // ignore persist failure
+          }
         } else {
           // add, but enforce single instance per emoji per sender
           const filtered = current.filter((r) => !(r.emoji === emoji && r.sender?.toLowerCase?.() === sender));
           filtered.push({ emoji, sender: senderInboxId || mineInbox || 'peer', timestamp: Date.now() });
           state.updateMessage(referenceMessageId, { reactions: filtered });
+          try {
+            const storage = await getStorage();
+            await storage.updateMessageReactions(referenceMessageId, filtered);
+          } catch {
+            // ignore persist failure
+          }
         }
       } catch (err) {
         console.warn('[Layout] Failed to handle reaction', err);

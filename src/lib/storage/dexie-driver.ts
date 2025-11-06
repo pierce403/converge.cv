@@ -285,6 +285,10 @@ export class DexieDriver implements StorageDriver {
     await this.db.messages.update(id, { status });
   }
 
+  async updateMessageReactions(id: string, reactions: Message['reactions']): Promise<void> {
+    await this.db.messages.update(id, { reactions });
+  }
+
   async deleteExpiredMessages(): Promise<number> {
     const now = Date.now();
     const expired = await this.db.messages

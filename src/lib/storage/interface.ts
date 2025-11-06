@@ -36,6 +36,7 @@ export interface StorageDriver {
   listMessages(conversationId: string, opts?: PageOpts): Promise<Message[]>;
   deleteMessage(id: string): Promise<void>;
   updateMessageStatus(id: string, status: Message['status']): Promise<void>;
+  updateMessageReactions(id: string, reactions: Message['reactions']): Promise<void>;
   deleteExpiredMessages(): Promise<number>; // returns count deleted
 
   // Attachments

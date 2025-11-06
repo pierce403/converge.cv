@@ -35,8 +35,18 @@ export function useMessages() {
       try {
         setLoading(true);
         const storage = await getStorage();
-        const messages = await storage.listMessages(conversationId, { limit: 100 });
+        let messages = await storage.listMessages(conversationId, { limit: 100 });
+        // Filter legacy reaction placeholder bubbles persisted prior to reaction aggregation
+        messages = messages.filter((m) => !(m.type === 'system' && /^reaction$/i.test(m.body)));
         setMessages(conversationId, messages);
+
+        // Best-effort: aggregate recent reactions from the network so chips render after refresh
+        try {
+          const xmtp = getXmtpClient();
+          await xmtp.backfillReactionsForConversation(conversationId, 300);
+        } catch (e) {
+          // Non-fatal if offline
+        }
       } catch (error) {
         console.error('Failed to load messages:', error);
       } finally {

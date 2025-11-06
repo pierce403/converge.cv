@@ -2921,6 +2921,53 @@ export class XmtpClient {
       return null;
     }
   }
+
+  /**
+   * Best-effort: scan recent messages for a conversation and dispatch xmtp:reaction
+   * events for any reaction content found. Does not persist anything directly;
+   * listeners (Layout) will aggregate and persist reactions on target messages.
+   */
+  async backfillReactionsForConversation(conversationId: string, max = 300): Promise<void> {
+    if (!this.client) return;
+    try {
+      const conv = await this.client.conversations.getConversationById(conversationId);
+      if (!conv) return;
+      const decoded = await conv.messages();
+      const start = Math.max(0, decoded.length - max);
+      for (let i = start; i < decoded.length; i++) {
+        const m = decoded[i] as unknown as { [k: string]: unknown };
+        const typeId = this.getContentTypeIdFromAny(m);
+        const lowerType = (typeId || '').toLowerCase();
+        if (!lowerType.includes('reaction')) continue;
+        try {
+          const content = (m as unknown as { content?: unknown }).content as
+            | { content?: string; reference?: string; action?: string }
+            | undefined;
+          const emoji = (content?.content ?? '').toString();
+          const ref = (content?.reference ?? '').toString();
+          const action = (content?.action ?? 'added').toString();
+          const convId = (m as unknown as { conversationId?: string }).conversationId as string | undefined;
+          const sender = (m as unknown as { senderInboxId?: string }).senderInboxId as string | undefined;
+          if (!convId || !ref || !emoji) continue;
+          window.dispatchEvent(
+            new CustomEvent('xmtp:reaction', {
+              detail: {
+                conversationId: convId,
+                referenceMessageId: ref,
+                emoji,
+                action,
+                senderInboxId: sender,
+              },
+            })
+          );
+        } catch (e) {
+          console.warn('[XMTP] backfillReactionsForConversation parse failed', e);
+        }
+      }
+    } catch (e) {
+      console.warn('[XMTP] backfillReactionsForConversation failed', e);
+    }
+  }
 }
 
 // Singleton instance
