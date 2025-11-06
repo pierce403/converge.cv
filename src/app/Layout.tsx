@@ -274,7 +274,7 @@ export function Layout() {
             const xmtp = getXmtpClient();
             const details = await xmtp.fetchGroupDetails(conversationId);
             if (details) {
-              // Map GroupDetails -> Partial<Conversation> (mirror of useConversations)
+              // Map GroupDetails -> Partial<Conversation> (mirror with safe field updates)
               const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId));
               const uniqueMembers = Array.from(new Set(memberIdentifiers.filter(Boolean)));
               const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
@@ -288,15 +288,18 @@ export function Layout() {
                 isSuperAdmin: m.isSuperAdmin,
               }));
               const merged: Partial<Conversation> = {
-                groupName: details.name?.trim() || undefined,
-                groupImage: details.imageUrl?.trim() || undefined,
-                groupDescription: details.description?.trim() || undefined,
                 members: uniqueMembers,
                 memberInboxes,
                 adminInboxes,
                 superAdminInboxes,
                 groupMembers,
-              } as Partial<Conversation>;
+              };
+              const name = details.name?.trim();
+              if (name) merged.groupName = name;
+              const img = details.imageUrl?.trim();
+              if (img) merged.groupImage = img;
+              const desc = details.description?.trim();
+              if (desc) merged.groupDescription = desc;
               const current = existing || (await storage.getConversation(conversationId));
               if (current) {
                 await storage.putConversation({ ...current, ...merged });

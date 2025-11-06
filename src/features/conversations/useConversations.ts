@@ -42,10 +42,7 @@ const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conve
     isSuperAdmin: member.isSuperAdmin,
   }));
 
-  return {
-    groupName: details.name?.trim() || undefined,
-    groupImage: details.imageUrl?.trim() || undefined,
-    groupDescription: details.description?.trim() || undefined,
+  const updates: Partial<Conversation> = {
     members: uniqueMembers,
     admins: uniqueAdmins,
     memberInboxes,
@@ -53,6 +50,13 @@ const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conve
     superAdminInboxes,
     groupMembers,
   };
+  const name = details.name?.trim();
+  if (name) updates.groupName = name;
+  const img = details.imageUrl?.trim();
+  if (img) updates.groupImage = img;
+  const desc = details.description?.trim();
+  if (desc) updates.groupDescription = desc;
+  return updates;
 };
 
 export function useConversations() {
