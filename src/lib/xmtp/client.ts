@@ -1039,21 +1039,52 @@ export class XmtpClient {
         loggingLevel: 'warn',
       });
 
-      client = await Client.create(signer, {
-        env: 'production',
-        loggingLevel: 'warn',
-        structuredLogging: false,
-        performanceLogging: false,
-        debugEventsEnabled: false,
-        disableAutoRegister: true,
-        codecs: [
-          new ReactionCodec(),
-          new ReplyCodec(),
-          new ReadReceiptCodec(),
-          new RemoteAttachmentCodec(),
-          new GroupUpdatedCodec(),
-        ],
-      });
+      try {
+        client = await Client.create(signer, {
+          env: 'production',
+          loggingLevel: 'warn',
+          structuredLogging: false,
+          performanceLogging: false,
+          debugEventsEnabled: false,
+          disableAutoRegister: true,
+          codecs: [
+            new ReactionCodec(),
+            new ReplyCodec(),
+            new ReadReceiptCodec(),
+            new RemoteAttachmentCodec(),
+            new GroupUpdatedCodec(),
+          ],
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const looksLikeCors = /get[_-]?inbox[_-]?ids/i.test(msg) || /CORS policy/i.test(msg);
+        if (looksLikeCors) {
+          console.warn('[XMTP] Client.create failed during identity probe (possibly CORS). Retrying without disableAutoRegister.');
+          try {
+            client = await Client.create(signer, {
+              env: 'production',
+              loggingLevel: 'warn',
+              structuredLogging: false,
+              performanceLogging: false,
+              debugEventsEnabled: false,
+              // Let SDK perform its default registration path; some identity probes are avoided
+              disableAutoRegister: false,
+              codecs: [
+                new ReactionCodec(),
+                new ReplyCodec(),
+                new ReadReceiptCodec(),
+                new RemoteAttachmentCodec(),
+                new GroupUpdatedCodec(),
+              ],
+            });
+          } catch (e2) {
+            console.warn('[XMTP] Fallback Client.create also failed:', e2);
+            throw e; // bubble original for upstream handling
+          }
+        } else {
+          throw e;
+        }
+      }
 
       // Decide whether we must register a new installation
       let mustRegister = shouldRegister;
