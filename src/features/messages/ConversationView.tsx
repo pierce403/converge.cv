@@ -508,8 +508,8 @@ export function ConversationView() {
                 const myInboxLower = identity?.inboxId?.toLowerCase();
                 const myAddressLower = identity?.address?.toLowerCase();
                 isSelf =
-                  (myInboxLower && senderLower === myInboxLower) ||
-                  (myAddressLower && senderLower === myAddressLower);
+                  ((myInboxLower ? senderLower === myInboxLower : false) ||
+                    (myAddressLower ? senderLower === myAddressLower : false));
 
                 if (isSelf) {
                   const fallback = identity?.displayName || 'You';
