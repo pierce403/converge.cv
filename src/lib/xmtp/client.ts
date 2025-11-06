@@ -297,8 +297,19 @@ export class XmtpClient {
     targetMessageId: string,
     text: string,
     referenceInboxId?: string,
-  ): Promise<void> {
-    if (!this.client) throw new Error('Client not connected');
+  ): Promise<XmtpMessage> {
+    if (!this.client) {
+      console.warn('[XMTP] Client not connected; queuing reply locally for conversation', conversationId);
+      const localMessage = this.createLocalMessage(conversationId, text);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'messages:reply:offline',
+        details: `Stored local reply for ${conversationId}`,
+        payload: this.formatPayload(text),
+      });
+      return localMessage;
+    }
+
     const conv = await this.client.conversations.getConversationById(conversationId);
     if (!conv) throw new Error('Conversation not found');
     const replyContent = {
@@ -307,8 +318,22 @@ export class XmtpClient {
       content: text,
       contentType: ContentTypeText,
     };
-    await conv.send(replyContent, ContentTypeReply);
-    logNetworkEvent({ direction: 'outbound', event: 'message:reply', details: `Reply sent` });
+    const messageId = await conv.send(replyContent, ContentTypeReply);
+    const now = Date.now();
+    const message: XmtpMessage = {
+      id: messageId,
+      conversationId,
+      senderAddress: this.client?.inboxId ?? this.identity?.address ?? 'unknown',
+      content: text,
+      sentAt: now,
+    };
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'message:reply',
+      details: `Reply sent`,
+      payload: this.formatPayload({ id: messageId }),
+    });
+    return message;
   }
 
   /**
@@ -2742,15 +2767,15 @@ export class XmtpClient {
       console.log('[XMTP] Found conversation, sending message...');
       
       // Send the message
-      await conversation.send(content);
-      
-      console.log('[XMTP] ✅ Message sent successfully');
+      const messageId = await conversation.send(content);
+
+      console.log('[XMTP] ✅ Message sent successfully', { conversationId, messageId });
 
       // Create a message object to return
       const message: XmtpMessage = {
-        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: messageId,
         conversationId: conversationId,
-        senderAddress: this.identity?.address || 'unknown',
+        senderAddress: this.client?.inboxId ?? this.identity?.address ?? 'unknown',
         content,
         sentAt: Date.now(),
       };
@@ -2759,7 +2784,7 @@ export class XmtpClient {
         direction: 'status',
         event: 'messages:send:success',
         details: `Message sent on ${conversationId}`,
-        payload: this.formatPayload(message),
+        payload: this.formatPayload({ id: messageId }),
       });
 
       return message;
