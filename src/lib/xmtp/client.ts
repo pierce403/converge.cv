@@ -1412,8 +1412,26 @@ export class XmtpClient {
       }
               continue;
             }
-            // Treat non-text content types as stylized system messages in history, too
+            // Treat non-text content types in history too
             try {
+              const isReadReceipt = !!typeId && typeId.toLowerCase().includes('read') && typeId.toLowerCase().includes('receipt');
+              if (isReadReceipt) {
+                const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                try {
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:read-receipt', {
+                      detail: {
+                        conversationId: m.conversationId,
+                        senderInboxId: m.senderInboxId,
+                        sentAt: ts,
+                      },
+                    })
+                  );
+                } catch (err) {
+                  // ignore
+                }
+                continue;
+              }
               const isTextLike = typeof content === 'string' && (!typeId || this.labelForContentType(typeId) === 'Text');
               if (!isTextLike) {
                 const label = this.labelForContentType(typeId);
@@ -1567,11 +1585,30 @@ export class XmtpClient {
               console.warn('[XMTP] Failed to inspect message kind', err);
             }
 
-            // If content type is not text, surface as a system message with a friendly label
+            // If content type is not text, surface appropriately
             try {
               const typeId = this.getContentTypeIdFromAny(message);
               const contentIsString = typeof message.content === 'string';
               const looksText = contentIsString && (!typeId || this.labelForContentType(typeId) === 'Text');
+              const isReadReceipt = !!typeId && typeId.toLowerCase().includes('read') && typeId.toLowerCase().includes('receipt');
+              if (isReadReceipt) {
+                // Do not display as a bubble or system line; dispatch a dedicated event to update UI statuses
+                const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                try {
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:read-receipt', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        senderInboxId: message.senderInboxId,
+                        sentAt: ts,
+                      },
+                    })
+                  );
+                } catch (err) {
+                  // ignore
+                }
+                continue;
+              }
               if (!looksText) {
                 const label = this.labelForContentType(typeId);
                 const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();

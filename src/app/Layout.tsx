@@ -192,10 +192,40 @@ export function Layout() {
     };
     window.addEventListener('xmtp:system', handleSystemMessage);
     
+    // Handle read receipts for status updates (no bubbles)
+    const handleReadReceipt = async (event: Event) => {
+      const custom = event as CustomEvent<{ conversationId: string; senderInboxId?: string; sentAt?: number }>;
+      const { conversationId, sentAt } = custom.detail;
+      try {
+        const myInbox = getXmtpClient().getInboxId()?.toLowerCase();
+        const myAddr = getXmtpClient().getAddress()?.toLowerCase();
+        const state = useMessageStore.getState();
+        const msgs = state.messagesByConversation[conversationId] || [];
+        for (const m of msgs) {
+          const senderLower = m.sender?.toLowerCase?.();
+          if (senderLower && (senderLower === myInbox || senderLower === myAddr)) {
+            if (!sentAt || m.sentAt <= sentAt) {
+              state.updateMessage(m.id, { status: 'delivered' });
+              try {
+                const storage = await getStorage();
+                await storage.updateMessageStatus(m.id, 'delivered');
+              } catch (e) {
+                // ignore storage failure
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Layout] Failed to handle read receipt', err);
+      }
+    };
+    window.addEventListener('xmtp:read-receipt', handleReadReceipt);
+    
     return () => {
       console.log('[Layout] 🔇 Global message listener unregistered');
       window.removeEventListener('xmtp:message', handleIncomingMessage);
       window.removeEventListener('xmtp:system', handleSystemMessage);
+      window.removeEventListener('xmtp:read-receipt', handleReadReceipt);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

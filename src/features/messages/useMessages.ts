@@ -173,15 +173,47 @@ export function useMessages() {
   /**
    * Send a lightweight read receipt for this conversation
    */
+  // Track last receipt sent per conversation to avoid spamming
+  // Persist last sent read-receipt timestamp per conversation on the global object.
+  type ReceiptMap = Record<string, number>;
+  const getReceiptMap = useCallback(() => {
+    const g = globalThis as unknown as { __cv_last_receipts?: ReceiptMap };
+    if (!g.__cv_last_receipts) g.__cv_last_receipts = {};
+    return g.__cv_last_receipts;
+  }, []);
+
   const sendReadReceiptFor = useCallback(
-    async (conversationId: string) => {
+    async (conversationId: string, latestIncomingAt?: number) => {
       try {
+        // Compute latest incoming ts if not provided
+        let latest = latestIncomingAt;
+        if (latest == null) {
+          const mineAddr = identity?.address?.toLowerCase();
+          const mineInbox = identity?.inboxId?.toLowerCase();
+          const list = messagesByConversation[conversationId] || [];
+          for (const m of list) {
+            const s = m.sender?.toLowerCase?.();
+            const fromPeer = s && s !== mineAddr && s !== mineInbox;
+            if (fromPeer) {
+              latest = Math.max(latest || 0, m.sentAt || 0);
+            }
+          }
+        }
+        if (!latest) return;
+
+        const map = getReceiptMap();
+        const prev = map[conversationId] || 0;
+        const now = Date.now();
+        // Only send if we haven't acknowledged up to this message yet, and rate-limit to avoid duplicates
+        if (latest <= prev || now - prev < 5000) return;
+
         await getXmtpClient().sendReadReceipt(conversationId);
+        map[conversationId] = latest;
       } catch {
         // non-fatal
       }
     },
-    []
+    [identity, messagesByConversation, getReceiptMap]
   );
 
   /**

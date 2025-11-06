@@ -52,11 +52,21 @@ export function ConversationView() {
   useEffect(() => {
     // Scroll to bottom when messages change
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    if (id && messages.length > 0) {
-      // Fire-and-forget; read receipts are best-effort
-      void sendReadReceiptFor(id);
+    if (id && messages.length > 0 && conversation && !conversation.isGroup) {
+      // Compute latest incoming message timestamp; send one receipt if needed
+      const myInbox = identity?.inboxId?.toLowerCase();
+      const myAddr = identity?.address?.toLowerCase();
+      let latestIncomingAt = 0;
+      for (const m of messages) {
+        const s = m.sender?.toLowerCase?.();
+        const fromPeer = s && s !== myInbox && s !== myAddr;
+        if (fromPeer) latestIncomingAt = Math.max(latestIncomingAt, m.sentAt || 0);
+      }
+      if (latestIncomingAt) {
+        void sendReadReceiptFor(id, latestIncomingAt);
+      }
     }
-  }, [messages, id, sendReadReceiptFor]);
+  }, [messages, id, conversation, identity?.inboxId, identity?.address, sendReadReceiptFor]);
 
   const contact = useMemo(() => {
     if (!conversation || conversation.isGroup) {
