@@ -1548,7 +1548,17 @@ export class XmtpClient {
               }
               if (isGroupUpdated) {
                 try {
-                  const label = this.formatGroupUpdatedLabel((m as unknown as Record<string, unknown>)['content']);
+                  const contentObj = (m as unknown as Record<string, unknown>)['content'];
+                  // Structured event for UI/state updates
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:group-updated', {
+                      detail: {
+                        conversationId: m.conversationId,
+                        content: contentObj,
+                      },
+                    })
+                  );
+                  const label = this.formatGroupUpdatedLabel(contentObj);
                   const body = label || 'Group updated';
                   const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
                   window.dispatchEvent(
@@ -1565,7 +1575,7 @@ export class XmtpClient {
                     })
                   );
                 } catch (err) {
-                  console.warn('[XMTP] Failed to dispatch group-updated system event', err);
+                  console.warn('[XMTP] Failed to dispatch group-updated events', err);
                 }
                 continue;
               }
@@ -1750,7 +1760,18 @@ export class XmtpClient {
               }
               if (isGroupUpdated) {
                 try {
-                  const label = this.formatGroupUpdatedLabel((message as unknown as Record<string, unknown>)['content']);
+                  // Dispatch structured event so UI can update conversation metadata
+                  const contentObj = (message as unknown as Record<string, unknown>)['content'];
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:group-updated', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        content: contentObj,
+                      },
+                    })
+                  );
+                  // Also surface a stylized system message label
+                  const label = this.formatGroupUpdatedLabel(contentObj);
                   const body = label || 'Group updated';
                   const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
                   window.dispatchEvent(
@@ -1767,7 +1788,7 @@ export class XmtpClient {
                     })
                   );
                 } catch (err) {
-                  console.warn('[XMTP] Failed to dispatch group-updated system event', err);
+                  console.warn('[XMTP] Failed to dispatch group-updated events', err);
                 }
                 continue;
               }

@@ -222,6 +222,80 @@ export function Layout() {
       }
     };
     window.addEventListener('xmtp:system', handleSystemMessage);
+
+    // Handle group metadata updates (name/image/description and membership changes)
+    const handleGroupUpdated = async (event: Event) => {
+      try {
+        const custom = event as CustomEvent<{ conversationId: string; content: unknown }>;
+        const { conversationId, content } = custom.detail || {};
+        if (!conversationId) return;
+
+        // Attempt lightweight local patch for metadata fields first
+        const any = (content as Record<string, unknown>) || {};
+        const changes = (any['metadataFieldChanges'] as Array<{ fieldName: string; newValue?: string }> | undefined) || [];
+        const added = (any['addedInboxes'] as Array<{ inboxId: string }> | undefined) || [];
+        const removed = (any['removedInboxes'] as Array<{ inboxId: string }> | undefined) || [];
+
+        const storage = await getStorage();
+        const existing = await storage.getConversation(conversationId);
+        const updates: Partial<Conversation> = {};
+        for (const c of changes) {
+          const field = (c.fieldName || '').toString();
+          const val = (c.newValue ?? '').toString().trim();
+          if (field === 'group_name') updates.groupName = val || undefined;
+          else if (field === 'group_image_url_square') updates.groupImage = val || undefined;
+          else if (field === 'description') updates.groupDescription = val || undefined;
+        }
+        if (Object.keys(updates).length && existing) {
+          await storage.putConversation({ ...existing, ...updates });
+          useConversationStore.getState().updateConversation(conversationId, updates);
+        }
+
+        // If membership changed or no metadata changes detected, refresh authoritative details
+        const membershipChanged = added.length > 0 || removed.length > 0;
+        if (membershipChanged || (!changes || changes.length === 0)) {
+          try {
+            const xmtp = getXmtpClient();
+            const details = await xmtp.fetchGroupDetails(conversationId);
+            if (details) {
+              // Map GroupDetails -> Partial<Conversation> (mirror of useConversations)
+              const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId));
+              const uniqueMembers = Array.from(new Set(memberIdentifiers.filter(Boolean)));
+              const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
+              const adminInboxes = Array.from(new Set(details.adminInboxes));
+              const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
+              const groupMembers = details.members.map((m) => ({
+                inboxId: m.inboxId,
+                address: m.address,
+                permissionLevel: m.permissionLevel,
+                isAdmin: m.isAdmin,
+                isSuperAdmin: m.isSuperAdmin,
+              }));
+              const merged: Partial<Conversation> = {
+                groupName: details.name?.trim() || undefined,
+                groupImage: details.imageUrl?.trim() || undefined,
+                groupDescription: details.description?.trim() || undefined,
+                members: uniqueMembers,
+                memberInboxes,
+                adminInboxes,
+                superAdminInboxes,
+                groupMembers,
+              } as Partial<Conversation>;
+              const current = existing || (await storage.getConversation(conversationId));
+              if (current) {
+                await storage.putConversation({ ...current, ...merged });
+              }
+              useConversationStore.getState().updateConversation(conversationId, merged);
+            }
+          } catch (err) {
+            console.warn('[Layout] Failed to refresh group details after update', err);
+          }
+        }
+      } catch (err) {
+        console.warn('[Layout] Failed to handle xmtp:group-updated event', err);
+      }
+    };
+    window.addEventListener('xmtp:group-updated', handleGroupUpdated);
     
     // Handle read receipts for status updates (no bubbles)
     const handleReadReceipt = async (event: Event) => {
@@ -257,6 +331,7 @@ export function Layout() {
       window.removeEventListener('xmtp:message', handleIncomingMessage);
       window.removeEventListener('xmtp:system', handleSystemMessage);
       window.removeEventListener('xmtp:read-receipt', handleReadReceipt);
+      window.removeEventListener('xmtp:group-updated', handleGroupUpdated);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
