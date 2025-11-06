@@ -1786,6 +1786,37 @@ export class XmtpClient {
             for (const m of decodedMessages) {
               const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
               const typeId = this.getContentTypeIdFromAny(m);
+              // Handle reactions first: aggregate onto target and skip bubble
+              try {
+                const lowerType = (typeId || '').toLowerCase();
+                if (lowerType.includes('reaction')) {
+                  try {
+                    const r = (m as unknown as { content?: unknown }).content as
+                      | { content?: string; reference?: string; action?: string }
+                      | undefined;
+                    const emoji = (r?.content ?? '').toString();
+                    const ref = (r?.reference ?? '').toString();
+                    const action = (r?.action ?? 'added').toString();
+                    window.dispatchEvent(
+                      new CustomEvent('xmtp:reaction', {
+                        detail: {
+                          conversationId: m.conversationId,
+                          referenceMessageId: ref,
+                          emoji,
+                          action,
+                          senderInboxId: m.senderInboxId,
+                        },
+                      })
+                    );
+                  } catch (rxErr) {
+                    console.warn('[XMTP] Failed to parse reaction (group backfill)', rxErr);
+                  }
+                  continue;
+                }
+              } catch {
+                // ignore
+              }
+
               // Treat non-text/system content types in history
               try {
                 const lowerType = (typeId || '').toLowerCase();
