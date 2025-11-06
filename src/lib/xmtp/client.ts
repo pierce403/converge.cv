@@ -25,6 +25,7 @@ import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-rea
 import { RemoteAttachmentCodec } from '@xmtp/content-type-remote-attachment';
 import { ContentTypeText } from '@xmtp/content-type-text';
 import { GroupUpdatedCodec } from '@xmtp/content-type-group-updated';
+import { getStorage } from '@/lib/storage';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
 
@@ -1451,6 +1452,67 @@ export class XmtpClient {
       await this.client.conversations.sync();
       const convos = await this.client.conversations.list();
       console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
+
+      // Ensure group conversations are present in local storage even if no messages were backfilled yet
+      try {
+        const storage = await getStorage();
+        for (const c of convos as Array<{ id?: string; createdAtNs?: bigint }>) {
+          const id = c?.id as string | undefined;
+          if (!id) continue;
+          const exists = await storage.getConversation(id);
+          if (exists) continue;
+          // Probe if this is a group by checking for group APIs on the conversation
+          let group = null as Awaited<ReturnType<typeof this.getGroupConversation>> | null;
+          try {
+            group = await this.getGroupConversation(id);
+          } catch {
+            group = null;
+          }
+          if (!group) continue; // Not a group (DMs will be created via message backfill)
+
+          try {
+            const details = await this.buildGroupDetails(id, group);
+            const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
+            const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId)).filter(Boolean);
+            const uniqueMembers = Array.from(new Set(memberIdentifiers));
+            const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
+            const adminInboxes = Array.from(new Set(details.adminInboxes));
+            const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
+            const groupMembers = details.members.map((m) => ({
+              inboxId: m.inboxId,
+              address: m.address,
+              permissionLevel: m.permissionLevel,
+              isAdmin: m.isAdmin,
+              isSuperAdmin: m.isSuperAdmin,
+            }));
+            const conversation: Conversation = {
+              id,
+              topic: id,
+              peerId: id,
+              createdAt,
+              lastMessageAt: createdAt,
+              unreadCount: 0,
+              pinned: false,
+              archived: false,
+              isGroup: true,
+              groupName: details.name?.trim() || undefined,
+              groupImage: details.imageUrl?.trim() || undefined,
+              groupDescription: details.description?.trim() || undefined,
+              members: uniqueMembers,
+              memberInboxes,
+              adminInboxes,
+              superAdminInboxes,
+              groupMembers,
+            };
+            await storage.putConversation(conversation);
+            logNetworkEvent({ direction: 'status', event: 'conversations:sync:group_added', details: `Inserted group ${id}` });
+          } catch (persistErr) {
+            console.warn('[XMTP] Failed to persist group conversation after sync', persistErr);
+          }
+        }
+      } catch (ensureErr) {
+        console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
+      }
       
       logNetworkEvent({
         direction: 'inbound',
