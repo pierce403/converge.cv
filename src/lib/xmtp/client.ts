@@ -1719,6 +1719,85 @@ export class XmtpClient {
         }
       }
 
+      // Backfill Groups as well (group conversations may not have recent DMs)
+      try {
+        const allConvs = await this.client.conversations.list();
+        const dmIds = new Set(dms.map((d) => d.id));
+        const maybeGroups = allConvs.filter((c) => !dmIds.has(c.id));
+        console.log(`[XMTP] Backfilling messages for ${maybeGroups.length} group conversations`);
+        for (const conv of maybeGroups) {
+          try {
+            const decodedMessages = await conv.messages();
+            decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
+            for (const m of decodedMessages) {
+              const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
+              const typeId = this.getContentTypeIdFromAny(m);
+              // Treat non-text/system content types in history
+              try {
+                const lowerType = (typeId || '').toLowerCase();
+                const isReadReceipt = lowerType.includes('read') && lowerType.includes('receipt');
+                const isGroupUpdated = lowerType.includes('group') && lowerType.includes('updated');
+                if (isReadReceipt) {
+                  const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                  try {
+                    window.dispatchEvent(
+                      new CustomEvent('xmtp:read-receipt', {
+                        detail: { conversationId: m.conversationId, senderInboxId: m.senderInboxId, sentAt: ts },
+                      })
+                    );
+                  } catch (rrErr) {
+                    // ignore read-receipt dispatch failure
+                  }
+                  continue;
+                }
+                if (isGroupUpdated) {
+                  try {
+                    const contentObj = (m as unknown as Record<string, unknown>)['content'];
+                    window.dispatchEvent(new CustomEvent('xmtp:group-updated', { detail: { conversationId: m.conversationId, content: contentObj } }));
+                    const label = this.formatGroupUpdatedLabel(contentObj);
+                    const body = label || 'Group updated';
+                    const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                    window.dispatchEvent(
+                      new CustomEvent('xmtp:system', {
+                        detail: { conversationId: m.conversationId, system: { id: `sys_${m.id}`, senderInboxId: m.senderInboxId, body, sentAt: ts } },
+                      })
+                    );
+                  } catch (err) {
+                    console.warn('[XMTP] Failed to dispatch group-updated events (group backfill)', err);
+                  }
+                  continue;
+                }
+                const isTextLike = typeof content === 'string' && (!typeId || this.labelForContentType(typeId) === 'Text');
+                if (!isTextLike) {
+                  const label = this.labelForContentType(typeId);
+                  const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:system', {
+                      detail: { conversationId: m.conversationId, system: { id: `sys_${m.id}`, senderInboxId: m.senderInboxId, body: label, sentAt: ts } },
+                    })
+                  );
+                  continue;
+                }
+              } catch (e) {
+                console.warn('[XMTP] Failed to classify group backfill message type', e);
+              }
+              const xmsg = {
+                id: m.id,
+                conversationId: m.conversationId,
+                senderAddress: m.senderInboxId,
+                content,
+                sentAt: Number(m.sentAtNs / 1000000n),
+              } as XmtpMessage;
+              window.dispatchEvent(new CustomEvent('xmtp:message', { detail: { conversationId: m.conversationId, message: xmsg } }));
+            }
+          } catch (gErr) {
+            console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
+          }
+        }
+      } catch (listErr) {
+        console.warn('[XMTP] Failed to enumerate conversations for group backfill', listErr);
+      }
+
       console.log('[XMTP] ✅ History sync + backfill complete');
     } catch (error) {
       console.error('[XMTP] History sync failed:', error);
