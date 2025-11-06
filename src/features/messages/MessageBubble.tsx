@@ -82,9 +82,17 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
         onPointerUp={clearTimer}
         onPointerLeave={clearTimer}
       >
-        {/* Message content */}
-        <div className={(isSent ? 'message-sent' : 'message-received') + ' w-full'}>
-          {message.type === 'text' && <p className="whitespace-pre-wrap break-words">{message.body}</p>}
+        {/* Message content (bubble) */}
+        <div
+          className={
+            (isSent ? 'message-sent' : 'message-received') +
+            ' w-full relative ' +
+            (message.reactions.length > 0 ? ' pb-5' : '')
+          }
+        >
+          {message.type === 'text' && (
+            <p className="whitespace-pre-wrap break-words">{message.body}</p>
+          )}
           {message.type === 'system' && (
             <div className="w-full flex justify-center">
               <div className="max-w-full text-center text-xs bg-primary-800/60 border border-primary-700 text-primary-200 px-2 py-1 rounded">
@@ -102,6 +110,24 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
                 />
               </svg>
               <span className="text-sm">Attachment</span>
+            </div>
+          )}
+
+          {/* Reactions tucked inside bubble bottom corner */}
+          {message.reactions.length > 0 && (
+            <div
+              className={
+                'absolute -bottom-2 flex gap-1 ' + (isSent ? 'left-2' : 'right-2')
+              }
+            >
+              {message.reactions.map((reaction, idx) => (
+                <span
+                  key={idx}
+                  className="text-xs bg-primary-900/70 px-2 py-0.5 rounded-full border border-primary-800/60 shadow"
+                >
+                  {reaction.emoji}
+                </span>
+              ))}
             </div>
           )}
         </div>
@@ -128,16 +154,7 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
           )}
         </div>
 
-        {/* Reactions */}
-        {message.reactions.length > 0 && (
-          <div className="flex gap-1 mt-1">
-            {message.reactions.map((reaction, idx) => (
-              <span key={idx} className="text-sm bg-primary-900/60 px-2 py-0.5 rounded-full">
-                {reaction.emoji}
-              </span>
-            ))}
-          </div>
-        )}
+        {/* Reactions moved into bubble; nothing here */}
         <MessageActionsModal
           open={showActions}
           onClose={closeActions}
