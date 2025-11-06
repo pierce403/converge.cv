@@ -87,7 +87,7 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
           className={
             (isSent ? 'message-sent' : 'message-received') +
             ' w-full relative ' +
-            (message.reactions.length > 0 ? ' pb-5' : '')
+            (message.reactions.length > 0 ? ' pb-7' : '')
           }
         >
           {message.type === 'text' && (
@@ -114,22 +114,40 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
           )}
 
           {/* Reactions tucked inside bubble bottom corner */}
-          {message.reactions.length > 0 && (
-            <div
-              className={
-                'absolute -bottom-2 flex gap-1 ' + (isSent ? 'left-2' : 'right-2')
-              }
-            >
-              {message.reactions.map((reaction, idx) => (
-                <span
-                  key={idx}
-                  className="text-xs bg-primary-900/70 px-2 py-0.5 rounded-full border border-primary-800/60 shadow"
+          {message.reactions.length > 0 && (() => {
+            const grouped = message.reactions.reduce<Record<string, number>>((acc, r) => {
+              acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+              return acc;
+            }, {});
+            const entries = Object.entries(grouped);
+            return (
+              <div
+                className={
+                  'absolute -bottom-2 max-w-[85%] ' +
+                  (isSent ? 'left-2' : 'right-2')
+                }
+              >
+                <div
+                  className={
+                    'inline-flex flex-wrap items-center gap-1 px-1.5 py-1 rounded-xl ' +
+                    'bg-primary-950/50 border border-primary-800/40 backdrop-blur-sm shadow'
+                  }
                 >
-                  {reaction.emoji}
-                </span>
-              ))}
-            </div>
-          )}
+                  {entries.map(([emoji, count]) => (
+                    <span
+                      key={emoji}
+                      className="text-xs px-1.5 py-0.5 rounded-full flex items-center bg-primary-900/20"
+                    >
+                      <span className="leading-none">{emoji}</span>
+                      {count > 1 && (
+                        <span className="ml-1 text-[10px] leading-none opacity-80">{count}</span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Metadata */}

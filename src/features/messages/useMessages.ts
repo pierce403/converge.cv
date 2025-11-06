@@ -153,15 +153,37 @@ export function useMessages() {
     async (conversationId: string, messageId: string, emoji: string) => {
       if (!identity) return;
       try {
-        await getXmtpClient().sendReaction(conversationId, messageId, emoji, 'added', 'unicode');
-        // Optimistically update local store
+        const mySenders = [identity.inboxId?.toLowerCase(), identity.address?.toLowerCase()].filter(Boolean);
         const current = messagesByConversation[conversationId] || [];
         const idx = current.findIndex((m) => m.id === messageId);
+        const now = Date.now();
+        let alreadyReacted = false;
         if (idx >= 0) {
           const msg = current[idx];
-          updateMessage(messageId, {
-            reactions: [...(msg.reactions || []), { emoji, sender: identity.address, timestamp: Date.now() }],
-          });
+          alreadyReacted = (msg.reactions || []).some(
+            (r) => r.emoji === emoji && mySenders.includes(r.sender?.toLowerCase?.())
+          );
+        }
+
+        if (alreadyReacted) {
+          // Toggle off: send removal and optimistically remove
+          await getXmtpClient().sendReaction(conversationId, messageId, emoji, 'removed', 'unicode');
+          if (idx >= 0) {
+            const msg = current[idx];
+            const filtered = (msg.reactions || []).filter(
+              (r) => !(r.emoji === emoji && mySenders.includes(r.sender?.toLowerCase?.()))
+            );
+            updateMessage(messageId, { reactions: filtered });
+          }
+        } else {
+          await getXmtpClient().sendReaction(conversationId, messageId, emoji, 'added', 'unicode');
+          // Optimistically add
+          if (idx >= 0) {
+            const msg = current[idx];
+            const next = [...(msg.reactions || [])];
+            next.push({ emoji, sender: identity.address, timestamp: now });
+            updateMessage(messageId, { reactions: next });
+          }
         }
       } catch (e) {
         console.warn('Failed to send reaction:', e);
