@@ -25,6 +25,7 @@
     "@xmtp/content-type-reaction": "^2.0.2",
     "@xmtp/content-type-reply": "^2.0.2",
     "@xmtp/content-type-read-receipt": "^2.0.2",
+    "@xmtp/content-type-group-updated": "^2.0.2",
     "@xmtp/content-type-remote-attachment": "^2.0.2",
     "@xmtp/content-type-text": "^2.0.2",
     "@xmtp/proto": "^3.73.0",

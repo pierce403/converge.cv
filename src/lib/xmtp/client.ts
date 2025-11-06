@@ -24,6 +24,7 @@ import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
 import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-read-receipt';
 import { RemoteAttachmentCodec } from '@xmtp/content-type-remote-attachment';
 import { ContentTypeText } from '@xmtp/content-type-text';
+import { GroupUpdatedCodec } from '@xmtp/content-type-group-updated';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
 
@@ -119,6 +120,46 @@ export class XmtpClient {
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
   private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
+
+  private formatGroupUpdatedLabel(payload: unknown): string | null {
+    try {
+      const any = payload as Record<string, unknown>;
+      const added = (any['addedInboxes'] as Array<{ inboxId: string }> | undefined) || [];
+      const removed = (any['removedInboxes'] as Array<{ inboxId: string }> | undefined) || [];
+      const changes = (any['metadataFieldChanges'] as Array<{ fieldName: string; newValue?: string }> | undefined) || [];
+      const who = (any['initiatedByInboxId'] as string | undefined) || '';
+      const short = (id: string) => (id.length > 10 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id);
+      if (added.length > 0) {
+        const list = added.map((i) => short(i.inboxId)).join(', ');
+        return `${short(who)} added ${list} to the group`;
+      }
+      if (removed.length > 0) {
+        const list = removed.map((i) => short(i.inboxId)).join(', ');
+        return `${short(who)} removed ${list} from the group`;
+      }
+      if (changes.length > 0) {
+        const friendly = changes
+          .map((c) => {
+            const field =
+              c.fieldName === 'group_name'
+                ? 'name'
+                : c.fieldName === 'description'
+                ? 'description'
+                : c.fieldName === 'group_image_url_square'
+                ? 'image'
+                : c.fieldName;
+            return c.newValue && c.newValue !== ''
+              ? `${field} to "${String(c.newValue).slice(0, 80)}"`
+              : `${field}`;
+          })
+          .join(', ');
+        return `${short(who)} changed ${friendly}`;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
 
   /**
    * Best-effort extraction of a content type identifier from a decoded/encoded message object.
@@ -946,6 +987,7 @@ export class XmtpClient {
           new ReplyCodec(),
           new ReadReceiptCodec(),
           new RemoteAttachmentCodec(),
+          new GroupUpdatedCodec(),
         ],
       });
 
@@ -1168,6 +1210,7 @@ export class XmtpClient {
           new ReplyCodec(),
           new ReadReceiptCodec(),
           new RemoteAttachmentCodec(),
+          new GroupUpdatedCodec(),
         ],
       });
       console.log('[XMTP] probeIdentity: Probe client created successfully');
@@ -1414,7 +1457,9 @@ export class XmtpClient {
             }
             // Treat non-text content types in history too
             try {
-              const isReadReceipt = !!typeId && typeId.toLowerCase().includes('read') && typeId.toLowerCase().includes('receipt');
+              const lowerType = (typeId || '').toLowerCase();
+              const isReadReceipt = lowerType.includes('read') && lowerType.includes('receipt');
+              const isGroupUpdated = lowerType.includes('group') && lowerType.includes('updated');
               if (isReadReceipt) {
                 const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
                 try {
@@ -1429,6 +1474,29 @@ export class XmtpClient {
                   );
                 } catch (err) {
                   // ignore
+                }
+                continue;
+              }
+              if (isGroupUpdated) {
+                try {
+                  const label = this.formatGroupUpdatedLabel((m as unknown as Record<string, unknown>)['content']);
+                  const body = label || 'Group updated';
+                  const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:system', {
+                      detail: {
+                        conversationId: m.conversationId,
+                        system: {
+                          id: `sys_${m.id}`,
+                          senderInboxId: m.senderInboxId,
+                          body,
+                          sentAt: ts,
+                        },
+                      },
+                    })
+                  );
+                } catch (err) {
+                  console.warn('[XMTP] Failed to dispatch group-updated system event', err);
                 }
                 continue;
               }
@@ -1590,7 +1658,9 @@ export class XmtpClient {
               const typeId = this.getContentTypeIdFromAny(message);
               const contentIsString = typeof message.content === 'string';
               const looksText = contentIsString && (!typeId || this.labelForContentType(typeId) === 'Text');
-              const isReadReceipt = !!typeId && typeId.toLowerCase().includes('read') && typeId.toLowerCase().includes('receipt');
+              const lowerType = (typeId || '').toLowerCase();
+              const isReadReceipt = lowerType.includes('read') && lowerType.includes('receipt');
+              const isGroupUpdated = lowerType.includes('group') && lowerType.includes('updated');
               if (isReadReceipt) {
                 // Do not display as a bubble or system line; dispatch a dedicated event to update UI statuses
                 const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
@@ -1606,6 +1676,29 @@ export class XmtpClient {
                   );
                 } catch (err) {
                   // ignore
+                }
+                continue;
+              }
+              if (isGroupUpdated) {
+                try {
+                  const label = this.formatGroupUpdatedLabel((message as unknown as Record<string, unknown>)['content']);
+                  const body = label || 'Group updated';
+                  const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:system', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        system: {
+                          id: `sys_${message.id}`,
+                          senderInboxId: message.senderInboxId,
+                          body,
+                          sentAt: ts,
+                        },
+                      },
+                    })
+                  );
+                } catch (err) {
+                  console.warn('[XMTP] Failed to dispatch group-updated system event', err);
                 }
                 continue;
               }

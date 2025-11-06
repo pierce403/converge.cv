@@ -23,6 +23,9 @@ importers:
       '@xmtp/browser-sdk':
         specifier: ^5.0.1
         version: 5.0.1
+      '@xmtp/content-type-group-updated':
+        specifier: ^2.0.2
+        version: 2.0.2
       '@xmtp/content-type-primitives':
         specifier: ^2.0.2
         version: 2.0.2
