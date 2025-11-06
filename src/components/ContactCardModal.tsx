@@ -24,6 +24,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const isContact = useContactStore((s) => s.isContact);
   const [showQR, setShowQR] = useState(false);
   const [preferredName, setPreferredName] = useState(contact.preferredName || '');
+  const [avatarUrlState, setAvatarUrlState] = useState<string | undefined>(
+    contact.preferredAvatar || contact.avatar
+  );
   const [notes, setNotes] = useState(contact.notes || '');
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -35,6 +38,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   useEffect(() => {
     setPreferredName(contact.preferredName || '');
     setNotes(contact.notes || '');
+    setAvatarUrlState(contact.preferredAvatar || contact.avatar);
     // Load existing inbox state if available
     if (contact.inboxId) {
       loadInboxState(contact.inboxId);
@@ -96,7 +100,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       try {
         const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
         if (targetInbox) {
+          console.log('[ContactCardModal] Refreshing profile for', targetInbox);
           const profile = await xmtp.fetchInboxProfile(String(targetInbox));
+          console.log('[ContactCardModal] fetchInboxProfile result:', profile);
           await upsertContactProfile({
             inboxId: profile.inboxId,
             displayName: profile.displayName,
@@ -107,6 +113,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             source: 'inbox',
             metadata: contact,
           });
+          // Reflect updates immediately in this modal
+          if (profile.displayName) setPreferredName(profile.displayName);
+          if (profile.avatarUrl) setAvatarUrlState(profile.avatarUrl);
         }
       } catch (e) {
         // Profile fetch failures are non-fatal for refresh
@@ -221,10 +230,10 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   };
 
   // Determine display name with priority
-  const displayName = contact.preferredName || contact.name;
+  const displayName = preferredName || contact.name;
   
   // Determine avatar (custom > Farcaster)
-  const avatarUrl = contact.avatar;
+  const avatarUrl = avatarUrlState;
 
   return (
     <>
