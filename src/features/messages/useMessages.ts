@@ -106,7 +106,7 @@ export function useMessages() {
         const message: Message = {
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           conversationId,
-          sender: identity.address,
+          sender: identity.inboxId ?? identity.address,
           sentAt: Date.now(),
           type: 'text',
           body: content,
@@ -125,19 +125,31 @@ export function useMessages() {
         // Send via XMTP
         try {
           const xmtp = getXmtpClient();
-          if (opts?.replyToId) {
-            await xmtp.sendReply(conversationId, opts.replyToId, content);
-          } else {
-            await xmtp.sendMessage(conversationId, content);
-          }
+          const sentMessage = opts?.replyToId
+            ? await xmtp.sendReply(conversationId, opts.replyToId, content)
+            : await xmtp.sendMessage(conversationId, content);
 
-          // Update status to sent
-          message.status = 'sent';
-          updateMessage(message.id, { status: 'sent' });
-          await storage.updateMessageStatus(message.id, 'sent');
+          const resolvedId = sentMessage.id || message.id;
+          const resolvedSentAt = sentMessage.sentAt ?? message.sentAt;
+          const finalStatus: Message['status'] = sentMessage.isLocalFallback ? 'pending' : 'sent';
+          const finalMessage: Message = {
+            ...message,
+            id: resolvedId,
+            sentAt: resolvedSentAt,
+            status: finalStatus,
+          };
+
+          if (resolvedId !== message.id) {
+            removeMessage(message.id);
+            await storage.deleteMessage(message.id);
+            addMessage(conversationId, finalMessage);
+            await storage.putMessage(finalMessage);
+          } else {
+            updateMessage(resolvedId, { status: finalStatus, sentAt: resolvedSentAt });
+            await storage.updateMessageStatus(resolvedId, finalStatus);
+          }
         } catch (xmtpError) {
           console.error('Failed to send via XMTP:', xmtpError);
-          message.status = 'failed';
           updateMessage(message.id, { status: 'failed' });
           await storage.updateMessageStatus(message.id, 'failed');
         }
@@ -153,7 +165,17 @@ export function useMessages() {
         setSending(false);
       }
     },
-    [identity, addMessage, updateMessage, setSending, updateConversation, conversations, upsertContactProfile, isContact]
+    [
+      identity,
+      addMessage,
+      updateMessage,
+      removeMessage,
+      setSending,
+      updateConversation,
+      conversations,
+      upsertContactProfile,
+      isContact,
+    ]
   );
 
   /**
@@ -191,7 +213,7 @@ export function useMessages() {
           if (idx >= 0) {
             const msg = current[idx];
             const next = [...(msg.reactions || [])];
-            next.push({ emoji, sender: identity.address, timestamp: now });
+            next.push({ emoji, sender: identity.inboxId ?? identity.address, timestamp: now });
             updateMessage(messageId, { reactions: next });
           }
         }
