@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
-import { useConversationStore, useContactStore, useMessageStore } from '@/lib/stores';
+import { useAuthStore, useConversationStore, useContactStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
@@ -13,14 +13,97 @@ import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
+import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
 // Do not enrich from ENS/Farcaster for avatars or names. Use XMTP network data only.
 
 
 export function Layout() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const identity = useAuthStore((state) => state.identity);
   const { addConversation, updateConversation } = useConversationStore();
   const { receiveMessage } = useMessages();
   const loadContacts = useContactStore((state) => state.loadContacts);
+  const [showPersonalizationReminder, setShowPersonalizationReminder] = useState(false);
+
+  const missingDisplayName = Boolean(identity && !identity.displayName?.trim());
+  const missingAvatar = Boolean(identity && !identity.avatar?.trim());
+
+  const readReminderPrefs = useCallback((): { lastNagAt?: number; dismissedForever?: boolean } => {
+    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+      return {};
+    }
+    try {
+      const raw = window.localStorage.getItem('personalization-reminder');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as { lastNagAt?: number; dismissedForever?: boolean };
+      return {
+        lastNagAt: typeof parsed.lastNagAt === 'number' ? parsed.lastNagAt : undefined,
+        dismissedForever: parsed.dismissedForever === true,
+      };
+    } catch (error) {
+      console.warn('[Layout] Failed to parse personalization reminder prefs:', error);
+      return {};
+    }
+  }, []);
+
+  const updateReminderPrefs = useCallback(
+    (updates: { lastNagAt?: number; dismissedForever?: boolean }) => {
+      if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+        return;
+      }
+      const existing = readReminderPrefs();
+      const next = { ...existing, ...updates };
+      try {
+        window.localStorage.setItem('personalization-reminder', JSON.stringify(next));
+      } catch (error) {
+        console.warn('[Layout] Failed to persist personalization reminder prefs:', error);
+      }
+    },
+    [readReminderPrefs]
+  );
+
+  useEffect(() => {
+    if (!identity) {
+      setShowPersonalizationReminder(false);
+      return;
+    }
+
+    if (!missingDisplayName && !missingAvatar) {
+      setShowPersonalizationReminder(false);
+      return;
+    }
+
+    const prefs = readReminderPrefs();
+    if (prefs.dismissedForever) {
+      setShowPersonalizationReminder(false);
+      return;
+    }
+
+    const now = Date.now();
+    const lastNagAt = prefs.lastNagAt ?? 0;
+    const oneDayMs = 24 * 60 * 60 * 1000;
+
+    if (!lastNagAt || now - lastNagAt >= oneDayMs) {
+      setShowPersonalizationReminder(true);
+    }
+  }, [identity, missingAvatar, missingDisplayName, readReminderPrefs]);
+
+  const handleRemindLater = useCallback(() => {
+    updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: false });
+    setShowPersonalizationReminder(false);
+  }, [updateReminderPrefs]);
+
+  const handleDismissForever = useCallback(() => {
+    updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: true });
+    setShowPersonalizationReminder(false);
+  }, [updateReminderPrefs]);
+
+  const handleGoToSettings = useCallback(() => {
+    updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: false });
+    setShowPersonalizationReminder(false);
+    navigate('/settings');
+  }, [navigate, updateReminderPrefs]);
 
   // Save route for persistence across refreshes
   useEffect(() => {
@@ -439,7 +522,7 @@ export function Layout() {
   }, [connectionStatus]);
 
   return (
-    <div className="flex flex-col h-screen text-primary-50">
+    <div className="flex h-screen flex-col text-primary-50">
       {/* Sync progress bar */}
       <SyncProgressBar />
       <ToastContainer />
@@ -517,6 +600,15 @@ export function Layout() {
           <DebugLogPanel />
         </div>
       </nav>
+      {showPersonalizationReminder && identity && (missingDisplayName || missingAvatar) && (
+        <PersonalizationReminderModal
+          missingDisplayName={missingDisplayName}
+          missingAvatar={missingAvatar}
+          onRemindLater={handleRemindLater}
+          onDismissForever={handleDismissForever}
+          onGoToSettings={handleGoToSettings}
+        />
+      )}
     </div>
   );
 }
