@@ -803,12 +803,18 @@ export class XmtpClient {
         }
         if (isEthereumAddress(trimmed)) {
           try {
-            identifierPayloads.push(this.identifierFromAddress(trimmed));
+            const with0x = this.normalizeEthereumAddress(trimmed).toLowerCase();
+            const identifier: Identifier = {
+              identifier: with0x, // keep 0x prefix for group.addMembersByIdentifiers
+              identifierKind: 'Ethereum',
+            };
+            identifierPayloads.push(identifier);
           } catch (error) {
             console.warn('[XMTP] Skipping invalid Ethereum address during addMembers:', trimmed, error);
           }
         } else {
-          inboxIds.push(trimmed.toLowerCase());
+          // Assume value is an inboxId; do not force case changes
+          inboxIds.push(trimmed);
         }
       }
 

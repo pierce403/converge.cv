@@ -402,15 +402,16 @@ export function useConversations() {
           return;
         }
 
-        const existingMembers = new Set((conversation.members || []).map((member) => member.toLowerCase()));
+        const existingIdentifiers = new Set<string>();
+        (conversation.members || []).forEach((m) => existingIdentifiers.add(m.toLowerCase()));
+        (conversation.memberInboxes || []).forEach((m) => existingIdentifiers.add(m.toLowerCase()));
 
         const normalizedCandidates = newMembers
           .map((member) => member.trim())
           .filter((member) => member.length > 0)
-          .map(normalizeIdentifier)
-          .filter((member) => isEthereumAddress(member));
+          .map(normalizeIdentifier);
 
-        const membersToAdd = normalizedCandidates.filter((member) => !existingMembers.has(member.toLowerCase()));
+        const membersToAdd = normalizedCandidates.filter((member) => !existingIdentifiers.has(member.toLowerCase()));
 
         if (membersToAdd.length === 0) {
           console.info('No new members to add for conversation', conversationId);
