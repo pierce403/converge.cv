@@ -19,7 +19,11 @@ import { logNetworkEvent, useContactStore } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
-import type { Conversation, GroupPermissionsState } from '@/types';
+import type {
+  Conversation,
+  GroupPermissionPolicyCode,
+  GroupPermissionsState,
+} from '@/types';
 import { getAddress } from 'viem';
 import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
 import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
@@ -73,6 +77,19 @@ export interface XmtpMessage {
 
 export type MessageCallback = (message: XmtpMessage) => void;
 export type Unsubscribe = () => void;
+
+function isGroupPermissionPolicyCode(value: number): value is GroupPermissionPolicyCode {
+  return value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 5;
+}
+
+function toGroupPermissionPolicyCode(value: number | undefined): GroupPermissionPolicyCode {
+  if (typeof value === 'number' && isGroupPermissionPolicyCode(value)) {
+    return value;
+  }
+
+  console.warn('[XMTP] Received unknown group permission policy code:', value);
+  return 0;
+}
 
 export interface GroupMemberSummary {
   inboxId: string;
@@ -762,14 +779,20 @@ export class XmtpClient {
           permissions = {
             policyType: rawPermissions.policyType as GroupPermissionsState['policyType'],
             policySet: {
-              addMemberPolicy: rawPermissions.policySet.addMemberPolicy,
-              removeMemberPolicy: rawPermissions.policySet.removeMemberPolicy,
-              addAdminPolicy: rawPermissions.policySet.addAdminPolicy,
-              removeAdminPolicy: rawPermissions.policySet.removeAdminPolicy,
-              updateGroupDescriptionPolicy: rawPermissions.policySet.updateGroupDescriptionPolicy,
-              updateGroupImageUrlSquarePolicy: rawPermissions.policySet.updateGroupImageUrlSquarePolicy,
-              updateGroupNamePolicy: rawPermissions.policySet.updateGroupNamePolicy,
-              updateMessageDisappearingPolicy: rawPermissions.policySet.updateMessageDisappearingPolicy,
+              addMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addMemberPolicy),
+              removeMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeMemberPolicy),
+              addAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addAdminPolicy),
+              removeAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeAdminPolicy),
+              updateGroupDescriptionPolicy: toGroupPermissionPolicyCode(
+                rawPermissions.policySet.updateGroupDescriptionPolicy,
+              ),
+              updateGroupImageUrlSquarePolicy: toGroupPermissionPolicyCode(
+                rawPermissions.policySet.updateGroupImageUrlSquarePolicy,
+              ),
+              updateGroupNamePolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.updateGroupNamePolicy),
+              updateMessageDisappearingPolicy: toGroupPermissionPolicyCode(
+                rawPermissions.policySet.updateMessageDisappearingPolicy,
+              ),
             },
           };
         }
