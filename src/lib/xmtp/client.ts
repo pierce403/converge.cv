@@ -142,6 +142,46 @@ export class XmtpClient {
   private messageStreamCloser: { close: () => void } | null = null;
   private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
 
+  // Basic 429/rate-limit detection
+  private isRateLimitError(err: unknown): boolean {
+    try {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      return /\b429\b/.test(msg) || /rate\s*limit/i.test(msg) || /exceeds rate limit/i.test(msg);
+    } catch {
+      return false;
+    }
+  }
+
+  // Exponential backoff wrapper for XMTP identity/preferences calls that may hit 429
+  private async retryWithBackoff<T>(label: string, fn: () => Promise<T>, opts?: {
+    attempts?: number;
+    initialDelayMs?: number;
+    factor?: number;
+    jitter?: boolean;
+  }): Promise<T> {
+    const attempts = opts?.attempts ?? 5;
+    const factor = opts?.factor ?? 2;
+    const jitter = opts?.jitter ?? true;
+    let delay = opts?.initialDelayMs ?? 500;
+    let lastErr: unknown = undefined;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        if (!this.isRateLimitError(err) || i === attempts - 1) {
+          throw err;
+        }
+        const wait = jitter ? Math.floor(delay * (0.75 + Math.random() * 0.5)) : delay;
+        console.warn(`[XMTP] ${label}: rate limited, retrying in ${wait}ms (attempt ${i + 2}/${attempts})`);
+        await new Promise((res) => setTimeout(res, wait));
+        delay *= factor;
+      }
+    }
+    // Fallback throw (should not reach here due to early return/throw)
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
   private formatGroupUpdatedLabel(payload: unknown): string | null {
     try {
       const any = payload as Record<string, unknown>;
@@ -587,7 +627,7 @@ export class XmtpClient {
 
       if (this.client) {
         try {
-          const latest = await this.client.preferences.getLatestInboxState(normalizedInboxId);
+          const latest = await this.retryWithBackoff('preferences.getLatestInboxState', () => this.client!.preferences.getLatestInboxState(normalizedInboxId));
           if (latest) {
             return buildProfile(latest.identifiers ?? []);
           }
@@ -596,7 +636,7 @@ export class XmtpClient {
         }
 
         try {
-          const states = await this.client.preferences.inboxStateFromInboxIds([normalizedInboxId], true);
+          const states = await this.retryWithBackoff('preferences.inboxStateFromInboxIds', () => this.client!.preferences.inboxStateFromInboxIds([normalizedInboxId], true));
           if (states?.length) {
             return buildProfile(states[0]?.identifiers ?? []);
           }
@@ -608,7 +648,7 @@ export class XmtpClient {
       const { getXmtpUtils } = await import('./utils-singleton');
       const utils = await getXmtpUtils();
       try {
-        const states = await utils.inboxStateFromInboxIds([normalizedInboxId], 'production');
+        const states = await this.retryWithBackoff('utils.inboxStateFromInboxIds', () => utils.inboxStateFromInboxIds([normalizedInboxId], 'production'));
         if (states?.length) {
           const state = states[0] as SafeInboxState;
           return buildProfile(state.identifiers);
@@ -1218,7 +1258,7 @@ export class XmtpClient {
       // Decide whether we must register a new installation
       let mustRegister = shouldRegister;
       try {
-        const preState: SafeInboxState = await client.preferences.inboxState(true);
+        const preState: SafeInboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => client!.preferences.inboxState(true));
         const existing = preState.installations || [];
         const hasOurInstallation = existing.some((inst: unknown) => {
           const id = (inst as { id?: string }).id;
@@ -1375,7 +1415,7 @@ export class XmtpClient {
           isRegistered = true; // inboxId presence is authoritative
           
           try {
-            inboxState = await this.client.preferences.inboxState(true);
+            inboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true));
             console.log('[XMTP] probeIdentity: Fetched inboxState from existing client:', {
               inboxId: inboxState?.inboxId,
               installationCount: inboxState?.installations?.length ?? 0,
@@ -1470,7 +1510,7 @@ export class XmtpClient {
       if (inboxId) {
         try {
           // Force refresh from network to get full inbox state
-          inboxState = await client.preferences.inboxState(true);
+          inboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => client!.preferences.inboxState(true));
           console.log('[XMTP] probeIdentity: fetched inboxState:', {
             inboxId: inboxState?.inboxId,
             hasInstallations: Boolean(inboxState?.installations),
@@ -2429,7 +2469,7 @@ export class XmtpClient {
 
     if (this.client) {
       // Force refresh from network to avoid stale state
-      return await withTimeout(this.client.preferences.inboxState(true));
+      return await withTimeout(this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true)));
     }
 
     if (!this.identity) {
@@ -2446,7 +2486,7 @@ export class XmtpClient {
         identifierKind: 'Ethereum',
       };
 
-      const inboxId = await withTimeout(utils.getInboxIdForIdentifier(identifier, 'production'));
+      const inboxId = await withTimeout(this.retryWithBackoff('utils.getInboxIdForIdentifier', () => utils.getInboxIdForIdentifier(identifier, 'production')));
       if (!inboxId) {
         console.warn('[XMTP] No inbox registered for this identity; returning empty inbox state');
         const stub: SafeInboxState = {
@@ -2459,7 +2499,7 @@ export class XmtpClient {
         return stub;
       }
 
-      const states = (await withTimeout(utils.inboxStateFromInboxIds([inboxId], 'production')))
+      const states = (await withTimeout(this.retryWithBackoff('utils.inboxStateFromInboxIds', () => utils.inboxStateFromInboxIds([inboxId], 'production'))))
         .filter(Boolean);
       // Utils worker doesn't need explicit close; it dies with page lifecycle.
       return states[0];
@@ -2592,10 +2632,10 @@ export class XmtpClient {
       console.log('[XMTP] findInboxId identifier payload:', identifier);
 
       // Directly ask the client for the inbox ID associated to this identifier.
-      const inboxId = await this.client.findInboxIdByIdentifier(
+      const inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        identifier as any
-      );
+          identifier as any
+      ));
 
       if (inboxId) {
         console.log('[XMTP] ✅ Found inbox ID:', inboxId, 'for address:', address);

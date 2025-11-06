@@ -102,7 +102,8 @@ export function GroupSettingsPage() {
   const [isAddingContacts, setIsAddingContacts] = useState(false);
 
   // Group avatar helpers — mirror user avatar flow: accept a file and turn it into a base64 data URL
-  const MAX_AVATAR_DATA_URL_BYTES = 256 * 1024; // keep parity with profile save limit
+  const MAX_AVATAR_DATA_URL_BYTES = 256 * 1024; // user-profile parity
+  const MAX_GROUP_IMAGE_CHARS = 2048; // protocol limit for group metadata field length
 
   const fileToDataUrl = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -112,9 +113,9 @@ export function GroupSettingsPage() {
       reader.readAsDataURL(file);
     });
 
-  const downscaleDataUrlIfNeeded = async (dataUrl: string): Promise<string> => {
+  const downscaleDataUrlIfNeeded = async (dataUrl: string, byteCap = MAX_AVATAR_DATA_URL_BYTES): Promise<string> => {
     try {
-      if (!dataUrl || dataUrl.length <= MAX_AVATAR_DATA_URL_BYTES) return dataUrl;
+      if (!dataUrl || dataUrl.length <= byteCap) return dataUrl;
       // Draw into canvas and downscale to fit within 512x512; adjust quality if still large
       const img = new Image();
       const loaded: Promise<void> = new Promise((res, rej) => {
@@ -135,7 +136,7 @@ export function GroupSettingsPage() {
       const qualities = [0.8, 0.7, 0.6, 0.5];
       for (const q of qualities) {
         const out = canvas.toDataURL('image/jpeg', q);
-        if (out.length <= MAX_AVATAR_DATA_URL_BYTES) return out;
+        if (out.length <= byteCap) return out;
       }
       // If still large, return the last attempt
       return canvas.toDataURL('image/jpeg', 0.5);
@@ -148,7 +149,42 @@ export function GroupSettingsPage() {
     try {
       if (!file) return;
       const dataUrl = await fileToDataUrl(file);
-      const sized = await downscaleDataUrlIfNeeded(dataUrl);
+      // First, downscale to user-profile cap (helps with huge images)
+      let sized = await downscaleDataUrlIfNeeded(dataUrl, MAX_AVATAR_DATA_URL_BYTES);
+      // Then, if still over the protocol's group metadata limit (character count), aggressively reduce
+      if (sized.length > MAX_GROUP_IMAGE_CHARS) {
+        // Iteratively shrink canvas max dimension and quality until we fit or give up
+        const img = new Image();
+        await new Promise<void>((res, rej) => {
+          img.onload = () => res();
+          img.onerror = () => rej(new Error('Failed to load image'));
+          img.src = sized;
+        });
+        let dim = 128; // start small for group meta
+        let finalOut = sized;
+        while (dim >= 32 && finalOut.length > MAX_GROUP_IMAGE_CHARS) {
+          const canvas = document.createElement('canvas');
+          const ratio = Math.min(1, dim / Math.max(img.width, img.height));
+          canvas.width = Math.max(1, Math.floor(img.width * ratio));
+          canvas.height = Math.max(1, Math.floor(img.height * ratio));
+          const ctx2 = canvas.getContext('2d');
+          if (!ctx2) break;
+          ctx2.drawImage(img, 0, 0, canvas.width, canvas.height);
+          for (const q of [0.5, 0.4, 0.3, 0.25]) {
+            const out = canvas.toDataURL('image/jpeg', q);
+            if (out.length <= MAX_GROUP_IMAGE_CHARS) {
+              finalOut = out;
+              break;
+            }
+            finalOut = out;
+          }
+          dim = Math.floor(dim / 2);
+        }
+        if (finalOut.length > MAX_GROUP_IMAGE_CHARS) {
+          setError('Avatar too large for group metadata field. Please use a smaller image or paste a hosted URL (<2048 chars).');
+        }
+        sized = finalOut;
+      }
       setGroupImage(sized);
     } catch (e) {
       console.warn('[GroupSettings] Failed to process avatar image:', e);
