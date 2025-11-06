@@ -28,6 +28,7 @@ export function InstallationsSettings() {
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [isFetchingStatuses, setIsFetchingStatuses] = useState(false);
+  const [isForceRecovering, setIsForceRecovering] = useState(false);
 
   const loadInstallations = async () => {
     setIsLoading(true);
@@ -114,6 +115,27 @@ export function InstallationsSettings() {
       setError(err instanceof Error ? err.message : 'Failed to refresh statuses');
     } finally {
       setIsFetchingStatuses(false);
+    }
+  };
+
+  const forceRecover = async () => {
+    if (!confirm('Force recover will delete older installations from the XMTP network to make room for this device. Continue?')) {
+      return;
+    }
+    setIsForceRecovering(true);
+    setError(null);
+    try {
+      const xmtp = getXmtpClient();
+      // Try to keep the newest 1 installation by default
+      const result = await xmtp.forceRevokeOldestInstallations(1);
+      await loadInstallations();
+      const msg = result.revoked.length > 0 ? `Revoked ${result.revoked.length} installation(s)` : 'No installations revoked';
+      try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg })); } catch { /* ignore */ }
+    } catch (err) {
+      console.error('[Installations] Force recover failed:', err);
+      setError(err instanceof Error ? err.message : 'Force recover failed');
+    } finally {
+      setIsForceRecovering(false);
     }
   };
 
@@ -239,6 +261,14 @@ export function InstallationsSettings() {
             All Installations ({installations.length}/10)
           </h3>
           <div className="flex items-center gap-3">
+            <button
+              onClick={forceRecover}
+              disabled={isForceRecovering}
+              className="text-sm text-yellow-300 hover:text-yellow-200 disabled:opacity-50"
+              title="Delete older installations to recover from 10/10 limit"
+            >
+              {isForceRecovering ? 'Force Recover…' : 'Force Recover'}
+            </button>
             <button
               onClick={loadInstallations}
               disabled={isLoading}

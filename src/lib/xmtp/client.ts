@@ -161,6 +161,69 @@ export class XmtpClient {
     return null;
   }
 
+  private hexToBytes(hex: string): Uint8Array | null {
+    try {
+      const clean = hex.startsWith('0x') || hex.startsWith('0X') ? hex.slice(2) : hex;
+      if (clean.length % 2 !== 0) return null;
+      const out = new Uint8Array(clean.length / 2);
+      for (let i = 0; i < clean.length; i += 2) {
+        out[i / 2] = parseInt(clean.slice(i, i + 2), 16);
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Force revoke oldest installations without registering a new one.
+   * Attempts a temporary management client (disableAutoRegister) to avoid hitting the 10/10 ceiling.
+   * Keeps the most recent `keepLatest` installations (default 1) and revokes the rest.
+   */
+  async forceRevokeOldestInstallations(keepLatest = 1): Promise<{ revoked: string[] }> {
+    if (!this.identity) throw new Error('No identity available');
+    const signer = await this.createSigner(this.identity);
+    // Create a temporary client without auto-registering a new installation
+    // so we can manage preferences/installations even when 10/10 is reached.
+    const temp = await Client.create(signer, {
+      env: 'production',
+      loggingLevel: 'warn',
+      structuredLogging: false,
+      performanceLogging: false,
+      debugEventsEnabled: false,
+      disableAutoRegister: true,
+    });
+    try {
+      const state = await temp.preferences.inboxState(true);
+      const list = (state.installations || []) as unknown as Array<{
+        id?: string;
+        clientTimestampNs?: bigint;
+        [k: string]: unknown;
+      }>;
+      if (!list.length) return { revoked: [] };
+      // Newest first
+      list.sort((a, b) => (a.clientTimestampNs && b.clientTimestampNs && a.clientTimestampNs > b.clientTimestampNs ? -1 : 1));
+      const toRevoke = list.slice(Math.max(keepLatest, 0));
+      const bytes: Uint8Array[] = [];
+      const revokedIds: string[] = [];
+      for (const inst of toRevoke) {
+        const rawBytes = (inst as unknown as { bytes?: Uint8Array; installationId?: Uint8Array; idBytes?: Uint8Array }).bytes
+          || (inst as unknown as { installationId?: Uint8Array }).installationId
+          || (inst as unknown as { idBytes?: Uint8Array }).idBytes
+          || (typeof inst.id === 'string' ? this.hexToBytes(inst.id) : null);
+        if (rawBytes) {
+          bytes.push(rawBytes);
+          if (typeof inst.id === 'string') revokedIds.push(inst.id);
+        }
+      }
+      if (!bytes.length) throw new Error('No revocable installation bytes found');
+      await temp.revokeInstallations(bytes);
+      return { revoked: revokedIds };
+    } finally {
+      try { await temp.close(); } catch { /* ignore */ }
+    }
+  }
+
   /**
    * Best-effort extraction of a content type identifier from a decoded/encoded message object.
    * Handles both decoded messages (dm.messages()) and raw wasm messages (getMessageById()).
