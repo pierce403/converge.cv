@@ -546,11 +546,17 @@ export function useConversations() {
           description: updates.groupDescription,
         });
 
-        if (!details) {
-          return null;
-        }
+        // Build authoritative updates if available
+        const authoritative = details ? groupDetailsToConversationUpdates(details) : {};
 
-        const mergedUpdates = groupDetailsToConversationUpdates(details);
+        // Apply optimistic fields we just set if SDK hasn't reflected them yet
+        const mergedUpdates: Partial<Conversation> = {
+          ...authoritative,
+          groupName: updates.groupName ?? authoritative.groupName,
+          groupImage: updates.groupImage ?? authoritative.groupImage,
+          groupDescription: updates.groupDescription ?? authoritative.groupDescription,
+        };
+
         await updateConversationAndPersist(conversationId, mergedUpdates);
         return mergedUpdates;
       } catch (error) {
