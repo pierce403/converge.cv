@@ -17,7 +17,7 @@ export function ConversationView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [showUserInfo, setShowUserInfo] = useState(false);
+  const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
 
   const { conversations } = useConversations();
@@ -63,6 +63,10 @@ export function ConversationView() {
       loadMessages(id);
     }
   }, [id, loadMessages]);
+
+  useEffect(() => {
+    setContactForModal(null);
+  }, [id]);
 
   useEffect(() => {
     loadContacts();
@@ -273,6 +277,46 @@ export function ConversationView() {
     return map;
   }, [conversation, contactsByInboxId, contactsByAddress]);
 
+  const inboxIdForActions = contact?.inboxId ?? conversation?.peerId ?? '';
+  const conversationContact = useMemo(() => {
+    if (!conversation || conversation.isGroup) {
+      return undefined;
+    }
+    if (contact) {
+      return contact;
+    }
+    if (!inboxIdForActions) {
+      return undefined;
+    }
+    const normalizedInbox = inboxIdForActions.toLowerCase();
+    const fallbackAddress = defaultContactInfo?.address?.toLowerCase();
+    const fallbackName =
+      conversationDisplayName ||
+      defaultContactInfo?.name ||
+      formatIdentifier(normalizedInbox);
+    return {
+      inboxId: normalizedInbox,
+      name: fallbackName,
+      avatar: defaultContactInfo?.avatar,
+      preferredAvatar: defaultContactInfo?.avatar,
+      preferredName: defaultContactInfo?.name,
+      createdAt: Date.now(),
+      primaryAddress: fallbackAddress,
+      addresses: fallbackAddress ? [fallbackAddress] : [],
+      identities: fallbackAddress
+        ? [
+            {
+              identifier: fallbackAddress,
+              kind: 'Ethereum',
+              isPrimary: true,
+            },
+          ]
+        : [],
+      isInboxOnly: true,
+      source: 'inbox',
+    } as ContactType;
+  }, [conversation, conversationDisplayName, contact, inboxIdForActions, defaultContactInfo]);
+
   if (!conversation) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -286,17 +330,44 @@ export function ConversationView() {
     );
   }
 
-  const inboxIdForActions = contact?.inboxId ?? conversation.peerId;
-  const contactForModal: ContactType = contact ?? ({
-    inboxId: inboxIdForActions.toLowerCase(),
-    name: conversationDisplayName,
-    createdAt: Date.now(),
-    primaryAddress: undefined,
-    addresses: [],
-    identities: [],
-    isInboxOnly: true,
-    source: 'inbox',
-  } as ContactType);
+  const resolveContactForSender = (senderLower: string | undefined): ContactType | null => {
+    if (!senderLower) {
+      return null;
+    }
+    const existingByInbox = contactsByInboxId.get(senderLower);
+    if (existingByInbox) {
+      return existingByInbox;
+    }
+    const existingByAddress = contactsByAddress.get(senderLower);
+    if (existingByAddress) {
+      return existingByAddress;
+    }
+    const profile = groupMemberProfiles.get(senderLower);
+    const addressLower = profile?.address?.toLowerCase();
+    const displayName = profile?.displayName || formatIdentifier(addressLower ?? senderLower);
+    const avatar = profile?.avatar;
+    return {
+      inboxId: senderLower,
+      name: displayName,
+      avatar,
+      preferredAvatar: avatar,
+      preferredName: profile?.displayName,
+      createdAt: Date.now(),
+      primaryAddress: addressLower,
+      addresses: addressLower ? [addressLower] : [],
+      identities: addressLower
+        ? [
+            {
+              identifier: addressLower,
+              kind: 'Ethereum',
+              isPrimary: true,
+            },
+          ]
+        : [],
+      isInboxOnly: true,
+      source: 'inbox',
+    } as ContactType;
+  };
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
     if (isDisplayableImageSrc(avatar)) {
@@ -363,14 +434,22 @@ export function ConversationView() {
         ) : (
           <>
             <button
-              onClick={() => setShowUserInfo(true)}
+              onClick={() => {
+                if (conversationContact) {
+                  setContactForModal(conversationContact);
+                }
+              }}
               className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
             >
               {renderAvatar(conversationAvatar, inboxIdForActions)}
             </button>
 
             <button
-              onClick={() => setShowUserInfo(true)}
+              onClick={() => {
+                if (conversationContact) {
+                  setContactForModal(conversationContact);
+                }
+              }}
               className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
             >
               <div className="flex items-center gap-2">
@@ -423,11 +502,12 @@ export function ConversationView() {
             {messages.map((message: Message) => {
               const senderLower = message.sender?.toLowerCase?.();
               let senderInfo: { displayName?: string; avatarUrl?: string; fallback?: string } | undefined;
+              let isSelf = false;
 
               if (conversation.isGroup && senderLower) {
                 const myInboxLower = identity?.inboxId?.toLowerCase();
                 const myAddressLower = identity?.address?.toLowerCase();
-                const isSelf =
+                isSelf =
                   (myInboxLower && senderLower === myInboxLower) ||
                   (myAddressLower && senderLower === myAddressLower);
 
@@ -469,6 +549,17 @@ export function ConversationView() {
                 }
               }
 
+              const senderContact =
+                conversation.isGroup && senderLower && !isSelf
+                  ? resolveContactForSender(senderLower)
+                  : null;
+
+              const handleAvatarClick = senderContact
+                ? () => {
+                    setContactForModal(senderContact);
+                  }
+                : undefined;
+
               return (
                 <MessageBubble
                   key={message.id}
@@ -477,6 +568,7 @@ export function ConversationView() {
                   senderInfo={senderInfo}
                   showAvatar={Boolean(conversation.isGroup)}
                   showSenderLabel={Boolean(conversation.isGroup)}
+                  onSenderClick={handleAvatarClick}
                 />
               );
             })}
@@ -489,8 +581,8 @@ export function ConversationView() {
       <MessageComposer onSend={handleSend} replyToMessage={replyTo ?? undefined} onCancelReply={() => setReplyTo(null)} onSent={() => setReplyTo(null)} />
 
       {/* User info modal */}
-      {showUserInfo && (
-        <ContactCardModal contact={contactForModal} onClose={() => setShowUserInfo(false)} />
+      {contactForModal && (
+        <ContactCardModal contact={contactForModal} onClose={() => setContactForModal(null)} />
       )}
     </div>
   );

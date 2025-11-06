@@ -1754,15 +1754,6 @@ export class XmtpClient {
                     avatarUrl: obj.avatarUrl,
                     source: 'inbox',
                   });
-                  try {
-                    window.dispatchEvent(
-                      new CustomEvent('ui:toast', {
-                        detail: `Profile updated for ${senderInboxId}`,
-                      })
-                    );
-                  } catch (err) {
-                    console.warn('[UI] Toast dispatch failed', err);
-                  }
                   logNetworkEvent({
                     direction: 'inbound',
                     event: 'profile:received',
