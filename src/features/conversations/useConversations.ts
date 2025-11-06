@@ -3,6 +3,7 @@
  */
 
 import { useCallback, useEffect } from 'react';
+import { PermissionPolicy, PermissionUpdateType } from '@xmtp/browser-sdk';
 import { useConversationStore, useAuthStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupDetails } from '@/lib/xmtp';
@@ -56,6 +57,12 @@ const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conve
   if (img) updates.groupImage = img;
   const desc = details.description?.trim();
   if (desc) updates.groupDescription = desc;
+  if (details.permissions) {
+    updates.groupPermissions = {
+      policyType: details.permissions.policyType,
+      policySet: { ...details.permissions.policySet },
+    };
+  }
   return updates;
 };
 
@@ -573,6 +580,29 @@ export function useConversations() {
     [updateConversationAndPersist]
   );
 
+  const updateGroupPermission = useCallback(
+    async (
+      conversationId: string,
+      permissionType: PermissionUpdateType,
+      policy: PermissionPolicy,
+    ): Promise<Partial<Conversation> | null> => {
+      try {
+        const xmtp = getXmtpClient();
+        const details = await xmtp.updateGroupPermission(conversationId, permissionType, policy);
+        if (!details) {
+          return null;
+        }
+        const updates = groupDetailsToConversationUpdates(details);
+        await updateConversationAndPersist(conversationId, updates);
+        return updates;
+      } catch (error) {
+        console.error('Failed to update group permission:', error);
+        throw error;
+      }
+    },
+    [updateConversationAndPersist],
+  );
+
   // Load conversations when authenticated and unlocked
   useEffect(() => {
     if (isAuthenticated && isVaultUnlocked) {
@@ -595,6 +625,7 @@ export function useConversations() {
     markAsRead,
     updateConversationAndPersist,
     updateGroupMetadata,
+    updateGroupPermission,
     addMembersToGroup,
     removeMembersFromGroup,
     promoteMemberToAdmin,

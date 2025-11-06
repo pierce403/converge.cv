@@ -354,6 +354,12 @@ export function Layout() {
               if (img) merged.groupImage = img;
               const desc = details.description?.trim();
               if (desc) merged.groupDescription = desc;
+              if (details.permissions) {
+                merged.groupPermissions = {
+                  policyType: details.permissions.policyType,
+                  policySet: { ...details.permissions.policySet },
+                };
+              }
               const current = existing || (await storage.getConversation(conversationId));
               if (current) {
                 await storage.putConversation({ ...current, ...merged });
