@@ -100,6 +100,61 @@ export function GroupSettingsPage() {
   const [contactSearchTerm, setContactSearchTerm] = useState('');
   const [selectedContactInboxIds, setSelectedContactInboxIds] = useState<string[]>([]);
   const [isAddingContacts, setIsAddingContacts] = useState(false);
+
+  // Group avatar helpers — mirror user avatar flow: accept a file and turn it into a base64 data URL
+  const MAX_AVATAR_DATA_URL_BYTES = 256 * 1024; // keep parity with profile save limit
+
+  const fileToDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.readAsDataURL(file);
+    });
+
+  const downscaleDataUrlIfNeeded = async (dataUrl: string): Promise<string> => {
+    try {
+      if (!dataUrl || dataUrl.length <= MAX_AVATAR_DATA_URL_BYTES) return dataUrl;
+      // Draw into canvas and downscale to fit within 512x512; adjust quality if still large
+      const img = new Image();
+      const loaded: Promise<void> = new Promise((res, rej) => {
+        img.onload = () => res();
+        img.onerror = () => rej(new Error('Failed to load image'));
+      });
+      img.src = dataUrl;
+      await loaded;
+      const maxDim = 512;
+      const ratio = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.floor(img.width * ratio));
+      canvas.height = Math.max(1, Math.floor(img.height * ratio));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return dataUrl;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // Try a couple of qualities to get under the cap
+      const qualities = [0.8, 0.7, 0.6, 0.5];
+      for (const q of qualities) {
+        const out = canvas.toDataURL('image/jpeg', q);
+        if (out.length <= MAX_AVATAR_DATA_URL_BYTES) return out;
+      }
+      // If still large, return the last attempt
+      return canvas.toDataURL('image/jpeg', 0.5);
+    } catch {
+      return dataUrl;
+    }
+  };
+
+  const onGroupImageFileSelected = async (file?: File | null) => {
+    try {
+      if (!file) return;
+      const dataUrl = await fileToDataUrl(file);
+      const sized = await downscaleDataUrlIfNeeded(dataUrl);
+      setGroupImage(sized);
+    } catch (e) {
+      console.warn('[GroupSettings] Failed to process avatar image:', e);
+      alert('Failed to process image. Please try a different file.');
+    }
+  };
   const [joinPolicySelection, setJoinPolicySelection] = useState<string>('loading');
   const [joinPolicyValue, setJoinPolicyValue] = useState<PermissionPolicy | null>(null);
   const [initialJoinPolicyValue, setInitialJoinPolicyValue] = useState<PermissionPolicy | null>(null);
@@ -802,25 +857,44 @@ export function GroupSettingsPage() {
             </div>
           )}
 
-          {/* Group Image */}
+          {/* Group Avatar */}
           <div>
             <label htmlFor="groupImage" className="block text-sm font-medium mb-2">
-              Group Image URL
+              Group Avatar
             </label>
-            <input
-              id="groupImage"
-              type="text"
-              value={groupImage}
-              onChange={(e) => setGroupImage(e.target.value)}
-              placeholder="https://example.com/group-avatar.png"
-              className="input-primary w-full"
-              disabled={!isCurrentUserAdmin}
-            />
-            {groupImage && (
-              <div className="mt-2">
-                <img src={groupImage} alt="Group Avatar" className="w-24 h-24 rounded-full object-cover" />
+            <div className="flex items-center gap-3">
+              <div className="w-16 h-16 rounded-full bg-primary-700/70 flex items-center justify-center overflow-hidden">
+                {groupImage ? (
+                  <img src={groupImage} alt="Group Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-primary-200 text-sm">No avatar</span>
+                )}
               </div>
-            )}
+              <div className="flex-1 flex items-center gap-2">
+                <input
+                  id="groupImage"
+                  type="text"
+                  value={groupImage}
+                  onChange={(e) => setGroupImage(e.target.value)}
+                  placeholder="Paste image URL or use Upload"
+                  className="input-primary w-full"
+                  disabled={!isCurrentUserAdmin}
+                />
+                <label className="btn-secondary cursor-pointer">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={!isCurrentUserAdmin}
+                    onChange={(e) => onGroupImageFileSelected(e.target.files?.[0])}
+                  />
+                  Upload
+                </label>
+                {groupImage && isCurrentUserAdmin && (
+                  <button className="btn-secondary" onClick={() => setGroupImage('')}>Clear</button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Group Description */}
