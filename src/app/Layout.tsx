@@ -224,6 +224,48 @@ export function Layout() {
     };
     window.addEventListener('xmtp:system', handleSystemMessage);
 
+    // Handle inbound reactions and aggregate onto the target message
+    const handleReaction = async (event: Event) => {
+      try {
+        const custom = event as CustomEvent<{
+          conversationId: string;
+          referenceMessageId: string;
+          emoji: string;
+          action: string;
+          senderInboxId?: string;
+        }>;
+        const empty = {
+          conversationId: '',
+          referenceMessageId: '',
+          emoji: '',
+          action: '',
+          senderInboxId: '' as string | undefined,
+        };
+        const { conversationId, referenceMessageId, emoji, action, senderInboxId } = custom.detail || empty;
+        if (!conversationId || !referenceMessageId || !emoji) return;
+
+        const state = useMessageStore.getState();
+        const msgs = state.messagesByConversation[conversationId] || [];
+        const target = msgs.find((m) => m.id === referenceMessageId);
+        if (!target) return;
+        const mineInbox = getXmtpClient().getInboxId()?.toLowerCase();
+        const sender = (senderInboxId || '').toLowerCase();
+        const current = target.reactions || [];
+        if ((action || 'added').toLowerCase() === 'removed') {
+          const filtered = current.filter((r) => !(r.emoji === emoji && r.sender?.toLowerCase?.() === sender));
+          state.updateMessage(referenceMessageId, { reactions: filtered });
+        } else {
+          // add, but enforce single instance per emoji per sender
+          const filtered = current.filter((r) => !(r.emoji === emoji && r.sender?.toLowerCase?.() === sender));
+          filtered.push({ emoji, sender: senderInboxId || mineInbox || 'peer', timestamp: Date.now() });
+          state.updateMessage(referenceMessageId, { reactions: filtered });
+        }
+      } catch (err) {
+        console.warn('[Layout] Failed to handle reaction', err);
+      }
+    };
+    window.addEventListener('xmtp:reaction', handleReaction);
+
     // Handle group metadata updates (name/image/description and membership changes)
     const handleGroupUpdated = async (event: Event) => {
       try {
@@ -350,6 +392,7 @@ export function Layout() {
       window.removeEventListener('xmtp:message', handleIncomingMessage);
       window.removeEventListener('xmtp:system', handleSystemMessage);
       window.removeEventListener('xmtp:read-receipt', handleReadReceipt);
+      window.removeEventListener('xmtp:reaction', handleReaction);
       window.removeEventListener('xmtp:group-updated', handleGroupUpdated);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

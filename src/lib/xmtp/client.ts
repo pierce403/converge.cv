@@ -1589,6 +1589,35 @@ export class XmtpClient {
           for (const m of decodedMessages) {
             const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
             const typeId = this.getContentTypeIdFromAny(m);
+            // Reactions: aggregate onto target message instead of surfacing as bubbles
+            try {
+              const lowerType = (typeId || '').toLowerCase();
+              const isReaction = lowerType.includes('reaction');
+              if (isReaction && m && typeof m.content === 'object') {
+                try {
+                  const r = m.content as unknown as { content?: string; reference?: string; action?: string };
+                  const emoji = (r.content ?? '').toString();
+                  const ref = (r.reference ?? '').toString();
+                  const action = (r.action ?? 'added').toString();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:reaction', {
+                      detail: {
+                        conversationId: m.conversationId,
+                        referenceMessageId: ref,
+                        emoji,
+                        action,
+                        senderInboxId: m.senderInboxId,
+                      },
+                    })
+                  );
+                } catch (rxErr) {
+                  console.warn('[XMTP] Failed to parse reaction (backfill)', rxErr);
+                }
+                continue;
+              }
+            } catch (rxOuter) {
+              // ignore
+            }
             // Handle profile broadcasts silently (do not surface as chat messages)
             if (typeof content === 'string' && content.startsWith(XmtpClient.PROFILE_PREFIX)) {
               try {
@@ -1626,6 +1655,31 @@ export class XmtpClient {
             // Treat non-text content types in history too
             try {
               const lowerType = (typeId || '').toLowerCase();
+              // Reactions: aggregate onto target message and skip bubble
+              if (lowerType.includes('reaction')) {
+                try {
+              const r = (m as unknown as { content?: unknown }).content as
+                    | { content?: string; reference?: string; action?: string }
+                    | undefined;
+                  const emoji = (r?.content ?? '').toString();
+                  const ref = (r?.reference ?? '').toString();
+                  const action = (r?.action ?? 'added').toString();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:reaction', {
+                      detail: {
+                        conversationId: m.conversationId,
+                        referenceMessageId: ref,
+                        emoji,
+                        action,
+                        senderInboxId: m.senderInboxId,
+                      },
+                    })
+                  );
+                } catch (rxErr) {
+                  console.warn('[XMTP] Failed to parse reaction (stream)', rxErr);
+                }
+                continue;
+              }
               const isReadReceipt = lowerType.includes('read') && lowerType.includes('receipt');
               const isGroupUpdated = lowerType.includes('group') && lowerType.includes('updated');
               if (isReadReceipt) {
