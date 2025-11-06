@@ -11,13 +11,19 @@ import {
   type SafeInboxState,
   type SafeGroupMember,
   type Identifier,
+  PermissionPolicy,
+  PermissionUpdateType,
 } from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
 import { logNetworkEvent, useContactStore } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
-import type { Conversation } from '@/types';
+import type {
+  Conversation,
+  GroupPermissionPolicyCode,
+  GroupPermissionsState,
+} from '@/types';
 import { getAddress } from 'viem';
 import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
 import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
@@ -72,6 +78,19 @@ export interface XmtpMessage {
 export type MessageCallback = (message: XmtpMessage) => void;
 export type Unsubscribe = () => void;
 
+function isGroupPermissionPolicyCode(value: number): value is GroupPermissionPolicyCode {
+  return value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 5;
+}
+
+function toGroupPermissionPolicyCode(value: number | undefined): GroupPermissionPolicyCode {
+  if (typeof value === 'number' && isGroupPermissionPolicyCode(value)) {
+    return value;
+  }
+
+  console.warn('[XMTP] Received unknown group permission policy code:', value);
+  return 0;
+}
+
 export interface GroupMemberSummary {
   inboxId: string;
   address?: string;
@@ -91,6 +110,7 @@ export interface GroupDetails {
   superAdminAddresses: string[];
   adminInboxes: string[];
   superAdminInboxes: string[];
+  permissions?: GroupPermissionsState;
 }
 
 export interface InboxProfile {
@@ -669,6 +689,24 @@ export class XmtpClient {
       removeMembers?: (inboxIds: string[]) => Promise<void>;
       addAdmin?: (inboxId: string) => Promise<void>;
       removeAdmin?: (inboxId: string) => Promise<void>;
+      permissions?: () => Promise<{
+        policyType: number;
+        policySet: {
+          addMemberPolicy: number;
+          removeMemberPolicy: number;
+          addAdminPolicy: number;
+          removeAdminPolicy: number;
+          updateGroupDescriptionPolicy: number;
+          updateGroupImageUrlSquarePolicy: number;
+          updateGroupNamePolicy: number;
+          updateMessageDisappearingPolicy: number;
+        };
+      }>;
+      updatePermission?: (
+        permissionType: PermissionUpdateType,
+        policy: PermissionPolicy,
+        metadataField?: unknown,
+      ) => Promise<void>;
     };
   }
 
@@ -733,6 +771,36 @@ export class XmtpClient {
     const adminAddresses = Array.from(new Set(adminInboxIds.map(toAddress)));
     const superAdminAddresses = Array.from(new Set(superAdminInboxIds.map(toAddress)));
 
+    let permissions: GroupPermissionsState | undefined;
+    if (typeof safeGroup.permissions === 'function') {
+      try {
+        const rawPermissions = await safeGroup.permissions();
+        if (rawPermissions?.policySet) {
+          permissions = {
+            policyType: rawPermissions.policyType as GroupPermissionsState['policyType'],
+            policySet: {
+              addMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addMemberPolicy),
+              removeMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeMemberPolicy),
+              addAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addAdminPolicy),
+              removeAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeAdminPolicy),
+              updateGroupDescriptionPolicy: toGroupPermissionPolicyCode(
+                rawPermissions.policySet.updateGroupDescriptionPolicy,
+              ),
+              updateGroupImageUrlSquarePolicy: toGroupPermissionPolicyCode(
+                rawPermissions.policySet.updateGroupImageUrlSquarePolicy,
+              ),
+              updateGroupNamePolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.updateGroupNamePolicy),
+              updateMessageDisappearingPolicy: toGroupPermissionPolicyCode(
+                rawPermissions.policySet.updateMessageDisappearingPolicy,
+              ),
+            },
+          };
+        }
+      } catch (error) {
+        console.warn('[XMTP] Failed to load group permissions:', conversationId, error);
+      }
+    }
+
     return {
       id: conversationId,
       name: safeGroup.name ?? '',
@@ -743,6 +811,7 @@ export class XmtpClient {
       superAdminAddresses,
       adminInboxes: Array.from(new Set(adminInboxIds)),
       superAdminInboxes: Array.from(new Set(superAdminInboxIds)),
+      permissions,
     };
   }
 
@@ -795,6 +864,35 @@ export class XmtpClient {
       return await this.buildGroupDetails(conversationId, group);
     } catch (error) {
       console.error('[XMTP] Failed to update group metadata:', error);
+      throw error;
+    }
+  }
+
+  async updateGroupPermission(
+    conversationId: string,
+    permissionType: PermissionUpdateType,
+    policy: PermissionPolicy,
+  ): Promise<GroupDetails | null> {
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    if (typeof group.updatePermission !== 'function') {
+      console.warn('[XMTP] Group updatePermission unavailable, refreshing details instead.');
+      return this.fetchGroupDetails(conversationId);
+    }
+
+    try {
+      await group.updatePermission(permissionType, policy);
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'group:permission_updated',
+        details: `Updated permission ${permissionType} for group ${conversationId} to ${policy}`,
+      });
+      return await this.buildGroupDetails(conversationId, group);
+    } catch (error) {
+      console.error('[XMTP] Failed to update group permission:', error);
       throw error;
     }
   }

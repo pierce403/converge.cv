@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import type { ChangeEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
@@ -6,6 +7,7 @@ import { getAddress } from 'viem';
 import type { GroupMember } from '@/types';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import type { Contact } from '@/lib/stores/contact-store';
+import { PermissionPolicy, PermissionUpdateType, GroupPermissionsOptions } from '@xmtp/browser-sdk';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
@@ -18,12 +20,64 @@ const safeNormalizeAddress = (value: string) => {
   }
 };
 
+const JOIN_POLICY_OPTIONS: Array<{
+  value: PermissionPolicy;
+  label: string;
+  description: string;
+  shareNote: string;
+}> = [
+  {
+    value: PermissionPolicy.Allow,
+    label: 'Open join (anyone with the link)',
+    description:
+      'All members can invite new people, and anyone with the join link can add themselves instantly.',
+    shareNote: 'Anyone who receives this link can join right away.',
+  },
+  {
+    value: PermissionPolicy.Admin,
+    label: 'Admin approval required',
+    description: 'Only group admins can add new members. Share links let admins know who wants to join.',
+    shareNote: 'People who open this link will still need an admin to add them.',
+  },
+  {
+    value: PermissionPolicy.SuperAdmin,
+    label: 'Super admins only',
+    description: 'Only super admins can approve or add new members to the group.',
+    shareNote: 'Only super admins can add someone after they open this link.',
+  },
+  {
+    value: PermissionPolicy.Deny,
+    label: 'Closed group',
+    description: 'No new members can be added until you change this setting.',
+    shareNote: 'Join links are disabled while the group is closed.',
+  },
+];
+
+const GROUP_POLICY_TYPE_LABELS: Record<
+  GroupPermissionsOptions,
+  { label: string; description: string }
+> = {
+  [GroupPermissionsOptions.Default]: {
+    label: 'Default policy',
+    description: 'Members can invite new people, while admins manage removals and metadata.',
+  },
+  [GroupPermissionsOptions.AdminOnly]: {
+    label: 'Admin-only policy',
+    description: 'Only admins can add or remove members or change group details.',
+  },
+  [GroupPermissionsOptions.CustomPolicy]: {
+    label: 'Custom policy',
+    description: 'Permissions have been customized individually via the XMTP API.',
+  },
+};
+
 export function GroupSettingsPage() {
   const navigate = useNavigate();
   const { conversationId } = useParams<{ conversationId: string }>();
   const {
     conversations,
     updateGroupMetadata,
+    updateGroupPermission,
     addMembersToGroup,
     removeMembersFromGroup,
     promoteMemberToAdmin,
@@ -46,6 +100,9 @@ export function GroupSettingsPage() {
   const [contactSearchTerm, setContactSearchTerm] = useState('');
   const [selectedContactInboxIds, setSelectedContactInboxIds] = useState<string[]>([]);
   const [isAddingContacts, setIsAddingContacts] = useState(false);
+  const [joinPolicySelection, setJoinPolicySelection] = useState<string>('loading');
+  const [joinPolicyValue, setJoinPolicyValue] = useState<PermissionPolicy | null>(null);
+  const [initialJoinPolicyValue, setInitialJoinPolicyValue] = useState<PermissionPolicy | null>(null);
 
   useEffect(() => {
     loadContacts();
@@ -92,6 +149,32 @@ export function GroupSettingsPage() {
     }
     return new Set((conversation.superAdminInboxes ?? []).map((value) => value.toLowerCase()));
   }, [conversation]);
+
+  const selectedJoinPolicyOption = useMemo(
+    () => JOIN_POLICY_OPTIONS.find((option) => option.value.toString() === joinPolicySelection),
+    [joinPolicySelection],
+  );
+
+  const policyTypeSummary = useMemo(() => {
+    const type = conversation?.groupPermissions?.policyType;
+    if (type === undefined) {
+      return null;
+    }
+    return GROUP_POLICY_TYPE_LABELS[type as GroupPermissionsOptions] ?? null;
+  }, [conversation?.groupPermissions?.policyType]);
+
+  const joinPolicyShareNote = useMemo(() => {
+    if (joinPolicySelection === 'loading') {
+      return 'Copy the link once the current access mode finishes loading.';
+    }
+    if (joinPolicySelection === 'custom') {
+      return 'This group uses a custom XMTP permission set. Joining behavior may vary until you choose a standard mode.';
+    }
+    if (selectedJoinPolicyOption) {
+      return `Copy and share this link to invite people. ${selectedJoinPolicyOption.shareNote}`;
+    }
+    return 'Copy and share this link to invite people to the group.';
+  }, [joinPolicySelection, selectedJoinPolicyOption]);
 
   const memberEntries = useMemo<GroupMember[]>(() => {
     if (!conversation?.isGroup) {
@@ -336,6 +419,26 @@ export function GroupSettingsPage() {
     }
   }, [conversation]);
 
+  useEffect(() => {
+    const policy = conversation?.groupPermissions?.policySet?.addMemberPolicy;
+    if (policy === undefined) {
+      setJoinPolicySelection('loading');
+      setJoinPolicyValue(null);
+      setInitialJoinPolicyValue(null);
+      return;
+    }
+    if (policy === PermissionPolicy.Other || policy === PermissionPolicy.DoesNotExist) {
+      setJoinPolicySelection('custom');
+      setJoinPolicyValue(null);
+      setInitialJoinPolicyValue(null);
+      return;
+    }
+    const typedPolicy = policy as PermissionPolicy;
+    setJoinPolicySelection(typedPolicy.toString());
+    setJoinPolicyValue(typedPolicy);
+    setInitialJoinPolicyValue(typedPolicy);
+  }, [conversation?.groupPermissions?.policySet?.addMemberPolicy]);
+
   if (!conversation || !conversation.isGroup) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-primary-50">
@@ -345,7 +448,23 @@ export function GroupSettingsPage() {
     );
   }
 
+  const handleJoinPolicyChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const value = event.target.value;
+    setJoinPolicySelection(value);
+    if (value === 'custom' || value === 'loading') {
+      setJoinPolicyValue(null);
+      return;
+    }
+    const numericValue = Number(value) as PermissionPolicy;
+    setJoinPolicyValue(numericValue);
+  };
+
   const handleSave = async () => {
+    if (!conversation) {
+      setError('Group conversation could not be loaded.');
+      return;
+    }
+
     if (!isCurrentUserAdmin) {
       setError('Only group admins can update settings.');
       return;
@@ -355,11 +474,45 @@ export function GroupSettingsPage() {
     setError('');
 
     try {
-      await updateGroupMetadata(conversation.id, {
+      const metadataPayload = {
         groupName: groupName || undefined,
         groupImage: groupImage || undefined,
         groupDescription: groupDescription || undefined,
-      });
+      };
+      const metadataChanged =
+        (groupName || '') !== (conversation.groupName || '') ||
+        (groupImage || '') !== (conversation.groupImage || '') ||
+        (groupDescription || '') !== (conversation.groupDescription || '');
+
+      const operations: Array<Promise<unknown>> = [];
+
+      if (metadataChanged) {
+        operations.push(updateGroupMetadata(conversation.id, metadataPayload));
+      }
+
+      const permissionChanged =
+        joinPolicyValue !== null && joinPolicyValue !== initialJoinPolicyValue;
+      if (permissionChanged && joinPolicyValue !== null) {
+        operations.push(
+          updateGroupPermission(
+            conversation.id,
+            PermissionUpdateType.AddMember,
+            joinPolicyValue,
+          ),
+        );
+      }
+
+      if (operations.length === 0) {
+        setIsSaving(false);
+        alert('No changes to save.');
+        return;
+      }
+
+      await Promise.all(operations);
+
+      if (permissionChanged && joinPolicyValue !== null) {
+        setInitialJoinPolicyValue(joinPolicyValue);
+      }
 
       alert('Group settings saved!');
       navigate(-1);
@@ -685,6 +838,56 @@ export function GroupSettingsPage() {
             />
           </div>
 
+          {/* Access Control */}
+          <div>
+            <h2 className="text-lg font-semibold mb-2">Access Control</h2>
+            <label htmlFor="groupAccessMode" className="block text-sm font-medium mb-2">
+              Who can add new members?
+            </label>
+            <select
+              id="groupAccessMode"
+              className="input-primary w-full"
+              value={joinPolicySelection}
+              onChange={handleJoinPolicyChange}
+              disabled={!isCurrentUserAdmin || joinPolicySelection === 'loading'}
+            >
+              {joinPolicySelection === 'loading' && (
+                <option value="loading" disabled>
+                  Loading current permissions…
+                </option>
+              )}
+              {joinPolicySelection === 'custom' && (
+                <option value="custom" disabled>
+                  Custom XMTP policy (advanced)
+                </option>
+              )}
+              {JOIN_POLICY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <div className="mt-2 text-sm text-primary-200 space-y-1">
+              {joinPolicySelection === 'loading' ? (
+                <p>Loading the latest access controls…</p>
+              ) : joinPolicySelection === 'custom' ? (
+                <p>
+                  This group is using a custom XMTP permission set. Selecting a mode above will replace it with one of
+                  the standard options.
+                </p>
+              ) : selectedJoinPolicyOption ? (
+                <p>{selectedJoinPolicyOption.description}</p>
+              ) : null}
+              {policyTypeSummary && (
+                <p className="text-xs text-primary-400">
+                  Base policy:{' '}
+                  <span className="font-medium text-primary-200">{policyTypeSummary.label}</span> —{' '}
+                  {policyTypeSummary.description}
+                </p>
+              )}
+            </div>
+          </div>
+
           {/* Member Management */}
           <div>
             <h2 className="text-lg font-semibold mb-2">Member Management</h2>
@@ -812,7 +1015,7 @@ export function GroupSettingsPage() {
               </button>
             </div>
             <p className="text-primary-300 text-sm mt-2">
-              Share this link with others to invite them to this group.
+              {joinPolicyShareNote}
             </p>
           </div>
         </div>

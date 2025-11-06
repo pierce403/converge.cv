@@ -2,6 +2,26 @@
  * Core application types
  */
 
+export type GroupPermissionPolicyCode = 0 | 1 | 2 | 3 | 4 | 5;
+
+export interface GroupPermissionPolicySet {
+  addMemberPolicy: GroupPermissionPolicyCode;
+  removeMemberPolicy: GroupPermissionPolicyCode;
+  addAdminPolicy: GroupPermissionPolicyCode;
+  removeAdminPolicy: GroupPermissionPolicyCode;
+  updateGroupNamePolicy: GroupPermissionPolicyCode;
+  updateGroupDescriptionPolicy: GroupPermissionPolicyCode;
+  updateGroupImageUrlSquarePolicy: GroupPermissionPolicyCode;
+  updateMessageDisappearingPolicy: GroupPermissionPolicyCode;
+}
+
+export type GroupPermissionsPolicyType = 0 | 1 | 2;
+
+export interface GroupPermissionsState {
+  policyType: GroupPermissionsPolicyType;
+  policySet: GroupPermissionPolicySet;
+}
+
 export interface Conversation {
   id: string;
   peerId: string;
@@ -25,6 +45,7 @@ export interface Conversation {
   adminInboxes?: string[]; // XMTP inbox IDs for admins
   superAdminInboxes?: string[]; // XMTP inbox IDs for super admins
   groupMembers?: GroupMember[];
+  groupPermissions?: GroupPermissionsState;
   isLocalOnly?: boolean;
 }
 
