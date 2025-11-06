@@ -251,6 +251,21 @@ export function Layout() {
           useConversationStore.getState().updateConversation(conversationId, updates);
         }
 
+        // Build a user-facing toast summarizing the update
+        try {
+          const fieldLabel = (f: string) =>
+            f === 'group_name' ? 'name' : f === 'group_image_url_square' ? 'image' : f === 'description' ? 'description' : f;
+          const changedFields = changes.map((c) => fieldLabel(String(c.fieldName)));
+          const parts: string[] = [];
+          if (changedFields.length) parts.push(`changed ${changedFields.join(', ')}`);
+          if (added.length) parts.push(`+${added.length}`);
+          if (removed.length) parts.push(`-${removed.length}`);
+          const summary = parts.length ? parts.join(' · ') : 'updated';
+          window.dispatchEvent(new CustomEvent('ui:toast', { detail: `Group updated: ${summary}` }));
+        } catch {
+          // ignore toast failures
+        }
+
         // If membership changed or no metadata changes detected, refresh authoritative details
         const membershipChanged = added.length > 0 || removed.length > 0;
         if (membershipChanged || (!changes || changes.length === 0)) {
