@@ -1054,31 +1054,37 @@ export class XmtpClient {
         ],
       });
 
-      if (shouldRegister) {
+      // Decide whether we must register a new installation
+      let mustRegister = shouldRegister;
+      try {
+        const preState: SafeInboxState = await client.preferences.inboxState(true);
+        const existing = preState.installations || [];
+        const hasOurInstallation = existing.some((inst: unknown) => {
+          const id = (inst as { id?: string }).id;
+          return id && client && id === client.installationId;
+        });
+        const count = existing.length;
+
+        if (hasOurInstallation) {
+          // Our device is already registered; do not register again
+          mustRegister = false;
+          console.log('[XMTP] Installation already present; skipping register()');
+        } else if (mustRegister && count >= 10) {
+          // Cannot register a new installation when already at limit
+          throw new Error('⚠️ Installation limit reached (10/10). Please revoke old installations in Settings → XMTP Installations or use Force Recover.');
+        } else if (count >= 8) {
+          console.warn('[XMTP] Installation count nearing limit:', count);
+          logNetworkEvent({ direction: 'status', event: 'connect:installation_warning', details: `Installation count ${count}/10` });
+        }
+      } catch (preCheckErr) {
+        console.warn('[XMTP] Installation pre-check failed (continuing):', preCheckErr);
+      }
+
+      if (mustRegister) {
         console.log('[XMTP] Registering inbox/installation after probe');
         await client.register();
       } else {
-        console.log('[XMTP] Skipping register() per options (probe-only connection)');
-      }
-
-      if (shouldRegister) {
-        try {
-          const inboxState: SafeInboxState = await client.preferences.inboxState(true);
-          const installationCount = inboxState.installations?.length ?? 0;
-          if (installationCount >= 10) {
-            throw new Error('⚠️ Installation limit reached (10/10). Please revoke old installations and retry.');
-          }
-          if (installationCount >= 8) {
-            console.warn('[XMTP] Installation count nearing limit:', installationCount);
-            logNetworkEvent({
-              direction: 'status',
-              event: 'connect:installation_warning',
-              details: `Installation count ${installationCount}/10`,
-            });
-          }
-        } catch (installError) {
-          console.warn('[XMTP] Failed to inspect installation count after register:', installError);
-        }
+        console.log('[XMTP] Skipping register() per options or pre-check');
       }
 
       console.log('[XMTP] ✅ Client created successfully');

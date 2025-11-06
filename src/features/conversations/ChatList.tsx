@@ -260,10 +260,10 @@ export function ChatList() {
 
       {/* New chat and New Group buttons */}
       <div className="p-4 border-t border-primary-900/40 bg-primary-950/40 flex gap-2">
-        <Link to="/new-chat" className="btn-primary w-full">
+        <Link to="/new-chat" className="btn-primary w-full inline-flex items-center justify-center text-center">
           + New Chat
         </Link>
-        <Link to="/new-group" className="btn-secondary w-full">
+        <Link to="/new-group" className="btn-secondary w-full inline-flex items-center justify-center text-center">
           + New Group
         </Link>
         <button
