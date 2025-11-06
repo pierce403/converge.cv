@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
-import { useContactStore } from '@/lib/stores';
+import { useContactStore, useAuthStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
@@ -41,12 +41,20 @@ export function ChatList() {
     return map;
   }, [contacts]);
 
+  const identity = useAuthStore((s) => s.identity);
+
   const getContactForConversation = (conversation: ConversationItem) => {
     if (conversation.isGroup) {
       return undefined;
     }
     const peerId = conversation.peerId?.toLowerCase?.();
     if (!peerId) {
+      return undefined;
+    }
+    // Hide self-DMs just in case
+    const myInbox = identity?.inboxId?.toLowerCase();
+    const myAddr = identity?.address?.toLowerCase();
+    if ((myInbox && peerId === myInbox) || (myAddr && peerId === myAddr)) {
       return undefined;
     }
     return contactsByAddress.get(peerId) ?? contactsByInboxId.get(peerId);

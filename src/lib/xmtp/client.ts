@@ -2174,11 +2174,12 @@ export class XmtpClient {
 
     try {
       // If it looks like an Ethereum address, we'll use the identifier path
-      const inboxId = peerAddressOrInboxId;
-      const displayAddress = peerAddressOrInboxId;
+      const inboxIdInput = peerAddressOrInboxId;
+      const originalInput = peerAddressOrInboxId;
 
       let dmConversation;
 
+      let resolvedPeerInboxId: string | null = null;
       if (isEthereumAddress(peerAddressOrInboxId)) {
         console.log('[XMTP] Detected Ethereum address, creating conversation via identifier...');
 
@@ -2191,9 +2192,16 @@ export class XmtpClient {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           identifier as any
         );
+        try {
+          // Resolve to canonical inbox id for storage to avoid duplicates
+          resolvedPeerInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
+        } catch (e) {
+          // non-fatal
+        }
       } else {
-        console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxId);
-        dmConversation = await this.client.conversations.newDm(inboxId);
+        console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxIdInput);
+        dmConversation = await this.client.conversations.newDm(inboxIdInput);
+        resolvedPeerInboxId = inboxIdInput;
       }
       
       console.log('[XMTP] ✅ DM conversation created:', {
@@ -2201,10 +2209,11 @@ export class XmtpClient {
         createdAtNs: dmConversation.createdAtNs,
       });
 
+      const peerForStore = (resolvedPeerInboxId || originalInput).toLowerCase();
       const conversation: Conversation = {
         id: dmConversation.id,
         topic: dmConversation.id, // Use conversation ID as topic
-        peerId: displayAddress, // Use the original address for display
+        peerId: peerForStore, // Store canonical inbox ID when available
         createdAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
         lastMessageAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
         unreadCount: 0,

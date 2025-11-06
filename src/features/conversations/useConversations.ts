@@ -78,6 +78,67 @@ export function useConversations() {
       const storage = await getStorage();
       let conversations = await storage.listConversations({ archived: false });
 
+      // Cleanup: remove self-DMs and dedupe by canonical inboxId
+      try {
+        const xmtp = getXmtpClient();
+        const myInbox = xmtp.getInboxId()?.toLowerCase() || useAuthStore.getState().identity?.inboxId?.toLowerCase();
+        const myAddr = useAuthStore.getState().identity?.address?.toLowerCase();
+        const byPeer: Map<string, Conversation> = new Map();
+        const toDelete: string[] = [];
+        for (const c of conversations) {
+          if (!c || c.isGroup) {
+            // groups unaffected
+            continue;
+          }
+          const peerLower = c.peerId?.toLowerCase?.() || '';
+          if (!peerLower) continue;
+          // Skip self conversations
+          if ((myInbox && peerLower === myInbox) || (myAddr && peerLower === myAddr)) {
+            toDelete.push(c.id);
+            continue;
+          }
+          let key = peerLower;
+          if (peerLower.startsWith('0x')) {
+            try {
+              const inboxId = await xmtp.deriveInboxIdFromAddress(peerLower);
+              if (inboxId) key = inboxId.toLowerCase();
+            } catch (e) {
+              // ignore
+            }
+          }
+          const existing = byPeer.get(key);
+          if (!existing) {
+            // If we discovered a canonical inboxId but current peerId is address, update it
+            if (key !== peerLower) {
+              await storage.putConversation({ ...c, peerId: key });
+              c.peerId = key;
+            }
+            byPeer.set(key, c);
+          } else {
+            // Prefer non-local, newer lastMessageAt
+            const pick = (() => {
+              const a = existing;
+              const b = c;
+              const aLocal = String(a.id).startsWith('local-');
+              const bLocal = String(b.id).startsWith('local-');
+              if (aLocal !== bLocal) return aLocal ? b : a;
+              return (a.lastMessageAt || 0) >= (b.lastMessageAt || 0) ? a : b;
+            })();
+            const drop = pick === c ? existing : c;
+            toDelete.push(drop.id);
+            byPeer.set(key, pick);
+          }
+        }
+        if (toDelete.length) {
+          for (const id of toDelete) {
+            try { await storage.deleteConversation(id); } catch (e) { /* ignore */ }
+          }
+          conversations = await storage.listConversations({ archived: false });
+        }
+      } catch (e) {
+        // non-fatal cleanup
+      }
+
       if (conversations.length === 0) {
         const now = Date.now();
         const seededConversations: Conversation[] = [];
@@ -135,20 +196,30 @@ export function useConversations() {
         // Check if conversation already exists
         const storage = await getStorage();
         const existing = await storage.listConversations();
-        const found = existing.find((c) => c.peerId === peerAddress);
+        const normalizedInput = peerAddress.toLowerCase();
+        const xmtp = getXmtpClient();
+        let inboxKey = normalizedInput;
+        if (normalizedInput.startsWith('0x')) {
+          try {
+            const inboxId = await xmtp.deriveInboxIdFromAddress(normalizedInput);
+            if (inboxId) inboxKey = inboxId.toLowerCase();
+          } catch (e) {
+            // ignore
+          }
+        }
+        const found = existing.find((c) => !c.isGroup && c.peerId.toLowerCase() === inboxKey);
 
         if (found) {
           return found;
         }
 
         // Create via XMTP
-        const xmtp = getXmtpClient();
         const xmtpConv = await xmtp.createConversation(peerAddress);
 
         // Create conversation object
         const conversation: Conversation = {
           id: xmtpConv.id,
-          peerId: peerAddress,
+          peerId: inboxKey,
           topic: xmtpConv.topic,
           lastMessageAt: Date.now(),
           lastMessagePreview: '',

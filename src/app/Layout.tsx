@@ -132,6 +132,18 @@ export function Layout() {
           console.log('[Layout] ✅ New conversation created:', newConversation);
 
           conversation = newConversation;
+          // Deduplicate: remove any other DM with same peer id
+          try {
+            const store = useConversationStore.getState();
+            const peerKey = (contact.inboxId || senderInboxId).toLowerCase();
+            const dupes = store.conversations.filter(
+              (c) => !c.isGroup && c.id !== newConversation.id && c.peerId.toLowerCase() === peerKey
+            );
+            for (const d of dupes) {
+              store.removeConversation(d.id);
+              try { await storage.deleteConversation(d.id); } catch (e) { /* ignore */ }
+            }
+          } catch (e) { /* ignore */ }
         } else {
           const updates: Partial<Conversation> = {};
           const displayName = contact.preferredName ?? contact.name;
@@ -148,6 +160,18 @@ export function Layout() {
             await storage.putConversation({ ...conversation, ...updates });
             conversation = { ...conversation, ...updates } as Conversation;
           }
+          // Deduplicate against existing by peer id also when conversation already existed
+          try {
+            const store = useConversationStore.getState();
+            const peerKey = (contact.inboxId || senderInboxId).toLowerCase();
+            const dupes = store.conversations.filter(
+              (c) => !c.isGroup && c.id !== conversation!.id && c.peerId.toLowerCase() === peerKey
+            );
+            for (const d of dupes) {
+              store.removeConversation(d.id);
+              try { await storage.deleteConversation(d.id); } catch (e) { /* ignore */ }
+            }
+          } catch (e) { /* ignore */ }
         }
         console.log('[Layout] Processing message with receiveMessage()');
         await receiveMessage(conversationId, message);
