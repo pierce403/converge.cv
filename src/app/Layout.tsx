@@ -12,6 +12,7 @@ import type { XmtpMessage } from '@/lib/xmtp';
 import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
+import { useXmtpStore } from '@/lib/stores/xmtp-store';
 // Do not enrich from ENS/Farcaster for avatars or names. Use XMTP network data only.
 
 
@@ -351,8 +352,11 @@ export function Layout() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Proactively enrich all loaded contacts from XMTP (no ENS/Farcaster)
+  // Proactively enrich all loaded contacts from XMTP (no ENS/Farcaster),
+  // but only after XMTP is connected to avoid Utils network calls during connect.
+  const connectionStatus = useXmtpStore((s) => s.connectionStatus);
   useEffect(() => {
+    if (connectionStatus !== 'connected') return;
     const run = async () => {
       try {
         const state = useContactStore.getState();
@@ -383,7 +387,7 @@ export function Layout() {
       }
     };
     run();
-  }, []);
+  }, [connectionStatus]);
 
   return (
     <div className="flex flex-col h-screen text-primary-50">

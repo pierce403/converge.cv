@@ -81,6 +81,7 @@ export function useConversations() {
       // Cleanup: remove self-DMs and dedupe by canonical inboxId
       try {
         const xmtp = getXmtpClient();
+        const isXmtpConnected = xmtp.isConnected();
         const myInbox = xmtp.getInboxId()?.toLowerCase() || useAuthStore.getState().identity?.inboxId?.toLowerCase();
         const myAddr = useAuthStore.getState().identity?.address?.toLowerCase();
         const byPeer: Map<string, Conversation> = new Map();
@@ -98,12 +99,12 @@ export function useConversations() {
             continue;
           }
           let key = peerLower;
-          if (peerLower.startsWith('0x')) {
+          if (isXmtpConnected && peerLower.startsWith('0x')) {
             try {
               const inboxId = await xmtp.deriveInboxIdFromAddress(peerLower);
               if (inboxId) key = inboxId.toLowerCase();
             } catch (e) {
-              // ignore
+              // ignore failures (e.g., offline or blocked); keep address as key
             }
           }
           const existing = byPeer.get(key);
