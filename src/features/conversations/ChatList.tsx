@@ -5,6 +5,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
+import { useConversationStore } from '@/lib/stores';
+import { getStorage } from '@/lib/storage';
+import { getXmtpClient } from '@/lib/xmtp';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore, useAuthStore } from '@/lib/stores';
@@ -15,9 +18,12 @@ import { isDisplayableImageSrc } from '@/lib/utils/image';
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [isResyncing, setIsResyncing] = useState(false);
   type ConversationItem = typeof conversations[number];
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
+  const setConversations = useConversationStore((s) => s.setConversations);
+  const { loadConversations } = useConversations();
 
   useEffect(() => {
     loadContacts();
@@ -260,6 +266,52 @@ export function ChatList() {
         <Link to="/new-group" className="btn-secondary w-full">
           + New Group
         </Link>
+        <button
+          className="btn-secondary w-full"
+          disabled={isResyncing}
+          onClick={async () => {
+            if (isResyncing) return;
+            if (!confirm('This will delete all local conversations and reload from XMTP. Continue?')) {
+              return;
+            }
+            setIsResyncing(true);
+            try {
+              // Visibly clear current list
+              setConversations([]);
+              // Delete from storage (also deletes messages per conversation)
+              const storage = await getStorage();
+              const existing = await storage.listConversations();
+              for (const c of existing) {
+                try {
+                  await storage.deleteConversation(c.id);
+                } catch (e) {
+                  console.warn('Failed to delete conversation during resync:', e);
+                }
+              }
+              // Ask XMTP to sync and backfill messages so conversations are recreated from real data
+              try {
+                const xmtp = getXmtpClient();
+                await xmtp.syncConversations();
+                await xmtp.syncHistory();
+              } catch (e) {
+                console.warn('[Resync] XMTP sync failed (continuing to reload local):', e);
+              }
+              await loadConversations();
+              try {
+                window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Resynced conversations' }));
+              } catch (e) {
+                /* ignore */
+              }
+            } catch (err) {
+              console.error('Resync failed:', err);
+              alert('Resync failed. See console for details.');
+            } finally {
+              setIsResyncing(false);
+            }
+          }}
+        >
+          {isResyncing ? 'Resyncing…' : 'Resync All'}
+        </button>
       </div>
 
       {/* User info modal */}
