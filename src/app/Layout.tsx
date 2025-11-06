@@ -145,12 +145,19 @@ export function Layout() {
             }
           } catch (e) { /* ignore */ }
         } else {
+          // Update display fields using the PEER's profile, not the sender of this message.
+          const contactStoreNow = useContactStore.getState();
+          const peerKey = conversation.peerId?.toLowerCase?.();
+          const peerContact = peerKey
+            ? contactStoreNow.getContactByInboxId(peerKey) ?? contactStoreNow.getContactByAddress(peerKey)
+            : undefined;
+
           const updates: Partial<Conversation> = {};
-          const displayName = contact.preferredName ?? contact.name;
+          const displayName = peerContact?.preferredName ?? peerContact?.name;
           if (displayName && conversation.displayName !== displayName) {
             updates.displayName = displayName;
           }
-          const avatar = contact.preferredAvatar ?? contact.avatar;
+          const avatar = peerContact?.preferredAvatar ?? peerContact?.avatar;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
           }
