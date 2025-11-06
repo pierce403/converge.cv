@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect } from 'react';
 import { PermissionPolicy, PermissionUpdateType } from '@xmtp/browser-sdk';
-import { useConversationStore, useAuthStore } from '@/lib/stores';
+import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupDetails } from '@/lib/xmtp';
 import type { Conversation, GroupMember } from '@/types';
@@ -73,6 +73,125 @@ export function useConversations() {
   const setConversations = useConversationStore((state) => state.setConversations);
   const addConversation = useConversationStore((state) => state.addConversation);
   const updateConversation = useConversationStore((state) => state.updateConversation);
+  const ensureConversationProfiles = useCallback(
+    async (items: Conversation[]) => {
+      if (!items.length) {
+        return;
+      }
+
+      const refreshIntervalMs = 30 * 60 * 1000; // 30 minutes
+      let storageInstance: Awaited<ReturnType<typeof getStorage>> | null = null;
+
+      for (const conversation of items) {
+        if (conversation.isGroup) {
+          continue;
+        }
+
+        try {
+          const peerIdRaw = conversation.peerId;
+          const peerIdLower = peerIdRaw?.toLowerCase?.();
+          if (!peerIdLower) {
+            continue;
+          }
+
+          const contactStore = useContactStore.getState();
+          const existingContact =
+            contactStore.getContactByInboxId(peerIdLower) ??
+            contactStore.getContactByAddress(peerIdLower);
+
+          const now = Date.now();
+          const lastSynced = existingContact?.lastSyncedAt ?? 0;
+          const hasFreshProfile =
+            existingContact?.preferredName &&
+            existingContact?.preferredAvatar &&
+            now - lastSynced < refreshIntervalMs;
+
+          if (hasFreshProfile) {
+            continue;
+          }
+
+          const xmtp = getXmtpClient();
+          let inboxId = peerIdLower;
+          if (peerIdLower.startsWith('0x')) {
+            try {
+              const derived = await xmtp.deriveInboxIdFromAddress(peerIdLower);
+              if (derived) {
+                inboxId = derived.toLowerCase();
+              }
+            } catch (err) {
+              console.warn('[useConversations] Failed to derive inbox id from address', err);
+            }
+          }
+
+          let profile = await xmtp.fetchInboxProfile(inboxId);
+
+          // If XMTP resolved the canonical inbox id, prefer it
+          const canonicalInboxId = profile.inboxId?.toLowerCase?.() ?? inboxId;
+          if (canonicalInboxId !== inboxId) {
+            try {
+              profile = await xmtp.fetchInboxProfile(canonicalInboxId);
+            } catch (err) {
+              console.warn('[useConversations] Failed to refetch profile for canonical inbox id', err);
+            }
+          }
+
+          const metadata = {
+            lastSyncedAt: Date.now(),
+            ...(existingContact
+              ? {}
+              : {
+                  createdAt: Date.now(),
+                  source: 'inbox' as const,
+                }),
+          };
+
+          const upserted = await contactStore.upsertContactProfile({
+            inboxId: canonicalInboxId,
+            displayName: profile.displayName,
+            avatarUrl: profile.avatarUrl,
+            primaryAddress: profile.primaryAddress,
+            addresses: profile.addresses,
+            identities: profile.identities,
+            source: 'inbox',
+            metadata,
+          });
+
+          const updates: Partial<Conversation> = {};
+          if (!conversation.isGroup && canonicalInboxId && conversation.peerId.toLowerCase() !== canonicalInboxId) {
+            updates.peerId = canonicalInboxId;
+          }
+
+          const displayName =
+            upserted.preferredName ||
+            upserted.name ||
+            profile.displayName ||
+            profile.primaryAddress ||
+            canonicalInboxId;
+          if (displayName && conversation.displayName !== displayName) {
+            updates.displayName = displayName;
+          }
+
+          const avatar = upserted.preferredAvatar || upserted.avatar || profile.avatarUrl;
+          if (avatar && conversation.displayAvatar !== avatar) {
+            updates.displayAvatar = avatar;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            updateConversation(conversation.id, updates);
+            try {
+              storageInstance = storageInstance ?? (await getStorage());
+              await storageInstance.putConversation({ ...conversation, ...updates });
+            } catch (err) {
+              console.warn('[useConversations] Failed to persist conversation profile updates', err);
+            }
+          }
+        } catch (error) {
+          console.warn('[useConversations] Failed to ensure conversation profile', conversation.id, error);
+        }
+      }
+    },
+    [updateConversation]
+  );
   const removeConversation = useConversationStore((state) => state.removeConversation);
   const setActiveConversation = useConversationStore((state) => state.setActiveConversation);
   const setLoading = useConversationStore((state) => state.setLoading);
@@ -192,12 +311,13 @@ export function useConversations() {
       }
 
       setConversations(conversations);
+      void ensureConversationProfiles(conversations);
     } catch (error) {
       console.error('Failed to load conversations:', error);
     } finally {
       setLoading(false);
     }
-  }, [setConversations, setLoading]);
+  }, [setConversations, setLoading, ensureConversationProfiles]);
 
   /**
    * Create a new conversation

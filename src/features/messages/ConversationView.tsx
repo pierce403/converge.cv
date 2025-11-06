@@ -9,6 +9,7 @@ import { ContactCardModal } from '@/components/ContactCardModal';
 import { getContactInfo } from '@/lib/default-contacts';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
+import { getXmtpClient } from '@/lib/xmtp';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 
@@ -25,6 +26,27 @@ export function ConversationView() {
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
+
+  const contactsByInboxId = useMemo(() => {
+    const map = new Map<string, ContactType>();
+    contacts.forEach((contact) => {
+      map.set(contact.inboxId.toLowerCase(), contact);
+    });
+    return map;
+  }, [contacts]);
+
+  const contactsByAddress = useMemo(() => {
+    const map = new Map<string, ContactType>();
+    contacts.forEach((contact) => {
+      if (contact.primaryAddress) {
+        map.set(contact.primaryAddress.toLowerCase(), contact);
+      }
+      contact.addresses?.forEach((address) => {
+        map.set(address.toLowerCase(), contact);
+      });
+    });
+    return map;
+  }, [contacts]);
 
   const conversation = conversations.find((c) => c.id === id);
   const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
@@ -45,6 +67,85 @@ export function ConversationView() {
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  useEffect(() => {
+    if (!conversation?.isGroup) {
+      return;
+    }
+
+    const memberSet = new Set<string>();
+    conversation.groupMembers?.forEach((member) => {
+      if (member.inboxId) {
+        memberSet.add(member.inboxId.toLowerCase());
+      }
+    });
+    conversation.memberInboxes?.forEach((memberInbox) => {
+      if (memberInbox) {
+        memberSet.add(memberInbox.toLowerCase());
+      }
+    });
+
+    if (memberSet.size === 0) {
+      return;
+    }
+
+    const myInboxLower = identity?.inboxId?.toLowerCase();
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const xmtp = getXmtpClient();
+        const contactStore = useContactStore.getState();
+        for (const memberInbox of memberSet) {
+          if (cancelled) {
+            break;
+          }
+          if (!memberInbox) {
+            continue;
+          }
+          if (myInboxLower && memberInbox === myInboxLower) {
+            continue;
+          }
+          try {
+            const existing = contactStore.getContactByInboxId(memberInbox);
+            if (existing) {
+              const now = Date.now();
+              const last = existing.lastSyncedAt ?? 0;
+              if (existing.preferredName && existing.preferredAvatar && now - last < 30 * 60 * 1000) {
+                continue;
+              }
+            }
+
+            const profile = await xmtp.fetchInboxProfile(memberInbox);
+            if (cancelled) {
+              return;
+            }
+
+            await contactStore.upsertContactProfile({
+              inboxId: profile.inboxId ?? memberInbox,
+              displayName: profile.displayName,
+              avatarUrl: profile.avatarUrl,
+              primaryAddress: profile.primaryAddress,
+              addresses: profile.addresses,
+              identities: profile.identities,
+              source: 'inbox',
+              metadata: { lastSyncedAt: Date.now() },
+            });
+          } catch (error) {
+            console.warn('[ConversationView] Failed to refresh member profile', memberInbox, error);
+          }
+        }
+      } catch (error) {
+        console.warn('[ConversationView] Failed to load group member profiles', error);
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation?.id, conversation?.isGroup, conversation?.groupMembers, conversation?.memberInboxes, identity?.inboxId]);
 
   // Note: Message handling is done globally in Layout.tsx
   // This component just displays messages from the store
@@ -130,6 +231,47 @@ export function ConversationView() {
       defaultContactInfo?.avatar
     );
   }, [conversation, contact, defaultContactInfo]);
+
+  const groupMemberProfiles = useMemo(() => {
+    const map = new Map<string, { displayName?: string; avatar?: string; address?: string }>();
+    if (!conversation?.isGroup) {
+      return map;
+    }
+
+    conversation.groupMembers?.forEach((member) => {
+      const inboxLower = member.inboxId?.toLowerCase?.();
+      if (!inboxLower) {
+        return;
+      }
+      const addressLower = member.address?.toLowerCase?.();
+      const contactMatch =
+        contactsByInboxId.get(inboxLower) || (addressLower ? contactsByAddress.get(addressLower) : undefined);
+      const displayName =
+        contactMatch?.preferredName ||
+        contactMatch?.name ||
+        member.displayName ||
+        (addressLower ? formatIdentifier(addressLower) : formatIdentifier(inboxLower));
+      const avatar = contactMatch?.preferredAvatar || contactMatch?.avatar || member.avatar;
+      map.set(inboxLower, { displayName, avatar, address: addressLower });
+    });
+
+    conversation.memberInboxes?.forEach((memberInbox) => {
+      const inboxLower = memberInbox?.toLowerCase?.();
+      if (!inboxLower || map.has(inboxLower)) {
+        return;
+      }
+      const contactMatch = contactsByInboxId.get(inboxLower);
+      const addressLower = contactMatch?.primaryAddress?.toLowerCase();
+      const displayName =
+        contactMatch?.preferredName ||
+        contactMatch?.name ||
+        (addressLower ? formatIdentifier(addressLower) : formatIdentifier(inboxLower));
+      const avatar = contactMatch?.preferredAvatar || contactMatch?.avatar;
+      map.set(inboxLower, { displayName, avatar, address: addressLower });
+    });
+
+    return map;
+  }, [conversation, contactsByInboxId, contactsByAddress]);
 
   if (!conversation) {
     return (
@@ -278,9 +420,66 @@ export function ConversationView() {
           </div>
         ) : (
           <>
-            {messages.map((message: Message) => (
-              <MessageBubble key={message.id} message={message} onReplyRequest={(m) => setReplyTo(m)} />
-            ))}
+            {messages.map((message: Message) => {
+              const senderLower = message.sender?.toLowerCase?.();
+              let senderInfo: { displayName?: string; avatarUrl?: string; fallback?: string } | undefined;
+
+              if (conversation.isGroup && senderLower) {
+                const myInboxLower = identity?.inboxId?.toLowerCase();
+                const myAddressLower = identity?.address?.toLowerCase();
+                const isSelf =
+                  (myInboxLower && senderLower === myInboxLower) ||
+                  (myAddressLower && senderLower === myAddressLower);
+
+                if (isSelf) {
+                  const fallback = identity?.displayName || 'You';
+                  senderInfo = {
+                    displayName: identity?.displayName || 'You',
+                    avatarUrl: identity?.avatar,
+                    fallback,
+                  };
+                } else {
+                  const profile = groupMemberProfiles.get(senderLower);
+                  let displayName = profile?.displayName;
+                  let avatarUrl = profile?.avatar;
+                  let fallback = profile?.address || senderLower;
+
+                  if (!profile) {
+                    const contactByInbox = contactsByInboxId.get(senderLower);
+                    if (contactByInbox) {
+                      displayName = contactByInbox.preferredName || contactByInbox.name;
+                      avatarUrl = contactByInbox.preferredAvatar || contactByInbox.avatar;
+                      fallback = contactByInbox.primaryAddress || senderLower;
+                    } else {
+                      const contactByAddress = contactsByAddress.get(senderLower);
+                      if (contactByAddress) {
+                        displayName = contactByAddress.preferredName || contactByAddress.name;
+                        avatarUrl = contactByAddress.preferredAvatar || contactByAddress.avatar;
+                        fallback = contactByAddress.primaryAddress || senderLower;
+                      }
+                    }
+                  }
+
+                  const resolvedFallback = fallback || senderLower;
+                  senderInfo = {
+                    displayName: displayName || formatIdentifier(resolvedFallback),
+                    avatarUrl,
+                    fallback: resolvedFallback,
+                  };
+                }
+              }
+
+              return (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onReplyRequest={(m) => setReplyTo(m)}
+                  senderInfo={senderInfo}
+                  showAvatar={Boolean(conversation.isGroup)}
+                  showSenderLabel={Boolean(conversation.isGroup)}
+                />
+              );
+            })}
             <div ref={messagesEndRef} />
           </>
         )}

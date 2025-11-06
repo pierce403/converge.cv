@@ -2,19 +2,35 @@
  * Message bubble component
  */
 
+import { useState, useRef, useCallback } from 'react';
 import { Message } from '@/types';
 import { formatMessageTime } from '@/lib/utils/date';
 import { useAuthStore } from '@/lib/stores';
-import { useState, useRef, useCallback } from 'react';
 import { MessageActionsModal } from './MessageActionsModal';
 import { useMessages } from './useMessages';
+import { isDisplayableImageSrc } from '@/lib/utils/image';
+
+interface SenderInfo {
+  displayName?: string;
+  avatarUrl?: string;
+  fallback?: string;
+}
 
 interface MessageBubbleProps {
   message: Message;
   onReplyRequest?: (message: Message) => void;
+  senderInfo?: SenderInfo;
+  showAvatar?: boolean;
+  showSenderLabel?: boolean;
 }
 
-export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onReplyRequest,
+  senderInfo,
+  showAvatar = false,
+  showSenderLabel = false,
+}: MessageBubbleProps) {
   const { identity } = useAuthStore();
   const identityAddress = identity?.address?.toLowerCase();
   const identityInbox = identity?.inboxId?.toLowerCase();
@@ -71,18 +87,59 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
     closeActions();
   };
 
+  const fallbackSource = senderInfo?.fallback || senderInfo?.displayName || message.sender || '';
+  const fallbackLabel = (() => {
+    const trimmed = fallbackSource.trim();
+    if (!trimmed) {
+      return '??';
+    }
+    if (trimmed.startsWith('0x') && trimmed.length > 4) {
+      return trimmed.slice(2, 4).toUpperCase();
+    }
+    return trimmed.slice(0, 2).toUpperCase();
+  })();
+
+  const renderAvatar = () => {
+    const avatarUrl = senderInfo?.avatarUrl;
+    if (isDisplayableImageSrc(avatarUrl)) {
+      return <img src={avatarUrl} alt="Sender avatar" className="w-full h-full rounded-full object-cover" />;
+    }
+    if (avatarUrl) {
+      return <span className="text-lg" aria-hidden>{avatarUrl}</span>;
+    }
+    return (
+      <span className="text-xs font-semibold text-white" aria-hidden>
+        {fallbackLabel}
+      </span>
+    );
+  };
+
+  const shouldShowAvatar = Boolean(showAvatar && message.type !== 'system');
+  const showLabel = Boolean(showSenderLabel && message.type !== 'system' && senderInfo?.displayName);
+
   return (
     <div
-      className={`flex mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
+      className={`flex items-end gap-2 mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
       onContextMenu={handleContextMenu}
     >
+      {!isSent && shouldShowAvatar && (
+        <div className="w-8 h-8 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
+          {renderAvatar()}
+        </div>
+      )}
       <div
         className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[66%]`}
         onPointerDown={handlePointerDown}
         onPointerUp={clearTimer}
         onPointerLeave={clearTimer}
       >
-        {/* Message content (bubble) */}
+        {showLabel && (
+          <span
+            className={`text-xs text-primary-300 mb-1 px-1 ${isSent ? 'self-end text-right' : 'self-start'}`}
+          >
+            {senderInfo?.displayName}
+          </span>
+        )}
         <div
           className={
             (isSent ? 'message-sent' : 'message-received') +
@@ -113,7 +170,6 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
             </div>
           )}
 
-          {/* Reactions tucked inside bubble bottom corner */}
           {message.reactions.length > 0 && (() => {
             const grouped = message.reactions.reduce<Record<string, number>>((acc, r) => {
               acc[r.emoji] = (acc[r.emoji] || 0) + 1;
@@ -150,7 +206,6 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
           })()}
         </div>
 
-        {/* Metadata */}
         <div className="flex items-center gap-2 mt-1 px-2">
           <span className="text-xs text-primary-300">{formatMessageTime(message.sentAt)}</span>
 
@@ -172,7 +227,6 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
           )}
         </div>
 
-        {/* Reactions moved into bubble; nothing here */}
         <MessageActionsModal
           open={showActions}
           onClose={closeActions}
@@ -184,6 +238,11 @@ export function MessageBubble({ message, onReplyRequest }: MessageBubbleProps) {
           onForward={onForward}
         />
       </div>
+      {isSent && shouldShowAvatar && (
+        <div className="w-8 h-8 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
+          {renderAvatar()}
+        </div>
+      )}
     </div>
   );
 }
