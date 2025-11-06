@@ -22,6 +22,7 @@ interface MessageBubbleProps {
   senderInfo?: SenderInfo;
   showAvatar?: boolean;
   showSenderLabel?: boolean;
+  onSenderClick?: () => void;
 }
 
 export function MessageBubble({
@@ -30,6 +31,7 @@ export function MessageBubble({
   senderInfo,
   showAvatar = false,
   showSenderLabel = false,
+  onSenderClick,
 }: MessageBubbleProps) {
   const { identity } = useAuthStore();
   const identityAddress = identity?.address?.toLowerCase();
@@ -117,15 +119,27 @@ export function MessageBubble({
   const shouldShowAvatar = Boolean(showAvatar && message.type !== 'system');
   const showLabel = Boolean(showSenderLabel && message.type !== 'system' && senderInfo?.displayName);
 
+  const avatarClassName =
+    'w-8 h-8 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0';
+
   return (
     <div
       className={`flex items-end gap-2 mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
       onContextMenu={handleContextMenu}
     >
       {!isSent && shouldShowAvatar && (
-        <div className="w-8 h-8 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
-          {renderAvatar()}
-        </div>
+        onSenderClick ? (
+          <button
+            type="button"
+            onClick={onSenderClick}
+            className={`${avatarClassName} hover:ring-2 hover:ring-accent-400 transition-all focus:outline-none focus:ring-2 focus:ring-accent-400`}
+            aria-label={senderInfo?.displayName ? `View contact ${senderInfo.displayName}` : 'View contact'}
+          >
+            {renderAvatar()}
+          </button>
+        ) : (
+          <div className={avatarClassName}>{renderAvatar()}</div>
+        )
       )}
       <div
         className={`flex flex-col ${isSent ? 'items-end' : 'items-start'} max-w-[66%]`}
@@ -239,9 +253,18 @@ export function MessageBubble({
         />
       </div>
       {isSent && shouldShowAvatar && (
-        <div className="w-8 h-8 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0">
-          {renderAvatar()}
-        </div>
+        onSenderClick ? (
+          <button
+            type="button"
+            onClick={onSenderClick}
+            className={`${avatarClassName} hover:ring-2 hover:ring-accent-400 transition-all focus:outline-none focus:ring-2 focus:ring-accent-400`}
+            aria-label={senderInfo?.displayName ? `View contact ${senderInfo.displayName}` : 'View contact'}
+          >
+            {renderAvatar()}
+          </button>
+        ) : (
+          <div className={avatarClassName}>{renderAvatar()}</div>
+        )
       )}
     </div>
   );
