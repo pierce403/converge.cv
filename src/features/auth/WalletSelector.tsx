@@ -112,24 +112,16 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
         ))}
       </div>
 
-      <div className="relative">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-primary-800/60" />
-        </div>
-        <div className="relative flex justify-center text-sm">
-          <span className="px-4 bg-primary-900/80 text-primary-200">or</span>
-        </div>
-      </div>
-
       <button
         onClick={() => onImportKeyfile?.()}
-        className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors text-left"
+        className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
       >
-        <div className="flex items-center gap-3">
-          <span className="text-3xl">📁</span>
-          <div>
-            <div className="font-medium text-primary-50">Import keyfile</div>
-            <div className="text-xs text-primary-200">Restore a Converge identity from a downloaded keyfile.</div>
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-3">
+            <span className="text-3xl">📁</span>
+            <div className="text-left">
+              <div className="font-medium text-primary-50">Import Keyfile</div>
+            </div>
           </div>
         </div>
       </button>
