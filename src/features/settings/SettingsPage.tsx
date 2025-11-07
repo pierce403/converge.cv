@@ -2,7 +2,7 @@
  * Settings page
  */
 
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
 import { getStorage } from '@/lib/storage';
@@ -19,7 +19,41 @@ export function SettingsPage() {
   const [storageSize, setStorageSize] = useState<number | null>(null);
   const [isLoadingSize, setIsLoadingSize] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
-  const [displayName, setDisplayName] = useState(identity?.displayName || '');
+  // Deterministic "Color Animal" suggestion (seeded by inboxId/address)
+  const suggestDisplayName = (seed?: string) => {
+    const colors = [
+      'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Orange', 'Pink', 'Brown', 'Black', 'White',
+    ];
+    const animals = [
+      'Orca','Dolphin','Whale','Penguin','Seal','Otter','Shark','Turtle','Eagle','Falcon','Hawk','Owl','Fox','Wolf','Bear','Tiger','Lion','Zebra','Giraffe','Elephant','Monkey','Panda','Koala','Kangaroo','Rabbit','Deer','Horse','Bison','Buffalo','Camel','Hippo','Rhino','Leopard','Cheetah','Jaguar','Goat','Sheep','Cow','Pig','Dog','Cat','Goose','Duck','Swan','Frog','Toad','Lizard','Snake','Chimpanzee','Gorilla',
+    ];
+    const s = (seed || 'converge').toLowerCase();
+    let h = 2166136261 >>> 0; // FNV-1a 32-bit
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    const c = colors[Math.abs(h) % colors.length];
+    const a = animals[Math.abs((h >>> 1)) % animals.length];
+    return `${c} ${a}`;
+  };
+
+  const isAutoLabel = (val?: string | null) => {
+    if (!val) return true;
+    const v = val.trim();
+    return v.startsWith('Identity ') || v.startsWith('Wallet ');
+  };
+
+  const computeInitialDisplayName = () => {
+    const raw = identity?.displayName?.trim();
+    if (!raw || isAutoLabel(raw)) {
+      const seed = identity?.inboxId || identity?.address;
+      return suggestDisplayName(seed);
+    }
+    return raw;
+  };
+
+  const [displayName, setDisplayName] = useState<string>(computeInitialDisplayName());
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const { disconnectWallet } = useWalletConnection();
   const [showQR, setShowQR] = useState(false);
@@ -121,6 +155,12 @@ export function SettingsPage() {
     }
   };
 
+  // Keep suggested name in sync when identity changes
+  useEffect(() => {
+    setDisplayName(computeInitialDisplayName());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity?.inboxId, identity?.address, identity?.displayName]);
+
   const handleAddIdentity = () => {
     // TODO: Implement add identity flow
     alert('Add Identity feature coming soon!\n\nThis will allow you to associate multiple identities (Ethereum addresses, passkeys, etc.) with your XMTP inbox.');
@@ -184,7 +224,9 @@ export function SettingsPage() {
         try {
           if (typeof window !== 'undefined') {
             // Remove legacy global key
-            try { window.localStorage.removeItem('personalization-reminder'); } catch {}
+            try { window.localStorage.removeItem('personalization-reminder'); } catch (e) {
+              console.warn('[Settings] Failed to remove legacy personalization key:', e);
+            }
             // Remove per-identity keys
             try {
               const keys: string[] = [];
@@ -197,10 +239,16 @@ export function SettingsPage() {
                   window.localStorage.removeItem(k);
                 }
               }
-            } catch {}
+            } catch (e) {
+              console.warn('[Settings] Failed to enumerate personalization keys:', e);
+            }
             // As this is "Clear All Data", clear all local/session storage as a final sweep
-            try { window.localStorage.clear(); } catch {}
-            try { window.sessionStorage.clear(); } catch {}
+            try { window.localStorage.clear(); } catch (e) {
+              console.warn('[Settings] Failed to clear localStorage:', e);
+            }
+            try { window.sessionStorage.clear(); } catch (e) {
+              console.warn('[Settings] Failed to clear sessionStorage:', e);
+            }
           }
         } catch (e) {
           console.warn('[Settings] Failed to clear personalization flags or web storage (non-fatal):', e);
@@ -363,7 +411,14 @@ export function SettingsPage() {
                     </button>
                     <button
                       onClick={() => {
-                        setDisplayName(identity?.displayName || '');
+                        // Reset to suggested/actual value on cancel
+                        const raw = identity?.displayName?.trim();
+                        if (!raw || raw.startsWith('Identity ') || raw.startsWith('Wallet ')) {
+                          const seed = identity?.inboxId || identity?.address;
+                          setDisplayName(suggestDisplayName(seed));
+                        } else {
+                          setDisplayName(raw);
+                        }
                         setIsEditingName(false);
                       }}
                       className="btn-secondary text-sm px-3"
@@ -376,7 +431,18 @@ export function SettingsPage() {
                     <span className="text-sm">
                       {identity?.displayName || <span className="text-primary-300">Not set</span>}
                     </span>
-                    <button onClick={() => setIsEditingName(true)} className="text-sm text-accent-300 hover:text-accent-200">
+                    <button
+                      onClick={() => {
+                        // Prefill with suggested name when entering edit if auto-label
+                        const raw = identity?.displayName?.trim();
+                        if (!raw || raw.startsWith('Identity ') || raw.startsWith('Wallet ')) {
+                          const seed = identity?.inboxId || identity?.address;
+                          setDisplayName(suggestDisplayName(seed));
+                        }
+                        setIsEditingName(true);
+                      }}
+                      className="text-sm text-accent-300 hover:text-accent-200"
+                    >
                       Edit
                     </button>
                   </div>
