@@ -482,7 +482,7 @@ export function ConversationView() {
           </>
         )}
         {conversation.isGroup ? (
-          <Menu as="div" className="relative inline-block text-left z-[90]">
+          <Menu as="div" className="relative inline-block text-left z-[9999]">
             <Menu.Button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
@@ -497,7 +497,7 @@ export function ConversationView() {
               leaveFrom="transform opacity-100 scale-100"
               leaveTo="transform opacity-0 scale-95"
             >
-              <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur z-[100]">
+              <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
                 <Menu.Item>
                   {({ active }) => (
                     <button
@@ -544,7 +544,7 @@ export function ConversationView() {
             </Transition>
           </Menu>
         ) : (
-          <Menu as="div" className="relative inline-block text-left z-[90]">
+          <Menu as="div" className="relative inline-block text-left z-[9999]">
             <Menu.Button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
@@ -559,7 +559,7 @@ export function ConversationView() {
               leaveFrom="transform opacity-100 scale-100"
               leaveTo="transform opacity-0 scale-95"
             >
-              <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur z-[100]">
+              <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
                 {/* Add/Remove Contact */}
                 <Menu.Item>
                   {({ active }) => (
