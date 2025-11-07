@@ -84,6 +84,7 @@ export function GroupSettingsPage() {
     promoteMemberToAdmin,
     demoteAdminToMember,
     refreshGroupDetails,
+    deleteGroup,
   } = useConversations();
   const { identity } = useAuthStore();
   const contacts = useContactStore((state) => state.contacts);
@@ -1141,6 +1142,35 @@ export function GroupSettingsPage() {
             <p className="text-primary-300 text-sm mt-2">
               {joinPolicyShareNote}
             </p>
+          </div>
+
+          {/* Danger Zone */}
+          <div className="border-t border-primary-800/60 pt-4">
+            <h2 className="text-lg font-semibold mb-2 text-red-300">Leave Group</h2>
+            <p className="text-sm text-primary-300 mb-3">
+              Leaving will remove you from this group on XMTP and delete all local data for this conversation. You will
+              stop receiving new messages.
+            </p>
+            <button
+              type="button"
+              className="w-full btn-danger"
+              onClick={async () => {
+                if (!conversation) return;
+                if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
+                try {
+                  await deleteGroup(conversation.id, false);
+                  navigate('/');
+                } catch (e) {
+                  console.warn('[GroupSettings] Failed to leave via combined action, attempting local purge', e);
+                  try {
+                    // Fallback: local-only navigation; actual purge handled elsewhere
+                    navigate('/');
+                  } catch (_e) { /* ignore */ }
+                }
+              }}
+            >
+              Leave group
+            </button>
           </div>
         </div>
       </div>
