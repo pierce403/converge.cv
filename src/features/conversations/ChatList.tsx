@@ -194,6 +194,8 @@ export function ChatList() {
             ? conversation.groupName || 'Group'
             : contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
+          const conversationDescription = contact?.description ?? defaultContactInfo?.description;
+
           // Compute preview from most recent message if available for extra correctness
           let subtitle = conversation.lastMessagePreview || '';
           const msgs = messagesByConversation[conversation.id] || [];
@@ -204,7 +206,7 @@ export function ChatList() {
             else subtitle = '📎 Attachment';
           }
           if (!subtitle) {
-            subtitle = contact?.description || defaultContactInfo?.description || 'No messages yet';
+            subtitle = conversationDescription || 'No messages yet';
           }
 
           return (
@@ -222,24 +224,52 @@ export function ChatList() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!conversation.isGroup) {
-                      if (contact) {
-                        setSelectedContact(contact);
-                      } else {
-                        // Create a minimal placeholder contact for the modal
-                        const placeholder: Contact = {
-                          inboxId: conversation.peerId.toLowerCase(),
-                          name: displayName,
-                          createdAt: Date.now(),
-                          primaryAddress: undefined,
-                          addresses: [],
-                          identities: [],
-                          isInboxOnly: true,
-                          source: 'inbox',
-                        } as Contact;
-                        setSelectedContact(placeholder);
-                      }
+                    if (conversation.isGroup) {
+                      return;
                     }
+
+                    if (contact) {
+                      setSelectedContact(contact);
+                      return;
+                    }
+
+                    const rawPeerId = conversation.peerId;
+                    const normalizedPeerId = rawPeerId?.toLowerCase?.();
+                    if (!normalizedPeerId) {
+                      console.warn('[ChatList] Missing peer identifier for conversation', conversation.id);
+                      return;
+                    }
+
+                    const fallbackAddress = normalizedPeerId.startsWith('0x')
+                      ? normalizedPeerId
+                      : undefined;
+
+                    const normalizedAddress = fallbackAddress?.toLowerCase();
+
+                    const placeholder: Contact = {
+                      inboxId: normalizedPeerId,
+                      name: displayName || formatIdentifier(normalizedPeerId),
+                      preferredName: displayName || undefined,
+                      avatar: avatarSource,
+                      preferredAvatar: avatarSource,
+                      description: conversationDescription,
+                      createdAt: Date.now(),
+                      source: 'inbox',
+                      isInboxOnly: true,
+                      primaryAddress: normalizedAddress,
+                      addresses: normalizedAddress ? [normalizedAddress] : [],
+                      identities: normalizedAddress
+                        ? [
+                            {
+                              identifier: normalizedAddress,
+                              kind: 'Ethereum',
+                              isPrimary: true,
+                            },
+                          ]
+                        : [],
+                    };
+
+                    setSelectedContact(placeholder);
                   }}
                   className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"
                 >
