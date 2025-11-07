@@ -505,43 +505,22 @@ export function ConversationView() {
                   {({ active }) => (
                     <button
                       onClick={async () => {
-                        try {
-                          const me = identity?.inboxId || identity?.address;
-                          if (!me) {
-                            alert('No identity available');
-                            return;
-                          }
-                          if (!confirm('Leave this group? You will stop receiving new messages.')) return;
-                          await removeMembersFromGroup(conversation.id, [me]);
-                          alert('You left the group');
-                          navigate('/');
-                        } catch (e) {
-                          alert('Failed to leave group');
-                        }
-                      }}
-                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
-                    >
-                      Leave group
-                    </button>
-                  )}
-                </Menu.Item>
-                <div className="my-1 h-px bg-primary-800/60" />
-                <Menu.Item>
-                  {({ active }) => (
-                    <button
-                      onClick={async () => {
-                        if (!confirm('Delete this group? You will leave the group and all local data will be removed.')) return;
+                        if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
                         try {
                           await deleteGroup(conversation.id, false);
                         } catch (e) {
-                          // fallback: local delete
-                          try { await removeConversation(conversation.id); } catch (_e) { void 0; }
+                          // fallback: try leave only, then local delete
+                          try {
+                            const me = identity?.inboxId || identity?.address;
+                            if (me) await removeMembersFromGroup(conversation.id, [me]);
+                          } catch (_e) { /* ignore */ }
+                          try { await removeConversation(conversation.id); } catch (_e) { /* ignore */ }
                         }
                         navigate('/');
                       }}
                       className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
                     >
-                      Delete group
+                      Leave group
                     </button>
                   )}
                 </Menu.Item>
