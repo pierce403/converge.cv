@@ -522,6 +522,27 @@ export function useConversations() {
   );
 
   /**
+   * Mute/unmute a conversation (indefinite mute when enabling)
+   */
+  const toggleMute = useCallback(
+    async (conversationId: string) => {
+      try {
+        const storage = await getStorage();
+        const conversation = await storage.getConversation(conversationId);
+        if (!conversation) return;
+        const now = Date.now();
+        const isMuted = Boolean(conversation.mutedUntil && conversation.mutedUntil > now);
+        const mutedUntil = isMuted ? undefined : now + 365 * 24 * 60 * 60 * 1000; // ~1 year
+        await storage.putConversation({ ...conversation, mutedUntil });
+        updateConversation(conversationId, { mutedUntil });
+      } catch (error) {
+        console.error('Failed to toggle mute:', error);
+      }
+    },
+    [updateConversation]
+  );
+
+  /**
    * Clear unread count
    */
   const markAsRead = useCallback(
@@ -839,6 +860,7 @@ export function useConversations() {
     createGroupConversation,
     togglePin,
     toggleArchive,
+    toggleMute,
     markAsRead,
     updateConversationAndPersist,
     updateGroupMetadata,

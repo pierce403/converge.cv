@@ -22,7 +22,7 @@ export function ConversationView() {
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
 
-  const { conversations, removeConversation, removeMembersFromGroup, deleteGroup } = useConversations();
+  const { conversations, removeConversation, removeMembersFromGroup, deleteGroup, toggleMute } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
   const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
@@ -614,6 +614,19 @@ export function ConversationView() {
                         Block user
                       </button>
                     )
+                  )}
+                </Menu.Item>
+                {/* Mute/Unmute */}
+                <Menu.Item>
+                  {({ active }) => (
+                    <button
+                      onClick={async () => {
+                        try { await toggleMute(conversation.id); } catch (_e) { /* ignore */ }
+                      }}
+                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                    >
+                      {(conversation.mutedUntil && conversation.mutedUntil > Date.now()) ? 'Unmute' : 'Mute'} conversation
+                    </button>
                   )}
                 </Menu.Item>
                 <div className="my-1 h-px bg-primary-800/60" />

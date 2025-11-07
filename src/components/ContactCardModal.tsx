@@ -4,6 +4,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import type { Contact } from '@/lib/stores/contact-store';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { useConversations } from '@/features/conversations/useConversations';
+import { useConversationStore } from '@/lib/stores';
 import { useNavigate } from 'react-router-dom';
 
 interface ContactCardModalProps {
@@ -32,7 +33,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [inboxState, setInboxState] = useState<InboxState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const { createConversation } = useConversations();
+  const { createConversation, toggleMute } = useConversations();
+  const conversations = useConversationStore((s) => s.conversations);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -229,6 +231,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     }
   };
 
+  const dmConversation = conversations.find((c) => !c.isGroup && c.peerId.toLowerCase() === contact.inboxId.toLowerCase());
+  const isMuted = Boolean(dmConversation?.mutedUntil && dmConversation.mutedUntil > Date.now());
+
   // Determine display name with priority
   const displayName = preferredName || contact.name;
   
@@ -296,6 +301,24 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
               placeholder="Enter display name"
             />
           </div>
+
+          {/* Mute toggle if DM exists */}
+          {dmConversation && (
+            <div className="w-full mb-4">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-primary-300">Mute conversation</label>
+                <button
+                  onClick={async () => {
+                    try { await toggleMute(dmConversation.id); } catch (_e) { /* ignore */ }
+                  }}
+                  className={`px-3 py-1 rounded ${isMuted ? 'bg-primary-800 text-primary-100' : 'bg-primary-900 text-primary-300 hover:bg-primary-800'}`}
+                >
+                  {isMuted ? 'Unmute' : 'Mute'}
+                </button>
+              </div>
+              <p className="text-xs text-primary-400 mt-1">{isMuted ? 'Muted' : 'Not muted'}</p>
+            </div>
+          )}
 
           {/* Inbox ID Section */}
           <div className="w-full mb-4">
