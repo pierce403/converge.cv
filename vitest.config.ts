@@ -8,6 +8,9 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    exclude: [
+      'tests/e2e/**', // Playwright E2E tests (run via playwright, not vitest)
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
@@ -32,4 +35,3 @@ export default defineConfig({
     },
   },
 });
-

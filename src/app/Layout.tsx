@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useVisualViewport } from '@/lib/utils/useVisualViewport';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
@@ -18,6 +19,8 @@ import { PersonalizationReminderModal } from '@/components/PersonalizationRemind
 
 
 export function Layout() {
+  // Sync CSS --vh and keyboard-open class with VisualViewport
+  useVisualViewport();
   const location = useLocation();
   const identity = useAuthStore((state) => state.identity);
   const { addConversation, updateConversation } = useConversationStore();
@@ -594,7 +597,7 @@ export function Layout() {
       </main>
 
       {/* Bottom navigation */}
-      <nav className="bg-primary-950/80 border-t border-primary-800/60 px-4 py-3 backdrop-blur-md shadow-inner">
+      <nav className="sticky bottom-0 bg-primary-950/80 border-t border-primary-800/60 px-4 py-3 backdrop-blur-md shadow-inner" style={{ paddingBottom: 'var(--safe-bottom)' }}>
         <div className="flex justify-around max-w-lg mx-auto">
           <Link
             to="/contacts"

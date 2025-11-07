@@ -67,15 +67,30 @@
   }
 }
 
-/* PWA safe area support for iOS - only bottom padding for navigation bar */
-body {
-  padding-bottom: env(safe-area-inset-bottom);
-  min-height: 100vh;
-  overflow-y: auto;
+:root {
+  --vh: 1vh;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* App shell sizing and scroll behavior */
+html, body {
+  height: 100%;
+  overflow: hidden;
 }
 
 #root {
-  min-height: 100vh;
+  min-height: calc(var(--vh, 1vh) * 100);
   display: flex;
   flex-direction: column;
+}
+
+@supports (height: 100dvh) {
+  #root { min-height: 100dvh; }
+}
+
+/* Bottom nav behavior when keyboard is open */
+.keyboard-open nav {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
 }

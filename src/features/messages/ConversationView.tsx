@@ -53,6 +53,8 @@ export function ConversationView() {
 
   const conversation = conversations.find((c) => c.id === id);
   const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
+  const [composerHeight, setComposerHeight] = useState<number>(0);
+  const composerRef = useRef<HTMLDivElement>(null);
 
   const isCurrentUserAdmin = useMemo(() => {
     if (!conversation?.isGroup || !identity?.address || !conversation.admins) {
@@ -66,6 +68,18 @@ export function ConversationView() {
       loadMessages(id);
     }
   }, [id, loadMessages]);
+
+  // Observe composer height to pad the message list bottom accordingly
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setComposerHeight(el.getBoundingClientRect().height);
+    });
+    ro.observe(el);
+    setComposerHeight(el.getBoundingClientRect().height);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     setContactForModal(null);
@@ -662,7 +676,7 @@ export function ConversationView() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30">
+      <div className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30" style={{ paddingBottom: `calc(${composerHeight}px + var(--safe-bottom))` }}>
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-primary-200">Loading messages...</div>
@@ -763,7 +777,9 @@ export function ConversationView() {
       </div>
 
       {/* Composer */}
-      <MessageComposer onSend={handleSend} replyToMessage={replyTo ?? undefined} onCancelReply={() => setReplyTo(null)} onSent={() => setReplyTo(null)} />
+      <div ref={composerRef}>
+        <MessageComposer onSend={handleSend} replyToMessage={replyTo ?? undefined} onCancelReply={() => setReplyTo(null)} onSent={() => setReplyTo(null)} />
+      </div>
 
       {/* User info modal */}
       {contactForModal && (
