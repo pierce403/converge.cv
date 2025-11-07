@@ -474,7 +474,6 @@ export function useAuth() {
    */
   const checkExistingIdentity = useCallback(async (): Promise<boolean> => {
     try {
-      const storage = await getStorage();
       const registry = useInboxRegistryStore.getState();
       registry.hydrate();
 
@@ -483,12 +482,25 @@ export function useAuth() {
         const forced = typeof window !== 'undefined' ? window.localStorage.getItem('converge.forceInboxId.v1') : null;
         if (forced && forced.trim().length > 0) {
           registry.setCurrentInbox(forced);
+          // Persist storage namespace early so the next getStorage() uses the right shard
+          await (await import('@/lib/storage')).setStorageNamespace(forced);
           // Clear the one-shot hint
           window.localStorage.removeItem('converge.forceInboxId.v1');
         }
       } catch (e) {
         // non-fatal
       }
+
+      // Ensure storage namespace is aligned with the current registry inbox before instantiating storage
+      if (registry.currentInboxId) {
+        try {
+          await (await import('@/lib/storage')).setStorageNamespace(registry.currentInboxId);
+        } catch {
+          // ignore
+        }
+      }
+
+      const storage = await getStorage();
 
       const identities = await storage.listIdentities();
       if (!identities.length) {

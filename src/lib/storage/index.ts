@@ -12,6 +12,20 @@ import type { StorageDriver } from './interface';
 let storageInstance: StorageDriver | null = null;
 let storageNamespace = 'default';
 
+// Initialize namespace from persisted value (survives reloads)
+(() => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const persisted = window.localStorage.getItem('converge.storageNamespace.v1');
+      if (persisted && persisted.trim().length > 0) {
+        storageNamespace = persisted;
+      }
+    }
+  } catch {
+    // ignore
+  }
+})();
+
 function sanitizeNamespace(ns: string): string {
   const trimmed = (ns || '').toLowerCase().trim();
   if (!trimmed) return 'default';
@@ -22,6 +36,13 @@ export async function setStorageNamespace(ns: string): Promise<void> {
   const next = sanitizeNamespace(ns);
   if (next === storageNamespace) return;
   storageNamespace = next;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem('converge.storageNamespace.v1', storageNamespace);
+    }
+  } catch {
+    // ignore
+  }
   if (storageInstance) {
     await storageInstance.close();
     storageInstance = null;
