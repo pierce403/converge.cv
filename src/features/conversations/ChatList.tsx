@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
-import { useConversationStore } from '@/lib/stores';
+import { useConversationStore, useMessageStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
 import { formatDistanceToNow } from '@/lib/utils/date';
@@ -13,17 +13,39 @@ import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore, useAuthStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
+import { ConversationDetailsModal } from '@/features/conversations/ConversationDetailsModal';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [detailsConvId, setDetailsConvId] = useState<string | null>(null);
+  const [pressTimer, setPressTimer] = useState<number | null>(null);
   const [isResyncing, setIsResyncing] = useState(false);
   type ConversationItem = typeof conversations[number];
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
   const setConversations = useConversationStore((s) => s.setConversations);
   const { loadConversations } = useConversations();
+  const messagesByConversation = useMessageStore((s) => s.messagesByConversation);
+
+  const startLongPress = (convId: string) => (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    if (pressTimer) {
+      window.clearTimeout(pressTimer);
+    }
+    const t = window.setTimeout(() => {
+      setDetailsConvId(convId);
+    }, 550);
+    setPressTimer(t);
+  };
+
+  const clearLongPress = () => {
+    if (pressTimer) {
+      window.clearTimeout(pressTimer);
+      setPressTimer(null);
+    }
+  };
 
   useEffect(() => {
     loadContacts();
@@ -172,15 +194,28 @@ export function ChatList() {
             ? conversation.groupName || 'Group'
             : contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
-          const subtitle = conversation.lastMessagePreview
-            || contact?.description
-            || defaultContactInfo?.description
-            || 'No messages yet';
+          // Compute preview from most recent message if available for extra correctness
+          let subtitle = conversation.lastMessagePreview || '';
+          const msgs = messagesByConversation[conversation.id] || [];
+          if (msgs.length) {
+            const last = msgs[msgs.length - 1];
+            if (last.type === 'text') subtitle = last.body;
+            else if (last.type === 'system') subtitle = last.body;
+            else subtitle = '📎 Attachment';
+          }
+          if (!subtitle) {
+            subtitle = contact?.description || defaultContactInfo?.description || 'No messages yet';
+          }
 
           return (
             <div
               key={conversation.id}
               className="border-b border-primary-900/40 hover:bg-primary-900/50 transition-colors"
+              onMouseDown={startLongPress(conversation.id)}
+              onMouseUp={clearLongPress}
+              onMouseLeave={clearLongPress}
+              onTouchStart={startLongPress(conversation.id)}
+              onTouchEnd={clearLongPress}
             >
               <div className="flex items-center px-4 py-3">
                 {/* Avatar - clickable */}
@@ -317,6 +352,12 @@ export function ChatList() {
       {/* User info modal */}
       {selectedContact && (
         <ContactCardModal contact={selectedContact} onClose={() => setSelectedContact(null)} />
+      )}
+      {detailsConvId && (
+        <ConversationDetailsModal
+          conversationId={detailsConvId}
+          onClose={() => setDetailsConvId(null)}
+        />
       )}
     </div>
   );
