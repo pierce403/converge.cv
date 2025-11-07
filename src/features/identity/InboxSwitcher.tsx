@@ -37,6 +37,10 @@ export function InboxSwitcher() {
     try {
       await closeStorage();
       await setStorageNamespace(entry.inboxId);
+      // One-shot hint for next boot to force this inbox selection
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('converge.forceInboxId.v1', entry.inboxId);
+      }
     } catch (e) {
       console.warn('[InboxSwitcher] Failed to reset storage (continuing):', e);
     }

@@ -478,6 +478,18 @@ export function useAuth() {
       const registry = useInboxRegistryStore.getState();
       registry.hydrate();
 
+      // If an explicit inbox was selected just before reload, honor it
+      try {
+        const forced = typeof window !== 'undefined' ? window.localStorage.getItem('converge.forceInboxId.v1') : null;
+        if (forced && forced.trim().length > 0) {
+          registry.setCurrentInbox(forced);
+          // Clear the one-shot hint
+          window.localStorage.removeItem('converge.forceInboxId.v1');
+        }
+      } catch (e) {
+        // non-fatal
+      }
+
       const identities = await storage.listIdentities();
       if (!identities.length) {
         return false;
@@ -489,7 +501,13 @@ export function useAuth() {
       }
 
       if (!identity) {
-        identity = identities[0];
+        // Fallback: pick the most recently opened from the registry list
+        const currentId = registry.currentInboxId;
+        if (currentId) {
+          identity = identities.find((it) => it.inboxId === currentId) || identities[0];
+        } else {
+          identity = identities[0];
+        }
       }
 
       if (!identity) {
