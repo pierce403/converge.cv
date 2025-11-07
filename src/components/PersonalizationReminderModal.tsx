@@ -112,9 +112,45 @@ export function PersonalizationReminderModal({
       setIdentity(updated);
       try {
         const xmtp = getXmtpClient();
-        await xmtp.saveProfile(updated.displayName, updated.avatar);
+        // If connected, write immediately; otherwise queue for later flush
+        const inboxKey = (updated.inboxId || updated.address || '').toLowerCase();
+        if (xmtp.isConnected()) {
+          await xmtp.saveProfile(updated.displayName, updated.avatar);
+          // Clean up any pending key if it exists
+          try {
+            const pendingKey = `pending-profile-save:${inboxKey}`;
+            window.localStorage.removeItem(pendingKey);
+          } catch (e) {
+            // ignore
+          }
+          console.log('[Personalization] ✅ Saved profile to XMTP immediately');
+        } else {
+          const payload = JSON.stringify({ displayName: updated.displayName, avatarUrl: updated.avatar, ts: Date.now() });
+          try {
+            const pendingKey = `pending-profile-save:${inboxKey}`;
+            window.localStorage.setItem(pendingKey, payload);
+            console.log('[Personalization] XMTP not connected; queued profile save for later:', payload);
+            try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Profile will be published when connected' })); } catch (e1) {
+              // ignore
+            }
+          } catch (e) {
+            console.warn('[Personalization] Failed to queue profile save:', e);
+          }
+        }
       } catch (e) {
-        console.warn('[Personalization] Failed to save profile to XMTP (non-fatal):', e);
+        console.warn('[Personalization] Failed to save profile to XMTP (will attempt queue):', e);
+        try {
+          const inboxKey = (updated.inboxId || updated.address || '').toLowerCase();
+          const pendingKey = `pending-profile-save:${inboxKey}`;
+          const payload = JSON.stringify({ displayName: updated.displayName, avatarUrl: updated.avatar, ts: Date.now() });
+          window.localStorage.setItem(pendingKey, payload);
+          console.log('[Personalization] Queued profile save after failure:', payload);
+          try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Profile will be retried on reconnect' })); } catch (e2) {
+            // ignore
+          }
+        } catch (e3) {
+          console.warn('[Personalization] Failed to persist pending profile save:', e3);
+        }
       }
       // Close and snooze reminder
       onRemindLater();

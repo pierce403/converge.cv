@@ -493,6 +493,33 @@ export function Layout() {
   useEffect(() => {
     if (connectionStatus !== 'connected') return;
     const run = async () => {
+      // 1) Flush any pending profile save queued while disconnected
+      try {
+        const me = useAuthStore.getState().identity;
+        const inboxKey = (me?.inboxId || me?.address || '').toLowerCase();
+        if (inboxKey && typeof window !== 'undefined') {
+          const pendingKey = `pending-profile-save:${inboxKey}`;
+          const raw = window.localStorage.getItem(pendingKey);
+          if (raw) {
+            try {
+              const payload = JSON.parse(raw) as { displayName?: string; avatarUrl?: string };
+              const xmtp = getXmtpClient();
+              await xmtp.saveProfile(payload.displayName, payload.avatarUrl);
+              window.localStorage.removeItem(pendingKey);
+              try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Profile published to XMTP' })); } catch (e) {
+                // ignore
+              }
+              console.log('[Layout] ✅ Flushed pending profile save to XMTP');
+            } catch (e) {
+              console.warn('[Layout] Failed to flush pending profile save:', e);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Layout] Pending profile flush skipped:', e);
+      }
+
+      // 2) Proactively enrich contacts from XMTP
       try {
         const state = useContactStore.getState();
         for (const c of state.contacts) {
