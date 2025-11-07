@@ -640,6 +640,61 @@ export function useConversations() {
   );
 
   /**
+   * Delete a group for this user: leave the group on XMTP and purge local data.
+   * If the user is a super admin and `deleteForAll` is true, attempt to remove all members
+   * before leaving, effectively disbanding the group. Regardless, local data is deleted.
+   */
+  const deleteGroup = useCallback(
+    async (conversationId: string, deleteForAll = false): Promise<void> => {
+      const storage = await getStorage();
+      const conversation = await storage.getConversation(conversationId);
+      if (!conversation || !conversation.isGroup) {
+        // Fallback: local delete if it's already missing or not a group
+        try { await storage.deleteConversation(conversationId); } catch (_e) { void 0; }
+        removeConversation(conversationId);
+        return;
+      }
+
+      // Determine current user identifiers
+      const meInbox = useAuthStore.getState().identity?.inboxId;
+      const meAddr = useAuthStore.getState().identity?.address;
+
+      try {
+        const xmtp = getXmtpClient();
+
+        if (deleteForAll) {
+          // Only attempt if current user appears to be super admin
+          const isSuper = (conversation.superAdminInboxes || []).some((id) => id && id.toLowerCase() === (meInbox || '').toLowerCase());
+          if (isSuper) {
+            // Remove everyone we know about, then proceed to local delete
+            const candidates = new Set<string>();
+            (conversation.memberInboxes || []).forEach((id) => id && candidates.add(id));
+            (conversation.members || []).forEach((id) => id && candidates.add(id));
+            const all = Array.from(candidates);
+            if (all.length) {
+              try { await xmtp.removeMembersFromGroup(conversationId, all); } catch (_e) { void 0; }
+            }
+          }
+        }
+
+        // Always leave the group for this user (use inboxId if available, else address)
+        const me = meInbox || meAddr;
+        if (me) {
+          try { await xmtp.removeMembersFromGroup(conversationId, [me]); } catch (_e) { void 0; }
+        }
+      } catch (e) {
+        // Non-fatal: still remove local data even if network fails
+      }
+
+      // Purge local conversation and its messages
+      try { await storage.deleteConversation(conversationId); } catch (_e) { void 0; }
+      removeConversation(conversationId);
+      try { await storage.vacuum(); } catch (_e) { void 0; }
+    },
+    [removeConversation],
+  );
+
+  /**
    * Promote a member to admin in a group conversation
    */
   const promoteMemberToAdmin = useCallback(
@@ -793,5 +848,6 @@ export function useConversations() {
     promoteMemberToAdmin,
     demoteAdminToMember,
     refreshGroupDetails,
+    deleteGroup,
   };
 }

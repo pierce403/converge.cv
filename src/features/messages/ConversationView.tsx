@@ -21,7 +21,7 @@ export function ConversationView() {
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
 
-  const { conversations, removeConversation, removeMembersFromGroup } = useConversations();
+  const { conversations, removeConversation, removeMembersFromGroup, deleteGroup } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
   const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
@@ -530,17 +530,18 @@ export function ConversationView() {
                   {({ active }) => (
                     <button
                       onClick={async () => {
-                        if (!confirm('Delete this conversation from this device?')) return;
+                        if (!confirm('Delete this group? You will leave the group and all local data will be removed.')) return;
                         try {
-                          await removeConversation(conversation.id);
-                          navigate('/');
+                          await deleteGroup(conversation.id, false);
                         } catch (e) {
-                          alert('Failed to delete conversation');
+                          // fallback: local delete
+                          try { await removeConversation(conversation.id); } catch (_e) { void 0; }
                         }
+                        navigate('/');
                       }}
                       className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
                     >
-                      Delete conversation
+                      Delete group
                     </button>
                   )}
                 </Menu.Item>
