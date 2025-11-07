@@ -915,7 +915,7 @@ export function GroupSettingsPage() {
             </label>
             <div className="flex items-center gap-3">
               <div className="w-16 h-16 rounded-full bg-primary-700/70 flex items-center justify-center overflow-hidden">
-                {groupImage ? (
+                {isDisplayableImageSrc(groupImage) ? (
                   <img src={groupImage} alt="Group Avatar" className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-primary-200 text-sm">No avatar</span>
