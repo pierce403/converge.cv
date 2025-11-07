@@ -20,16 +20,9 @@ export interface DefaultContact {
  * NOTE: Some addresses are placeholders. Replace with actual XMTP-enabled addresses as they become available.
  * Check https://docs.xmtp.org for official bot addresses and https://base.org for Base ecosystem agents.
  */
-export const DEFAULT_CONTACTS: DefaultContact[] = [
-  {
-    address: 'gm.xmtp.eth', // Official XMTP bot
-    name: 'GM Bot',
-    description: 'Say GM! The official XMTP bot for getting started',
-    category: 'bot',
-    isVerified: true,
-    avatar: '👋',
-  },
-];
+// Intentionally empty for now. We previously included the GM Bot here,
+// but it has been removed from the default seeded conversations.
+export const DEFAULT_CONTACTS: DefaultContact[] = [];
 
 /**
  * Get contacts by category
@@ -62,4 +55,3 @@ export function getContactInfo(address: string): DefaultContact | undefined {
     contact.address.toLowerCase() === address.toLowerCase()
   );
 }
-

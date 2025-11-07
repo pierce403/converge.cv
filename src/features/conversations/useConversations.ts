@@ -208,6 +208,26 @@ export function useConversations() {
       const storage = await getStorage();
       let conversations = await storage.listConversations({ archived: false });
 
+      // Remove deprecated/broken default GM Bot conversations if present
+      try {
+        const gmPeer = 'gm.xmtp.eth';
+        const toDelete = conversations
+          .filter((c) => !c.isGroup && c.peerId.toLowerCase() === gmPeer)
+          .map((c) => c.id);
+        if (toDelete.length) {
+          for (const id of toDelete) {
+            try {
+              await storage.deleteConversation(id);
+            } catch (e) {
+              // ignore deletion failure
+            }
+          }
+          conversations = await storage.listConversations({ archived: false });
+        }
+      } catch (e) {
+        // ignore cleanup failure
+      }
+
       // Cleanup: remove self-DMs and dedupe by canonical inboxId
       try {
         const xmtp = getXmtpClient();
@@ -307,6 +327,28 @@ export function useConversations() {
             seededConversations.map((conversation) => conversation.peerId)
           );
           conversations = await storage.listConversations({ archived: false });
+        }
+
+        // Ensure a default contact exists: deanpierce.eth (unless the current user is that ENS)
+        try {
+          const me = useAuthStore.getState().identity;
+          const myName = me?.displayName?.toLowerCase?.();
+          if (myName !== 'deanpierce.eth') {
+            const contactStore = useContactStore.getState();
+            const existsByInbox = contactStore.getContactByInboxId('deanpierce.eth');
+            const existsByAddr = contactStore.getContactByAddress('deanpierce.eth');
+            if (!existsByInbox && !existsByAddr) {
+              await contactStore.upsertContactProfile({
+                inboxId: 'deanpierce.eth',
+                displayName: 'deanpierce.eth',
+                source: 'inbox',
+                // TS: metadata is a free-form Partial<Contact>; keep it minimal
+                metadata: { createdAt: Date.now(), isInboxOnly: true } as unknown as Record<string, unknown>,
+              });
+            }
+          }
+        } catch (e) {
+          // non-fatal
         }
       }
 
