@@ -108,6 +108,7 @@ export interface Identity {
   inboxId?: string; // XMTP inbox ID
   installationId?: string; // XMTP installation ID for this device
   farcasterFid?: number; // Farcaster FID for contact syncing
+  mnemonic?: string; // Optional BIP39 phrase for local identities
 }
 
 export interface InboxRegistryEntry {

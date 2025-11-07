@@ -2,9 +2,9 @@
  * Onboarding page for new users
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { privateKeyToAccount } from 'viem/accounts';
+import { generateMnemonic, mnemonicToAccount, english } from 'viem/accounts';
 import { useSignMessage } from 'wagmi';
 import type { Identifier } from '@xmtp/browser-sdk';
 import { WalletSelector } from './WalletSelector';
@@ -13,6 +13,8 @@ import { useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
 import type { IdentityProbeResult } from '@/lib/xmtp/client';
 import type { InboxRegistryEntry } from '@/types';
 import { resetXmtpClient } from '@/lib/xmtp/client';
+import { deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
+import type { KeyfileIdentity } from '@/lib/keyfile';
 import { useWalletConnection } from '@/lib/wagmi';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
@@ -172,13 +174,19 @@ export function OnboardingPage() {
   const registryEntries = useInboxRegistryStore((state) => state.entries);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
 
-  const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing'>(
+  const [view, setView] = useState<
+    'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'
+  >(
     'landing'
   );
   const [statusMessage, setStatusMessage] = useState('Setting things up…');
   const [error, setError] = useState<string | null>(null);
   const [walletCandidate, setWalletCandidate] = useState<WalletIdentityCandidate | null>(null);
   const [probeResult, setProbeResult] = useState<IdentityProbeResult | null>(null);
+  const [keyfileCandidate, setKeyfileCandidate] = useState<KeyfileIdentity | null>(null);
+  const [keyfileError, setKeyfileError] = useState<string | null>(null);
+  const [keyfileName, setKeyfileName] = useState<string | null>(null);
+  const keyfileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     hydrateRegistry();
@@ -188,6 +196,43 @@ export function OnboardingPage() {
     () => [...registryEntries].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),
     [registryEntries]
   );
+
+  const resetKeyfileFlow = () => {
+    setKeyfileCandidate(null);
+    setKeyfileError(null);
+    setKeyfileName(null);
+    if (keyfileInputRef.current) {
+      keyfileInputRef.current.value = '';
+    }
+  };
+
+  const handleKeyfileSelected = async (file: File | null) => {
+    setError(null);
+    if (!file) {
+      resetKeyfileFlow();
+      return;
+    }
+
+    try {
+      const content = await file.text();
+      const parsed = parseKeyfile(content);
+      const derived = deriveIdentityFromKeyfile(parsed);
+      setKeyfileCandidate(derived);
+      setKeyfileError(null);
+      setKeyfileName(file.name);
+    } catch (err) {
+      console.error('[Onboarding] Failed to parse keyfile:', err);
+      setKeyfileCandidate(null);
+      setKeyfileName(file.name);
+      setKeyfileError(
+        err instanceof Error ? err.message : 'Unable to read that keyfile. Please double-check the file.'
+      );
+    } finally {
+      if (keyfileInputRef.current) {
+        keyfileInputRef.current.value = '';
+      }
+    }
+  };
 
   const resetWalletFlow = async () => {
     console.log('[Onboarding] Resetting wallet flow - disconnecting XMTP and wallet...');
@@ -222,20 +267,19 @@ export function OnboardingPage() {
 
   const handleCreateGeneratedIdentity = async () => {
     setError(null);
+    setKeyfileError(null);
     setStatusMessage('Creating your new inbox…');
     setView('processing');
 
     try {
-      const privateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
-      const privateKeyHex = (`0x${Array.from(privateKeyBytes)
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('')}`) as `0x${string}`;
-      const account = privateKeyToAccount(privateKeyHex);
+      const mnemonic = generateMnemonic(english);
+      const account = mnemonicToAccount(mnemonic, { path: "m/44'/60'/0'/0/0" });
 
-      const success = await auth.createIdentity(account.address, privateKeyHex, undefined, undefined, {
+      const success = await auth.createIdentity(account.address, account.privateKey, undefined, undefined, {
         register: true,
         enableHistorySync: true,
         label: `Identity ${shortAddress(account.address)}`,
+        mnemonic,
       });
 
       if (!success) {
@@ -247,6 +291,48 @@ export function OnboardingPage() {
       console.error('[Onboarding] Failed to create generated identity:', err);
       setError('Unable to create a new identity. Please try again.');
       setView('landing');
+    }
+  };
+
+  const handleImportKeyfileIdentity = async () => {
+    if (!keyfileCandidate) {
+      setKeyfileError('Select a valid keyfile to continue.');
+      return;
+    }
+
+    setError(null);
+    setKeyfileError(null);
+    setStatusMessage('Importing identity from keyfile…');
+    setView('processing');
+
+    try {
+      const label =
+        keyfileCandidate.label && keyfileCandidate.label.trim().length > 0
+          ? keyfileCandidate.label
+          : `Identity ${shortAddress(keyfileCandidate.address)}`;
+
+      const success = await auth.createIdentity(
+        keyfileCandidate.address,
+        keyfileCandidate.privateKey,
+        undefined,
+        undefined,
+        {
+          register: true,
+          enableHistorySync: true,
+          label,
+          mnemonic: keyfileCandidate.mnemonic,
+        }
+      );
+
+      if (!success) {
+        throw new Error('createIdentity returned false');
+      }
+
+      navigate('/');
+    } catch (err) {
+      console.error('[Onboarding] Failed to import keyfile identity:', err);
+      setKeyfileError('Failed to import that keyfile. Please try again.');
+      setView('keyfile');
     }
   };
 
@@ -415,6 +501,20 @@ export function OnboardingPage() {
               We&rsquo;ll generate everything for you instantly — no passphrases or extra steps.
             </div>
           </button>
+          <button
+            onClick={() => {
+              setError(null);
+              resetKeyfileFlow();
+              setView('keyfile');
+            }}
+            className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
+          >
+            <div className="text-3xl">📁</div>
+            <div className="mt-2 text-xl font-semibold text-primary-50">Import keyfile</div>
+            <div className="mt-1 text-sm text-primary-200">
+              Restore a Converge identity from a downloaded keyfile with a BIP-39 recovery phrase.
+            </div>
+          </button>
         </div>
 
         {sortedRegistry.length > 0 && renderLocalRegistry(null)}
@@ -432,6 +532,89 @@ export function OnboardingPage() {
         }}
         backLabel="← Back"
       />
+    </div>
+  );
+
+  const renderKeyfileImport = () => (
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+      <div className="w-full max-w-2xl space-y-6 rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 shadow-xl">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold text-primary-50">Import keyfile</h2>
+            <p className="mt-1 text-sm text-primary-200">
+              Select the JSON file you downloaded from Converge settings. We&rsquo;ll restore the identity using its recovery phrase.
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              resetKeyfileFlow();
+              setView('landing');
+            }}
+            className="rounded-md border border-primary-700 bg-primary-900 px-3 py-1 text-sm text-primary-200 transition hover:border-primary-500 hover:text-primary-100"
+          >
+            ← Back
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-primary-200">Keyfile</label>
+            <input
+              ref={keyfileInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={(event) => handleKeyfileSelected(event.target.files?.[0] ?? null)}
+              className="mt-2 w-full cursor-pointer rounded-md border border-dashed border-primary-700 bg-primary-950/60 p-4 text-sm text-primary-100 file:hidden"
+            />
+            <div className="mt-2 text-xs text-primary-300">
+              Keyfiles stay on this device. If you imported from another device, delete it safely when you&rsquo;re done.
+            </div>
+          </div>
+
+          {keyfileName && (
+            <div className="rounded-md border border-primary-800/60 bg-primary-900/60 px-4 py-3 text-sm text-primary-100">
+              Selected: <span className="font-mono">{keyfileName}</span>
+            </div>
+          )}
+
+          {keyfileError && (
+            <div className="rounded-md border border-red-500/60 bg-red-900/30 px-4 py-3 text-sm text-red-200">
+              {keyfileError}
+            </div>
+          )}
+
+          {keyfileCandidate && (
+            <div className="space-y-3 rounded-lg border border-primary-800/60 bg-primary-900/60 p-4">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-primary-400">Recovered identity</div>
+                <div className="text-lg font-semibold text-primary-50">{keyfileCandidate.label || 'Unlabeled identity'}</div>
+                <div className="font-mono text-sm text-primary-200 break-all mt-1">{keyfileCandidate.address}</div>
+              </div>
+              {keyfileCandidate.mnemonic && (
+                <div className="rounded-md border border-accent-400/40 bg-accent-600/10 px-3 py-2 text-xs text-accent-200">
+                  Includes 12-word recovery phrase
+                </div>
+              )}
+              <div className="text-xs text-primary-300">
+                We&rsquo;ll register this device with XMTP and sync history once connected.
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-primary-800/60 pt-4">
+          <div className="text-xs text-primary-400">
+            Need help? Contact hello@converge.cv from any connected device.
+          </div>
+          <button
+            onClick={handleImportKeyfileIdentity}
+            disabled={!keyfileCandidate}
+            className="rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:border-primary-700 disabled:bg-primary-900 disabled:text-primary-400"
+          >
+            Import identity
+          </button>
+        </div>
+      </div>
     </div>
   );
 
@@ -656,6 +839,10 @@ export function OnboardingPage() {
 
   if (view === 'wallet') {
     return renderWalletSelection();
+  }
+
+  if (view === 'keyfile') {
+    return renderKeyfileImport();
   }
 
   if (view === 'probing') {
