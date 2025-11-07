@@ -11,6 +11,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
+import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -57,6 +58,7 @@ export function SettingsPage() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const { disconnectWallet } = useWalletConnection();
   const [showQR, setShowQR] = useState(false);
+  const canDownloadKeyfile = Boolean(identity?.privateKey || identity?.mnemonic);
 
   const handleLockVault = () => {
     lock();
@@ -164,6 +166,39 @@ export function SettingsPage() {
   const handleAddIdentity = () => {
     // TODO: Implement add identity flow
     alert('Add Identity feature coming soon!\n\nThis will allow you to associate multiple identities (Ethereum addresses, passkeys, etc.) with your XMTP inbox.');
+  };
+
+  const handleDownloadKeyfile = () => {
+    try {
+      if (!identity) {
+        alert('No identity is currently loaded.');
+        return;
+      }
+
+      if (!identity.privateKey && !identity.mnemonic) {
+        alert('This identity is managed by an external wallet. Connect on the device where it was generated to export a keyfile.');
+        return;
+      }
+
+      const keyfile = exportIdentityToKeyfile(identity);
+      const serialized = serializeKeyfile(keyfile);
+      const blob = new Blob([serialized], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const safeAddress = identity.address.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10) || 'identity';
+      const timestamp = new Date().toISOString().replace(/[:]/g, '-');
+      const filename = `converge-keyfile-${safeAddress}-${timestamp}.json`;
+
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export keyfile:', error);
+      alert('Failed to export keyfile. Please try again.');
+    }
   };
 
   const handleExportData = async () => {
@@ -558,6 +593,28 @@ export function SettingsPage() {
           <section>
             <h2 className="text-lg font-semibold mb-3">Account</h2>
             <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg divide-y divide-primary-800/60 backdrop-blur">
+              <button
+                onClick={handleDownloadKeyfile}
+                disabled={!canDownloadKeyfile}
+                className="w-full p-4 text-left flex items-center justify-between transition-colors hover:bg-primary-950/60 disabled:cursor-not-allowed disabled:text-primary-400 disabled:bg-primary-950/40"
+              >
+                <div>
+                  <div className="font-medium">Download keyfile</div>
+                  <div className="text-sm text-primary-200">
+                    {canDownloadKeyfile
+                      ? 'Save a backup with your recovery phrase'
+                      : 'Available for Converge-generated identities only'}
+                  </div>
+                </div>
+                <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4"
+                  />
+                </svg>
+              </button>
               <button
                 onClick={handleLockVault}
                 className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between"

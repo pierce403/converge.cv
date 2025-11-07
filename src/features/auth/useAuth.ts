@@ -161,6 +161,7 @@ export function useAuth() {
         enableHistorySync?: boolean;
         label?: string;
         skipRegistryUpdate?: boolean;
+        mnemonic?: string;
       }
     ) => {
       try {
@@ -183,6 +184,9 @@ export function useAuth() {
           createdAt: Date.now(),
           displayName: options?.label,
         };
+        if (options?.mnemonic) {
+          identity.mnemonic = options.mnemonic;
+        }
         await storage.putIdentity(identity);
 
         // For now, skip vault secrets - no passphrase needed
