@@ -1,0 +1,30 @@
+name: Socket Supply Chain Scan
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  socket-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Socket CLI scan
+        run: npx -y @socketsecurity/cli scan --ci
+        env:
+          # Optional: provide a Socket API key for richer results/logging if available
+          SOCKET_API_KEY: ${{ secrets.SOCKET_API_KEY }}
+

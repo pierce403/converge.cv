@@ -160,6 +160,17 @@ pnpm typecheck        # TypeScript type checking
 
 ---
 
+## Security & Supply Chain
+
+- CodeQL scanning: Configured via `.github/workflows/codeql.yml` to run on pushes, PRs to `main`, and weekly. Results appear in GitHub code scanning alerts.
+- Socket.dev supply-chain scan: Configured via `.github/workflows/socket.yml` using the Socket CLI.
+  - The job runs `npx -y @socketsecurity/cli scan --ci` on pushes/PRs to `main`.
+  - Optional: add a repository secret `SOCKET_API_KEY` for enriched results/logging.
+  - No server components are required; this runs fully in GitHub Actions.
+
+
+---
+
 ## Current State (as of this session)
 
 ### ✅ Completed
