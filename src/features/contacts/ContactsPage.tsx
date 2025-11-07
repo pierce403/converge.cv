@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useContactStore } from '@/lib/stores';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import type { Contact } from '@/lib/stores/contact-store';
+import { isDisplayableImageSrc } from '@/lib/utils/image';
 
 export function ContactsPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -114,6 +115,15 @@ export function ContactsPage() {
                 contact.addresses?.[0] ??
                 contact.inboxId;
 
+              // Avatar precedence: preferredAvatar > avatar; show initials if none/invalid
+              const avatarSrc = contact.preferredAvatar || contact.avatar;
+              const wantInitials = !isDisplayableImageSrc(avatarSrc || '');
+              const initialsBasis = label || secondary || contact.inboxId;
+              const initials = (initialsBasis || '??')
+                .replace(/^0x/i, '')
+                .slice(0, 2)
+                .toUpperCase();
+
               return (
               <li
                 key={contact.inboxId}
@@ -123,7 +133,20 @@ export function ContactsPage() {
                   setShowContactCard(true);
                 }}
               >
-                <div className="flex-1">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="w-10 h-10 rounded-full bg-primary-700/80 flex items-center justify-center overflow-hidden flex-shrink-0">
+                    {wantInitials ? (
+                      <span className="text-white font-semibold text-sm" aria-hidden>
+                        {initials}
+                      </span>
+                    ) : (
+                      <img
+                        src={avatarSrc}
+                        alt="Contact avatar"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <p className="text-primary-50 font-medium">
                       {label}
@@ -139,7 +162,7 @@ export function ContactsPage() {
                       </span>
                     )}
                   </div>
-                  <p className="text-primary-300 text-sm">{secondary}</p>
+                  <p className="text-primary-300 text-sm truncate">{secondary}</p>
                 </div>
                 <button
                   onClick={(e) => {
