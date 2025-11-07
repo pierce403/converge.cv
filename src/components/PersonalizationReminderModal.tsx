@@ -1,5 +1,5 @@
 import type { ReactNode, ChangeEvent } from 'react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useAuthStore } from '@/lib/stores/auth-store';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
@@ -32,7 +32,33 @@ export function PersonalizationReminderModal({
 }: PersonalizationReminderModalProps) {
   const identity = useAuthStore((s) => s.identity);
   const setIdentity = useAuthStore((s) => s.setIdentity);
-  const [displayName, setDisplayName] = useState<string>(identity?.displayName || '');
+  // Suggested name: Color + Animal when no display name is set
+  const suggestedName = useMemo(() => {
+    if (identity?.displayName?.trim()) return identity.displayName.trim();
+    const colors = [
+      'Red',
+      'Blue',
+      'Green',
+      'Yellow',
+      'Purple',
+      'Orange',
+      'Pink',
+      'Brown',
+      'Black',
+      'White',
+    ];
+    const animals = [
+      'Orca', 'Dolphin', 'Whale', 'Penguin', 'Seal', 'Otter', 'Shark', 'Turtle', 'Eagle', 'Falcon',
+      'Hawk', 'Owl', 'Fox', 'Wolf', 'Bear', 'Tiger', 'Lion', 'Zebra', 'Giraffe', 'Elephant',
+      'Monkey', 'Panda', 'Koala', 'Kangaroo', 'Rabbit', 'Deer', 'Horse', 'Bison', 'Buffalo', 'Camel',
+      'Hippo', 'Rhino', 'Leopard', 'Cheetah', 'Jaguar', 'Goat', 'Sheep', 'Cow', 'Pig', 'Dog',
+      'Cat', 'Goose', 'Duck', 'Swan', 'Frog', 'Toad', 'Lizard', 'Snake', 'Chimpanzee', 'Gorilla',
+    ];
+    const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+    return `${pick(colors)} ${pick(animals)}`;
+  }, [identity?.displayName]);
+
+  const [displayName, setDisplayName] = useState<string>(suggestedName);
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | undefined>(identity?.avatar || undefined);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -130,16 +156,6 @@ export function PersonalizationReminderModal({
 
           <div className="flex flex-col gap-3">
             <div>
-              <label className="block text-xs font-medium text-primary-300">Display Name</label>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Your name"
-                className="input-primary w-full"
-              />
-            </div>
-            <div>
               <label className="block text-xs font-medium text-primary-300">Avatar</label>
               <div className="flex items-center gap-3">
                 <div className="h-12 w-12 rounded-full bg-primary-800/70 overflow-hidden flex items-center justify-center">
@@ -160,6 +176,16 @@ export function PersonalizationReminderModal({
                 )}
               </div>
               <p className="mt-1 text-xs text-primary-400">Max 256KB. Image is stored in your XMTP profile for discovery.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-primary-300">Display Name</label>
+              <input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your name"
+                className="input-primary w-full"
+              />
             </div>
           </div>
 
