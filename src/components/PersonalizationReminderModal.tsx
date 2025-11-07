@@ -1,11 +1,14 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, ChangeEvent } from 'react';
+import { useState } from 'react';
+import { useAuthStore } from '@/lib/stores/auth-store';
+import { getStorage } from '@/lib/storage';
+import { getXmtpClient } from '@/lib/xmtp';
 
 interface PersonalizationReminderModalProps {
   missingDisplayName: boolean;
   missingAvatar: boolean;
   onRemindLater: () => void;
   onDismissForever: () => void;
-  onGoToSettings: () => void;
 }
 
 const bulletCopy: Record<'displayName' | 'avatar', ReactNode> = {
@@ -26,8 +29,61 @@ export function PersonalizationReminderModal({
   missingAvatar,
   onRemindLater,
   onDismissForever,
-  onGoToSettings,
 }: PersonalizationReminderModalProps) {
+  const identity = useAuthStore((s) => s.identity);
+  const setIdentity = useAuthStore((s) => s.setIdentity);
+  const [displayName, setDisplayName] = useState<string>(identity?.displayName || '');
+  const [avatarDataUrl, setAvatarDataUrl] = useState<string | undefined>(identity?.avatar || undefined);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const onPickAvatar = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 256 * 1024) {
+      alert('Avatar image must be less than 256KB');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUri = String(ev.target?.result || '');
+      setAvatarDataUrl(dataUri);
+    };
+    reader.onerror = () => alert('Failed to read image file');
+    reader.readAsDataURL(file);
+  };
+
+  const onSave = async () => {
+    try {
+      setIsSaving(true);
+      const storage = await getStorage();
+      const current = identity;
+      if (!current) {
+        alert('No identity found. Please connect first.');
+        return;
+      }
+      const updated = { ...current, displayName: displayName.trim() || current.displayName, avatar: avatarDataUrl || current.avatar };
+      await storage.putIdentity(updated);
+      setIdentity(updated);
+      try {
+        const xmtp = getXmtpClient();
+        await xmtp.saveProfile(updated.displayName, updated.avatar);
+      } catch (e) {
+        console.warn('[Personalization] Failed to save profile to XMTP (non-fatal):', e);
+      }
+      // Close and snooze reminder
+      onRemindLater();
+    } catch (e) {
+      console.error('[Personalization] Failed to save profile:', e);
+      alert('Failed to save profile');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onRemindLater}>
       <div
@@ -72,9 +128,44 @@ export function PersonalizationReminderModal({
             )}
           </ul>
 
+          <div className="flex flex-col gap-3">
+            <div>
+              <label className="block text-xs font-medium text-primary-300">Display Name</label>
+              <input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your name"
+                className="input-primary w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-primary-300">Avatar</label>
+              <div className="flex items-center gap-3">
+                <div className="h-12 w-12 rounded-full bg-primary-800/70 overflow-hidden flex items-center justify-center">
+                  {avatarDataUrl ? (
+                    <img src={avatarDataUrl} alt="Avatar preview" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="text-xs text-primary-300">None</span>
+                  )}
+                </div>
+                <label className="btn-secondary cursor-pointer">
+                  <input type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
+                  Upload
+                </label>
+                {avatarDataUrl && (
+                  <button className="btn-secondary" onClick={() => setAvatarDataUrl(undefined)}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-primary-400">Max 256KB. Image is stored in your XMTP profile for discovery.</p>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-2">
-            <button onClick={onGoToSettings} className="btn-primary w-full">
-              Update profile
+            <button onClick={onSave} className="btn-primary w-full" disabled={isSaving}>
+              {isSaving ? 'Saving…' : 'Save'}
             </button>
             <button onClick={onRemindLater} className="btn-secondary w-full">
               Remind me tomorrow

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
@@ -19,7 +19,6 @@ import { PersonalizationReminderModal } from '@/components/PersonalizationRemind
 
 export function Layout() {
   const location = useLocation();
-  const navigate = useNavigate();
   const identity = useAuthStore((state) => state.identity);
   const { addConversation, updateConversation } = useConversationStore();
   const { receiveMessage } = useMessages();
@@ -99,11 +98,7 @@ export function Layout() {
     setShowPersonalizationReminder(false);
   }, [updateReminderPrefs]);
 
-  const handleGoToSettings = useCallback(() => {
-    updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: false });
-    setShowPersonalizationReminder(false);
-    navigate('/settings');
-  }, [navigate, updateReminderPrefs]);
+  // Deprecated: Settings redirect from personalization reminder (inline save now available)
 
   // Save route for persistence across refreshes
   useEffect(() => {
@@ -606,7 +601,6 @@ export function Layout() {
           missingAvatar={missingAvatar}
           onRemindLater={handleRemindLater}
           onDismissForever={handleDismissForever}
-          onGoToSettings={handleGoToSettings}
         />
       )}
     </div>
