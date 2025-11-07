@@ -565,6 +565,19 @@ export function GroupSettingsPage() {
     setError('');
 
     try {
+      // Enforce protocol constraints for image field length when using data URLs.
+      // The XMTP group metadata field has a hard limit (~2048 chars). If the user pasted
+      // a too-large base64 data URL directly, stop early with a helpful error instead
+      // of attempting the network call that would fail.
+      if (
+        (groupImage || '').startsWith('data:') &&
+        (groupImage || '').length > MAX_GROUP_IMAGE_CHARS
+      ) {
+        setError('Avatar too large for group metadata field. Please upload a smaller image or paste a hosted URL (<2048 chars).');
+        setIsSaving(false);
+        return;
+      }
+
       const metadataPayload = {
         groupName: groupName || undefined,
         groupImage: groupImage || undefined,

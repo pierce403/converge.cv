@@ -395,6 +395,12 @@ if (!isRegistered) {
 - **Live App**: https://converge.cv
 - **XMTP Docs**: https://xmtp.org
 
+### XMTP + LLMs (Always Load In Context)
+- Build with LLMs overview: https://docs.xmtp.org/chat-apps/intro/build-with-llms
+- Full LLMs guide (raw): https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
+
+These links are high-signal for XMTP behaviors and should be considered required reading for future agents working on AI/agent features. Keep them in working memory while making protocol/UI decisions.
+
 ### XMTP + LLMs (Always Load in Context)
 - Build-with-LLMs overview: https://docs.xmtp.org/chat-apps/intro/build-with-llms
 - Full reference text (raw): https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt

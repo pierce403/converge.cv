@@ -40,7 +40,7 @@ export function Layout() {
     }
     try {
       const key = getReminderKey();
-      const raw = window.localStorage.getItem(key) || window.localStorage.getItem('personalization-reminder');
+      const raw = window.localStorage.getItem(key);
       if (!raw) return {};
       const parsed = JSON.parse(raw) as { lastNagAt?: number; dismissedForever?: boolean };
       return {
