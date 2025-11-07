@@ -706,8 +706,18 @@ export class XmtpClient {
       return null;
     }
 
-    if (typeof (conversation as { members?: () => Promise<SafeGroupMember[]> }).members !== 'function') {
-      console.warn('[XMTP] Conversation is not a group:', conversationId);
+    // Be conservative: some DM wrappers might expose a members-like field.
+    // Require presence of at least one group-only API to classify as group.
+    const hasMembersFn = typeof (conversation as { members?: () => Promise<SafeGroupMember[]> }).members === 'function';
+    const hasGroupApi =
+      typeof (conversation as { addMembersByIdentifiers?: (ids: Identifier[]) => Promise<void> }).addMembersByIdentifiers ===
+        'function' ||
+      typeof (conversation as { addMembers?: (ids: string[]) => Promise<void> }).addMembers === 'function' ||
+      typeof (conversation as { updateName?: (name: string) => Promise<void> }).updateName === 'function' ||
+      typeof (conversation as { permissions?: () => Promise<unknown> }).permissions === 'function';
+
+    if (!hasMembersFn || !hasGroupApi) {
+      // Not a group; treat as DM
       return null;
     }
 
@@ -1651,6 +1661,15 @@ export class XmtpClient {
       console.log('[XMTP] Syncing conversations...');
       await this.client.conversations.sync();
       const convos = await this.client.conversations.list();
+      // Build a set of DM ids to avoid misclassifying them as groups
+      let dmIdSet = new Set<string>();
+      try {
+        const dms = (await this.client.conversations.listDms()) as Array<{ id?: string }>;
+        dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
+      } catch (e) {
+        // If listDms fails, proceed without the set; group detection below is still conservative
+        console.warn('[XMTP] listDms failed during syncConversations; continuing without DM filter', e);
+      }
       console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
 
       // Ensure group conversations are present in local storage even if no messages were backfilled yet
@@ -1661,6 +1680,10 @@ export class XmtpClient {
           if (!id) continue;
           const exists = await storage.getConversation(id);
           if (exists) continue;
+          // Never classify known DM ids as groups
+          if (dmIdSet.has(id)) {
+            continue;
+          }
           // Probe if this is a group by checking for group APIs on the conversation
           let group = null as Awaited<ReturnType<typeof this.getGroupConversation>> | null;
           try {
