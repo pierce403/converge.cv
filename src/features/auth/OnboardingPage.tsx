@@ -175,11 +175,7 @@ export function OnboardingPage() {
   const registryEntries = useInboxRegistryStore((state) => state.entries);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
 
-  const [view, setView] = useState<
-    'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'
-  >(
-    'landing'
-  );
+  const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'>('landing');
   const [statusMessage, setStatusMessage] = useState('Setting things up…');
   const [error, setError] = useState<string | null>(null);
   const [walletCandidate, setWalletCandidate] = useState<WalletIdentityCandidate | null>(null);
@@ -192,6 +188,18 @@ export function OnboardingPage() {
   useEffect(() => {
     hydrateRegistry();
   }, [hydrateRegistry]);
+
+  // If navigated with ?connect=1 (from InboxSwitcher), jump straight into wallet selection
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('connect') === '1') {
+        setView('wallet');
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const sortedRegistry = useMemo(
     () => [...registryEntries].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),
@@ -507,20 +515,7 @@ export function OnboardingPage() {
               We&rsquo;ll generate everything for you instantly — no passphrases or extra steps.
             </div>
           </button>
-          <button
-            onClick={() => {
-              setError(null);
-              resetKeyfileFlow();
-              setView('keyfile');
-            }}
-            className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
-          >
-            <div className="text-3xl">📁</div>
-            <div className="mt-2 text-xl font-semibold text-primary-50">Import keyfile</div>
-            <div className="mt-1 text-sm text-primary-200">
-              Restore a Converge identity from a downloaded keyfile with a BIP-39 recovery phrase.
-            </div>
-          </button>
+          {/* Import keyfile option moved into WalletSelector as another connection method */}
         </div>
 
         {sortedRegistry.length > 0 && renderLocalRegistry(null)}
@@ -537,6 +532,11 @@ export function OnboardingPage() {
           setView('landing');
         }}
         backLabel="← Back"
+        onImportKeyfile={() => {
+          setError(null);
+          resetKeyfileFlow();
+          setView('keyfile');
+        }}
       />
     </div>
   );

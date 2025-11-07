@@ -9,9 +9,10 @@ interface WalletSelectorProps {
   onWalletConnected: (address: string, chainId?: number) => void;
   onBack: () => void;
   backLabel?: string;
+  onImportKeyfile?: () => void;
 }
 
-export function WalletSelector({ onWalletConnected, onBack, backLabel }: WalletSelectorProps) {
+export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportKeyfile }: WalletSelectorProps) {
   const { connectWallet, address, chainId, isConnecting } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
   const hasTriggeredCallback = useRef(false);
@@ -121,6 +122,19 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel }: WalletS
       </div>
 
       <button
+        onClick={() => onImportKeyfile?.()}
+        className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors text-left"
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-3xl">📁</span>
+          <div>
+            <div className="font-medium text-primary-50">Import keyfile</div>
+            <div className="text-xs text-primary-200">Restore a Converge identity from a downloaded keyfile.</div>
+          </div>
+        </div>
+      </button>
+
+      <button
         onClick={onBack}
         className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg font-medium transition-colors text-primary-100"
       >
@@ -133,4 +147,3 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel }: WalletS
     </div>
   );
 }
-

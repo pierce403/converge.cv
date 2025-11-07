@@ -36,7 +36,7 @@ export function InboxSwitcher() {
   };
 
   return (
-    <Menu as="div" className="relative inline-block text-left">
+    <Menu as="div" className="relative inline-block text-left z-[90]">
       <Menu.Button className="flex items-center gap-3 rounded-full border border-primary-700/70 bg-primary-900/80 px-3 py-1.5 text-left text-sm font-medium text-primary-100 shadow hover:border-accent-400 hover:text-white">
         {currentAvatar ? (
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-primary-800/60">
@@ -77,7 +77,7 @@ export function InboxSwitcher() {
       >
         {/* Center dropdown under the viewport header and ensure it stays on screen */}
         <Menu.Items
-          className="fixed left-1/2 -translate-x-1/2 top-16 z-50 w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
+          className="fixed left-1/2 -translate-x-1/2 top-16 z-[100] w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
         >
           <div className="mb-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
@@ -142,12 +142,12 @@ export function InboxSwitcher() {
           <Menu.Item>
             {({ active }) => (
               <button
-                onClick={() => navigate('/onboarding')}
+                onClick={() => navigate('/onboarding?connect=1')}
                 className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
                   active ? 'bg-accent-600/20 text-accent-200' : 'text-accent-300 hover:text-accent-200'
                 }`}
               >
-                Connect another identity…
+                Connect to another inbox…
               </button>
             )}
           </Menu.Item>
