@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/fix-xmtp-wasm-worker.mjs",
+    "postinstall": "patch-package || true; node scripts/fix-xmtp-wasm-worker.mjs",
     "prebuild": "node scripts/fix-xmtp-wasm-worker.mjs && node scripts/generate-build-info.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
@@ -64,6 +64,7 @@
     "vite": "^5.4.5",
     "vite-plugin-pwa": "^0.20.5",
     "vitest": "^2.1.1",
+    "patch-package": "^8.0.0",
     "workbox-cacheable-response": "^7.3.0",
     "workbox-core": "^7.3.0",
     "workbox-expiration": "^7.3.0",
