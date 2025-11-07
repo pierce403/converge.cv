@@ -141,6 +141,8 @@ export class XmtpClient {
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
   private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
+  // Suppress noisy retries for inboxIds that trigger identity backend parse errors
+  private inboxErrorCooldown: Map<string, number> = new Map();
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -553,7 +555,31 @@ export class XmtpClient {
   }
 
   async fetchInboxProfile(inboxId: string): Promise<InboxProfile> {
-    const normalizedInboxId = inboxId.toLowerCase();
+    let normalizedInboxId = inboxId.toLowerCase();
+
+    // If this inboxId previously produced an identity parse error (e.g., invalid hex),
+    // avoid hammering the API for a cooldown period and return a minimal profile.
+    const cooldownUntil = this.inboxErrorCooldown.get(normalizedInboxId) || 0;
+    if (cooldownUntil > Date.now()) {
+      return {
+        inboxId: normalizedInboxId,
+        displayName: undefined,
+        avatarUrl: undefined,
+        primaryAddress: undefined,
+        addresses: [],
+        identities: [],
+      };
+    }
+
+    // If input looks like an Ethereum address, resolve to canonical inboxId first.
+    if (/^0x[0-9a-f]{40}$/i.test(normalizedInboxId)) {
+      try {
+        const resolved = await this.deriveInboxIdFromAddress(normalizedInboxId);
+        if (resolved) normalizedInboxId = resolved.toLowerCase();
+      } catch (e) {
+        // Non-fatal; continue with provided value
+      }
+    }
 
     const toIdentityRecord = (identifier: Identifier, index: number) => ({
       identifier: identifier.identifier.startsWith('0x')
@@ -655,6 +681,17 @@ export class XmtpClient {
         }
       } catch (error) {
         console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+        // Heuristic: if backend reports invalid hexadecimal digit (e.g., "g"),
+        // put this inboxId on cooldown to prevent repeated noisy retries.
+        try {
+          const msg = error instanceof Error ? error.message : String(error ?? '');
+          if (/invalid hexadecimal digit/i.test(msg)) {
+            this.inboxErrorCooldown.set(normalizedInboxId, Date.now() + 30 * 60 * 1000);
+            console.warn('[XMTP] Cooldown applied to inboxId due to identity parse error:', normalizedInboxId);
+          }
+        } catch {
+          // ignore
+        }
       }
     } catch (error) {
       console.error('[XMTP] fetchInboxProfile unexpected error:', error);
