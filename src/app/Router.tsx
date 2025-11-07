@@ -13,6 +13,9 @@ import { NewGroupPage } from '@/features/conversations/NewGroupPage';
 import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
 import { JoinGroupPage } from '@/features/conversations/JoinGroupPage';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
+import { GroupConnectRedirect, UserConnectRedirect, InboxConnectRedirect } from '@/app/deeplinks';
+import { StartDmPage } from '@/features/conversations/StartDmPage';
+import { ContactLinkPage } from '@/features/contacts/ContactLinkPage';
 
 export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
@@ -35,6 +38,10 @@ export function AppRouter() {
     return (
       <Routes>
         <Route path="/onboarding" element={<OnboardingPage />} />
+        {/* Preserve deep links by forwarding context into onboarding */}
+        <Route path="/g/:conversationId" element={<GroupConnectRedirect />} />
+        <Route path="/i/:inboxId" element={<InboxConnectRedirect />} />
+        <Route path="/u/:userId" element={<UserConnectRedirect />} />
         {isCheckingAuth ? (
           // While checking auth, render all app routes but show loading screen
           // This preserves the URL so it doesn't redirect
@@ -76,7 +83,10 @@ export function AppRouter() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="debug" element={<DebugPage />} />
         <Route path="contacts" element={<ContactsPage />} />
-        <Route path="join-group/:conversationId" element={<JoinGroupPage />} />
+        {/* New simplified deep links */}
+        <Route path="g/:conversationId" element={<JoinGroupPage />} />
+        <Route path="i/:inboxId" element={<StartDmPage />} />
+        <Route path="u/:userId" element={<ContactLinkPage />} />
         <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -14,8 +14,8 @@ export function HandleXmtpProtocol() {
       const parts = xmtpUrl.split('/');
       if (parts.length >= 4 && parts[2] === 'chat') {
         const conversationId = parts[3];
-        console.log(`Redirecting to /join-group/${conversationId}`);
-        navigate(`/join-group/${conversationId}`);
+        console.log(`Redirecting to /g/${conversationId}`);
+        navigate(`/g/${conversationId}`);
       } else {
         console.error('Invalid XMTP URL format:', xmtpUrl);
         navigate('/');

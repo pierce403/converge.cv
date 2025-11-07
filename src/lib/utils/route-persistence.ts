@@ -23,8 +23,8 @@ function shouldPersistRoute(path: string): boolean {
     return false;
   }
   
-  // Don't persist join-group routes (they're one-time use)
-  if (path.startsWith('/join-group/')) {
+  // Don't persist deep links (one-time use)
+  if (path.startsWith('/join-group/') || path.startsWith('/g/') || path.startsWith('/u/') || path.startsWith('/i/')) {
     return false;
   }
   
@@ -95,4 +95,3 @@ export function clearLastRoute(): void {
 export function shouldRestoreLastRoute(currentPath: string): boolean {
   return currentPath === '/' || currentPath === '';
 }
-

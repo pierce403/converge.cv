@@ -189,7 +189,7 @@ export function OnboardingPage() {
     hydrateRegistry();
   }, [hydrateRegistry]);
 
-  // If navigated with ?connect=1 (from InboxSwitcher), jump straight into wallet selection
+  // If navigated with ?connect=1 (from InboxSwitcher or deep links), jump straight into wallet selection
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -300,6 +300,18 @@ export function OnboardingPage() {
         throw new Error('createIdentity returned false');
       }
 
+      // After onboarding, honor deep-link targets (?g=... or ?i=... or ?u=...)
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const g = params.get('g');
+        const i = params.get('i');
+        const u = params.get('u');
+        if (g) return navigate(`/g/${encodeURIComponent(g)}`);
+        if (i) return navigate(`/i/${encodeURIComponent(i)}`);
+        if (u) return navigate(`/u/${encodeURIComponent(u)}`);
+      } catch (e) {
+        // ignore deep-link parse failure
+      }
       navigate('/');
     } catch (err) {
       console.error('[Onboarding] Failed to create generated identity:', err);
@@ -342,6 +354,17 @@ export function OnboardingPage() {
         throw new Error('createIdentity returned false');
       }
 
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const g = params.get('g');
+        const i = params.get('i');
+        const u = params.get('u');
+        if (g) return navigate(`/g/${encodeURIComponent(g)}`);
+        if (i) return navigate(`/i/${encodeURIComponent(i)}`);
+        if (u) return navigate(`/u/${encodeURIComponent(u)}`);
+      } catch (e) {
+        // ignore deep-link parse failure
+      }
       navigate('/');
     } catch (err) {
       console.error('[Onboarding] Failed to import keyfile identity:', err);
@@ -419,6 +442,17 @@ export function OnboardingPage() {
         setCurrentInbox(inboxId);
       }
 
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const g = params.get('g');
+        const i = params.get('i');
+        const u = params.get('u');
+        if (g) return navigate(`/g/${encodeURIComponent(g)}`);
+        if (i) return navigate(`/i/${encodeURIComponent(i)}`);
+        if (u) return navigate(`/u/${encodeURIComponent(u)}`);
+      } catch (e) {
+        // ignore deep-link parse failure
+      }
       navigate('/');
     } catch (err) {
       console.error('[Onboarding] Failed to finalize wallet identity:', err);

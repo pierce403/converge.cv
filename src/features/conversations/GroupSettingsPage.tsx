@@ -1123,14 +1123,14 @@ export function GroupSettingsPage() {
               <input
                 type="text"
                 readOnly
-                value={`${window.location.origin}/join-group/${conversation.id}`}
+                value={`${window.location.origin}/g/${conversation.id}`}
                 className="input-primary flex-1 cursor-text"
                 onClick={(e) => (e.target as HTMLInputElement).select()}
               />
               <button
                 className="btn-primary"
                 onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/join-group/${conversation.id}`);
+                  navigator.clipboard.writeText(`${window.location.origin}/g/${conversation.id}`);
                   alert('Link copied to clipboard!');
                 }}
               >
