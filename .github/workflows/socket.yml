@@ -1,10 +1,8 @@
-name: Socket Supply Chain Scan
+name: Socket Supply Chain Scan (disabled)
 
+# Temporarily disabled — requires SOCKET_API_KEY. Enable by restoring push/PR triggers.
 on:
-  pull_request:
-    branches: [ "main" ]
-  push:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,6 +10,7 @@ permissions:
 
 jobs:
   socket-scan:
+    if: ${{ false }} # disabled until API key is configured
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,4 +26,3 @@ jobs:
         env:
           # Optional: provide a Socket API key for richer results/logging if available
           SOCKET_API_KEY: ${{ secrets.SOCKET_API_KEY }}
-
