@@ -13,7 +13,7 @@ export function InboxSwitcher() {
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
-  const { checkExistingIdentity } = useAuth();
+  const { checkExistingIdentity, createIdentity } = useAuth();
 
   useEffect(() => {
     hydrateRegistry();
@@ -35,8 +35,32 @@ export function InboxSwitcher() {
     await checkExistingIdentity();
   };
 
+  const handleCreateEphemeral = async () => {
+    try {
+      const { generateMnemonic, mnemonicToAccount, english } = await import('viem/accounts');
+      const { bytesToHex } = await import('viem');
+      const mnemonic = generateMnemonic(english);
+      const account = mnemonicToAccount(mnemonic, { path: "m/44'/60'/0'/0/0" });
+      const pkBytes = account.getHdKey().privateKey;
+      if (!pkBytes) throw new Error('Failed to derive private key');
+      const privateKeyHex = bytesToHex(pkBytes);
+      const label = `Identity ${shortAddress(account.address)}`;
+      const ok = await createIdentity(account.address, privateKeyHex, undefined, undefined, {
+        register: true,
+        enableHistorySync: true,
+        label,
+        mnemonic,
+      });
+      if (!ok) throw new Error('createIdentity returned false');
+      navigate('/');
+    } catch (e) {
+      console.error('[InboxSwitcher] Failed to create ephemeral identity:', e);
+      alert('Failed to create a new identity. Please try again.');
+    }
+  };
+
   return (
-    <Menu as="div" className="relative inline-block text-left z-[90]">
+    <Menu as="div" className="relative inline-block text-left z-[9999]">
       <Menu.Button className="flex items-center gap-3 rounded-full border border-primary-700/70 bg-primary-900/80 px-3 py-1.5 text-left text-sm font-medium text-primary-100 shadow hover:border-accent-400 hover:text-white">
         {currentAvatar ? (
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-primary-800/60">
@@ -77,7 +101,7 @@ export function InboxSwitcher() {
       >
         {/* Center dropdown under the viewport header and ensure it stays on screen */}
         <Menu.Items
-          className="fixed left-1/2 -translate-x-1/2 top-16 z-[100] w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
+          className="fixed left-1/2 -translate-x-1/2 top-16 z-[10000] w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
         >
           <div className="mb-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
@@ -148,6 +172,21 @@ export function InboxSwitcher() {
                 }`}
               >
                 Connect to another inbox…
+              </button>
+            )}
+          </Menu.Item>
+
+          <div className="my-2 h-px bg-primary-800/60" />
+
+          <Menu.Item>
+            {({ active }) => (
+              <button
+                onClick={handleCreateEphemeral}
+                className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
+                  active ? 'bg-primary-800/70 text-primary-100' : 'text-primary-200 hover:text-primary-100'
+                }`}
+              >
+                Create ephemeral identity
               </button>
             )}
           </Menu.Item>
