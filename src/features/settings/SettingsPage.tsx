@@ -266,6 +266,106 @@ export function SettingsPage() {
       )
     ) {
       try {
+        // Helper: robustly clear cookies for all paths/domains on this origin
+        const clearAllCookies = async () => {
+          try {
+            const raw = document.cookie;
+            if (!raw) return;
+            const cookiePairs = raw.split(';');
+            const names = cookiePairs
+              .map((c) => c.trim())
+              .filter(Boolean)
+              .map((c) => (c.includes('=') ? c.slice(0, c.indexOf('=')) : c));
+
+            // Generate domain variants: exact host, parent domains, and dotted forms
+            const host = location.hostname;
+            const parts = host.split('.');
+            const domainVariants = new Set<string>([host]);
+            for (let i = 0; i < parts.length; i++) {
+              const dom = parts.slice(i).join('.');
+              if (dom) {
+                domainVariants.add(dom);
+                domainVariants.add('.' + dom);
+              }
+            }
+
+            // Generate path variants from deepest to root
+            const path = location.pathname || '/';
+            const segments = path.split('/').filter(Boolean);
+            const pathVariants = new Set<string>(['/']);
+            for (let i = 0; i < segments.length; i++) {
+              pathVariants.add('/' + segments.slice(0, i + 1).join('/'));
+            }
+
+            const expires = 'Thu, 01 Jan 1970 00:00:00 GMT';
+            const setExpired = (name: string, opts: string) => {
+              try { document.cookie = `${name}=; Expires=${expires}; Max-Age=0; ${opts}`; } catch (e) { /* ignore set-cookie failure */ }
+              try { document.cookie = `${name}=; Expires=${expires}; ${opts}`; } catch (e) { /* ignore set-cookie failure */ }
+            };
+
+            // Without domain attribute (current host implied)
+            for (const name of names) {
+              for (const p of pathVariants) {
+                setExpired(name, `Path=${p}; SameSite=Lax`);
+                // Try with Secure attribute as some cookies were set with SameSite=None; Secure
+                setExpired(name, `Path=${p}; SameSite=None; Secure`);
+              }
+            }
+
+            // With explicit domain attribute variants
+            for (const name of names) {
+              for (const d of domainVariants) {
+                for (const p of pathVariants) {
+                  setExpired(name, `Domain=${d}; Path=${p}; SameSite=Lax`);
+                  setExpired(name, `Domain=${d}; Path=${p}; SameSite=None; Secure`);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('[Settings] Failed to clear some cookies (non-fatal):', err);
+          }
+        };
+
+        // Helper: clear all IndexedDB databases for this origin (in addition to app logout)
+        const clearAllIndexedDB = async () => {
+          try {
+            // Prefer standards method when available
+            const idbWithDatabases = indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> };
+            const dbs: { name?: string }[] | undefined = await idbWithDatabases?.databases?.();
+            if (Array.isArray(dbs)) {
+              await Promise.all(
+                dbs
+                  .map((db) => db?.name)
+                  .filter((n): n is string => Boolean(n))
+                  .map((name) =>
+                    new Promise<void>((resolve) => {
+                      const req = indexedDB.deleteDatabase(name);
+                      req.onsuccess = () => resolve();
+                      req.onerror = () => resolve();
+                      req.onblocked = () => resolve();
+                    })
+                  )
+              );
+            } else {
+              // Fallback: delete our known DBs explicitly
+              const known = ['ConvergeDB', 'ConvergeGlobal'];
+              await Promise.all(
+                known.map(
+                  (name) =>
+                    new Promise<void>((resolve) => {
+                      const req = indexedDB.deleteDatabase(name);
+                      req.onsuccess = () => resolve();
+                      req.onerror = () => resolve();
+                      req.onblocked = () => resolve();
+                    })
+                )
+              );
+            }
+          } catch (err) {
+            console.warn('[Settings] Failed to enumerate/delete some IndexedDB databases (non-fatal):', err);
+          }
+        };
+
         // 1) Disconnect wallet to prevent auto-reconnect on next load
         try {
           await disconnectWallet();
@@ -316,7 +416,10 @@ export function SettingsPage() {
           console.warn('[Settings] Failed to clear personalization flags or web storage (non-fatal):', e);
         }
 
-        // 4) Clear service worker caches and unregister SW (force a fresh start)
+        // 4) Clear cookies for this origin (best-effort)
+        await clearAllCookies();
+
+        // 5) Clear service worker caches and unregister SW (force a fresh start)
         try {
           if ('caches' in window) {
             const cacheNames = await caches.keys();
@@ -324,15 +427,26 @@ export function SettingsPage() {
             console.log('[Settings] Cleared service worker caches');
           }
           if ('serviceWorker' in navigator) {
+            // Unregister all known registrations
             const registrations = await navigator.serviceWorker.getRegistrations();
             await Promise.all(registrations.map((reg) => reg.unregister()));
+            // Also try the current scope registration (Safari compatibility)
+            try {
+              const reg = await navigator.serviceWorker.getRegistration();
+              if (reg) await reg.unregister();
+            } catch (e) {
+              console.warn('[Settings] SW getRegistration/unregister failed (non-fatal):', e);
+            }
             console.log('[Settings] Unregistered service workers');
           }
         } catch (e) {
           console.warn('[Settings] Failed to clear SW caches or unregister SW (non-fatal):', e);
         }
 
-        // 5) Hard reload the page to ensure a completely clean slate
+        // 6) As a final sweep, delete all IndexedDB databases on this origin
+        await clearAllIndexedDB();
+
+        // 7) Hard reload the page to ensure a completely clean slate
         window.location.reload();
       } catch (error) {
         console.error('Failed to clear data:', error);
