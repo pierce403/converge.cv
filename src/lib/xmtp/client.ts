@@ -976,9 +976,12 @@ export class XmtpClient {
         }
         if (isEthereumAddress(trimmed)) {
           try {
+            // For Identifier payloads passed to the XMTP API, the identity service
+            // expects raw hex without the 0x prefix. Normalize and strip prefix.
             const with0x = this.normalizeEthereumAddress(trimmed).toLowerCase();
+            const rawHex = toIdentifierHex(with0x).toLowerCase();
             const identifier: Identifier = {
-              identifier: with0x, // keep 0x prefix for group.addMembersByIdentifiers
+              identifier: rawHex,
               identifierKind: 'Ethereum',
             };
             identifierPayloads.push(identifier);
