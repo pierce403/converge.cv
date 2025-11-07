@@ -586,14 +586,19 @@ export function Layout() {
         <div className="flex justify-around max-w-lg mx-auto">
           <Link
             to="/contacts"
+            aria-label="Contacts"
             className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
               location.pathname === '/contacts'
                 ? 'text-accent-300 bg-primary-900/70 shadow-lg'
                 : 'text-primary-300 hover:text-primary-100'
             }`}
           >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 3 0 10-6 0 3 3 0 006 0z" />
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" role="img" aria-hidden="true">
+              <title>Contacts</title>
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M15.75 9a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4.5 19.5a8.999 8.999 0 1115 0" />
             </svg>
             <span className="text-xs mt-1">Contacts</span>
           </Link>
