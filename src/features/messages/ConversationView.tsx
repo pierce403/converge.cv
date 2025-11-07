@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from 'react';
+import { useEffect, useRef, useMemo, useState, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMessageStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
@@ -12,6 +12,7 @@ import { AddContactButton } from '@/features/contacts/AddContactButton';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
+import { Menu, Transition } from '@headlessui/react';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -20,7 +21,7 @@ export function ConversationView() {
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
 
-  const { conversations } = useConversations();
+  const { conversations, removeConversation, removeMembersFromGroup } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
   const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
@@ -464,16 +465,94 @@ export function ConversationView() {
             </button>
           </>
         )}
-        <button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"
-            />
-          </svg>
-        </button>
+        {conversation.isGroup ? (
+          <Menu as="div" className="relative inline-block text-left z-[90]">
+            <Menu.Button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+              </svg>
+            </Menu.Button>
+            <Transition
+              as={Fragment}
+              enter="transition ease-out duration-100"
+              enterFrom="transform opacity-0 scale-95"
+              enterTo="transform opacity-100 scale-100"
+              leave="transition ease-in duration-75"
+              leaveFrom="transform opacity-100 scale-100"
+              leaveTo="transform opacity-0 scale-95"
+            >
+              <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur z-[100]">
+                <Menu.Item>
+                  {({ active }) => (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const url = `${window.location.origin}/join-group/${conversation.id}`;
+                          await navigator.clipboard.writeText(url);
+                          alert('Group link copied to clipboard');
+                        } catch (e) {
+                          alert('Failed to copy link');
+                        }
+                      }}
+                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                    >
+                      Copy group link
+                    </button>
+                  )}
+                </Menu.Item>
+                <Menu.Item>
+                  {({ active }) => (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const me = identity?.inboxId || identity?.address;
+                          if (!me) {
+                            alert('No identity available');
+                            return;
+                          }
+                          if (!confirm('Leave this group? You will stop receiving new messages.')) return;
+                          await removeMembersFromGroup(conversation.id, [me]);
+                          alert('You left the group');
+                          navigate('/');
+                        } catch (e) {
+                          alert('Failed to leave group');
+                        }
+                      }}
+                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                    >
+                      Leave group
+                    </button>
+                  )}
+                </Menu.Item>
+                <div className="my-1 h-px bg-primary-800/60" />
+                <Menu.Item>
+                  {({ active }) => (
+                    <button
+                      onClick={async () => {
+                        if (!confirm('Delete this conversation from this device?')) return;
+                        try {
+                          await removeConversation(conversation.id);
+                          navigate('/');
+                        } catch (e) {
+                          alert('Failed to delete conversation');
+                        }
+                      }}
+                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
+                    >
+                      Delete conversation
+                    </button>
+                  )}
+                </Menu.Item>
+              </Menu.Items>
+            </Transition>
+          </Menu>
+        ) : (
+          <button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Messages */}
