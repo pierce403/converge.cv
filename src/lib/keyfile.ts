@@ -2,6 +2,7 @@
  * Keyfile utilities for exporting and importing identities.
  */
 
+import { bytesToHex } from 'viem';
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts';
 import type { Identity } from '@/types';
 
@@ -94,14 +95,23 @@ export function deriveIdentityFromKeyfile(keyfile: ConvergeKeyfile): KeyfileIden
   let resolvedAddress: string;
 
   if (mnemonic && mnemonic.trim().length > 0) {
-    const path = derivationPath && derivationPath.trim().length > 0 ? derivationPath : DEFAULT_DERIVATION_PATH;
-    const account = mnemonicToAccount(mnemonic.trim(), { path });
-    resolvedPrivateKey = account.privateKey;
+    const defaultPath: `m/44'/60'/${string}` = DEFAULT_DERIVATION_PATH;
+    const trimmedPath = derivationPath?.trim();
+    const resolvedPath =
+      trimmedPath && trimmedPath.length > 0
+        ? (trimmedPath as `m/44'/60'/${string}`)
+        : defaultPath;
+    const account = mnemonicToAccount(mnemonic.trim(), { path: resolvedPath });
+    const privateKeyBytes = account.getHdKey().privateKey;
+    if (!privateKeyBytes) {
+      throw new Error('Unable to derive private key from mnemonic.');
+    }
+    resolvedPrivateKey = bytesToHex(privateKeyBytes);
     resolvedAddress = account.address;
   } else if (privateKey && privateKey.trim().length > 0) {
     const normalised = privateKey.trim().startsWith('0x') ? privateKey.trim() : `0x${privateKey.trim()}`;
     const account = privateKeyToAccount(normalised as `0x${string}`);
-    resolvedPrivateKey = account.privateKey;
+    resolvedPrivateKey = normalised as `0x${string}`;
     resolvedAddress = account.address;
   } else {
     throw new Error('Keyfile does not contain a mnemonic or private key.');

@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { generateMnemonic, mnemonicToAccount, english } from 'viem/accounts';
+import { bytesToHex } from 'viem';
 import { useSignMessage } from 'wagmi';
 import type { Identifier } from '@xmtp/browser-sdk';
 import { WalletSelector } from './WalletSelector';
@@ -274,8 +275,13 @@ export function OnboardingPage() {
     try {
       const mnemonic = generateMnemonic(english);
       const account = mnemonicToAccount(mnemonic, { path: "m/44'/60'/0'/0/0" });
+      const privateKeyBytes = account.getHdKey().privateKey;
+      if (!privateKeyBytes) {
+        throw new Error('Unable to derive private key from mnemonic.');
+      }
+      const privateKeyHex = bytesToHex(privateKeyBytes);
 
-      const success = await auth.createIdentity(account.address, account.privateKey, undefined, undefined, {
+      const success = await auth.createIdentity(account.address, privateKeyHex, undefined, undefined, {
         register: true,
         enableHistorySync: true,
         label: `Identity ${shortAddress(account.address)}`,
