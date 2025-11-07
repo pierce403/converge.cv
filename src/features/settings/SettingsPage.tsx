@@ -180,7 +180,33 @@ export function SettingsPage() {
           console.warn('[Settings] Logout encountered an error (continuing):', e);
         }
 
-        // 3) Clear service worker caches and unregister SW (force a fresh start)
+        // 3) Clear personalization reminder flags and any local/session storage app data
+        try {
+          if (typeof window !== 'undefined') {
+            // Remove legacy global key
+            try { window.localStorage.removeItem('personalization-reminder'); } catch {}
+            // Remove per-identity keys
+            try {
+              const keys: string[] = [];
+              for (let i = 0; i < window.localStorage.length; i++) {
+                const k = window.localStorage.key(i);
+                if (k) keys.push(k);
+              }
+              for (const k of keys) {
+                if (k.startsWith('personalization-reminder:')) {
+                  window.localStorage.removeItem(k);
+                }
+              }
+            } catch {}
+            // As this is "Clear All Data", clear all local/session storage as a final sweep
+            try { window.localStorage.clear(); } catch {}
+            try { window.sessionStorage.clear(); } catch {}
+          }
+        } catch (e) {
+          console.warn('[Settings] Failed to clear personalization flags or web storage (non-fatal):', e);
+        }
+
+        // 4) Clear service worker caches and unregister SW (force a fresh start)
         try {
           if ('caches' in window) {
             const cacheNames = await caches.keys();
@@ -196,7 +222,7 @@ export function SettingsPage() {
           console.warn('[Settings] Failed to clear SW caches or unregister SW (non-fatal):', e);
         }
 
-        // 4) Hard reload the page to ensure a completely clean slate
+        // 5) Hard reload the page to ensure a completely clean slate
         window.location.reload();
       } catch (error) {
         console.error('Failed to clear data:', error);
