@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   useAuthStore,
   useConversationStore,
@@ -8,6 +8,11 @@ import {
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { WebWorkersPanel } from './WebWorkersPanel';
 import buildInfo from '../../build-info.json'; // Import build info
+import { registerServiceWorkerForPush, enablePush, disablePush } from '@/lib/push';
+import { logNetworkEvent } from '@/lib/stores/debug-store';
+
+const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
+const PUSH_API_BASE = import.meta.env.VITE_PUSH_API_BASE as string | undefined;
 
 export function DebugPage() {
   const consoleEntries = useDebugStore((state) => state.consoleEntries);
@@ -34,6 +39,47 @@ export function DebugPage() {
   const reversedConsole = useMemo(() => consoleEntries.slice().reverse(), [consoleEntries]);
   const reversedNetwork = useMemo(() => networkEntries.slice().reverse(), [networkEntries]);
   const reversedErrors = useMemo(() => errorEntries.slice().reverse(), [errorEntries]);
+
+  // Push Debug local state
+  const [pushPermission, setPushPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default',
+  );
+  const [swRegistered, setSwRegistered] = useState<boolean>(false);
+  const [swScope, setSwScope] = useState<string>('');
+  const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
+  const [backendReachable, setBackendReachable] = useState<string>('unknown');
+
+  async function refreshPushStatus() {
+    try {
+      const perm = typeof Notification !== 'undefined' ? Notification.permission : 'default';
+      setPushPermission(perm);
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        setSwRegistered(true);
+        setSwScope(reg.scope || '');
+        const sub = await reg.pushManager.getSubscription();
+        setSubscriptionEndpoint(sub?.endpoint || '');
+      } else {
+        setSwRegistered(false);
+        setSwScope('');
+        setSubscriptionEndpoint('');
+      }
+      if (PUSH_API_BASE) {
+        try {
+          const res = await fetch(`${PUSH_API_BASE.replace(/\/$/, '')}/health`, { method: 'GET' });
+          setBackendReachable(`${res.status} ${res.ok ? 'OK' : 'ERR'}`);
+          logNetworkEvent({ direction: 'status', event: 'push:health', details: `GET /health → ${res.status}` });
+        } catch (e) {
+          setBackendReachable('unreachable');
+          logNetworkEvent({ direction: 'status', event: 'push:health', details: 'GET /health unreachable' });
+        }
+      } else {
+        setBackendReachable('not configured');
+      }
+    } catch (e) {
+      // swallow – this is debug UI
+    }
+  }
 
 
   return (
@@ -119,6 +165,129 @@ export function DebugPage() {
               </div>
             </dl>
           </article>
+        </section>
+
+        {/* Push Debug */}
+        <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
+          <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-primary-100">Push Debug</h2>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={refreshPushStatus}
+                className="rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700"
+              >
+                Refresh
+              </button>
+            </div>
+          </header>
+          <div className="px-4 py-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 text-sm">
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">VAPID Key</div>
+              <div className="mt-1 text-primary-100 break-all">{VAPID_PUBLIC ? 'configured' : 'not set'}</div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Push API Base</div>
+              <div className="mt-1 text-primary-100 break-all">{PUSH_API_BASE || 'not set'}</div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Notification Permission</div>
+              <div className="mt-1 text-primary-100">{pushPermission}</div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Service Worker</div>
+              <div className="mt-1 text-primary-100">{swRegistered ? `registered (${swScope})` : 'not registered'}</div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Subscription</div>
+              <div className="mt-1 text-primary-100 break-all">
+                {subscriptionEndpoint ? subscriptionEndpoint : 'none'}
+              </div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Backend Health</div>
+              <div className="mt-1 text-primary-100">{backendReachable}</div>
+            </div>
+          </div>
+          <div className="px-4 pb-4">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const reg = await registerServiceWorkerForPush();
+                  logNetworkEvent({ direction: 'status', event: 'push:sw_register', details: reg ? `scope=${reg.scope}` : 'failed' });
+                  await refreshPushStatus();
+                }}
+                className="btn-secondary"
+              >
+                Register SW
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const inboxId = identity?.inboxId || identity?.address || 'unknown';
+                  const dto = await enablePush(inboxId, identity?.installationId);
+                  logNetworkEvent({ direction: 'outbound', event: 'push:enable', details: dto ? 'subscribed' : 'no-op', payload: dto ? JSON.stringify({ endpoint: dto.endpoint }) : undefined });
+                  await refreshPushStatus();
+                }}
+                className="btn-primary"
+                disabled={!identity}
+              >
+                Enable Push
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const inboxId = identity?.inboxId || identity?.address || 'unknown';
+                  await disablePush(inboxId);
+                  logNetworkEvent({ direction: 'outbound', event: 'push:disable', details: 'unsubscribed' });
+                  await refreshPushStatus();
+                }}
+                className="btn-secondary"
+                disabled={!identity}
+              >
+                Disable Push
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await refreshPushStatus();
+                }}
+                className="btn-secondary"
+              >
+                Check Subscription
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!PUSH_API_BASE) {
+                    logNetworkEvent({ direction: 'status', event: 'push:test', details: 'API base not configured' });
+                    return;
+                  }
+                  try {
+                    const body = {
+                      inboxId: identity?.inboxId || identity?.address || 'unknown',
+                      title: 'Converge Test',
+                      body: 'This is a test notification',
+                      url: '/',
+                    };
+                    const res = await fetch(`${PUSH_API_BASE.replace(/\/$/, '')}/push/test`, {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify(body),
+                    });
+                    logNetworkEvent({ direction: 'outbound', event: 'push:test', details: `POST /push/test → ${res.status}` });
+                  } catch (e) {
+                    logNetworkEvent({ direction: 'outbound', event: 'push:test', details: 'POST /push/test failed' });
+                  }
+                }}
+                className="btn-secondary"
+                disabled={!identity}
+              >
+                Send Test Push
+              </button>
+            </div>
+          </div>
         </section>
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
