@@ -66,6 +66,8 @@ interface ContactState {
   getContactByInboxId: (inboxId: string) => Contact | undefined;
   getContactByAddress: (address: string) => Contact | undefined;
   upsertContactProfile: (profile: ContactProfileInput) => Promise<Contact>;
+  blockContact: (inboxId: string) => Promise<void>;
+  unblockContact: (inboxId: string) => Promise<void>;
   syncFarcasterContacts: (
     fid: number,
     onProgress?: (current: number, total: number, status?: string) => void
@@ -227,6 +229,14 @@ export const useContactStore = create<ContactState>()(
         if (contact) {
           await storage.putContact(contact);
         }
+      },
+
+      blockContact: async (inboxId) => {
+        await get().updateContact(inboxId, { isBlocked: true });
+      },
+
+      unblockContact: async (inboxId) => {
+        await get().updateContact(inboxId, { isBlocked: false });
       },
 
       loadContacts: async () => {

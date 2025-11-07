@@ -164,6 +164,14 @@ export function Layout() {
         const senderInboxId = message.senderAddress;
         const contactStore = useContactStore.getState();
         const xmtp = getXmtpClient();
+        // Drop messages from blocked senders to avoid recreating DMs on refresh
+        try {
+          const existing = contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
+          if (existing?.isBlocked) {
+            console.info('[Layout] Dropping message from blocked inbox:', senderInboxId);
+            return;
+          }
+        } catch { /* ignore */ }
         // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact
         const existingContact = contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
         const nowTs = Date.now();
@@ -181,6 +189,10 @@ export function Layout() {
           identities: profile?.identities,
           source: 'inbox',
         });
+        if (upserted.isBlocked) {
+          console.info('[Layout] Dropping message after upsert because contact is blocked:', senderInboxId);
+          return;
+        }
         const contact = upserted;
 
         // Enrich with ENS (and Farcaster if available) asynchronously

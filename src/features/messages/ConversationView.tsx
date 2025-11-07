@@ -10,6 +10,7 @@ import { getContactInfo } from '@/lib/default-contacts';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import { getXmtpClient } from '@/lib/xmtp';
+import { getStorage } from '@/lib/storage';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition } from '@headlessui/react';
@@ -26,6 +27,7 @@ export function ConversationView() {
   const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
+  const isContact = useContactStore((state) => state.isContact);
   const loadContacts = useContactStore((state) => state.loadContacts);
 
   const contactsByInboxId = useMemo(() => {
@@ -528,11 +530,121 @@ export function ConversationView() {
             </Transition>
           </Menu>
         ) : (
-          <button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-            </svg>
-          </button>
+          <Menu as="div" className="relative inline-block text-left z-[90]">
+            <Menu.Button className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+              </svg>
+            </Menu.Button>
+            <Transition
+              as={Fragment}
+              enter="transition ease-out duration-100"
+              enterFrom="transform opacity-0 scale-95"
+              enterTo="transform opacity-100 scale-100"
+              leave="transition ease-in duration-75"
+              leaveFrom="transform opacity-100 scale-100"
+              leaveTo="transform opacity-0 scale-95"
+            >
+              <Menu.Items className="absolute right-0 mt-2 w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur z-[100]">
+                {/* Add/Remove Contact */}
+                <Menu.Item>
+                  {({ active }) => (
+                    isContact(conversation.peerId) ? (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await useContactStore.getState().removeContact(conversation.peerId);
+                          } catch (e) {
+                            alert('Failed to remove contact');
+                          }
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                      >
+                        Remove from contacts
+                      </button>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await useContactStore.getState().upsertContactProfile({
+                              inboxId: conversation.peerId,
+                              displayName: conversationDisplayName,
+                              avatarUrl: conversationAvatar,
+                              source: 'inbox',
+                              metadata: { createdAt: Date.now() },
+                            });
+                          } catch (e) {
+                            alert('Failed to add contact');
+                          }
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                      >
+                        Add to contacts
+                      </button>
+                    )
+                  )}
+                </Menu.Item>
+                {/* Block/Unblock */}
+                <Menu.Item>
+                  {({ active }) => (
+                    (contactsByInboxId.get(conversation.peerId.toLowerCase())?.isBlocked) ? (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await useContactStore.getState().unblockContact(conversation.peerId);
+                          } catch (e) {
+                            alert('Failed to unblock');
+                          }
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                      >
+                        Unblock user
+                      </button>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await useContactStore.getState().blockContact(conversation.peerId);
+                          } catch (e) {
+                            alert('Failed to block');
+                          }
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                      >
+                        Block user
+                      </button>
+                    )
+                  )}
+                </Menu.Item>
+                <div className="my-1 h-px bg-primary-800/60" />
+                {/* Delete conversation (local) and block to prevent reappear */}
+                <Menu.Item>
+                  {({ active }) => (
+                    <button
+                      onClick={async () => {
+                        if (!confirm('Delete this conversation locally and block the user so it will not reappear on resync?')) return;
+                        try {
+                          await useContactStore.getState().blockContact(conversation.peerId);
+                        } catch (_e) { /* ignore */ }
+                        try {
+                          const storage = await getStorage();
+                          await storage.deleteConversation(conversation.id);
+                          removeConversation(conversation.id);
+                        } catch (e) {
+                          alert('Failed to delete conversation');
+                          return;
+                        }
+                        navigate('/');
+                      }}
+                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
+                    >
+                      Delete conversation
+                    </button>
+                  )}
+                </Menu.Item>
+              </Menu.Items>
+            </Transition>
+          </Menu>
         )}
       </div>
 
