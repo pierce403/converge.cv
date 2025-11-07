@@ -30,8 +30,8 @@ class ConvergeDB extends Dexie {
   // New contacts table keyed by inboxId (v3)
   contacts_v3!: Table<Contact, string>;
 
-  constructor() {
-    super('ConvergeDB');
+  constructor(name: string) {
+    super(name);
 
     this.version(1).stores({
       conversations: 'id, lastMessageAt, pinned, archived, peerId',
@@ -177,31 +177,35 @@ class ConvergeDB extends Dexie {
 }
 
 export class DexieDriver implements StorageDriver {
-  private db: ConvergeDB;
+  private globalDb: ConvergeDB; // identities, vault
+  private dataDb: ConvergeDB;   // conversations, messages, contacts, attachments
 
-  constructor() {
-    this.db = new ConvergeDB();
+  constructor(namespace = 'default') {
+    this.globalDb = new ConvergeDB('ConvergeDB');
+    this.dataDb = new ConvergeDB(`ConvergeDB:${namespace}`);
   }
 
   async init(): Promise<void> {
-    await this.db.open();
+    await this.globalDb.open();
+    await this.dataDb.open();
   }
 
   async close(): Promise<void> {
-    this.db.close();
+    this.globalDb.close();
+    this.dataDb.close();
   }
 
   // Conversations
   async putConversation(conversation: Conversation): Promise<void> {
-    await this.db.conversations.put(conversation);
+    await this.dataDb.conversations.put(conversation);
   }
 
   async getConversation(id: string): Promise<Conversation | undefined> {
-    return await this.db.conversations.get(id);
+    return await this.dataDb.conversations.get(id);
   }
 
   async listConversations(query?: Query): Promise<Conversation[]> {
-    let collection = this.db.conversations.orderBy('lastMessageAt').reverse();
+    let collection = this.dataDb.conversations.orderBy('lastMessageAt').reverse();
 
     if (query?.pinned !== undefined) {
       collection = collection.filter((c) => c.pinned === query.pinned);
@@ -223,24 +227,24 @@ export class DexieDriver implements StorageDriver {
   }
 
   async deleteConversation(id: string): Promise<void> {
-    await this.db.transaction('rw', [this.db.conversations, this.db.messages], async () => {
-      await this.db.conversations.delete(id);
-      await this.db.messages.where('conversationId').equals(id).delete();
+    await this.dataDb.transaction('rw', [this.dataDb.conversations, this.dataDb.messages], async () => {
+      await this.dataDb.conversations.delete(id);
+      await this.dataDb.messages.where('conversationId').equals(id).delete();
     });
   }
 
   async updateConversationUnread(id: string, count: number): Promise<void> {
-    await this.db.conversations.update(id, { unreadCount: count });
+    await this.dataDb.conversations.update(id, { unreadCount: count });
   }
 
   // Messages
   async putMessage(message: Message): Promise<void> {
-    await this.db.messages.put(message);
+    await this.dataDb.messages.put(message);
     
     // Update conversation lastMessageAt and preview
-    const conversation = await this.db.conversations.get(message.conversationId);
+    const conversation = await this.dataDb.conversations.get(message.conversationId);
     if (conversation) {
-      await this.db.conversations.update(message.conversationId, {
+      await this.dataDb.conversations.update(message.conversationId, {
         lastMessageAt: message.sentAt,
         lastMessagePreview: message.type === 'text' ? message.body.substring(0, 100) : '📎 Attachment',
       });
@@ -248,11 +252,11 @@ export class DexieDriver implements StorageDriver {
   }
 
   async getMessage(id: string): Promise<Message | undefined> {
-    return await this.db.messages.get(id);
+    return await this.dataDb.messages.get(id);
   }
 
   async listMessages(conversationId: string, opts?: PageOpts): Promise<Message[]> {
-    let collection = this.db.messages
+    let collection = this.dataDb.messages
       .where('[conversationId+sentAt]')
       .between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey])
       .reverse();
@@ -278,32 +282,32 @@ export class DexieDriver implements StorageDriver {
   }
 
   async deleteMessage(id: string): Promise<void> {
-    await this.db.messages.delete(id);
+    await this.dataDb.messages.delete(id);
   }
 
   async updateMessageStatus(id: string, status: Message['status']): Promise<void> {
-    await this.db.messages.update(id, { status });
+    await this.dataDb.messages.update(id, { status });
   }
 
   async updateMessageReactions(id: string, reactions: Message['reactions']): Promise<void> {
-    await this.db.messages.update(id, { reactions });
+    await this.dataDb.messages.update(id, { reactions });
   }
 
   async deleteExpiredMessages(): Promise<number> {
     const now = Date.now();
-    const expired = await this.db.messages
+    const expired = await this.dataDb.messages
       .filter((m) => m.expiresAt !== undefined && m.expiresAt < now)
       .toArray();
 
-    await this.db.messages.bulkDelete(expired.map((m) => m.id));
+    await this.dataDb.messages.bulkDelete(expired.map((m) => m.id));
     return expired.length;
   }
 
   // Attachments
   async putAttachment(attachment: Attachment, data: ArrayBuffer): Promise<void> {
-    await this.db.transaction('rw', [this.db.attachments, this.db.attachmentData], async () => {
-      await this.db.attachments.put(attachment);
-      await this.db.attachmentData.put({ id: attachment.id, data });
+    await this.dataDb.transaction('rw', [this.dataDb.attachments, this.dataDb.attachmentData], async () => {
+      await this.dataDb.attachments.put(attachment);
+      await this.dataDb.attachmentData.put({ id: attachment.id, data });
     });
   }
 
@@ -311,8 +315,8 @@ export class DexieDriver implements StorageDriver {
     id: string
   ): Promise<{ attachment: Attachment; data: ArrayBuffer } | undefined> {
     const [attachment, attachmentData] = await Promise.all([
-      this.db.attachments.get(id),
-      this.db.attachmentData.get(id),
+      this.dataDb.attachments.get(id),
+      this.dataDb.attachmentData.get(id),
     ]);
 
     if (!attachment || !attachmentData) {
@@ -323,97 +327,93 @@ export class DexieDriver implements StorageDriver {
   }
 
   async deleteAttachment(id: string): Promise<void> {
-    await this.db.transaction('rw', [this.db.attachments, this.db.attachmentData], async () => {
-      await this.db.attachments.delete(id);
-      await this.db.attachmentData.delete(id);
+    await this.dataDb.transaction('rw', [this.dataDb.attachments, this.dataDb.attachmentData], async () => {
+      await this.dataDb.attachments.delete(id);
+      await this.dataDb.attachmentData.delete(id);
     });
   }
 
   // Identity
   async putIdentity(identity: Identity): Promise<void> {
-    await this.db.identity.put(identity);
+    await this.globalDb.identity.put(identity);
   }
 
   async getIdentity(): Promise<Identity | undefined> {
-    const identities = await this.db.identity.toArray();
+    const identities = await this.globalDb.identity.toArray();
     return identities[0];
   }
 
   async listIdentities(): Promise<Identity[]> {
-    return await this.db.identity.toArray();
+    return await this.globalDb.identity.toArray();
   }
 
   async getIdentityByAddress(address: string): Promise<Identity | undefined> {
-    return await this.db.identity.get(address);
+    return await this.globalDb.identity.get(address);
   }
 
   async getIdentityByInboxId(inboxId: string): Promise<Identity | undefined> {
-    return await this.db.identity.where('inboxId').equals(inboxId).first();
+    return await this.globalDb.identity.where('inboxId').equals(inboxId).first();
   }
 
   async deleteIdentity(): Promise<void> {
-    await this.db.identity.clear();
+    await this.globalDb.identity.clear();
   }
 
   async deleteIdentityByAddress(address: string): Promise<void> {
-    await this.db.identity.delete(address);
+    await this.globalDb.identity.delete(address);
   }
 
   // Contacts
   async putContact(contact: Contact): Promise<void> {
-    await this.db.contacts_v3.put(contact);
+    await this.dataDb.contacts_v3.put(contact);
   }
 
   async getContact(inboxId: string): Promise<Contact | undefined> {
-    return await this.db.contacts_v3.get(inboxId);
+    return await this.dataDb.contacts_v3.get(inboxId);
   }
 
   async listContacts(): Promise<Contact[]> {
-    return await this.db.contacts_v3.toArray();
+    return await this.dataDb.contacts_v3.toArray();
   }
 
   async deleteContact(inboxId: string): Promise<void> {
-    await this.db.contacts_v3.delete(inboxId);
+    await this.dataDb.contacts_v3.delete(inboxId);
   }
 
   async updateContact(inboxId: string, updates: Partial<Contact>): Promise<void> {
-    await this.db.contacts_v3.update(inboxId, updates);
+    await this.dataDb.contacts_v3.update(inboxId, updates);
   }
 
   // Vault secrets
   async putVaultSecrets(secrets: VaultSecrets): Promise<void> {
-    await this.db.vaultSecrets.put(secrets);
+    await this.globalDb.vaultSecrets.put(secrets);
   }
 
   async getVaultSecrets(): Promise<VaultSecrets | undefined> {
-    const secrets = await this.db.vaultSecrets.toArray();
+    const secrets = await this.globalDb.vaultSecrets.toArray();
     return secrets[0];
   }
 
   async deleteVaultSecrets(): Promise<void> {
-    await this.db.vaultSecrets.clear();
+    await this.globalDb.vaultSecrets.clear();
   }
 
   // Clear ALL data
   async clearAllData(): Promise<void> {
-    await this.db.transaction('rw', [
-      this.db.conversations,
-      this.db.messages,
-      this.db.attachments,
-      this.db.attachmentData,
-      this.db.identity,
-      this.db.vaultSecrets,
-      this.db.contacts,
-      this.db.contacts_v3,
+    await this.dataDb.transaction('rw', [
+      this.dataDb.conversations,
+      this.dataDb.messages,
+      this.dataDb.attachments,
+      this.dataDb.attachmentData,
+      this.dataDb.contacts,
+      this.dataDb.contacts_v3,
     ], async () => {
-      await this.db.conversations.clear();
-      await this.db.messages.clear();
-      await this.db.attachments.clear();
-      await this.db.attachmentData.clear();
-      await this.db.identity.clear();
-      await this.db.vaultSecrets.clear();
-      await this.db.contacts.clear();
-      await this.db.contacts_v3.clear();
+      await this.dataDb.conversations.clear();
+      await this.dataDb.messages.clear();
+      await this.dataDb.attachments.clear();
+      await this.dataDb.attachmentData.clear();
+      await this.dataDb.contacts.clear();
+      await this.dataDb.contacts_v3.clear();
       console.log('[Storage] ✅ All IndexedDB data cleared');
     });
 
@@ -437,9 +437,9 @@ export class DexieDriver implements StorageDriver {
   // Search - basic prefix search on Dexie
   async searchMessages(query: string, limit = 50): Promise<Message[]> {
     const queryLower = query.toLowerCase();
-    return await this.db.messages
+    return await this.dataDb.messages
       .filter(
-        (m) =>
+        (m: Message) =>
           m.type === 'text' &&
           (m.body.toLowerCase().includes(queryLower) ||
             m.sender.toLowerCase().includes(queryLower))
@@ -452,10 +452,10 @@ export class DexieDriver implements StorageDriver {
   async vacuum(): Promise<void> {
     // Dexie doesn't need explicit vacuum like SQLite
     // but we can delete orphaned data
-    const messageIds = new Set((await this.db.messages.toArray()).map((m) => m.id));
-    const attachments = await this.db.attachments.toArray();
+    const messageIds = new Set((await this.dataDb.messages.toArray()).map((m: Message) => m.id));
+    const attachments = await this.dataDb.attachments.toArray();
 
-    const orphaned = attachments.filter((a) => !messageIds.has(a.messageId));
+    const orphaned = attachments.filter((a: Attachment) => !messageIds.has(a.messageId));
     await Promise.all(orphaned.map((a) => this.deleteAttachment(a.id)));
   }
 

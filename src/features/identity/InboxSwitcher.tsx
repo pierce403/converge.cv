@@ -3,6 +3,7 @@ import { Menu, Transition } from '@headlessui/react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
 import { useAuthStore, useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
+import { setStorageNamespace, closeStorage } from '@/lib/storage';
 import type { InboxRegistryEntry } from '@/types';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
@@ -32,7 +33,16 @@ export function InboxSwitcher() {
 
   const handleSwitch = async (entry: InboxRegistryEntry) => {
     setCurrentInbox(entry.inboxId);
+    // Swap storage namespace to the selected inbox and hard reload state
+    try {
+      await closeStorage();
+      await setStorageNamespace(entry.inboxId);
+    } catch (e) {
+      console.warn('[InboxSwitcher] Failed to reset storage (continuing):', e);
+    }
     await checkExistingIdentity();
+    // Reload the app to ensure in-memory stores hydrate from the new namespace
+    setTimeout(() => window.location.reload(), 50);
   };
 
   const handleCreateEphemeral = async () => {
