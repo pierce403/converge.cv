@@ -46,7 +46,7 @@ export function useAuth() {
         if (isE2E) {
           // Skip live XMTP connection during E2E.
           const storage = await getStorage();
-          const identity = await storage.getIdentity();
+          const identity = await storage.getIdentityByAddress(address);
           if (identity && identity.address === address) {
             const stubInboxId = `local-${address.slice(2, 8)}-${Date.now().toString(36)}`;
             identity.inboxId = stubInboxId;
@@ -94,7 +94,7 @@ export function useAuth() {
 
         if (inboxId && installationId) {
           const storage = await getStorage();
-          const identity = await storage.getIdentity();
+          const identity = await storage.getIdentityByAddress(address);
           if (identity && identity.address === address) {
             identity.inboxId = inboxId;
             identity.installationId = installationId;
@@ -290,7 +290,7 @@ export function useAuth() {
         const storage = await getStorage();
 
         // Check if identity already exists for this address
-        const existingIdentity = await storage.getIdentity();
+        const existingIdentity = await storage.getIdentityByAddress(walletAddress);
         if (existingIdentity && existingIdentity.address === walletAddress) {
           console.log('Identity already exists for this address, re-importing');
         }
@@ -391,7 +391,7 @@ export function useAuth() {
         setVaultKey(vaultKey);
 
         // Get identity
-        const identity = await storage.getIdentity();
+        const identity = walletAddress ? await storage.getIdentityByAddress(walletAddress) : undefined;
         if (!identity) {
           return false;
         }
@@ -411,7 +411,7 @@ export function useAuth() {
         return false;
       }
     },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
+    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress]
   );
 
   /**
