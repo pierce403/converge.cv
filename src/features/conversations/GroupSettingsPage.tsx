@@ -8,6 +8,7 @@ import type { GroupMember } from '@/types';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import type { Contact } from '@/lib/stores/contact-store';
 import { PermissionPolicy, PermissionUpdateType, GroupPermissionsOptions } from '@xmtp/browser-sdk';
+import { groupShareUrl } from '@/lib/utils/links';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
@@ -1123,14 +1124,14 @@ export function GroupSettingsPage() {
               <input
                 type="text"
                 readOnly
-                value={`${window.location.origin}/g/${conversation.id}`}
+                value={groupShareUrl(conversation.id)}
                 className="input-primary flex-1 cursor-text"
                 onClick={(e) => (e.target as HTMLInputElement).select()}
               />
               <button
                 className="btn-primary"
                 onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/g/${conversation.id}`);
+                  navigator.clipboard.writeText(groupShareUrl(conversation.id));
                   alert('Link copied to clipboard!');
                 }}
               >

@@ -487,7 +487,8 @@ export function ConversationView() {
                     <button
                       onClick={async () => {
                         try {
-                          const url = `${window.location.origin}/g/${conversation.id}`;
+                          const { groupShareUrl } = await import('@/lib/utils/links');
+                          const url = groupShareUrl(conversation.id);
                           await navigator.clipboard.writeText(url);
                           alert('Group link copied to clipboard');
                         } catch (e) {
