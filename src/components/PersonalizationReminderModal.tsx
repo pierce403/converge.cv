@@ -32,31 +32,47 @@ export function PersonalizationReminderModal({
 }: PersonalizationReminderModalProps) {
   const identity = useAuthStore((s) => s.identity);
   const setIdentity = useAuthStore((s) => s.setIdentity);
-  // Suggested name: Color + Animal when no display name is set
+
+  // Treat auto-generated labels as "unset" so we show a friendly suggestion.
+  const isAutoLabel = (val?: string | null) => {
+    if (!val) return true;
+    const v = val.trim();
+    return v.startsWith('Identity ') || v.startsWith('Wallet ');
+  };
+
+  // Suggested name: deterministic Color + Animal when no meaningful display name is set
   const suggestedName = useMemo(() => {
-    if (identity?.displayName?.trim()) return identity.displayName.trim();
+    const existing = identity?.displayName?.trim();
+    if (existing && !isAutoLabel(existing)) return existing;
+
     const colors = [
-      'Red',
-      'Blue',
-      'Green',
-      'Yellow',
-      'Purple',
-      'Orange',
-      'Pink',
-      'Brown',
-      'Black',
-      'White',
+      'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Orange', 'Pink', 'Brown', 'Black', 'White',
     ];
     const animals = [
-      'Orca', 'Dolphin', 'Whale', 'Penguin', 'Seal', 'Otter', 'Shark', 'Turtle', 'Eagle', 'Falcon',
-      'Hawk', 'Owl', 'Fox', 'Wolf', 'Bear', 'Tiger', 'Lion', 'Zebra', 'Giraffe', 'Elephant',
-      'Monkey', 'Panda', 'Koala', 'Kangaroo', 'Rabbit', 'Deer', 'Horse', 'Bison', 'Buffalo', 'Camel',
-      'Hippo', 'Rhino', 'Leopard', 'Cheetah', 'Jaguar', 'Goat', 'Sheep', 'Cow', 'Pig', 'Dog',
-      'Cat', 'Goose', 'Duck', 'Swan', 'Frog', 'Toad', 'Lizard', 'Snake', 'Chimpanzee', 'Gorilla',
+      'Orca','Dolphin','Whale','Penguin','Seal','Otter','Shark','Turtle','Eagle','Falcon','Hawk','Owl','Fox','Wolf','Bear','Tiger','Lion','Zebra','Giraffe','Elephant','Monkey','Panda','Koala','Kangaroo','Rabbit','Deer','Horse','Bison','Buffalo','Camel','Hippo','Rhino','Leopard','Cheetah','Jaguar','Goat','Sheep','Cow','Pig','Dog','Cat','Goose','Duck','Swan','Frog','Toad','Lizard','Snake','Chimpanzee','Gorilla',
     ];
-    const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
-    return `${pick(colors)} ${pick(animals)}`;
-  }, [identity?.displayName]);
+
+    // Deterministic pick based on inboxId/address when available
+    const seed = (identity?.inboxId || identity?.address || 'converge').toLowerCase();
+    let h = 2166136261 >>> 0; // FNV-1a 32-bit
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    const color = colors[Math.abs(h) % colors.length];
+    const animal = animals[Math.abs((h >>> 1)) % animals.length];
+
+    // Log picks for debugging clarity
+    try {
+      console.log(
+        `[Personalization] Suggested display name parts: color="${color}", animal="${animal}" → "${color} ${animal}"`
+      );
+    } catch (e) {
+      // ignore console failure in restricted envs
+    }
+
+    return `${color} ${animal}`;
+  }, [identity?.displayName, identity?.inboxId, identity?.address]);
 
   const [displayName, setDisplayName] = useState<string>(suggestedName);
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | undefined>(identity?.avatar || undefined);
