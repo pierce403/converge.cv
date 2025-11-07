@@ -28,12 +28,19 @@ export function Layout() {
   const missingDisplayName = Boolean(identity && !identity.displayName?.trim());
   const missingAvatar = Boolean(identity && !identity.avatar?.trim());
 
+  // Use identity-specific reminder key so a new/other identity gets prompted immediately
+  const getReminderKey = useCallback(() => {
+    const id = identity?.inboxId?.toLowerCase?.() || identity?.address?.toLowerCase?.();
+    return id ? `personalization-reminder:${id}` : 'personalization-reminder';
+  }, [identity?.inboxId, identity?.address]);
+
   const readReminderPrefs = useCallback((): { lastNagAt?: number; dismissedForever?: boolean } => {
     if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
       return {};
     }
     try {
-      const raw = window.localStorage.getItem('personalization-reminder');
+      const key = getReminderKey();
+      const raw = window.localStorage.getItem(key) || window.localStorage.getItem('personalization-reminder');
       if (!raw) return {};
       const parsed = JSON.parse(raw) as { lastNagAt?: number; dismissedForever?: boolean };
       return {
@@ -44,7 +51,7 @@ export function Layout() {
       console.warn('[Layout] Failed to parse personalization reminder prefs:', error);
       return {};
     }
-  }, []);
+  }, [getReminderKey]);
 
   const updateReminderPrefs = useCallback(
     (updates: { lastNagAt?: number; dismissedForever?: boolean }) => {
@@ -54,12 +61,13 @@ export function Layout() {
       const existing = readReminderPrefs();
       const next = { ...existing, ...updates };
       try {
-        window.localStorage.setItem('personalization-reminder', JSON.stringify(next));
+        const key = getReminderKey();
+        window.localStorage.setItem(key, JSON.stringify(next));
       } catch (error) {
         console.warn('[Layout] Failed to persist personalization reminder prefs:', error);
       }
     },
-    [readReminderPrefs]
+    [readReminderPrefs, getReminderKey]
   );
 
   useEffect(() => {
