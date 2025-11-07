@@ -194,6 +194,8 @@ export function ChatList() {
             ? conversation.groupName || 'Group'
             : contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
+          const conversationDescription = contact?.description ?? defaultContactInfo?.description;
+
           // Compute preview from most recent message if available for extra correctness
           let subtitle = conversation.lastMessagePreview || '';
           const msgs = messagesByConversation[conversation.id] || [];
@@ -204,7 +206,7 @@ export function ChatList() {
             else subtitle = '📎 Attachment';
           }
           if (!subtitle) {
-            subtitle = contact?.description || defaultContactInfo?.description || 'No messages yet';
+            subtitle = conversationDescription || 'No messages yet';
           }
 
           return (
@@ -250,7 +252,7 @@ export function ChatList() {
                       preferredName: displayName || undefined,
                       avatar: avatarSource,
                       preferredAvatar: avatarSource,
-                      description: contact?.description || defaultContactInfo?.description,
+                      description: conversationDescription,
                       createdAt: Date.now(),
                       source: 'inbox',
                       isInboxOnly: true,
