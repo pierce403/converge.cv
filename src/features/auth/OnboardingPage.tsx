@@ -517,7 +517,7 @@ export function OnboardingPage() {
   );
 
   const renderLanding = () => (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+    <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
       <div className="w-full max-w-xl space-y-8 text-center">
         <div>
           <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center rounded-full border border-primary-700/60 bg-primary-900/60 shadow-lg">
@@ -563,7 +563,7 @@ export function OnboardingPage() {
   );
 
   const renderWalletSelection = () => (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+    <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
       <WalletSelector
         onWalletConnected={handleWalletConnected}
         onBack={() => {
@@ -581,7 +581,7 @@ export function OnboardingPage() {
   );
 
   const renderKeyfileImport = () => (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+    <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
       <div className="w-full max-w-2xl space-y-6 rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <div>
@@ -664,7 +664,7 @@ export function OnboardingPage() {
   );
 
   const renderLoading = (message: string) => (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+    <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
       <div className="w-full max-w-md space-y-4 text-center">
         <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-primary-700/60 bg-primary-900/60">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-accent-400 border-t-transparent" />
@@ -695,7 +695,7 @@ export function OnboardingPage() {
     const preferredLabel = getPreferredLabel(remoteIdentifiers, walletCandidate.address);
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+      <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
         <div className="w-full max-w-4xl space-y-6">
           <div className="rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 shadow-lg">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
