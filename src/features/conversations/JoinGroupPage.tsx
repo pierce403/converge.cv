@@ -14,16 +14,17 @@ const MEMBER_NAME_PRIORITY = ['ens', 'lens', 'farcaster', 'twitter'];
 
 const JOIN_POLICY_COPY: Record<number, { title: string; description: string; hint?: string }> = {
   [PermissionPolicy.Allow]: {
-    title: 'Open join',
-    description: 'Anyone with the link can join instantly.',
+    title: 'Members can add new members',
+    description: 'Any existing group member can add someone to this group.',
+    hint: 'Ask a current member or an admin to add you.',
   },
   [PermissionPolicy.Admin]: {
-    title: 'Admin approval required',
-    description: 'An admin needs to approve new members before they can participate.',
-    hint: 'If you are not added automatically, ask a group admin to invite you.',
+    title: 'Admins can add new members',
+    description: 'Only group admins can add or approve new members.',
+    hint: 'Share this link with a group admin so they can add you.',
   },
   [PermissionPolicy.SuperAdmin]: {
-    title: 'Super admin approval required',
+    title: 'Super admins only',
     description: 'Only super admins can add new members to this group.',
     hint: 'Share this link with a super admin so they can add you.',
   },

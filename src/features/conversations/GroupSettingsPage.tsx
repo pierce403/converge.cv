@@ -29,22 +29,22 @@ const JOIN_POLICY_OPTIONS: Array<{
 }> = [
   {
     value: PermissionPolicy.Allow,
-    label: 'Open join (anyone with the link)',
+    label: 'Members can add new members',
     description:
-      'All members can invite new people, and anyone with the join link can add themselves instantly.',
-    shareNote: 'Anyone who receives this link can join right away.',
+      'Any existing group member can add someone to the group. Share the link with a member and they can add the person for you.',
+    shareNote: 'Share this link with a member or admin so they can add the person.',
   },
   {
     value: PermissionPolicy.Admin,
-    label: 'Admin approval required',
-    description: 'Only group admins can add new members. Share links let admins know who wants to join.',
-    shareNote: 'People who open this link will still need an admin to add them.',
+    label: 'Admins can add new members',
+    description: 'Only group admins can add or approve new members. Share links help admins identify who to add.',
+    shareNote: 'Share this link with an admin so they can add the person.',
   },
   {
     value: PermissionPolicy.SuperAdmin,
     label: 'Super admins only',
-    description: 'Only super admins can approve or add new members to the group.',
-    shareNote: 'Only super admins can add someone after they open this link.',
+    description: 'Only super admins can add or approve new members to the group.',
+    shareNote: 'Only super admins can add someone after opening this link.',
   },
   {
     value: PermissionPolicy.Deny,
