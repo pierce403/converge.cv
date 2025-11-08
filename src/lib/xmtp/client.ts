@@ -557,6 +557,20 @@ export class XmtpClient {
   async fetchInboxProfile(inboxId: string): Promise<InboxProfile> {
     let normalizedInboxId = inboxId.toLowerCase();
 
+    // Heuristic: skip remote lookups for values that clearly aren't inbox IDs
+    // (e.g., ENS names like "deanpierce.eth" or arbitrary labels). This avoids
+    // backend errors such as "invalid hexadecimal digit" when identity services
+    // attempt to parse non-inbox inputs.
+    const looksLikeInboxId = (value: string): boolean => {
+      const v = value.trim();
+      if (!v) return false;
+      if (v.startsWith('0x')) return false; // that's an address, not an inbox id
+      if (v.includes('.') || v.includes('@') || v.includes(' ')) return false; // ENS/email-like
+      if (v.length < 10) return false; // too short to be a real inbox id
+      // Allow lowercase alphanumerics, dash, underscore (broad, non-breaking)
+      return /^[a-z0-9_-]+$/.test(v);
+    };
+
     // If this inboxId previously produced an identity parse error (e.g., invalid hex),
     // avoid hammering the API for a cooldown period and return a minimal profile.
     const cooldownUntil = this.inboxErrorCooldown.get(normalizedInboxId) || 0;
@@ -579,6 +593,19 @@ export class XmtpClient {
       } catch (e) {
         // Non-fatal; continue with provided value
       }
+    }
+
+    // If the value still doesn't look like an inbox id, return a minimal profile
+    // and avoid identity/preferences calls.
+    if (!looksLikeInboxId(normalizedInboxId)) {
+      return {
+        inboxId: normalizedInboxId,
+        displayName: inboxId,
+        avatarUrl: undefined,
+        primaryAddress: undefined,
+        addresses: [],
+        identities: [],
+      };
     }
 
     const toIdentityRecord = (identifier: Identifier, index: number) => ({
