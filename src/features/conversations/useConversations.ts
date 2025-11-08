@@ -826,11 +826,15 @@ export function useConversations() {
     ): Promise<Partial<Conversation> | null> => {
       try {
         const xmtp = getXmtpClient();
+        // First attempt to update permission on the remote group
         const details = await xmtp.updateGroupPermission(conversationId, permissionType, policy);
-        if (!details) {
+        // Immediately re-fetch authoritative details to ensure we reflect the latest state
+        const refreshed = await xmtp.fetchGroupDetails(conversationId);
+        const source = refreshed || details;
+        if (!source) {
           return null;
         }
-        const updates = groupDetailsToConversationUpdates(details);
+        const updates = groupDetailsToConversationUpdates(source);
         await updateConversationAndPersist(conversationId, updates);
         return updates;
       } catch (error) {

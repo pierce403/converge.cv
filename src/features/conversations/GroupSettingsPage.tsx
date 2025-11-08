@@ -616,6 +616,13 @@ export function GroupSettingsPage() {
 
       await Promise.all(operations);
 
+      // Re-fetch permissions to verify the latest state from the network
+      try {
+        await refreshGroupDetails(conversation.id);
+      } catch (e) {
+        // Non-fatal; UI will still reflect optimistic updates
+      }
+
       if (permissionChanged && joinPolicyValue !== null) {
         setInitialJoinPolicyValue(joinPolicyValue);
       }
