@@ -886,33 +886,39 @@ export class XmtpClient {
     const superAdminAddresses = Array.from(new Set(superAdminInboxIds.map(toAddress)));
 
     let permissions: GroupPermissionsState | undefined;
-    if (typeof safeGroup.permissions === 'function') {
-      try {
-        const rawPermissions = await safeGroup.permissions();
-        if (rawPermissions?.policySet) {
-          permissions = {
-            policyType: rawPermissions.policyType as GroupPermissionsState['policyType'],
-            policySet: {
-              addMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addMemberPolicy),
-              removeMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeMemberPolicy),
-              addAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addAdminPolicy),
-              removeAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeAdminPolicy),
-              updateGroupDescriptionPolicy: toGroupPermissionPolicyCode(
-                rawPermissions.policySet.updateGroupDescriptionPolicy,
-              ),
-              updateGroupImageUrlSquarePolicy: toGroupPermissionPolicyCode(
-                rawPermissions.policySet.updateGroupImageUrlSquarePolicy,
-              ),
-              updateGroupNamePolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.updateGroupNamePolicy),
-              updateMessageDisappearingPolicy: toGroupPermissionPolicyCode(
-                rawPermissions.policySet.updateMessageDisappearingPolicy,
-              ),
-            },
-          };
-        }
-      } catch (error) {
-        console.warn('[XMTP] Failed to load group permissions:', conversationId, error);
+    try {
+      // SDKs have exposed permissions both as a method and as a getter across versions.
+      // Support both shapes defensively.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const maybeAny: any = safeGroup as any;
+      const rawPermissions =
+        typeof maybeAny.permissions === 'function'
+          ? await maybeAny.permissions()
+          : maybeAny.permissions;
+
+      if (rawPermissions?.policySet) {
+        permissions = {
+          policyType: rawPermissions.policyType as GroupPermissionsState['policyType'],
+          policySet: {
+            addMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addMemberPolicy),
+            removeMemberPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeMemberPolicy),
+            addAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.addAdminPolicy),
+            removeAdminPolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.removeAdminPolicy),
+            updateGroupDescriptionPolicy: toGroupPermissionPolicyCode(
+              rawPermissions.policySet.updateGroupDescriptionPolicy,
+            ),
+            updateGroupImageUrlSquarePolicy: toGroupPermissionPolicyCode(
+              rawPermissions.policySet.updateGroupImageUrlSquarePolicy,
+            ),
+            updateGroupNamePolicy: toGroupPermissionPolicyCode(rawPermissions.policySet.updateGroupNamePolicy),
+            updateMessageDisappearingPolicy: toGroupPermissionPolicyCode(
+              rawPermissions.policySet.updateMessageDisappearingPolicy,
+            ),
+          },
+        };
       }
+    } catch (error) {
+      console.warn('[XMTP] Failed to load group permissions:', conversationId, error);
     }
 
     return {
