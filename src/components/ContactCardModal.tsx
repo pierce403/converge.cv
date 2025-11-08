@@ -49,6 +49,15 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
   const loadInboxState = async (inboxId: string) => {
     try {
+      const looksLikeInboxId = (value: string): boolean => {
+        const v = value.trim().toLowerCase();
+        if (!v || v.startsWith('0x') || v.includes('.') || v.includes('@') || v.includes(' ')) return false;
+        return v.length >= 10 && /^[a-z0-9_-]+$/.test(v);
+      };
+      if (!looksLikeInboxId(inboxId)) {
+        // Skip identity service calls for ENS-like or obviously non-inbox inputs
+        return;
+      }
       type SafeInboxStateLite = {
         inboxId: string;
         identifiers?: Array<{ identifierKind: string; identifier: string }>;
@@ -160,6 +169,16 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         inboxId: string;
         identifiers?: Array<{ identifierKind: string; identifier: string }>;
       };
+      const looksLikeInboxId = (value: string): boolean => {
+        const v = value.trim().toLowerCase();
+        if (!v || v.startsWith('0x') || v.includes('.') || v.includes('@') || v.includes(' ')) return false;
+        return v.length >= 10 && /^[a-z0-9_-]+$/.test(v);
+      };
+      if (!looksLikeInboxId(inboxId)) {
+        setRefreshError('No inbox ID available to refresh.');
+        setIsRefreshing(false);
+        return;
+      }
       const { getXmtpUtils } = await import('@/lib/xmtp/utils-singleton');
       const utils = await getXmtpUtils();
       const states = (await utils.inboxStateFromInboxIds([inboxId], 'production')) as unknown as SafeInboxStateLite[];
