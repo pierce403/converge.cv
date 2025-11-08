@@ -110,21 +110,22 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
             </div>
           </button>
         ))}
-      </div>
 
-      <button
-        onClick={() => onImportKeyfile?.()}
-        className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
-      >
-        <div className="flex items-center justify-between w-full">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl">📁</span>
-            <div className="text-left">
-              <div className="font-medium text-primary-50">Import Keyfile</div>
+        {/* Import Keyfile option styled identically for consistent spacing */}
+        <button
+          onClick={() => onImportKeyfile?.()}
+          className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+        >
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">📁</span>
+              <div className="text-left">
+                <div className="font-medium text-primary-50">Import Keyfile</div>
+              </div>
             </div>
           </div>
-        </div>
-      </button>
+        </button>
+      </div>
 
       <button
         onClick={onBack}
