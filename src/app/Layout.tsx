@@ -170,6 +170,16 @@ export function Layout() {
 
       try {
         const senderInboxId = message.senderAddress;
+        const storage = await getStorage();
+        if (await storage.isConversationDeleted(conversationId)) {
+          console.info('[Layout] Skipping message for deleted conversation:', conversationId);
+          return;
+        }
+        const normalizedSender = senderInboxId?.toLowerCase?.();
+        if (normalizedSender && (await storage.isPeerDeleted(normalizedSender))) {
+          console.info('[Layout] Skipping message for peer marked as deleted:', normalizedSender);
+          return;
+        }
         const contactStore = useContactStore.getState();
         const xmtp = getXmtpClient();
         // Drop messages from blocked senders to avoid recreating DMs on refresh
@@ -205,8 +215,6 @@ export function Layout() {
 
         // Enrich with ENS (and Farcaster if available) asynchronously
         void enrichContactProfile(contact);
-
-        const storage = await getStorage();
 
         let conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
         const preservedReadState = getResyncReadStateFor(conversationId);

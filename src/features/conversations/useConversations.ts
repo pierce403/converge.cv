@@ -295,6 +295,14 @@ export function useConversations() {
         const seededConversations: Conversation[] = [];
 
         for (const [index, contact] of DEFAULT_CONTACTS.entries()) {
+          const normalizedCandidate = contact.address.toLowerCase();
+          try {
+            if (await storage.isPeerDeleted(normalizedCandidate)) {
+              continue;
+            }
+          } catch (markerError) {
+            console.warn('[useConversations] Failed to check deleted marker for default contact', contact.address, markerError);
+          }
           const existing = conversations.find(
             (conversation) =>
               conversation.peerId.toLowerCase() === contact.address.toLowerCase()
@@ -414,6 +422,15 @@ export function useConversations() {
 
         // Persist
         await storage.putConversation(conversation);
+        try {
+          await storage.unmarkConversationDeletion(conversation.id);
+          await storage.unmarkPeerDeletion(conversation.peerId);
+        } catch (cleanupError) {
+          console.warn(
+            '[useConversations] Failed to clear deleted conversation markers during creation:',
+            cleanupError
+          );
+        }
 
         // Add to store
         addConversation(conversation);

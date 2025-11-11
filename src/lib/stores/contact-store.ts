@@ -232,11 +232,48 @@ export const useContactStore = create<ContactState>()(
       },
 
       blockContact: async (inboxId) => {
-        await get().updateContact(inboxId, { isBlocked: true });
+        const normalized = normalizeInboxId(inboxId);
+        const state = get();
+        const existingByInbox = state.contacts.find(
+          (contact) => normalizeInboxId(contact.inboxId) === normalized
+        );
+
+        if (existingByInbox) {
+          await state.updateContact(normalized, { isBlocked: true });
+          return;
+        }
+
+        // Ensure we persist a minimal contact record so the block survives reloads
+        const placeholder: Contact = normaliseContactInput({
+          inboxId: normalized,
+          name: normalized,
+          createdAt: Date.now(),
+          isBlocked: true,
+          isInboxOnly: true,
+          source: 'inbox',
+        } as Contact);
+
+        const storage = await getStorage();
+        set((prev) => ({ contacts: [...prev.contacts, placeholder] }));
+        await storage.putContact(placeholder);
       },
 
       unblockContact: async (inboxId) => {
-        await get().updateContact(inboxId, { isBlocked: false });
+        const normalized = normalizeInboxId(inboxId);
+        const state = get();
+        const existingByInbox = state.contacts.find(
+          (contact) => normalizeInboxId(contact.inboxId) === normalized
+        );
+        if (existingByInbox) {
+          await state.updateContact(normalized, { isBlocked: false });
+        }
+
+        try {
+          const storage = await getStorage();
+          await storage.unmarkPeerDeletion(normalized);
+        } catch (error) {
+          console.warn('Failed to clear deleted conversation marker for contact:', normalized, error);
+        }
       },
 
       loadContacts: async () => {

@@ -13,7 +13,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { getStorage } from '@/lib/storage';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
-import { Menu, Transition } from '@headlessui/react';
+import { Menu, Transition, Portal } from '@headlessui/react';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -560,33 +560,35 @@ export function ConversationView() {
               leaveFrom="transform opacity-100 scale-100"
               leaveTo="transform opacity-0 scale-95"
             >
-              <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
-                <Menu.Item>
-                  {({ active }) => (
-                    <button
-                      onClick={async () => {
-                        if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
-                        try {
-                          await deleteGroup(conversation.id, false);
-                        } catch (e) {
-                          // fallback: try leave only, then local delete
+              <Portal>
+                <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
+                  <Menu.Item>
+                    {({ active }) => (
+                      <button
+                        onClick={async () => {
+                          if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
                           try {
-                            const identifiers = [identity?.inboxId, identity?.address].filter(Boolean) as string[];
-                            if (identifiers.length) {
-                              await removeMembersFromGroup(conversation.id, identifiers);
-                            }
-                          } catch (_e) { /* ignore */ }
-                          try { await removeConversation(conversation.id); } catch (_e) { /* ignore */ }
-                        }
-                        navigate('/');
-                      }}
-                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
-                    >
-                      Leave group
-                    </button>
-                  )}
-                </Menu.Item>
-              </Menu.Items>
+                            await deleteGroup(conversation.id, false);
+                          } catch (e) {
+                            // fallback: try leave only, then local delete
+                            try {
+                              const identifiers = [identity?.inboxId, identity?.address].filter(Boolean) as string[];
+                              if (identifiers.length) {
+                                await removeMembersFromGroup(conversation.id, identifiers);
+                              }
+                            } catch (_e) { /* ignore */ }
+                            try { await removeConversation(conversation.id); } catch (_e) { /* ignore */ }
+                          }
+                          navigate('/');
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
+                      >
+                        Leave group
+                      </button>
+                    )}
+                  </Menu.Item>
+                </Menu.Items>
+              </Portal>
             </Transition>
           </Menu>
         ) : (
@@ -605,117 +607,125 @@ export function ConversationView() {
               leaveFrom="transform opacity-100 scale-100"
               leaveTo="transform opacity-0 scale-95"
             >
-              <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
-                {/* Add/Remove Contact */}
-                <Menu.Item>
-                  {({ active }) => (
-                    isContact(conversation.peerId) ? (
+              <Portal>
+                <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
+                  {/* Add/Remove Contact */}
+                  <Menu.Item>
+                    {({ active }) => (
+                      isContact(conversation.peerId) ? (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await useContactStore.getState().removeContact(conversation.peerId);
+                            } catch (e) {
+                              alert('Failed to remove contact');
+                            }
+                          }}
+                          className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                        >
+                          Remove from contacts
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await useContactStore.getState().upsertContactProfile({
+                                inboxId: conversation.peerId,
+                                displayName: conversationDisplayName,
+                                avatarUrl: conversationAvatar,
+                                source: 'inbox',
+                                metadata: { createdAt: Date.now() },
+                              });
+                            } catch (e) {
+                              alert('Failed to add contact');
+                            }
+                          }}
+                          className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                        >
+                          Add to contacts
+                        </button>
+                      )
+                    )}
+                  </Menu.Item>
+                  {/* Block/Unblock */}
+                  <Menu.Item>
+                    {({ active }) => (
+                      (contactsByInboxId.get(conversation.peerId.toLowerCase())?.isBlocked) ? (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await useContactStore.getState().unblockContact(conversation.peerId);
+                            } catch (e) {
+                              alert('Failed to unblock');
+                            }
+                          }}
+                          className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                        >
+                          Unblock user
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await useContactStore.getState().blockContact(conversation.peerId);
+                            } catch (e) {
+                              alert('Failed to block');
+                            }
+                          }}
+                          className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                        >
+                          Block user
+                        </button>
+                      )
+                    )}
+                  </Menu.Item>
+                  {/* Mute/Unmute */}
+                  <Menu.Item>
+                    {({ active }) => (
                       <button
                         onClick={async () => {
-                          try {
-                            await useContactStore.getState().removeContact(conversation.peerId);
-                          } catch (e) {
-                            alert('Failed to remove contact');
-                          }
+                          try { await toggleMute(conversation.id); } catch (_e) { /* ignore */ }
                         }}
                         className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
                       >
-                        Remove from contacts
+                        {(conversation.mutedUntil && conversation.mutedUntil > Date.now()) ? 'Unmute' : 'Mute'} conversation
                       </button>
-                    ) : (
+                    )}
+                  </Menu.Item>
+                  <div className="my-1 h-px bg-primary-800/60" />
+                  {/* Delete conversation (local) and block to prevent reappear */}
+                  <Menu.Item>
+                    {({ active }) => (
                       <button
                         onClick={async () => {
-                          try {
-                            await useContactStore.getState().upsertContactProfile({
-                              inboxId: conversation.peerId,
-                              displayName: conversationDisplayName,
-                              avatarUrl: conversationAvatar,
-                              source: 'inbox',
-                              metadata: { createdAt: Date.now() },
-                            });
-                          } catch (e) {
-                            alert('Failed to add contact');
-                          }
-                        }}
-                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
-                      >
-                        Add to contacts
-                      </button>
-                    )
-                  )}
-                </Menu.Item>
-                {/* Block/Unblock */}
-                <Menu.Item>
-                  {({ active }) => (
-                    (contactsByInboxId.get(conversation.peerId.toLowerCase())?.isBlocked) ? (
-                      <button
-                        onClick={async () => {
-                          try {
-                            await useContactStore.getState().unblockContact(conversation.peerId);
-                          } catch (e) {
-                            alert('Failed to unblock');
-                          }
-                        }}
-                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
-                      >
-                        Unblock user
-                      </button>
-                    ) : (
-                      <button
-                        onClick={async () => {
+                          if (!confirm('Delete this conversation locally and block the user so it will not reappear on resync?')) return;
                           try {
                             await useContactStore.getState().blockContact(conversation.peerId);
+                          } catch (_e) { /* ignore */ }
+                          try {
+                            const storage = await getStorage();
+                            await storage.deleteConversation(conversation.id);
+                            await storage.markConversationDeleted({
+                              conversationId: conversation.id,
+                              peerId: conversation.peerId.toLowerCase(),
+                              deletedAt: Date.now(),
+                              reason: 'user-hidden',
+                            });
+                            removeConversation(conversation.id);
                           } catch (e) {
-                            alert('Failed to block');
+                            alert('Failed to delete conversation');
+                            return;
                           }
+                          navigate('/');
                         }}
-                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
                       >
-                        Block user
+                        Delete conversation
                       </button>
-                    )
-                  )}
-                </Menu.Item>
-                {/* Mute/Unmute */}
-                <Menu.Item>
-                  {({ active }) => (
-                    <button
-                      onClick={async () => {
-                        try { await toggleMute(conversation.id); } catch (_e) { /* ignore */ }
-                      }}
-                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
-                    >
-                      {(conversation.mutedUntil && conversation.mutedUntil > Date.now()) ? 'Unmute' : 'Mute'} conversation
-                    </button>
-                  )}
-                </Menu.Item>
-                <div className="my-1 h-px bg-primary-800/60" />
-                {/* Delete conversation (local) and block to prevent reappear */}
-                <Menu.Item>
-                  {({ active }) => (
-                    <button
-                      onClick={async () => {
-                        if (!confirm('Delete this conversation locally and block the user so it will not reappear on resync?')) return;
-                        try {
-                          await useContactStore.getState().blockContact(conversation.peerId);
-                        } catch (_e) { /* ignore */ }
-                        try {
-                          const storage = await getStorage();
-                          await storage.deleteConversation(conversation.id);
-                          removeConversation(conversation.id);
-                        } catch (e) {
-                          alert('Failed to delete conversation');
-                          return;
-                        }
-                        navigate('/');
-                      }}
-                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
-                    >
-                      Delete conversation
-                    </button>
-                  )}
-                </Menu.Item>
-              </Menu.Items>
+                    )}
+                  </Menu.Item>
+                </Menu.Items>
+              </Portal>
             </Transition>
           </Menu>
         )}
