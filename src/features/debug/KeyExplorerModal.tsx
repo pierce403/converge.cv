@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Identifier, SafeInboxState, SafeInstallation } from '@xmtp/browser-sdk';
 import { useAuthStore, useConversationStore } from '@/lib/stores';
+import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupKeySummary } from '@/lib/xmtp';
 
 interface KeyExplorerModalProps {
@@ -40,6 +41,12 @@ interface KeyExplorerNode {
   badge?: string;
   details?: NodeDetail[];
   children?: KeyExplorerNode[];
+  action?: {
+    type: 'deleteKey';
+    targetId: string;
+    targetKind: 'dm' | 'group';
+    label?: string;
+  };
 }
 
 interface ConversationKeyContext {
@@ -234,11 +241,20 @@ function DetailRow({ detail }: { detail: NodeDetail }) {
   );
 }
 
-function TreeNode({ node, level, expandedState, onToggle }: {
+function TreeNode({
+  node,
+  level,
+  expandedState,
+  onToggle,
+  onDeleteKey,
+  pendingActionId,
+}: {
   node: KeyExplorerNode;
   level: number;
   expandedState: Record<string, boolean>;
   onToggle: (id: string) => void;
+  onDeleteKey?: (targetId: string, targetKind: 'dm' | 'group') => void;
+  pendingActionId?: string | null;
 }) {
   const hasChildren = Array.isArray(node.children) && node.children.length > 0;
   const isOpen = expandedState[node.id] ?? false;
@@ -277,13 +293,33 @@ function TreeNode({ node, level, expandedState, onToggle }: {
             {node.details?.map((detail) => (
               <DetailRow key={`${node.id}-${detail.label}`} detail={detail} />
             ))}
+            {node.action?.type === 'deleteKey' && onDeleteKey && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => onDeleteKey(node.action!.targetId, node.action!.targetKind)}
+                  disabled={pendingActionId === node.action.targetId}
+                  className="rounded border border-red-700/70 px-2 py-1 text-[11px] text-red-200 transition hover:border-red-500 hover:bg-red-900/20 disabled:cursor-not-allowed disabled:border-red-900 disabled:text-red-400"
+                >
+                  {pendingActionId === node.action.targetId ? 'Deleting…' : node.action.label ?? 'Delete key'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
       {hasChildren && isOpen && (
         <ul className="mt-2 space-y-2">
           {node.children!.map((child) => (
-            <TreeNode key={child.id} node={child} level={level + 1} expandedState={expandedState} onToggle={onToggle} />
+            <TreeNode
+              key={child.id}
+              node={child}
+              level={level + 1}
+              expandedState={expandedState}
+              onToggle={onToggle}
+              onDeleteKey={onDeleteKey}
+              pendingActionId={pendingActionId}
+            />
           ))}
         </ul>
       )}
@@ -294,10 +330,13 @@ function TreeNode({ node, level, expandedState, onToggle }: {
 export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
   const identity = useAuthStore((state) => state.identity);
   const conversations = useConversationStore((state) => state.conversations);
+  const removeConversationFromStore = useConversationStore((state) => state.removeConversation);
   const [tree, setTree] = useState<KeyExplorerNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -555,6 +594,12 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
                   children: mlsChildren,
                 },
               ],
+              action: {
+                type: 'deleteKey',
+                targetId: conversation.id,
+                targetKind: 'group',
+                label: 'Delete local key',
+              },
             } satisfies KeyExplorerNode;
           });
 
@@ -587,6 +632,12 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
                   description: 'Per-peer message protection (non-MLS).',
                 },
               ],
+              action: {
+                type: 'deleteKey',
+                targetId: conversation.id,
+                targetKind: 'dm',
+                label: 'Delete local key',
+              },
             } satisfies KeyExplorerNode;
           });
 
@@ -677,6 +728,48 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
     }));
   }, []);
 
+  const handleDeleteKey = useCallback(
+    async (targetId: string, targetKind: 'dm' | 'group') => {
+      if (!targetId) return;
+
+      const confirmationMessage =
+        targetKind === 'dm'
+          ? 'Delete the stored session key for this DM? You may need to refresh history to re-establish secure messaging.'
+          : 'Delete the stored MLS key material for this group? You may need to refresh history or rejoin to regain access.';
+
+      if (typeof window !== 'undefined') {
+        const confirmed = window.confirm(confirmationMessage);
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      setPendingActionId(targetId);
+      setActionError(null);
+
+      try {
+        const storage = await getStorage();
+        await storage.deleteConversation(targetId);
+        removeConversationFromStore(targetId);
+        try {
+          window.dispatchEvent(
+            new CustomEvent('ui:toast', {
+              detail: targetKind === 'dm' ? 'Deleted DM key from local storage.' : 'Deleted group key from local storage.',
+            }),
+          );
+        } catch {
+          // ignore toast failure
+        }
+      } catch (err) {
+        console.error('[KeyExplorer] Failed to delete stored key', targetId, err);
+        setActionError(err instanceof Error ? err.message : 'Failed to delete local key.');
+      } finally {
+        setPendingActionId(null);
+      }
+    },
+    [removeConversationFromStore],
+  );
+
   const webBanner = useMemo(() => {
     if (isNativeRuntime()) return null;
     return (
@@ -710,6 +803,11 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
           </p>
           {webBanner}
         </header>
+        {actionError && (
+          <div className="rounded-lg border border-red-500/60 bg-red-900/30 px-3 py-2 text-xs text-red-200">
+            {actionError}
+          </div>
+        )}
         {error && (
           <div className="rounded-lg border border-red-500/60 bg-red-900/30 px-3 py-2 text-xs text-red-200">
             {error}
@@ -720,7 +818,15 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
         ) : tree.length ? (
           <ul className="space-y-3 pb-6">
             {tree.map((node) => (
-              <TreeNode key={node.id} node={node} level={0} expandedState={expanded} onToggle={handleToggle} />
+              <TreeNode
+                key={node.id}
+                node={node}
+                level={0}
+                expandedState={expanded}
+                onToggle={handleToggle}
+                onDeleteKey={handleDeleteKey}
+                pendingActionId={pendingActionId}
+              />
             ))}
           </ul>
         ) : (

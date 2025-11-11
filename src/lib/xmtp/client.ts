@@ -354,6 +354,34 @@ export class XmtpClient {
     return undefined;
   }
 
+  private isMissingConversationKeyError(err: unknown): boolean {
+    if (err == null) {
+      return false;
+    }
+    const message = err instanceof Error ? err.message : String(err ?? '');
+    if (!message) {
+      return false;
+    }
+    const normalized = message.toLowerCase();
+    const checks: Array<(value: string) => boolean> = [
+      (value) => value.includes('missing') && value.includes('key'),
+      (value) => value.includes('no key'),
+      (value) => value.includes('key not found'),
+      (value) => value.includes('secret not found'),
+      (value) => value.includes('no session key'),
+      (value) => value.includes('session key') && value.includes('not found'),
+      (value) => value.includes('mls') && value.includes('key') && value.includes('not found'),
+      (value) => value.includes('failed to decrypt') && value.includes('key'),
+    ];
+    return checks.some((fn) => {
+      try {
+        return fn(normalized);
+      } catch {
+        return false;
+      }
+    });
+  }
+
   /**
    * Send a reaction to a specific message within a conversation (DM or group).
    */
@@ -2157,6 +2185,10 @@ export class XmtpClient {
             );
           }
         } catch (dmErr) {
+          if (this.isMissingConversationKeyError(dmErr)) {
+            console.info('[XMTP] Skipping DM history backfill due to missing key:', dm.id);
+            continue;
+          }
           console.warn('[XMTP] Failed to backfill messages for DM:', dm.id, dmErr);
         }
       }
@@ -2273,15 +2305,20 @@ export class XmtpClient {
                 content,
                 sentAt: Number(m.sentAtNs / 1000000n),
               } as XmtpMessage;
+
               window.dispatchEvent(
                 new CustomEvent('xmtp:message', {
                   detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
                 })
               );
             }
-          } catch (gErr) {
-            console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
+        } catch (gErr) {
+          if (this.isMissingConversationKeyError(gErr)) {
+            console.info('[XMTP] Skipping group history backfill due to missing key:', conv.id);
+            continue;
           }
+          console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
+        }
         }
       } catch (listErr) {
         console.warn('[XMTP] Failed to enumerate conversations for group backfill', listErr);
