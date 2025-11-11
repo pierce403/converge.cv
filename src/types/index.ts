@@ -32,6 +32,10 @@ export interface Conversation {
   pinned: boolean;
   archived: boolean;
   mutedUntil?: number;
+  lastMessageId?: string;
+  lastMessageSender?: string;
+  lastReadAt?: number;
+  lastReadMessageId?: string;
   createdAt: number;
   displayName?: string;
   displayAvatar?: string;

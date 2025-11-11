@@ -22,7 +22,15 @@ export function ConversationView() {
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
 
-  const { conversations, removeConversation, removeMembersFromGroup, deleteGroup, toggleMute } = useConversations();
+  const {
+    conversations,
+    removeConversation,
+    removeMembersFromGroup,
+    deleteGroup,
+    toggleMute,
+    markAsRead,
+    setActiveConversation,
+  } = useConversations();
   const { messagesByConversation, isLoading } = useMessageStore();
   const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
@@ -55,6 +63,7 @@ export function ConversationView() {
   const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
   const [composerHeight, setComposerHeight] = useState<number>(0);
   const composerRef = useRef<HTMLDivElement>(null);
+  const lastMarkedRef = useRef<number>(0);
 
   const isCurrentUserAdmin = useMemo(() => {
     if (!conversation?.isGroup || !identity?.address || !conversation.admins) {
@@ -88,6 +97,14 @@ export function ConversationView() {
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  useEffect(() => {
+    if (!id) return;
+    setActiveConversation(id);
+    return () => {
+      setActiveConversation(null);
+    };
+  }, [id, setActiveConversation]);
 
   useEffect(() => {
     if (!conversation?.isGroup) {
@@ -189,6 +206,52 @@ export function ConversationView() {
       }
     }
   }, [messages, id, conversation, identity?.inboxId, identity?.address, sendReadReceiptFor]);
+
+  useEffect(() => {
+    if (!id || !conversation || conversation.isGroup) {
+      return;
+    }
+    const myInbox = identity?.inboxId?.toLowerCase();
+    const myAddr = identity?.address?.toLowerCase();
+    let latestIncomingAt = 0;
+    let latestIncomingId: string | undefined;
+    for (const message of messages) {
+      const senderLower = message.sender?.toLowerCase?.();
+      const fromPeer = senderLower && senderLower !== myInbox && senderLower !== myAddr;
+      if (fromPeer) {
+        const sentAt = message.sentAt || 0;
+        if (sentAt >= latestIncomingAt) {
+          latestIncomingAt = sentAt;
+          latestIncomingId = message.id;
+        }
+      }
+    }
+    const conversationLastRead = conversation.lastReadAt ?? 0;
+    const previousMarked = lastMarkedRef.current;
+    const effectiveBaseline = Math.max(conversationLastRead, previousMarked);
+    if (!latestIncomingAt) {
+      if (conversation.unreadCount > 0) {
+        void markAsRead(id, { lastReadAt: Date.now() });
+      }
+      return;
+    }
+    if (latestIncomingAt > effectiveBaseline || (conversation.unreadCount ?? 0) > 0) {
+      lastMarkedRef.current = latestIncomingAt;
+      void markAsRead(id, {
+        lastReadAt: latestIncomingAt,
+        lastReadMessageId: latestIncomingId,
+      });
+    }
+  }, [
+    id,
+    conversation,
+    conversation?.lastReadAt,
+    conversation?.unreadCount,
+    messages,
+    identity?.inboxId,
+    identity?.address,
+    markAsRead,
+  ]);
 
   const contact = useMemo(() => {
     if (!conversation || conversation.isGroup) {

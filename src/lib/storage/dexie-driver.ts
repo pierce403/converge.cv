@@ -173,6 +173,30 @@ class ConvergeDB extends Dexie {
           // Don't throw; leave legacy table as-is to avoid blocking DB open
         }
       });
+
+    this.version(4)
+      .stores({
+        conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+        messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+        attachments: 'id, messageId',
+        attachmentData: 'id',
+        identity: 'address, inboxId',
+        vaultSecrets: 'method',
+        contacts: 'address',
+        contacts_v3: '&inboxId, primaryAddress, *addresses',
+      })
+      .upgrade(async (transaction) => {
+        const conversationsTable = transaction.table('conversations');
+        const conversations = await conversationsTable.toArray();
+        await Promise.all(
+          conversations.map((conversation) =>
+            conversationsTable.put({
+              ...conversation,
+              lastReadAt: conversation.lastReadAt ?? 0,
+            })
+          )
+        );
+      });
   }
 }
 
@@ -197,7 +221,11 @@ export class DexieDriver implements StorageDriver {
 
   // Conversations
   async putConversation(conversation: Conversation): Promise<void> {
-    await this.dataDb.conversations.put(conversation);
+    const normalized: Conversation = {
+      ...conversation,
+      lastReadAt: conversation.lastReadAt ?? 0,
+    };
+    await this.dataDb.conversations.put(normalized);
   }
 
   async getConversation(id: string): Promise<Conversation | undefined> {
@@ -233,8 +261,24 @@ export class DexieDriver implements StorageDriver {
     });
   }
 
-  async updateConversationUnread(id: string, count: number): Promise<void> {
-    await this.dataDb.conversations.update(id, { unreadCount: count });
+  async updateConversationReadState(
+    id: string,
+    updates: { unreadCount?: number; lastReadAt?: number; lastReadMessageId?: string | null }
+  ): Promise<void> {
+    const patch: Partial<Conversation & { lastReadMessageId?: string | null }> = {};
+    if (updates.unreadCount !== undefined) {
+      patch.unreadCount = updates.unreadCount;
+    }
+    if (updates.lastReadAt !== undefined) {
+      patch.lastReadAt = updates.lastReadAt;
+    }
+    if (updates.lastReadMessageId !== undefined) {
+      patch.lastReadMessageId = updates.lastReadMessageId ?? undefined;
+    }
+    if (Object.keys(patch).length === 0) {
+      return;
+    }
+    await this.dataDb.conversations.update(id, patch);
   }
 
   // Messages
@@ -247,6 +291,8 @@ export class DexieDriver implements StorageDriver {
       await this.dataDb.conversations.update(message.conversationId, {
         lastMessageAt: message.sentAt,
         lastMessagePreview: message.type === 'text' ? message.body.substring(0, 100) : '📎 Attachment',
+        lastMessageId: message.id,
+        lastMessageSender: message.sender,
       });
     }
   }

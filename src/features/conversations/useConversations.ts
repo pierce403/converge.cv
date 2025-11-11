@@ -314,6 +314,10 @@ export function useConversations() {
             unreadCount: 0,
             pinned: index < 2,
             archived: false,
+            lastMessageId: undefined,
+            lastMessageSender: undefined,
+            lastReadAt: timestamp,
+            lastReadMessageId: undefined,
             createdAt: timestamp,
           };
 
@@ -400,6 +404,10 @@ export function useConversations() {
           unreadCount: 0,
           pinned: false,
           archived: false,
+          lastMessageId: undefined,
+          lastMessageSender: undefined,
+          lastReadAt: Date.now(),
+          lastReadMessageId: undefined,
           createdAt: Date.now(),
           isGroup: false, // Explicitly mark as DM
         };
@@ -445,6 +453,10 @@ export function useConversations() {
           unreadCount: 0,
           pinned: false,
           archived: false,
+          lastMessageId: undefined,
+          lastMessageSender: undefined,
+          lastReadAt: Date.now(),
+          lastReadMessageId: undefined,
           createdAt: Date.now(),
           isGroup: true, // Explicitly mark as group
           groupName: groupName || `Group with ${allParticipants.length} members`,
@@ -546,16 +558,41 @@ export function useConversations() {
    * Clear unread count
    */
   const markAsRead = useCallback(
-    async (conversationId: string) => {
+    async (
+      conversationId: string,
+      opts?: { lastReadAt?: number; lastReadMessageId?: string }
+    ) => {
       try {
         const storage = await getStorage();
-        await storage.updateConversationUnread(conversationId, 0);
+        const currentConversation = useConversationStore
+          .getState()
+          .conversations.find((c) => c.id === conversationId);
+        const existingLastReadAt = currentConversation?.lastReadAt ?? 0;
+        const requestedLastReadAt = opts?.lastReadAt ?? Date.now();
+        const finalLastReadAt = Math.max(existingLastReadAt, requestedLastReadAt);
+        const lastReadMessageId =
+          opts?.lastReadMessageId ?? currentConversation?.lastReadMessageId ?? undefined;
+
+        await storage.updateConversationReadState(conversationId, {
+          unreadCount: 0,
+          lastReadAt: finalLastReadAt,
+          lastReadMessageId: lastReadMessageId ?? null,
+        });
+
         clearUnread(conversationId);
+        const updates: Partial<Conversation> = {
+          unreadCount: 0,
+          lastReadAt: finalLastReadAt,
+        };
+        if (lastReadMessageId !== undefined) {
+          updates.lastReadMessageId = lastReadMessageId;
+        }
+        updateConversation(conversationId, updates);
       } catch (error) {
         console.error('Failed to mark as read:', error);
       }
     },
-    [clearUnread]
+    [clearUnread, updateConversation]
   );
 
   /**

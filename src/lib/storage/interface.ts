@@ -28,7 +28,14 @@ export interface StorageDriver {
   getConversation(id: string): Promise<Conversation | undefined>;
   listConversations(query?: Query): Promise<Conversation[]>;
   deleteConversation(id: string): Promise<void>;
-  updateConversationUnread(id: string, count: number): Promise<void>;
+  updateConversationReadState(
+    id: string,
+    updates: {
+      unreadCount?: number;
+      lastReadAt?: number;
+      lastReadMessageId?: string | null;
+    }
+  ): Promise<void>;
 
   // Messages
   putMessage(message: Message): Promise<void>;
