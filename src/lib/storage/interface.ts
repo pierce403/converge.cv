@@ -2,7 +2,15 @@
  * Storage driver interface for swappable backends (Dexie, SQLite, etc.)
  */
 
-import type { Conversation, Message, Attachment, VaultSecrets, Identity, DeletedConversationRecord } from '@/types';
+import type {
+  Conversation,
+  Message,
+  Attachment,
+  VaultSecrets,
+  Identity,
+  DeletedConversationRecord,
+  IgnoredConversationRecord,
+} from '@/types';
 import type { Contact } from '../stores/contact-store';
 
 export interface PageOpts {
@@ -33,6 +41,10 @@ export interface StorageDriver {
   isPeerDeleted(peerId: string): Promise<boolean>;
   unmarkConversationDeletion(conversationId: string): Promise<void>;
   unmarkPeerDeletion(peerId: string): Promise<void>;
+  ignoreConversation(record: Omit<IgnoredConversationRecord, 'createdAt'> & { createdAt?: number }): Promise<void>;
+  unignoreConversation(conversationId: string): Promise<void>;
+  isConversationIgnored(conversationId: string): Promise<boolean>;
+  listIgnoredConversationIds(): Promise<string[]>;
   updateConversationReadState(
     id: string,
     updates: {

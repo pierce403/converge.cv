@@ -625,6 +625,27 @@ export function useConversations() {
           const updatedConversation = { ...existingConversation, ...updates };
           await storage.putConversation(updatedConversation);
           updateConversation(conversationId, updatedConversation);
+          if (updatedConversation.isGroup) {
+            const myInbox = useAuthStore.getState().identity?.inboxId?.toLowerCase();
+            const memberSet = new Set<string>();
+            updatedConversation.memberInboxes?.forEach((memberInbox) => {
+              if (memberInbox) {
+                memberSet.add(memberInbox.toLowerCase());
+              }
+            });
+            updatedConversation.groupMembers?.forEach((member) => {
+              if (member.inboxId) {
+                memberSet.add(member.inboxId.toLowerCase());
+              }
+            });
+            if (myInbox && memberSet.size > 0 && !memberSet.has(myInbox)) {
+              try {
+                await storage.ignoreConversation({ conversationId, reason: 'left-group' });
+              } catch (ignoreError) {
+                console.warn('[useConversations] Failed to mark group as ignored after leaving:', ignoreError);
+              }
+            }
+          }
         }
       } catch (error) {
         console.error('Failed to update conversation and persist:', error);
@@ -820,6 +841,11 @@ export function useConversations() {
 
       // Purge local conversation and its messages regardless of network outcome
       try { await storage.deleteConversation(conversationId); } catch (_e) { void 0; }
+      try {
+        await storage.ignoreConversation({ conversationId, reason: 'left-group' });
+      } catch (_e) {
+        /* ignore */
+      }
       removeConversation(conversationId);
       try { await storage.vacuum(); } catch (_e) { void 0; }
     },
