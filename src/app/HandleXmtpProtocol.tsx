@@ -9,21 +9,30 @@ export function HandleXmtpProtocol() {
     const urlParams = new URLSearchParams(location.search);
     const xmtpUrl = urlParams.get('url');
 
-    if (xmtpUrl) {
-      // Expected format: xmtp://chat/conversationId
-      const parts = xmtpUrl.split('/');
-      if (parts.length >= 4 && parts[2] === 'chat') {
-        const conversationId = parts[3];
-        console.log(`Redirecting to /g/${conversationId}`);
-        navigate(`/g/${conversationId}`);
-      } else {
-        console.error('Invalid XMTP URL format:', xmtpUrl);
-        navigate('/');
-      }
-    } else {
+    if (!xmtpUrl) {
       console.error('No URL parameter found for xmtp protocol handler.');
       navigate('/');
+      return;
     }
+
+    const parts = xmtpUrl.split('/');
+    if (parts.length >= 4 && parts[2] === 'chat') {
+      console.warn('Group invite links are not supported. Redirecting to home.');
+      navigate('/');
+      try {
+        window.dispatchEvent(
+          new CustomEvent('ui:toast', {
+            detail: 'Group links are no longer supported. Ask a member to add you instead.',
+          })
+        );
+      } catch {
+        // ignore toast failures
+      }
+      return;
+    }
+
+    console.error('Invalid XMTP URL format:', xmtpUrl);
+    navigate('/');
   }, [location, navigate]);
 
   return (

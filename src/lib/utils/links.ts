@@ -13,10 +13,6 @@ export function getOgBase(): string {
   }
 }
 
-export function groupShareUrl(conversationId: string): string {
-  return `${getOgBase()}/g/${encodeURIComponent(conversationId)}`;
-}
-
 export function inboxShareUrl(inboxId: string): string {
   return `${getOgBase()}/i/${encodeURIComponent(inboxId)}`;
 }
