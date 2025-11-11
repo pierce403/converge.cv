@@ -11,6 +11,8 @@ import {
   type SafeInboxState,
   type SafeGroupMember,
   type Identifier,
+  type SafeConversationDebugInfo,
+  type SafeHmacKey,
   PermissionPolicy,
   PermissionUpdateType,
 } from '@xmtp/browser-sdk';
@@ -124,6 +126,13 @@ export interface InboxProfile {
     kind: string;
     isPrimary?: boolean;
   }>;
+}
+
+export interface GroupKeySummary {
+  currentEpoch?: number | null;
+  maybeForked?: boolean;
+  forkDetails?: string;
+  epochRange?: { min: number; max: number } | null;
 }
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -933,6 +942,67 @@ export class XmtpClient {
       superAdminInboxes: Array.from(new Set(superAdminInboxIds)),
       permissions,
     };
+  }
+
+  async getGroupKeySummary(conversationId: string): Promise<GroupKeySummary | null> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      return null;
+    }
+
+    const summary: GroupKeySummary = {
+      currentEpoch: null,
+      maybeForked: false,
+      forkDetails: undefined,
+      epochRange: null,
+    };
+
+    const hasDebugInfo = typeof (group as { debugInfo?: () => Promise<SafeConversationDebugInfo> }).debugInfo === 'function';
+    if (hasDebugInfo) {
+      try {
+        const info = await (group as { debugInfo: () => Promise<SafeConversationDebugInfo> }).debugInfo();
+        if (info) {
+          summary.currentEpoch = typeof info.epoch === 'bigint' ? Number(info.epoch) : Number(info.epoch ?? 0);
+          summary.maybeForked = Boolean(info.maybeForked);
+          summary.forkDetails = info.forkDetails || undefined;
+        }
+      } catch (error) {
+        console.warn('[XMTP] Failed to load conversation debug info:', conversationId, error);
+      }
+    }
+
+    const hasHmacKeys = typeof (group as { getHmacKeys?: () => Promise<Map<string, SafeHmacKey[]>> }).getHmacKeys === 'function';
+    if (hasHmacKeys) {
+      try {
+        const keyMap = await (group as { getHmacKeys: () => Promise<Map<string, SafeHmacKey[]>> }).getHmacKeys();
+        const epochs: number[] = [];
+        keyMap.forEach((entries) => {
+          entries.forEach((entry) => {
+            if (typeof entry.epoch === 'bigint') {
+              epochs.push(Number(entry.epoch));
+            } else if (typeof entry.epoch === 'number') {
+              epochs.push(entry.epoch);
+            }
+          });
+        });
+        if (epochs.length > 0) {
+          const min = epochs.reduce((acc, value) => Math.min(acc, value), epochs[0]);
+          const max = epochs.reduce((acc, value) => Math.max(acc, value), epochs[0]);
+          summary.epochRange = { min, max };
+          if (summary.currentEpoch === null || summary.currentEpoch === undefined) {
+            summary.currentEpoch = max;
+          }
+        }
+      } catch (error) {
+        console.warn('[XMTP] Failed to load group HMAC key epochs:', conversationId, error);
+      }
+    }
+
+    return summary;
   }
 
   async fetchGroupDetails(conversationId: string): Promise<GroupDetails | null> {
