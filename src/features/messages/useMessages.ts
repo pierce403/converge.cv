@@ -84,8 +84,24 @@ export function useMessages() {
             ? getAddress(recipientInboxId as `0x${string}`)
             : undefined;
           const addressList = normalizedAddress ? [normalizedAddress.toLowerCase()] : [];
+          
+          // If recipientInboxId looks like an address, try to derive the actual inbox ID
+          let actualInboxId = recipientInboxId;
+          if (normalizedAddress) {
+            try {
+              const xmtp = getXmtpClient();
+              const derivedInboxId = await xmtp.deriveInboxIdFromAddress(normalizedAddress);
+              if (derivedInboxId) {
+                actualInboxId = derivedInboxId.toLowerCase();
+                console.log('[useMessages] Derived inbox ID from address:', normalizedAddress, '->', actualInboxId);
+              }
+            } catch (e) {
+              console.warn('[useMessages] Failed to derive inbox ID from address, using address as inbox ID:', e);
+            }
+          }
+          
           await upsertContactProfile({
-            inboxId: recipientInboxId,
+            inboxId: actualInboxId,
             displayName: recipientInboxId,
             primaryAddress: normalizedAddress?.toLowerCase(),
             addresses: addressList,
@@ -100,7 +116,7 @@ export function useMessages() {
               : [],
             source: 'inbox',
           });
-          console.log('Automatically added new contact:', recipientInboxId);
+          console.log('Automatically added new contact:', actualInboxId);
         }
 
         // Create message object

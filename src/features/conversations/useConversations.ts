@@ -399,10 +399,14 @@ export function useConversations() {
         // Create via XMTP
         const xmtpConv = await xmtp.createConversation(peerAddress);
 
+        // Use the peerId from the XMTP conversation (which is the actual inbox ID)
+        // instead of the local inboxKey which might just be an address
+        const actualPeerId = xmtpConv.peerId?.toLowerCase() || inboxKey;
+
         // Create conversation object
         const conversation: Conversation = {
           id: xmtpConv.id,
-          peerId: inboxKey,
+          peerId: actualPeerId, // Use the actual inbox ID from XMTP
           topic: xmtpConv.topic,
           lastMessageAt: Date.now(),
           lastMessagePreview: '',

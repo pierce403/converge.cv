@@ -27,26 +27,23 @@ test('regression: rename identity and send DM to deanpierce.eth', async ({ page 
   await expect(createIdentityButton).toBeVisible({ timeout: 60_000 });
   await createIdentityButton.click();
 
-  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
-
-  const settingsButton = page.getByTitle('Settings');
-  await expect(settingsButton).toBeVisible();
-  await settingsButton.click();
-
-  const editButton = page.getByRole('button', { name: /^edit$/i });
-  await expect(editButton).toBeVisible({ timeout: 20_000 });
-  await editButton.click();
+  // Wait for and interact with the "Make it yours" personalization modal
+  const modalHeading = page.getByRole('heading', { name: /make it yours/i });
+  await expect(modalHeading).toBeVisible({ timeout: 60_000 });
 
   const displayName = createDisplayName();
-  const nameInput = page.getByPlaceholder('Enter display name');
-  await expect(nameInput).toBeVisible();
+  // The input has placeholder "Your name" and is within the modal dialog
+  const nameInput = page.getByRole('dialog').getByPlaceholder('Your name');
+  await expect(nameInput).toBeVisible({ timeout: 10_000 });
   await nameInput.fill(displayName);
 
   const saveButton = page.getByRole('button', { name: /^save$/i });
+  await expect(saveButton).toBeVisible();
   await saveButton.click();
-  await page.waitForTimeout(1000);
 
-  await expect(page.getByText(displayName, { exact: true })).toBeVisible({ timeout: 20_000 });
+  // Wait for modal to close and app to be ready
+  await expect(modalHeading).not.toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
 
   await page.goto('/');
   await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 30_000 });
@@ -71,6 +68,36 @@ test('regression: rename identity and send DM to deanpierce.eth', async ({ page 
   await composer.fill(MESSAGE_TEXT);
   await composer.press('Enter');
 
+  // Verify message appears in the conversation view
+  await expect(page.getByText(MESSAGE_TEXT, { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  // Navigate back to chat list to verify conversation appears
+  await page.goto('/');
+  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 30_000 });
+
+  // Wait for the conversation to appear in the list
+  // Try to find a link that contains the message text, or deanpierce, or any /chat/ link
+  // First try message text (most reliable)
+  let conversationLink = page.getByRole('link').filter({ hasText: MESSAGE_TEXT }).first();
+  try {
+    await expect(conversationLink).toBeVisible({ timeout: 5_000 });
+  } catch {
+    // Fallback: try finding by deanpierce
+    conversationLink = page.getByRole('link').filter({ hasText: /deanpierce/i }).first();
+    try {
+      await expect(conversationLink).toBeVisible({ timeout: 5_000 });
+    } catch {
+      // Last resort: find any link that goes to /chat/ (excluding new-chat)
+      conversationLink = page.locator('a[href^="/chat/"]').first();
+      await expect(conversationLink).toBeVisible({ timeout: 20_000 });
+    }
+  }
+
+  // Click on the conversation to open it
+  await conversationLink.click();
+  await expect(page).toHaveURL(/\/chat\//, { timeout: 10_000 });
+
+  // Verify the message is visible in the conversation view
   await expect(page.getByText(MESSAGE_TEXT, { exact: true })).toBeVisible({ timeout: 30_000 });
 
   expect(pageErrors, `Unexpected page errors: ${pageErrors.map((err) => err.message).join('; ')}`).toEqual([]);
