@@ -198,12 +198,14 @@ export function ConversationView() {
           }
           try {
             const existing = contactStore.getContactByInboxId(memberInbox);
-            if (existing) {
-              const now = Date.now();
-              const last = existing.lastSyncedAt ?? 0;
-              if (existing.preferredName && existing.preferredAvatar && now - last < 30 * 60 * 1000) {
-                continue;
-              }
+            if (!existing) {
+              continue;
+            }
+
+            const now = Date.now();
+            const last = existing.lastSyncedAt ?? 0;
+            if (existing.preferredName && existing.preferredAvatar && now - last < 30 * 60 * 1000) {
+              continue;
             }
 
             const profile = await xmtp.fetchInboxProfile(memberInbox);
@@ -219,7 +221,7 @@ export function ConversationView() {
               addresses: profile.addresses,
               identities: profile.identities,
               source: 'inbox',
-              metadata: { lastSyncedAt: Date.now() },
+              metadata: { ...existing, lastSyncedAt: Date.now() },
             });
           } catch (error) {
             console.warn('[ConversationView] Failed to refresh member profile', memberInbox, error);
