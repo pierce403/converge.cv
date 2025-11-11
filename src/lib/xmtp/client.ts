@@ -2014,7 +2014,7 @@ export class XmtpClient {
 
             window.dispatchEvent(
               new CustomEvent('xmtp:message', {
-                detail: { conversationId: m.conversationId, message: xmsg },
+                detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
               })
             );
           }
@@ -2123,7 +2123,11 @@ export class XmtpClient {
                 content,
                 sentAt: Number(m.sentAtNs / 1000000n),
               } as XmtpMessage;
-              window.dispatchEvent(new CustomEvent('xmtp:message', { detail: { conversationId: m.conversationId, message: xmsg } }));
+              window.dispatchEvent(
+                new CustomEvent('xmtp:message', {
+                  detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
+                })
+              );
             }
           } catch (gErr) {
             console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
@@ -2388,6 +2392,7 @@ export class XmtpClient {
                   content: message.content,
                   sentAt: message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now(),
                 },
+                isHistory: false,
               },
             }));
             console.log('[XMTP] Custom event dispatched');

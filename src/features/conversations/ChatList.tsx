@@ -8,6 +8,7 @@ import { useConversations } from './useConversations';
 import { useConversationStore, useMessageStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
+import { clearResyncReadState, getResyncReadState, setResyncReadState } from '@/lib/xmtp/resync-state';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore, useAuthStore } from '@/lib/stores';
@@ -346,6 +347,16 @@ export function ChatList() {
               // Delete from storage (also deletes messages per conversation)
               const storage = await getStorage();
               const existing = await storage.listConversations();
+              const preservedReadState = new Map<string, { lastReadAt?: number; lastReadMessageId?: string | null }>();
+              for (const c of existing) {
+                if (c.lastReadAt !== undefined || c.lastReadMessageId !== undefined) {
+                  preservedReadState.set(c.id, {
+                    lastReadAt: c.lastReadAt,
+                    lastReadMessageId: c.lastReadMessageId ?? null,
+                  });
+                }
+              }
+              setResyncReadState(preservedReadState);
               for (const c of existing) {
                 try {
                   await storage.deleteConversation(c.id);
@@ -362,6 +373,33 @@ export function ChatList() {
                 console.warn('[Resync] XMTP sync failed (continuing to reload local):', e);
               }
               await loadConversations();
+              const resyncedState = getResyncReadState();
+              if (resyncedState && resyncedState.size > 0) {
+                try {
+                  const refreshedStorage = await getStorage();
+                  for (const [conversationId, state] of resyncedState.entries()) {
+                    const existingConversation = await refreshedStorage.getConversation(conversationId);
+                    if (!existingConversation) continue;
+                    const updates: Partial<typeof existingConversation> = {};
+                    if (state.lastReadAt !== undefined) {
+                      updates.lastReadAt = state.lastReadAt;
+                    }
+                    if (state.lastReadMessageId !== undefined) {
+                      updates.lastReadMessageId = state.lastReadMessageId ?? undefined;
+                    }
+                    if (Object.keys(updates).length > 0) {
+                      await refreshedStorage.putConversation({ ...existingConversation, ...updates });
+                      useConversationStore.getState().updateConversation(conversationId, updates);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('[Resync] Failed to restore read state after resync:', e);
+                } finally {
+                  clearResyncReadState();
+                }
+              } else {
+                clearResyncReadState();
+              }
               try {
                 window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Resynced conversations' }));
               } catch (e) {
@@ -370,6 +408,7 @@ export function ChatList() {
             } catch (err) {
               console.error('Resync failed:', err);
               alert('Resync failed. See console for details.');
+              clearResyncReadState();
             } finally {
               setIsResyncing(false);
             }

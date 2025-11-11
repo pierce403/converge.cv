@@ -6,6 +6,7 @@ import { useCallback } from 'react';
 import { useMessageStore, useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
+import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Message } from '@/types';
 import { getAddress, isAddress } from 'viem';
 
@@ -122,6 +123,10 @@ export function useMessages() {
         const storage = await getStorage();
         await storage.putMessage(message);
 
+        let latestMessageId = message.id;
+        let latestMessageSentAt = message.sentAt;
+        let latestMessageSender = message.sender;
+
         // Send via XMTP
         try {
           const xmtp = getXmtpClient();
@@ -138,6 +143,9 @@ export function useMessages() {
             sentAt: resolvedSentAt,
             status: finalStatus,
           };
+          latestMessageId = finalMessage.id;
+          latestMessageSentAt = finalMessage.sentAt;
+          latestMessageSender = finalMessage.sender;
 
           if (resolvedId !== message.id) {
             removeMessage(message.id);
@@ -156,8 +164,10 @@ export function useMessages() {
 
         // Update conversation
         updateConversation(conversationId, {
-          lastMessageAt: message.sentAt,
+          lastMessageAt: latestMessageSentAt,
           lastMessagePreview: content.substring(0, 100),
+          lastMessageId: latestMessageId,
+          lastMessageSender: latestMessageSender,
         });
       } catch (error) {
         console.error('Failed to send message:', error);
@@ -274,11 +284,16 @@ export function useMessages() {
    * Receive a message (from XMTP stream)
    */
   const receiveMessage = useCallback(
-    async (conversationId: string, xmtpMessage: XmtpMessage) => {
+    async (
+      conversationId: string,
+      xmtpMessage: XmtpMessage,
+      options?: { isHistory?: boolean }
+    ) => {
       try {
+        const isHistory = options?.isHistory ?? false;
         // Convert content to string if it's a Uint8Array
-        const content = typeof xmtpMessage.content === 'string' 
-          ? xmtpMessage.content 
+        const content = typeof xmtpMessage.content === 'string'
+          ? xmtpMessage.content
           : new TextDecoder().decode(xmtpMessage.content);
 
         const message: Message = {
@@ -331,16 +346,37 @@ export function useMessages() {
         updateConversation(conversationId, {
           lastMessageAt: message.sentAt,
           lastMessagePreview: message.body.substring(0, 100),
+          lastMessageId: message.id,
+          lastMessageSender: message.sender,
         });
 
         // Increment unread if not viewing this conversation
         // (This would be better handled in a global message listener)
-        incrementUnread(conversationId);
+        const myInbox = identity?.inboxId?.toLowerCase();
+        const myAddr = identity?.address?.toLowerCase();
+        const senderLower = message.sender?.toLowerCase?.();
+        const fromSelf = senderLower && (senderLower === myInbox || senderLower === myAddr);
+        if (!fromSelf) {
+          const preserved = isHistory ? getResyncReadStateFor(conversationId) : undefined;
+          const comparisonBase = preserved?.lastReadAt ?? conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;
+          const shouldIncrement = !isHistory || message.sentAt > comparisonBase;
+          if (shouldIncrement) {
+            incrementUnread(conversationId);
+          }
+        }
       } catch (error) {
         console.error('Failed to receive message:', error);
       }
     },
-    [addMessage, updateConversation, incrementUnread, messagesByConversation, identity, removeMessage]
+    [
+      addMessage,
+      updateConversation,
+      incrementUnread,
+      messagesByConversation,
+      identity,
+      removeMessage,
+      conversations,
+    ]
   );
 
   /**

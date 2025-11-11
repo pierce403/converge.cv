@@ -8,6 +8,7 @@ import { useAuthStore, useConversationStore, useContactStore, useMessageStore } 
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
+import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
 import type { Contact } from '@/lib/stores/contact-store';
@@ -154,8 +155,12 @@ export function Layout() {
     };
 
     const handleIncomingMessage = async (event: Event) => {
-      const customEvent = event as CustomEvent<{ conversationId: string; message: XmtpMessage }>;
-      const { conversationId, message } = customEvent.detail;
+      const customEvent = event as CustomEvent<{
+        conversationId: string;
+        message: XmtpMessage;
+        isHistory?: boolean;
+      }>;
+      const { conversationId, message, isHistory } = customEvent.detail;
       
       console.log('[Layout] Global message listener: received message', {
         conversationId,
@@ -204,6 +209,7 @@ export function Layout() {
         const storage = await getStorage();
 
         let conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
+        const preservedReadState = getResyncReadStateFor(conversationId);
 
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
@@ -226,6 +232,10 @@ export function Layout() {
             archived: false,
             displayName: contact.preferredName ?? contact.name,
             displayAvatar: contact.preferredAvatar ?? contact.avatar,
+            lastMessageId: message.id,
+            lastMessageSender: message.senderAddress,
+            lastReadAt: preservedReadState?.lastReadAt ?? 0,
+            lastReadMessageId: preservedReadState?.lastReadMessageId ?? undefined,
           };
 
           addConversation(newConversation);
@@ -269,6 +279,26 @@ export function Layout() {
             await storage.putConversation({ ...conversation, ...updates });
             conversation = { ...conversation, ...updates } as Conversation;
           }
+          if (preservedReadState) {
+            const readUpdates: Partial<Conversation> = {};
+            if (
+              preservedReadState.lastReadAt !== undefined &&
+              (conversation.lastReadAt ?? 0) < preservedReadState.lastReadAt
+            ) {
+              readUpdates.lastReadAt = preservedReadState.lastReadAt;
+            }
+            if (
+              preservedReadState.lastReadMessageId !== undefined &&
+              conversation.lastReadMessageId !== preservedReadState.lastReadMessageId
+            ) {
+              readUpdates.lastReadMessageId = preservedReadState.lastReadMessageId ?? undefined;
+            }
+            if (Object.keys(readUpdates).length > 0) {
+              updateConversation(conversation.id, readUpdates);
+              await storage.putConversation({ ...conversation, ...readUpdates });
+              conversation = { ...conversation, ...readUpdates } as Conversation;
+            }
+          }
           // Deduplicate against existing by peer id also when conversation already existed
           try {
             const store = useConversationStore.getState();
@@ -283,7 +313,7 @@ export function Layout() {
           } catch (e) { /* ignore */ }
         }
         console.log('[Layout] Processing message with receiveMessage()');
-        await receiveMessage(conversationId, message);
+        await receiveMessage(conversationId, message, { isHistory: Boolean(isHistory) });
         
         console.log('[Layout] ✅ Message processed successfully');
       } catch (error) {
