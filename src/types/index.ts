@@ -53,6 +53,13 @@ export interface Conversation {
   isLocalOnly?: boolean;
 }
 
+export interface DeletedConversationRecord {
+  conversationId: string;
+  peerId: string;
+  deletedAt: number;
+  reason?: 'user-hidden' | 'system';
+}
+
 export interface Message {
   id: string;
   conversationId: string;

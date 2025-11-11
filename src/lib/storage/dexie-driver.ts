@@ -9,6 +9,7 @@ import type {
   Attachment,
   VaultSecrets,
   Identity,
+  DeletedConversationRecord,
 } from '@/types';
 import type { StorageDriver, PageOpts, Query } from './interface';
 import type { Contact } from '../stores/contact-store';
@@ -29,6 +30,7 @@ class ConvergeDB extends Dexie {
   contacts!: Table<Contact & { address?: string }, string>;
   // New contacts table keyed by inboxId (v3)
   contacts_v3!: Table<Contact, string>;
+  deletedConversations!: Table<DeletedConversationRecord, string>;
 
   constructor(name: string) {
     super(name);
@@ -197,6 +199,18 @@ class ConvergeDB extends Dexie {
           )
         );
       });
+
+    this.version(5).stores({
+      conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+      messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+      attachments: 'id, messageId',
+      attachmentData: 'id',
+      identity: 'address, inboxId',
+      vaultSecrets: 'method',
+      contacts: 'address',
+      contacts_v3: '&inboxId, primaryAddress, *addresses',
+      deletedConversations: '&conversationId, peerId',
+    });
   }
 }
 
@@ -259,6 +273,43 @@ export class DexieDriver implements StorageDriver {
       await this.dataDb.conversations.delete(id);
       await this.dataDb.messages.where('conversationId').equals(id).delete();
     });
+  }
+
+  async markConversationDeleted(record: DeletedConversationRecord): Promise<void> {
+    const normalizedPeer = record.peerId ? record.peerId.toLowerCase() : '';
+    const entry: DeletedConversationRecord = {
+      conversationId: record.conversationId,
+      peerId: normalizedPeer,
+      deletedAt: record.deletedAt ?? Date.now(),
+      reason: record.reason,
+    };
+    await this.dataDb.deletedConversations.put(entry);
+  }
+
+  async isConversationDeleted(conversationId: string): Promise<boolean> {
+    const record = await this.dataDb.deletedConversations.get(conversationId);
+    return Boolean(record);
+  }
+
+  async isPeerDeleted(peerId: string): Promise<boolean> {
+    if (!peerId) {
+      return false;
+    }
+    const normalized = peerId.toLowerCase();
+    const record = await this.dataDb.deletedConversations.where('peerId').equals(normalized).first();
+    return Boolean(record);
+  }
+
+  async unmarkConversationDeletion(conversationId: string): Promise<void> {
+    await this.dataDb.deletedConversations.delete(conversationId);
+  }
+
+  async unmarkPeerDeletion(peerId: string): Promise<void> {
+    if (!peerId) {
+      return;
+    }
+    const normalized = peerId.toLowerCase();
+    await this.dataDb.deletedConversations.where('peerId').equals(normalized).delete();
   }
 
   async updateConversationReadState(
@@ -453,6 +504,7 @@ export class DexieDriver implements StorageDriver {
       this.dataDb.attachmentData,
       this.dataDb.contacts,
       this.dataDb.contacts_v3,
+      this.dataDb.deletedConversations,
     ], async () => {
       await this.dataDb.conversations.clear();
       await this.dataDb.messages.clear();
@@ -460,6 +512,7 @@ export class DexieDriver implements StorageDriver {
       await this.dataDb.attachmentData.clear();
       await this.dataDb.contacts.clear();
       await this.dataDb.contacts_v3.clear();
+      await this.dataDb.deletedConversations.clear();
       console.log('[Storage] ✅ All IndexedDB data cleared');
     });
 
