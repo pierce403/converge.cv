@@ -10,6 +10,7 @@ import type {
   VaultSecrets,
   Identity,
   DeletedConversationRecord,
+  IgnoredConversationRecord,
 } from '@/types';
 import type { StorageDriver, PageOpts, Query } from './interface';
 import type { Contact } from '../stores/contact-store';
@@ -31,6 +32,7 @@ class ConvergeDB extends Dexie {
   // New contacts table keyed by inboxId (v3)
   contacts_v3!: Table<Contact, string>;
   deletedConversations!: Table<DeletedConversationRecord, string>;
+  ignoredConversations!: Table<IgnoredConversationRecord, string>;
 
   constructor(name: string) {
     super(name);
@@ -211,6 +213,19 @@ class ConvergeDB extends Dexie {
       contacts_v3: '&inboxId, primaryAddress, *addresses',
       deletedConversations: '&conversationId, peerId',
     });
+
+    this.version(6).stores({
+      conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+      messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+      attachments: 'id, messageId',
+      attachmentData: 'id',
+      identity: 'address, inboxId',
+      vaultSecrets: 'method',
+      contacts: 'address',
+      contacts_v3: '&inboxId, primaryAddress, *addresses',
+      deletedConversations: '&conversationId, peerId',
+      ignoredConversations: '&conversationId',
+    });
   }
 }
 
@@ -310,6 +325,38 @@ export class DexieDriver implements StorageDriver {
     }
     const normalized = peerId.toLowerCase();
     await this.dataDb.deletedConversations.where('peerId').equals(normalized).delete();
+  }
+
+  async ignoreConversation(record: Omit<IgnoredConversationRecord, 'createdAt'> & { createdAt?: number }): Promise<void> {
+    if (!record.conversationId) {
+      return;
+    }
+    const entry: IgnoredConversationRecord = {
+      conversationId: record.conversationId,
+      createdAt: record.createdAt ?? Date.now(),
+      reason: record.reason,
+    };
+    await this.dataDb.ignoredConversations.put(entry);
+  }
+
+  async unignoreConversation(conversationId: string): Promise<void> {
+    if (!conversationId) {
+      return;
+    }
+    await this.dataDb.ignoredConversations.delete(conversationId);
+  }
+
+  async isConversationIgnored(conversationId: string): Promise<boolean> {
+    if (!conversationId) {
+      return false;
+    }
+    const record = await this.dataDb.ignoredConversations.get(conversationId);
+    return Boolean(record);
+  }
+
+  async listIgnoredConversationIds(): Promise<string[]> {
+    const entries = await this.dataDb.ignoredConversations.toArray();
+    return entries.map((entry) => entry.conversationId);
   }
 
   async updateConversationReadState(
@@ -505,6 +552,7 @@ export class DexieDriver implements StorageDriver {
       this.dataDb.contacts,
       this.dataDb.contacts_v3,
       this.dataDb.deletedConversations,
+      this.dataDb.ignoredConversations,
     ], async () => {
       await this.dataDb.conversations.clear();
       await this.dataDb.messages.clear();
@@ -513,6 +561,7 @@ export class DexieDriver implements StorageDriver {
       await this.dataDb.contacts.clear();
       await this.dataDb.contacts_v3.clear();
       await this.dataDb.deletedConversations.clear();
+      await this.dataDb.ignoredConversations.clear();
       console.log('[Storage] ✅ All IndexedDB data cleared');
     });
 

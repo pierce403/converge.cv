@@ -72,6 +72,58 @@ export function ConversationView() {
     return conversation.admins.includes(identity.address);
   }, [conversation, identity]);
 
+  const isGroupMember = useMemo(() => {
+    if (!conversation?.isGroup) {
+      return true;
+    }
+    const myInbox = identity?.inboxId?.toLowerCase();
+    const myAddress = identity?.address?.toLowerCase();
+    const inboxSet = new Set<string>();
+    conversation.memberInboxes?.forEach((memberInbox) => {
+      if (memberInbox) {
+        inboxSet.add(memberInbox.toLowerCase());
+      }
+    });
+    conversation.groupMembers?.forEach((member) => {
+      if (member.inboxId) {
+        inboxSet.add(member.inboxId.toLowerCase());
+      }
+    });
+    if (inboxSet.size > 0 && myInbox) {
+      return inboxSet.has(myInbox);
+    }
+
+    if (!myInbox && inboxSet.size > 0) {
+      // No inbox information available, but group lists members
+      return false;
+    }
+
+    if (!myInbox && !myAddress) {
+      return true;
+    }
+
+    const addressSet = new Set<string>();
+    conversation.members?.forEach((member) => {
+      if (member) {
+        addressSet.add(member.trim().toLowerCase());
+      }
+    });
+    if (conversation.groupMembers) {
+      conversation.groupMembers.forEach((member) => {
+        if (member.address) {
+          addressSet.add(member.address.trim().toLowerCase());
+        }
+      });
+    }
+    if (addressSet.size === 0) {
+      return true;
+    }
+    if (myAddress && addressSet.has(myAddress)) {
+      return true;
+    }
+    return myInbox ? inboxSet.has(myInbox) : false;
+  }, [conversation, identity?.inboxId, identity?.address]);
+
   useEffect(() => {
     if (id) {
       loadMessages(id);
@@ -711,6 +763,10 @@ export function ConversationView() {
                               deletedAt: Date.now(),
                               reason: 'user-hidden',
                             });
+                            await storage.ignoreConversation({
+                              conversationId: conversation.id,
+                              reason: 'user-hidden',
+                            });
                             removeConversation(conversation.id);
                           } catch (e) {
                             alert('Failed to delete conversation');
@@ -834,7 +890,18 @@ export function ConversationView() {
 
       {/* Composer */}
       <div ref={composerRef}>
-        <MessageComposer onSend={handleSend} replyToMessage={replyTo ?? undefined} onCancelReply={() => setReplyTo(null)} onSent={() => setReplyTo(null)} />
+        {conversation?.isGroup && !isGroupMember ? (
+          <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg px-4 py-3 text-sm text-primary-200">
+            You are no longer a member of this group and cannot send new messages.
+          </div>
+        ) : (
+          <MessageComposer
+            onSend={handleSend}
+            replyToMessage={replyTo ?? undefined}
+            onCancelReply={() => setReplyTo(null)}
+            onSent={() => setReplyTo(null)}
+          />
+        )}
       </div>
 
       {/* User info modal */}
