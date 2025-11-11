@@ -109,10 +109,18 @@ function nanosToLocaleString(value?: bigint | number | null): string | undefined
   return undefined;
 }
 
+function toDigestBuffer(bytes: Uint8Array): ArrayBuffer {
+  const underlying = bytes.buffer as ArrayBuffer;
+  if (bytes.byteOffset === 0 && bytes.byteLength === underlying.byteLength) {
+    return underlying;
+  }
+  return underlying.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 async function fingerprintBytes(bytes: Uint8Array): Promise<string> {
   if (bytes.length === 0) return '';
   if (globalThis.crypto?.subtle) {
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', toDigestBuffer(bytes));
     return Array.from(new Uint8Array(digest))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');

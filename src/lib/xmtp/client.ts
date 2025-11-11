@@ -142,6 +142,25 @@ const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(val
 const toIdentifierHex = (address: string): string =>
   address.startsWith('0x') || address.startsWith('0X') ? address.slice(2) : address;
 
+const EMPTY_ETHEREUM_IDENTIFIER = { identifier: '', identifierKind: 'Ethereum' } as const;
+
+function createStubInboxState({
+  identifier,
+  inboxId,
+}: {
+  identifier?: { identifier: string; identifierKind: 'Ethereum' };
+  inboxId?: string | null;
+}): SafeInboxState {
+  const safeIdentifier = (identifier ?? EMPTY_ETHEREUM_IDENTIFIER) as unknown as Identifier;
+  const identifiers = identifier ? [safeIdentifier] : [];
+  return {
+    identifiers,
+    inboxId: inboxId ?? '',
+    installations: [],
+    recoveryIdentifier: safeIdentifier,
+  } as unknown as SafeInboxState;
+}
+
 /**
  * XMTP Client wrapper for v5 SDK
  */
@@ -830,6 +849,8 @@ export class XmtpClient {
         policy: PermissionPolicy,
         metadataField?: unknown,
       ) => Promise<void>;
+      debugInfo?: () => Promise<SafeConversationDebugInfo>;
+      getHmacKeys?: () => Promise<Map<string, SafeHmacKey[]>>;
     };
   }
 
@@ -961,10 +982,9 @@ export class XmtpClient {
       epochRange: null,
     };
 
-    const hasDebugInfo = typeof (group as { debugInfo?: () => Promise<SafeConversationDebugInfo> }).debugInfo === 'function';
-    if (hasDebugInfo) {
+    if (typeof group.debugInfo === 'function') {
       try {
-        const info = await (group as { debugInfo: () => Promise<SafeConversationDebugInfo> }).debugInfo();
+        const info = await group.debugInfo();
         if (info) {
           summary.currentEpoch = typeof info.epoch === 'bigint' ? Number(info.epoch) : Number(info.epoch ?? 0);
           summary.maybeForked = Boolean(info.maybeForked);
@@ -975,10 +995,9 @@ export class XmtpClient {
       }
     }
 
-    const hasHmacKeys = typeof (group as { getHmacKeys?: () => Promise<Map<string, SafeHmacKey[]>> }).getHmacKeys === 'function';
-    if (hasHmacKeys) {
+    if (typeof group.getHmacKeys === 'function') {
       try {
-        const keyMap = await (group as { getHmacKeys: () => Promise<Map<string, SafeHmacKey[]>> }).getHmacKeys();
+        const keyMap = await group.getHmacKeys();
         const epochs: number[] = [];
         keyMap.forEach((entries) => {
           entries.forEach((entry) => {
@@ -2671,19 +2690,19 @@ export class XmtpClient {
    * - If connected, refresh from network via Preferences API.
    * - If not connected, use Utils worker to resolve inboxId & fetch state without a client.
    */
-  async getInboxState() {
+  async getInboxState(): Promise<SafeInboxState> {
     const isE2E = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_E2E_TEST === 'true');
+    const fallbackIdentifier: { identifier: string; identifierKind: 'Ethereum' } | undefined = this.identity?.address
+      ? {
+          identifier: toIdentifierHex(this.identity.address).toLowerCase(),
+          identifierKind: 'Ethereum' as const,
+        }
+      : undefined;
+
     if (isE2E) {
       // Return a stubbed inbox state for E2E to avoid network calls
       const inboxId = this.identity?.inboxId ?? `local-${Date.now().toString(36)}`;
-      const addr = (this.identity?.address ?? '0x').replace(/^0x/i, '').toLowerCase();
-      const stub: SafeInboxState = {
-        identifiers: addr ? [{ identifier: addr, identifierKind: 'Ethereum' } as unknown as Identifier] : [],
-        inboxId,
-        installations: [],
-        recoveryIdentifier: { identifier: '', identifierKind: 'Ethereum' } as unknown as Identifier,
-      } as unknown as SafeInboxState;
-      return stub;
+      return createStubInboxState({ identifier: fallbackIdentifier, inboxId });
     }
     const withTimeout = async <T>(p: Promise<T>, ms = 10000): Promise<T> => {
       return await Promise.race<T>([
@@ -2694,52 +2713,55 @@ export class XmtpClient {
 
     if (this.client) {
       // Force refresh from network to avoid stale state
-      return await withTimeout(this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true)));
+      const state = (await withTimeout(
+        this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true)),
+      )) as SafeInboxState | null | undefined;
+
+      if (state) {
+        return state;
+      }
+
+      console.warn('[XMTP] Preferences returned empty inbox state; using stub fallback');
+      return createStubInboxState({
+        identifier: fallbackIdentifier,
+        inboxId: this.client?.inboxId ?? this.identity?.inboxId ?? null,
+      });
     }
 
     if (!this.identity) {
       throw new Error('No identity available');
     }
 
+    const identifier = fallbackIdentifier ?? {
+      identifier: toIdentifierHex(this.identity.address).toLowerCase(),
+      identifierKind: 'Ethereum' as const,
+    };
+
     try {
       // Use Utils to resolve inboxId & fetch state without creating a full client
       const { getXmtpUtils } = await import('./utils-singleton');
       const utils = await getXmtpUtils();
 
-      const identifier: { identifier: string; identifierKind: 'Ethereum' } = {
-        identifier: toIdentifierHex(this.identity.address).toLowerCase(),
-        identifierKind: 'Ethereum',
-      };
-
       const inboxId = await withTimeout(this.retryWithBackoff('utils.getInboxIdForIdentifier', () => utils.getInboxIdForIdentifier(identifier, 'production')));
       if (!inboxId) {
         console.warn('[XMTP] No inbox registered for this identity; returning empty inbox state');
-        const stub: SafeInboxState = {
-          // As per SafeInboxState type mapping
-          identifiers: [identifier as unknown as Identifier],
-          inboxId: this.identity?.inboxId ?? '',
-          installations: [],
-          recoveryIdentifier: identifier as unknown as Identifier,
-        } as unknown as SafeInboxState;
-        return stub;
+        return createStubInboxState({ identifier, inboxId: this.identity?.inboxId ?? null });
       }
 
-      const states = (await withTimeout(this.retryWithBackoff('utils.inboxStateFromInboxIds', () => utils.inboxStateFromInboxIds([inboxId], 'production'))))
-        .filter(Boolean);
+      const states = (await withTimeout(
+        this.retryWithBackoff('utils.inboxStateFromInboxIds', () => utils.inboxStateFromInboxIds([inboxId], 'production')),
+      )) as Array<SafeInboxState | null | undefined>;
+      const state = states.find((value) => Boolean(value)) ?? null;
       // Utils worker doesn't need explicit close; it dies with page lifecycle.
-      return states[0];
+      if (state) {
+        return state as SafeInboxState;
+      }
+
+      console.warn('[XMTP] Utils returned empty inbox state array; using stub fallback');
+      return createStubInboxState({ identifier, inboxId });
     } catch (error) {
       console.warn('[XMTP] Failed to fetch inbox state via Utils; returning empty inbox state:', error);
-      const identifier: { identifier: string; identifierKind: 'Ethereum' } | null = this.identity
-        ? { identifier: toIdentifierHex(this.identity.address).toLowerCase(), identifierKind: 'Ethereum' }
-        : null;
-      const stub: SafeInboxState = {
-        identifiers: identifier ? [identifier as unknown as Identifier] : [],
-        inboxId: this.identity?.inboxId ?? '',
-        installations: [],
-        recoveryIdentifier: (identifier ?? { identifier: '', identifierKind: 'Ethereum' }) as unknown as Identifier,
-      } as unknown as SafeInboxState;
-      return stub;
+      return createStubInboxState({ identifier, inboxId: this.identity?.inboxId ?? null });
     }
   }
 
