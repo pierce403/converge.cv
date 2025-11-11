@@ -2,7 +2,7 @@
  * Onboarding page for new users
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { generateMnemonic, mnemonicToAccount, english } from 'viem/accounts';
 import { bytesToHex } from 'viem';
@@ -17,7 +17,6 @@ import { resetXmtpClient } from '@/lib/xmtp/client';
 import { deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
 import type { KeyfileIdentity } from '@/lib/keyfile';
 import { useWalletConnection } from '@/lib/wagmi';
-import { setPendingGroupInvite } from '@/lib/utils/group-invite';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
@@ -197,10 +196,6 @@ export function OnboardingPage() {
       if (params.get('connect') === '1') {
         setView('wallet');
       }
-      const groupId = params.get('g');
-      if (groupId) {
-        setPendingGroupInvite(groupId);
-      }
     } catch {
       // ignore
     }
@@ -219,6 +214,25 @@ export function OnboardingPage() {
       keyfileInputRef.current.value = '';
     }
   };
+
+  const navigateToPendingTarget = useCallback(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const inboxTarget = params.get('i');
+      if (inboxTarget) {
+        navigate(`/i/${encodeURIComponent(inboxTarget)}`);
+        return true;
+      }
+      const userTarget = params.get('u');
+      if (userTarget) {
+        navigate(`/u/${encodeURIComponent(userTarget)}`);
+        return true;
+      }
+    } catch {
+      // ignore deep-link parse failure
+    }
+    return false;
+  }, [navigate]);
 
   const handleKeyfileSelected = async (file: File | null) => {
     setError(null);
@@ -305,19 +319,10 @@ export function OnboardingPage() {
         throw new Error('createIdentity returned false');
       }
 
-      // After onboarding, honor deep-link targets (?g=... or ?i=... or ?u=...)
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const g = params.get('g');
-        const i = params.get('i');
-        const u = params.get('u');
-        if (g) return navigate(`/g/${encodeURIComponent(g)}`);
-        if (i) return navigate(`/i/${encodeURIComponent(i)}`);
-        if (u) return navigate(`/u/${encodeURIComponent(u)}`);
-      } catch (e) {
-        // ignore deep-link parse failure
+        // After onboarding, honor deep-link targets (?i=... or ?u=...)
+      if (!navigateToPendingTarget()) {
+        navigate('/');
       }
-      navigate('/');
     } catch (err) {
       console.error('[Onboarding] Failed to create generated identity:', err);
       setError('Unable to create a new identity. Please try again.');
@@ -359,18 +364,9 @@ export function OnboardingPage() {
         throw new Error('createIdentity returned false');
       }
 
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const g = params.get('g');
-        const i = params.get('i');
-        const u = params.get('u');
-        if (g) return navigate(`/g/${encodeURIComponent(g)}`);
-        if (i) return navigate(`/i/${encodeURIComponent(i)}`);
-        if (u) return navigate(`/u/${encodeURIComponent(u)}`);
-      } catch (e) {
-        // ignore deep-link parse failure
+      if (!navigateToPendingTarget()) {
+        navigate('/');
       }
-      navigate('/');
     } catch (err) {
       console.error('[Onboarding] Failed to import keyfile identity:', err);
       setKeyfileError('Failed to import that keyfile. Please try again.');
@@ -447,18 +443,9 @@ export function OnboardingPage() {
         setCurrentInbox(inboxId);
       }
 
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const g = params.get('g');
-        const i = params.get('i');
-        const u = params.get('u');
-        if (g) return navigate(`/g/${encodeURIComponent(g)}`);
-        if (i) return navigate(`/i/${encodeURIComponent(i)}`);
-        if (u) return navigate(`/u/${encodeURIComponent(u)}`);
-      } catch (e) {
-        // ignore deep-link parse failure
+      if (!navigateToPendingTarget()) {
+        navigate('/');
       }
-      navigate('/');
     } catch (err) {
       console.error('[Onboarding] Failed to finalize wallet identity:', err);
       setError(

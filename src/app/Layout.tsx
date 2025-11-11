@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useVisualViewport } from '@/lib/utils/useVisualViewport';
-import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
@@ -14,7 +14,6 @@ import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
-import { consumePendingGroupInvite } from '@/lib/utils/group-invite';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
 // Do not enrich from ENS/Farcaster for avatars or names. Use XMTP network data only.
 
@@ -23,7 +22,6 @@ export function Layout() {
   // Sync CSS --vh and keyboard-open class with VisualViewport
   useVisualViewport();
   const location = useLocation();
-  const navigate = useNavigate();
   const identity = useAuthStore((state) => state.identity);
   const { addConversation, updateConversation } = useConversationStore();
   const { receiveMessage } = useMessages();
@@ -110,22 +108,6 @@ export function Layout() {
     updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: true });
     setShowPersonalizationReminder(false);
   }, [updateReminderPrefs]);
-
-  useEffect(() => {
-    if (!identity) {
-      return;
-    }
-
-    const pending = consumePendingGroupInvite();
-    if (!pending) {
-      return;
-    }
-
-    const target = `/g/${encodeURIComponent(pending)}`;
-    if (location.pathname !== target) {
-      navigate(target);
-    }
-  }, [identity, location.pathname, navigate]);
 
   // Deprecated: Settings redirect from personalization reminder (inline save now available)
 

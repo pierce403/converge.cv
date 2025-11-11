@@ -13,7 +13,6 @@ import {
   GroupPermissionsOptions,
   PermissionLevel,
 } from '@xmtp/browser-sdk';
-import { groupShareUrl } from '@/lib/utils/links';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
@@ -30,32 +29,27 @@ const JOIN_POLICY_OPTIONS: Array<{
   value: PermissionPolicy;
   label: string;
   description: string;
-  shareNote: string;
 }> = [
   {
     value: PermissionPolicy.Allow,
     label: 'Members can add new members',
     description:
-      'Any existing group member can add someone to the group. Share the link with a member and they can add the person for you.',
-    shareNote: 'Share this link with a member or admin so they can add the person.',
+      'Any existing group member can add someone to the group. Ask a member or admin to invite the new person directly from Converge.',
   },
   {
     value: PermissionPolicy.Admin,
     label: 'Admins can add new members',
-    description: 'Only group admins can add or approve new members. Share links help admins identify who to add.',
-    shareNote: 'Share this link with an admin so they can add the person.',
+    description: 'Only group admins can add or approve new members. Contact an admin when someone needs to join.',
   },
   {
     value: PermissionPolicy.SuperAdmin,
     label: 'Super admins only',
     description: 'Only super admins can add or approve new members to the group.',
-    shareNote: 'Only super admins can add someone after opening this link.',
   },
   {
     value: PermissionPolicy.Deny,
     label: 'Closed group',
     description: 'No new members can be added until you change this setting.',
-    shareNote: 'Join links are disabled while the group is closed.',
   },
 ];
 
@@ -260,19 +254,6 @@ export function GroupSettingsPage() {
     }
     return GROUP_POLICY_TYPE_LABELS[type as GroupPermissionsOptions] ?? null;
   }, [conversation?.groupPermissions?.policyType]);
-
-  const joinPolicyShareNote = useMemo(() => {
-    if (joinPolicySelection === 'loading') {
-      return 'Copy the link once the current access mode finishes loading.';
-    }
-    if (joinPolicySelection === 'custom') {
-      return 'This group uses a custom XMTP permission set. Joining behavior may vary until you choose a standard mode.';
-    }
-    if (selectedJoinPolicyOption) {
-      return `Copy and share this link to invite people. ${selectedJoinPolicyOption.shareNote}`;
-    }
-    return 'Copy and share this link to invite people to the group.';
-  }, [joinPolicySelection, selectedJoinPolicyOption]);
 
   const memberEntries = useMemo<GroupMember[]>(() => {
     if (!conversation?.isGroup) {
@@ -1283,32 +1264,6 @@ export function GroupSettingsPage() {
                 );
               })}
             </ul>
-          </div>
-
-          {/* Share Group Link */}
-          <div>
-            <h2 className="text-lg font-semibold mb-2">Share Group Link</h2>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                readOnly
-                value={groupShareUrl(conversation.id)}
-                className="input-primary flex-1 cursor-text"
-                onClick={(e) => (e.target as HTMLInputElement).select()}
-              />
-              <button
-                className="btn-primary"
-                onClick={() => {
-                  navigator.clipboard.writeText(groupShareUrl(conversation.id));
-                  alert('Link copied to clipboard!');
-                }}
-              >
-                Copy
-              </button>
-            </div>
-            <p className="text-primary-300 text-sm mt-2">
-              {joinPolicyShareNote}
-            </p>
           </div>
 
           {/* Danger Zone */}

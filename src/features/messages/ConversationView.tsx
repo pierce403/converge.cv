@@ -502,33 +502,16 @@ export function ConversationView() {
                   {({ active }) => (
                     <button
                       onClick={async () => {
-                        try {
-                          const { groupShareUrl } = await import('@/lib/utils/links');
-                          const url = groupShareUrl(conversation.id);
-                          await navigator.clipboard.writeText(url);
-                          alert('Group link copied to clipboard');
-                        } catch (e) {
-                          alert('Failed to copy link');
-                        }
-                      }}
-                      className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
-                    >
-                      Copy group link
-                    </button>
-                  )}
-                </Menu.Item>
-                <Menu.Item>
-                  {({ active }) => (
-                    <button
-                      onClick={async () => {
                         if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
                         try {
                           await deleteGroup(conversation.id, false);
                         } catch (e) {
                           // fallback: try leave only, then local delete
                           try {
-                            const me = identity?.inboxId || identity?.address;
-                            if (me) await removeMembersFromGroup(conversation.id, [me]);
+                            const identifiers = [identity?.inboxId, identity?.address].filter(Boolean) as string[];
+                            if (identifiers.length) {
+                              await removeMembersFromGroup(conversation.id, identifiers);
+                            }
                           } catch (_e) { /* ignore */ }
                           try { await removeConversation(conversation.id); } catch (_e) { /* ignore */ }
                         }

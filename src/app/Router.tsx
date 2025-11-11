@@ -11,9 +11,8 @@ import { SearchPage } from '@/features/search';
 import { ContactsPage } from '@/features/contacts/ContactsPage';
 import { NewGroupPage } from '@/features/conversations/NewGroupPage';
 import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
-import { JoinGroupPage } from '@/features/conversations/JoinGroupPage';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
-import { GroupConnectRedirect, UserConnectRedirect, InboxConnectRedirect } from '@/app/deeplinks';
+import { UserConnectRedirect, InboxConnectRedirect } from '@/app/deeplinks';
 import { StartDmPage } from '@/features/conversations/StartDmPage';
 import { ContactLinkPage } from '@/features/contacts/ContactLinkPage';
 
@@ -38,8 +37,6 @@ export function AppRouter() {
     return (
       <Routes>
         <Route path="/onboarding" element={<OnboardingPage />} />
-        {/* Preserve deep links by forwarding context into onboarding */}
-        <Route path="/g/:conversationId" element={<GroupConnectRedirect />} />
         <Route path="/i/:inboxId" element={<InboxConnectRedirect />} />
         <Route path="/u/:userId" element={<UserConnectRedirect />} />
         {isCheckingAuth ? (
@@ -84,7 +81,6 @@ export function AppRouter() {
         <Route path="debug" element={<DebugPage />} />
         <Route path="contacts" element={<ContactsPage />} />
         {/* New simplified deep links */}
-        <Route path="g/:conversationId" element={<JoinGroupPage />} />
         <Route path="i/:inboxId" element={<StartDmPage />} />
         <Route path="u/:userId" element={<ContactLinkPage />} />
         <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />

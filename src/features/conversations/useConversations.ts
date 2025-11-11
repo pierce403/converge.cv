@@ -669,45 +669,102 @@ export function useConversations() {
     async (conversationId: string, deleteForAll = false): Promise<void> => {
       const storage = await getStorage();
       const conversation = await storage.getConversation(conversationId);
-      if (!conversation || !conversation.isGroup) {
-        // Fallback: local delete if it's already missing or not a group
-        try { await storage.deleteConversation(conversationId); } catch (_e) { void 0; }
-        removeConversation(conversationId);
-        return;
-      }
-
-      // Determine current user identifiers
       const meInbox = useAuthStore.getState().identity?.inboxId;
       const meAddr = useAuthStore.getState().identity?.address;
+      const normalizedInbox = typeof meInbox === 'string' ? meInbox.trim() : '';
+      const normalizedAddress = typeof meAddr === 'string' ? normalizeIdentifier(meAddr) : '';
+      const selfIdentifiers = Array.from(
+        new Set(
+          [normalizedInbox, normalizedAddress].filter((value): value is string => Boolean(value))
+        )
+      );
 
       try {
         const xmtp = getXmtpClient();
+        let remoteDetails: GroupDetails | null = null;
+        let remoteDetailsLoaded = false;
 
-        if (deleteForAll) {
-          // Only attempt if current user appears to be super admin
-          const isSuper = (conversation.superAdminInboxes || []).some((id) => id && id.toLowerCase() === (meInbox || '').toLowerCase());
-          if (isSuper) {
-            // Remove everyone we know about, then proceed to local delete
+        const loadRemoteDetails = async (): Promise<GroupDetails | null> => {
+          if (remoteDetailsLoaded) {
+            return remoteDetails;
+          }
+          remoteDetailsLoaded = true;
+          try {
+            remoteDetails = await xmtp.fetchGroupDetails(conversationId);
+          } catch (error) {
+            console.warn('[useConversations] Failed to fetch remote group details during deleteGroup:', error);
+            remoteDetails = null;
+          }
+          return remoteDetails;
+        };
+
+        if (deleteForAll && normalizedInbox) {
+          const normalizedInboxLower = normalizedInbox.toLowerCase();
+          let isSuperAdmin = Boolean(
+            conversation?.superAdminInboxes?.some(
+              (id) => id && id.toLowerCase() === normalizedInboxLower
+            )
+          );
+
+          if (!isSuperAdmin) {
+            const details = await loadRemoteDetails();
+            if (details) {
+              isSuperAdmin = details.superAdminInboxes.some(
+                (id) => id && id.toLowerCase() === normalizedInboxLower
+              );
+            }
+          }
+
+          if (isSuperAdmin) {
             const candidates = new Set<string>();
-            (conversation.memberInboxes || []).forEach((id) => id && candidates.add(id));
-            (conversation.members || []).forEach((id) => id && candidates.add(id));
-            const all = Array.from(candidates);
-            if (all.length) {
-              try { await xmtp.removeMembersFromGroup(conversationId, all); } catch (_e) { void 0; }
+            const addCandidate = (value?: string | null) => {
+              if (!value) return;
+              const trimmed = value.trim();
+              if (trimmed) {
+                candidates.add(trimmed);
+              }
+            };
+
+            (conversation?.memberInboxes || []).forEach((id) => addCandidate(id));
+            (conversation?.members || []).forEach((id) => {
+              if (id) {
+                candidates.add(normalizeIdentifier(id));
+              }
+            });
+
+            if (candidates.size === 0) {
+              const details = await loadRemoteDetails();
+              details?.members.forEach((member) => {
+                addCandidate(member.inboxId);
+                if (member.address) {
+                  candidates.add(normalizeIdentifier(member.address));
+                }
+              });
+            }
+
+            const allTargets = Array.from(candidates).filter(Boolean);
+            if (allTargets.length) {
+              try {
+                await xmtp.removeMembersFromGroup(conversationId, allTargets);
+              } catch (error) {
+                console.warn('[useConversations] Failed to remove all members while deleting group:', error);
+              }
             }
           }
         }
 
-        // Always leave the group for this user (use inboxId if available, else address)
-        const me = meInbox || meAddr;
-        if (me) {
-          try { await xmtp.removeMembersFromGroup(conversationId, [me]); } catch (_e) { void 0; }
+        if (selfIdentifiers.length) {
+          try {
+            await xmtp.removeMembersFromGroup(conversationId, selfIdentifiers);
+          } catch (error) {
+            console.warn('[useConversations] Failed to leave group on XMTP:', error);
+          }
         }
-      } catch (e) {
-        // Non-fatal: still remove local data even if network fails
+      } catch (error) {
+        console.warn('[useConversations] Failed to process group deletion on XMTP:', error);
       }
 
-      // Purge local conversation and its messages
+      // Purge local conversation and its messages regardless of network outcome
       try { await storage.deleteConversation(conversationId); } catch (_e) { void 0; }
       removeConversation(conversationId);
       try { await storage.vacuum(); } catch (_e) { void 0; }
