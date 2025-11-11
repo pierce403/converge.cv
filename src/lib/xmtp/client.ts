@@ -2015,12 +2015,19 @@ export class XmtpClient {
                 const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
                 const senderInboxId = m.senderInboxId;
                 if (senderInboxId) {
-                  await useContactStore.getState().upsertContactProfile({
-                    inboxId: senderInboxId,
-                    displayName: obj.displayName,
-                    avatarUrl: obj.avatarUrl,
-                    source: 'inbox',
-                  });
+                  const contactStore = useContactStore.getState();
+                  const existingContact =
+                    contactStore.getContactByInboxId(senderInboxId) ??
+                    contactStore.getContactByAddress(senderInboxId);
+                  if (existingContact) {
+                    await contactStore.upsertContactProfile({
+                      inboxId: senderInboxId,
+                      displayName: obj.displayName,
+                      avatarUrl: obj.avatarUrl,
+                      source: 'inbox',
+                      metadata: { ...existingContact, lastSyncedAt: Date.now() },
+                    });
+                  }
                   logNetworkEvent({
                     direction: 'inbound',
                     event: 'profile:received',
@@ -2495,12 +2502,19 @@ export class XmtpClient {
                 const obj = JSON.parse(payload) as { displayName?: string; avatarUrl?: string };
                 const senderInboxId = message.senderInboxId;
                 if (senderInboxId) {
-                  await useContactStore.getState().upsertContactProfile({
-                    inboxId: senderInboxId,
-                    displayName: obj.displayName,
-                    avatarUrl: obj.avatarUrl,
-                    source: 'inbox',
-                  });
+                  const contactStore = useContactStore.getState();
+                  const existingContact =
+                    contactStore.getContactByInboxId(senderInboxId) ??
+                    contactStore.getContactByAddress(senderInboxId);
+                  if (existingContact) {
+                    await contactStore.upsertContactProfile({
+                      inboxId: senderInboxId,
+                      displayName: obj.displayName,
+                      avatarUrl: obj.avatarUrl,
+                      source: 'inbox',
+                      metadata: { ...existingContact, lastSyncedAt: Date.now() },
+                    });
+                  }
                   try {
                     window.dispatchEvent(
                       new CustomEvent('ui:toast', {

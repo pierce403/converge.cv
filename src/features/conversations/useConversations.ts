@@ -135,26 +135,22 @@ export function useConversations() {
             }
           }
 
-          const metadata = {
-            lastSyncedAt: Date.now(),
-            ...(existingContact
-              ? {}
-              : {
-                  createdAt: Date.now(),
-                  source: 'inbox' as const,
-                }),
-          };
+          const metadata = existingContact
+            ? { lastSyncedAt: Date.now() }
+            : undefined;
 
-          const upserted = await contactStore.upsertContactProfile({
-            inboxId: canonicalInboxId,
-            displayName: profile.displayName,
-            avatarUrl: profile.avatarUrl,
-            primaryAddress: profile.primaryAddress,
-            addresses: profile.addresses,
-            identities: profile.identities,
-            source: 'inbox',
-            metadata,
-          });
+          const updatedContact = existingContact
+            ? await contactStore.upsertContactProfile({
+                inboxId: canonicalInboxId,
+                displayName: profile.displayName,
+                avatarUrl: profile.avatarUrl,
+                primaryAddress: profile.primaryAddress,
+                addresses: profile.addresses,
+                identities: profile.identities,
+                source: 'inbox',
+                metadata,
+              })
+            : undefined;
 
           const updates: Partial<Conversation> = {};
           if (!conversation.isGroup && canonicalInboxId && conversation.peerId.toLowerCase() !== canonicalInboxId) {
@@ -162,8 +158,8 @@ export function useConversations() {
           }
 
           const displayName =
-            upserted.preferredName ||
-            upserted.name ||
+            updatedContact?.preferredName ||
+            updatedContact?.name ||
             profile.displayName ||
             profile.primaryAddress ||
             canonicalInboxId;
@@ -171,7 +167,8 @@ export function useConversations() {
             updates.displayName = displayName;
           }
 
-          const avatar = upserted.preferredAvatar || upserted.avatar || profile.avatarUrl;
+          const avatar =
+            updatedContact?.preferredAvatar || updatedContact?.avatar || profile.avatarUrl;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
           }

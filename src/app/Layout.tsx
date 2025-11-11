@@ -186,50 +186,67 @@ export function Layout() {
         }
         const contactStore = useContactStore.getState();
         const xmtp = getXmtpClient();
+        const existingContact =
+          contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
+
         // Drop messages from blocked senders to avoid recreating DMs on refresh
-        try {
-          const existing = contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
-          if (existing?.isBlocked) {
-            console.info('[Layout] Dropping message from blocked inbox:', senderInboxId);
-            return;
-          }
-        } catch { /* ignore */ }
+        if (existingContact?.isBlocked) {
+          console.info('[Layout] Dropping message from blocked inbox:', senderInboxId);
+          return;
+        }
+
         // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact
-        const existingContact = contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
         const nowTs = Date.now();
         const lastSync = existingContact?.lastSyncedAt ?? 0;
         let profile = undefined as Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | undefined;
         if (!existingContact || nowTs - lastSync > 5 * 60 * 1000) {
           profile = await xmtp.fetchInboxProfile(senderInboxId);
         }
-        const upserted = await contactStore.upsertContactProfile({
-          inboxId: senderInboxId,
-          displayName: profile?.displayName,
-          avatarUrl: profile?.avatarUrl,
-          primaryAddress: profile?.primaryAddress,
-          addresses: profile?.addresses,
-          identities: profile?.identities,
-          source: 'inbox',
-        });
-        if (upserted.isBlocked) {
-          console.info('[Layout] Dropping message after upsert because contact is blocked:', senderInboxId);
+
+        let contact = existingContact;
+        if (existingContact && profile) {
+          contact = await contactStore.upsertContactProfile({
+            inboxId: senderInboxId,
+            displayName: profile.displayName,
+            avatarUrl: profile.avatarUrl,
+            primaryAddress: profile.primaryAddress,
+            addresses: profile.addresses,
+            identities: profile.identities,
+            source: 'inbox',
+          });
+        }
+
+        if (contact?.isBlocked) {
+          console.info('[Layout] Dropping message after contact refresh because contact is blocked:', senderInboxId);
           return;
         }
-        const contact = upserted;
 
         // Enrich with ENS (and Farcaster if available) asynchronously
-        void enrichContactProfile(contact);
+        if (contact) {
+          void enrichContactProfile(contact);
+        }
+
+        const resolvedDisplayName =
+          contact?.preferredName ??
+          contact?.name ??
+          profile?.displayName ??
+          profile?.primaryAddress ??
+          senderInboxId ??
+          'Unknown Sender';
+        const resolvedAvatar = contact?.preferredAvatar ?? contact?.avatar ?? profile?.avatarUrl;
 
         let conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
         const preservedReadState = getResyncReadStateFor(conversationId);
 
+        const peerKeyBase = contact?.inboxId || senderInboxId;
+
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
 
-          const peerId = contact?.inboxId || senderInboxId;
+          const peerId = peerKeyBase ?? senderInboxId ?? 'unknown-peer';
           // Avoid creating a self-DM conversation
           const myInbox = getXmtpClient().getInboxId()?.toLowerCase();
-          if (myInbox && peerId.toLowerCase() === myInbox) {
+          if (peerId && myInbox && peerId.toLowerCase() === myInbox) {
             console.log('[Layout] Skipping creation of self-DM conversation');
             return;
           }
@@ -242,8 +259,8 @@ export function Layout() {
             unreadCount: 0,
             pinned: false,
             archived: false,
-            displayName: contact.preferredName ?? contact.name,
-            displayAvatar: contact.preferredAvatar ?? contact.avatar,
+            displayName: resolvedDisplayName,
+            displayAvatar: resolvedAvatar,
             lastMessageId: message.id,
             lastMessageSender: message.senderAddress,
             lastReadAt: preservedReadState?.lastReadAt ?? 0,
@@ -259,13 +276,19 @@ export function Layout() {
           // Deduplicate: remove any other DM with same peer id
           try {
             const store = useConversationStore.getState();
-            const peerKey = (contact.inboxId || senderInboxId).toLowerCase();
-            const dupes = store.conversations.filter(
-              (c) => !c.isGroup && c.id !== newConversation.id && c.peerId.toLowerCase() === peerKey
-            );
-            for (const d of dupes) {
-              store.removeConversation(d.id);
-              try { await storage.deleteConversation(d.id); } catch (e) { /* ignore */ }
+            const peerKey = (peerKeyBase ?? peerId)?.toLowerCase?.();
+            if (peerKey) {
+              const dupes = store.conversations.filter(
+                (c) => !c.isGroup && c.id !== newConversation.id && c.peerId.toLowerCase() === peerKey
+              );
+              for (const d of dupes) {
+                store.removeConversation(d.id);
+                try {
+                  await storage.deleteConversation(d.id);
+                } catch (e) {
+                  /* ignore */
+                }
+              }
             }
           } catch (e) { /* ignore */ }
         } else {
@@ -280,10 +303,14 @@ export function Layout() {
           const displayName = peerContact?.preferredName ?? peerContact?.name;
           if (displayName && conversation.displayName !== displayName) {
             updates.displayName = displayName;
+          } else if (!peerContact && resolvedDisplayName && conversation.displayName !== resolvedDisplayName) {
+            updates.displayName = resolvedDisplayName;
           }
           const avatar = peerContact?.preferredAvatar ?? peerContact?.avatar;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
+          } else if (!peerContact && resolvedAvatar && conversation.displayAvatar !== resolvedAvatar) {
+            updates.displayAvatar = resolvedAvatar;
           }
 
           if (Object.keys(updates).length > 0) {
@@ -314,13 +341,19 @@ export function Layout() {
           // Deduplicate against existing by peer id also when conversation already existed
           try {
             const store = useConversationStore.getState();
-            const peerKey = (contact.inboxId || senderInboxId).toLowerCase();
-            const dupes = store.conversations.filter(
-              (c) => !c.isGroup && c.id !== conversation!.id && c.peerId.toLowerCase() === peerKey
-            );
-            for (const d of dupes) {
-              store.removeConversation(d.id);
-              try { await storage.deleteConversation(d.id); } catch (e) { /* ignore */ }
+            const peerKey = (peerKeyBase ?? conversation!.peerId)?.toLowerCase?.();
+            if (peerKey) {
+              const dupes = store.conversations.filter(
+                (c) => !c.isGroup && c.id !== conversation!.id && c.peerId.toLowerCase() === peerKey
+              );
+              for (const d of dupes) {
+                store.removeConversation(d.id);
+                try {
+                  await storage.deleteConversation(d.id);
+                } catch (e) {
+                  /* ignore */
+                }
+              }
             }
           } catch (e) { /* ignore */ }
         }
