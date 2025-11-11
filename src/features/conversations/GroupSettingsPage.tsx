@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore, useContactStore } from '@/lib/stores';
@@ -7,7 +7,12 @@ import { getAddress } from 'viem';
 import type { GroupMember } from '@/types';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import type { Contact } from '@/lib/stores/contact-store';
-import { PermissionPolicy, PermissionUpdateType, GroupPermissionsOptions } from '@xmtp/browser-sdk';
+import {
+  PermissionPolicy,
+  PermissionUpdateType,
+  GroupPermissionsOptions,
+  PermissionLevel,
+} from '@xmtp/browser-sdk';
 import { groupShareUrl } from '@/lib/utils/links';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -338,42 +343,184 @@ export function GroupSettingsPage() {
     return members;
   }, [conversation, contactsByAddress, contactsByInboxId, adminInboxSet, adminAddressSet, superAdminInboxSet]);
 
-  const isCurrentUserAdmin = useMemo(() => {
-    if (!conversation?.isGroup || !identity) {
+  const identityAddressLower = identity?.address?.toLowerCase();
+  const identityInboxLower = identity?.inboxId?.toLowerCase();
+
+  const currentMember = useMemo(() => {
+    if (!identityAddressLower && !identityInboxLower) {
+      return null;
+    }
+
+    return (
+      memberEntries.find((member) => {
+        const memberAddressLower = member.address?.toLowerCase();
+        const memberInboxLower = member.inboxId.toLowerCase();
+        return (
+          (identityAddressLower && memberAddressLower === identityAddressLower) ||
+          (identityInboxLower && memberInboxLower === identityInboxLower)
+        );
+      }) ?? null
+    );
+  }, [identityAddressLower, identityInboxLower, memberEntries]);
+
+  const isCurrentUserSuperAdmin = useMemo(() => {
+    if (!conversation?.isGroup) {
       return false;
     }
 
-    const identityAddress = identity.address?.toLowerCase();
-    const identityInbox = identity.inboxId?.toLowerCase();
-
-    if (identityAddress && adminAddressSet.has(identityAddress)) {
+    if (currentMember?.isSuperAdmin) {
       return true;
     }
 
-    if (identityInbox && adminInboxSet.has(identityInbox)) {
+    if (
+      typeof currentMember?.permissionLevel === 'number' &&
+      currentMember.permissionLevel >= PermissionLevel.SuperAdmin
+    ) {
       return true;
     }
 
-    const currentMember = memberEntries.find((member) => {
-      const matchesAddress = identityAddress && member.address?.toLowerCase() === identityAddress;
-      const matchesInbox = identityInbox && member.inboxId.toLowerCase() === identityInbox;
-      return Boolean(matchesAddress || matchesInbox);
-    });
+    if (identityInboxLower && superAdminInboxSet.has(identityInboxLower)) {
+      return true;
+    }
+
+    return false;
+  }, [conversation?.isGroup, currentMember, identityInboxLower, superAdminInboxSet]);
+
+  const isCurrentUserAdmin = useMemo(() => {
+    if (!conversation?.isGroup) {
+      return false;
+    }
+
+    if (isCurrentUserSuperAdmin) {
+      return true;
+    }
+
+    if (identityAddressLower && adminAddressSet.has(identityAddressLower)) {
+      return true;
+    }
+
+    if (identityInboxLower && adminInboxSet.has(identityInboxLower)) {
+      return true;
+    }
 
     if (!currentMember) {
       return false;
     }
 
-    if (currentMember.isSuperAdmin || currentMember.isAdmin) {
+    if (currentMember.isAdmin) {
       return true;
     }
 
-    if (typeof currentMember.permissionLevel === 'number' && currentMember.permissionLevel >= 1) {
+    if (
+      typeof currentMember.permissionLevel === 'number' &&
+      currentMember.permissionLevel >= PermissionLevel.Admin
+    ) {
       return true;
     }
 
     return false;
-  }, [conversation, identity, memberEntries, adminAddressSet, adminInboxSet]);
+  }, [
+    conversation?.isGroup,
+    adminAddressSet,
+    adminInboxSet,
+    currentMember,
+    identityAddressLower,
+    identityInboxLower,
+    isCurrentUserSuperAdmin,
+  ]);
+
+  const isCurrentUserMember = Boolean(currentMember);
+
+  const canCurrentUserPerformPolicy = useCallback(
+    (policy?: number | null) => {
+      if (policy === PermissionPolicy.Allow) {
+        return isCurrentUserMember;
+      }
+      if (policy === PermissionPolicy.Admin) {
+        return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+      }
+      if (policy === PermissionPolicy.SuperAdmin) {
+        return isCurrentUserSuperAdmin;
+      }
+      if (policy === PermissionPolicy.Deny) {
+        return false;
+      }
+      if (policy === PermissionPolicy.Other || policy === PermissionPolicy.DoesNotExist) {
+        return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+      }
+      return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+    },
+    [isCurrentUserAdmin, isCurrentUserMember, isCurrentUserSuperAdmin],
+  );
+
+  const addMemberPolicy = conversation?.groupPermissions?.policySet?.addMemberPolicy;
+  const removeMemberPolicy = conversation?.groupPermissions?.policySet?.removeMemberPolicy;
+  const addAdminPolicy = conversation?.groupPermissions?.policySet?.addAdminPolicy;
+  const removeAdminPolicy = conversation?.groupPermissions?.policySet?.removeAdminPolicy;
+
+  const canCurrentUserAddMembers = useMemo(() => {
+    if (!conversation?.isGroup) {
+      return false;
+    }
+    if (addMemberPolicy === undefined || addMemberPolicy === null) {
+      return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+    }
+    return canCurrentUserPerformPolicy(addMemberPolicy);
+  }, [
+    addMemberPolicy,
+    canCurrentUserPerformPolicy,
+    conversation?.isGroup,
+    isCurrentUserAdmin,
+    isCurrentUserSuperAdmin,
+  ]);
+
+  const canCurrentUserRemoveMembers = useMemo(() => {
+    if (!conversation?.isGroup) {
+      return false;
+    }
+    if (removeMemberPolicy === undefined || removeMemberPolicy === null) {
+      return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+    }
+    return canCurrentUserPerformPolicy(removeMemberPolicy);
+  }, [
+    canCurrentUserPerformPolicy,
+    conversation?.isGroup,
+    isCurrentUserAdmin,
+    isCurrentUserSuperAdmin,
+    removeMemberPolicy,
+  ]);
+
+  const canCurrentUserPromoteMembers = useMemo(() => {
+    if (!conversation?.isGroup) {
+      return false;
+    }
+    if (addAdminPolicy === undefined || addAdminPolicy === null) {
+      return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+    }
+    return canCurrentUserPerformPolicy(addAdminPolicy);
+  }, [
+    addAdminPolicy,
+    canCurrentUserPerformPolicy,
+    conversation?.isGroup,
+    isCurrentUserAdmin,
+    isCurrentUserSuperAdmin,
+  ]);
+
+  const canCurrentUserDemoteAdmins = useMemo(() => {
+    if (!conversation?.isGroup) {
+      return false;
+    }
+    if (removeAdminPolicy === undefined || removeAdminPolicy === null) {
+      return isCurrentUserAdmin || isCurrentUserSuperAdmin;
+    }
+    return canCurrentUserPerformPolicy(removeAdminPolicy);
+  }, [
+    canCurrentUserPerformPolicy,
+    conversation?.isGroup,
+    isCurrentUserAdmin,
+    isCurrentUserSuperAdmin,
+    removeAdminPolicy,
+  ]);
 
   const normalizedNewMemberAddress = useMemo(() => {
     const value = newMemberAddress.trim();
@@ -467,6 +614,11 @@ export function GroupSettingsPage() {
 
     if (!conversation) {
       setError('Group conversation not available.');
+      return;
+    }
+
+    if (!canCurrentUserAddMembers) {
+      setError('You do not have permission to add members.');
       return;
     }
 
@@ -650,8 +802,8 @@ export function GroupSettingsPage() {
       return;
     }
 
-    if (!isCurrentUserAdmin) {
-      setError('Only group admins can add members.');
+    if (!canCurrentUserAddMembers) {
+      setError('You do not have permission to add members.');
       return;
     }
 
@@ -668,8 +820,8 @@ export function GroupSettingsPage() {
   const handleRemoveMember = async (member: GroupMember) => {
     setError('');
 
-    if (!isCurrentUserAdmin) {
-      setError('Only group admins can remove members.');
+    if (!canCurrentUserRemoveMembers) {
+      setError('You do not have permission to remove members.');
       return;
     }
     const label = member.address ?? member.inboxId;
@@ -687,8 +839,8 @@ export function GroupSettingsPage() {
   const handlePromoteToAdmin = async (member: GroupMember) => {
     setError('');
 
-    if (!isCurrentUserAdmin) {
-      setError('Only group admins can promote members.');
+    if (!canCurrentUserPromoteMembers) {
+      setError('You do not have permission to promote members.');
       return;
     }
     try {
@@ -703,8 +855,8 @@ export function GroupSettingsPage() {
   const handleDemoteFromAdmin = async (member: GroupMember) => {
     setError('');
 
-    if (!isCurrentUserAdmin) {
-      setError('Only group admins can demote admins.');
+    if (!canCurrentUserDemoteAdmins) {
+      setError('You do not have permission to demote admins.');
       return;
     }
     const label = member.address ?? member.inboxId;
@@ -823,7 +975,7 @@ export function GroupSettingsPage() {
               disabled={!isCurrentUserAdmin}
             />
           </div>
-          {isCurrentUserAdmin && isContactPickerOpen && (
+          {canCurrentUserAddMembers && isContactPickerOpen && (
             <div className="fixed inset-0 z-40 flex items-center justify-center bg-primary-950/80 backdrop-blur-sm">
               <div className="bg-primary-900/95 border border-primary-700 rounded-2xl shadow-2xl w-full max-w-md mx-4">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-primary-700/60">
@@ -1023,7 +1175,12 @@ export function GroupSettingsPage() {
           {/* Member Management */}
           <div>
             <h2 className="text-lg font-semibold mb-2">Member Management</h2>
-            {isCurrentUserAdmin && (
+            {!canCurrentUserAddMembers && !canCurrentUserRemoveMembers && (
+              <p className="text-sm text-primary-300 mb-4">
+                You don&apos;t have permission to add or remove members in this group.
+              </p>
+            )}
+            {canCurrentUserAddMembers && (
               <div className="flex flex-col gap-2 mb-4">
                 <div className="flex gap-2">
                   <input
@@ -1055,7 +1212,10 @@ export function GroupSettingsPage() {
                     setError('');
                     setIsContactPickerOpen(true);
                   }}
-                  disabled={contactsLoading && availableContacts.length === 0}
+                  disabled={
+                    !canCurrentUserAddMembers ||
+                    (contactsLoading && availableContacts.length === 0)
+                  }
                 >
                   Select from contacts
                 </button>
@@ -1091,9 +1251,9 @@ export function GroupSettingsPage() {
                       <span className="text-accent-300 text-xs px-2 py-0.5 bg-accent-900 rounded-full">Admin</span>
                     ) : null}
                   </div>
-                  {isCurrentUserAdmin && (
+                  {(canCurrentUserPromoteMembers || canCurrentUserDemoteAdmins || canCurrentUserRemoveMembers) && (
                     <div className="flex gap-2">
-                      {!member.isAdmin && (
+                      {!member.isAdmin && canCurrentUserPromoteMembers && (
                         <button
                           className="btn-secondary btn-xs"
                           onClick={() => handlePromoteToAdmin(member)}
@@ -1101,7 +1261,7 @@ export function GroupSettingsPage() {
                           Promote
                         </button>
                       )}
-                      {member.isAdmin && !isSelf && (
+                      {member.isAdmin && !isSelf && canCurrentUserDemoteAdmins && (
                         <button
                           className="btn-secondary btn-xs"
                           onClick={() => handleDemoteFromAdmin(member)}
@@ -1109,7 +1269,7 @@ export function GroupSettingsPage() {
                           Demote
                         </button>
                       )}
-                      {!isSelf && (
+                      {!isSelf && canCurrentUserRemoveMembers && (
                         <button
                           className="btn-danger btn-xs"
                           onClick={() => handleRemoveMember(member)}
