@@ -28,7 +28,6 @@ export function ConversationView() {
   const {
     conversations,
     removeConversation,
-    removeMembersFromGroup,
     deleteGroup,
     toggleMute,
     markAsRead,
@@ -693,24 +692,17 @@ export function ConversationView() {
                     {({ active }) => (
                       <button
                         onClick={async () => {
-                          if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
+                          if (!confirm('Delete this group from this device? Local keys and messages will be removed.')) return;
                           try {
-                            await deleteGroup(conversation.id, false);
+                            await deleteGroup(conversation.id);
                           } catch (e) {
-                            // fallback: try leave only, then local delete
-                            try {
-                              const identifiers = [identity?.inboxId, identity?.address].filter(Boolean) as string[];
-                              if (identifiers.length) {
-                                await removeMembersFromGroup(conversation.id, identifiers);
-                              }
-                            } catch (_e) { /* ignore */ }
-                            try { await removeConversation(conversation.id); } catch (_e) { /* ignore */ }
+                            console.warn('[ConversationView] Failed to delete local group data', e);
                           }
                           navigate('/');
                         }}
                         className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-red-900/40 text-red-200' : 'text-red-300'}`}
                       >
-                        Leave group
+                        Delete group
                       </button>
                     )}
                   </Menu.Item>
@@ -820,29 +812,17 @@ export function ConversationView() {
                     )}
                   </Menu.Item>
                   <div className="my-1 h-px bg-primary-800/60" />
-                  {/* Delete conversation (local) and block to prevent reappear */}
+                  {/* Delete conversation (local data only) */}
                   <Menu.Item>
                     {({ active }) => (
                       <button
                         onClick={async () => {
-                          if (!confirm('Delete this conversation locally and block the user so it will not reappear on resync?')) return;
-                          try {
-                            await useContactStore.getState().blockContact(conversation.peerId);
-                          } catch (_e) { /* ignore */ }
+                          if (!confirm('Delete this conversation from this device? Local keys and messages will be removed.')) return;
                           try {
                             const storage = await getStorage();
                             await storage.deleteConversation(conversation.id);
-                            await storage.markConversationDeleted({
-                              conversationId: conversation.id,
-                              peerId: conversation.peerId.toLowerCase(),
-                              deletedAt: Date.now(),
-                              reason: 'user-hidden',
-                            });
-                            await storage.ignoreConversation({
-                              conversationId: conversation.id,
-                              reason: 'user-hidden',
-                            });
                             removeConversation(conversation.id);
+                            try { await storage.vacuum(); } catch (_e) { /* ignore */ }
                           } catch (e) {
                             alert('Failed to delete conversation');
                             return;

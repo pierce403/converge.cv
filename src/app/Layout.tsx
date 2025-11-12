@@ -175,10 +175,6 @@ export function Layout() {
           console.info('[Layout] Skipping message for deleted conversation:', conversationId);
           return;
         }
-        if (await storage.isConversationIgnored(conversationId)) {
-          console.info('[Layout] Skipping message for ignored conversation:', conversationId);
-          return;
-        }
         const normalizedSender = senderInboxId?.toLowerCase?.();
         if (normalizedSender && (await storage.isPeerDeleted(normalizedSender))) {
           console.info('[Layout] Skipping message for peer marked as deleted:', normalizedSender);

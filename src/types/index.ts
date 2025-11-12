@@ -62,12 +62,6 @@ export interface DeletedConversationRecord {
   reason?: 'user-hidden' | 'system';
 }
 
-export interface IgnoredConversationRecord {
-  conversationId: string;
-  createdAt: number;
-  reason?: 'user-hidden' | 'left-group' | 'blocked';
-}
-
 export interface Message {
   id: string;
   conversationId: string;

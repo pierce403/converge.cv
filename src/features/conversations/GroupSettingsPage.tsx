@@ -1268,22 +1268,22 @@ export function GroupSettingsPage() {
 
           {/* Danger Zone */}
           <div className="border-t border-primary-800/60 pt-4">
-            <h2 className="text-lg font-semibold mb-2 text-red-300">Leave Group</h2>
+            <h2 className="text-lg font-semibold mb-2 text-red-300">Delete Group</h2>
             <p className="text-sm text-primary-300 mb-3">
-              Leaving will remove you from this group on XMTP and delete all local data for this conversation. You will
-              stop receiving new messages.
+              Deleting removes this group&apos;s encryption keys and messages from this device. You can rejoin later if you
+              regain access to the group key material.
             </p>
             <button
               type="button"
               className="w-full btn-danger"
               onClick={async () => {
                 if (!conversation) return;
-                if (!confirm('Leave this group? You will stop receiving new messages and local data will be removed.')) return;
+                if (!confirm('Delete this group from this device? Local keys and messages will be removed.')) return;
                 try {
-                  await deleteGroup(conversation.id, false);
+                  await deleteGroup(conversation.id);
                   navigate('/');
                 } catch (e) {
-                  console.warn('[GroupSettings] Failed to leave via combined action, attempting local purge', e);
+                  console.warn('[GroupSettings] Failed to delete local group data', e);
                   try {
                     // Fallback: local-only navigation; actual purge handled elsewhere
                     navigate('/');
@@ -1291,7 +1291,7 @@ export function GroupSettingsPage() {
                 }
               }}
             >
-              Leave group
+              Delete group
             </button>
           </div>
         </div>
