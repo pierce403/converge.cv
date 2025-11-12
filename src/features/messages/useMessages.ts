@@ -29,12 +29,68 @@ export function useMessages() {
   const isContact = useContactStore((state) => state.isContact);
 
   /**
+   * Sync a conversation from XMTP network
+   */
+  const syncConversation = useCallback(
+    async (conversationId: string) => {
+      try {
+        const xmtp = getXmtpClient();
+        if (!xmtp.isConnected()) {
+          console.warn('[useMessages] Cannot sync conversation: XMTP client not connected');
+          return;
+        }
+
+        const conversation = conversations.find((c) => c.id === conversationId);
+        if (!conversation) {
+          console.warn('[useMessages] Cannot sync conversation: conversation not found');
+          return;
+        }
+
+        // Access the internal XMTP client instance
+        const client = (xmtp as any).client;
+        if (!client) {
+          console.warn('[useMessages] Cannot sync conversation: XMTP client instance not available');
+          return;
+        }
+
+        try {
+          // Get the XMTP conversation object
+          const xmtpConv = await client.conversations.getConversationById(conversationId);
+          if (!xmtpConv) {
+            console.warn('[useMessages] Cannot sync conversation: XMTP conversation not found');
+            return;
+          }
+
+          // Sync messages for this conversation (both DMs and groups support sync())
+          if (typeof (xmtpConv as any).sync === 'function') {
+            await (xmtpConv as any).sync();
+            console.log('[useMessages] ✅ Synced conversation from XMTP:', conversationId);
+          } else {
+            console.warn('[useMessages] Conversation does not support sync() method');
+          }
+        } catch (syncError) {
+          console.warn('[useMessages] Failed to sync conversation from XMTP:', syncError);
+        }
+      } catch (error) {
+        console.error('[useMessages] Error syncing conversation:', error);
+      }
+    },
+    [conversations]
+  );
+
+  /**
    * Load messages for a conversation
    */
   const loadMessages = useCallback(
-    async (conversationId: string) => {
+    async (conversationId: string, syncFromNetwork = false) => {
       try {
         setLoading(true);
+        
+        // If syncing from network, sync the conversation first
+        if (syncFromNetwork) {
+          await syncConversation(conversationId);
+        }
+
         const storage = await getStorage();
         let messages = await storage.listMessages(conversationId, { limit: 100 });
         // Filter legacy reaction placeholder bubbles persisted prior to reaction aggregation
@@ -54,7 +110,7 @@ export function useMessages() {
         setLoading(false);
       }
     },
-    [setLoading, setMessages]
+    [setLoading, setMessages, syncConversation]
   );
 
   /**

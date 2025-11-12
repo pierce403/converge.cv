@@ -19,8 +19,11 @@ export function ConversationView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const lastScrollTopRef = useRef<number>(0);
 
   const {
     conversations,
@@ -129,6 +132,78 @@ export function ConversationView() {
       loadMessages(id);
     }
   }, [id, loadMessages]);
+
+  // Pull-to-refresh: detect scroll to top and sync messages
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container || !id) return;
+
+    let touchStartY = 0;
+    let touchStartScrollTop = 0;
+    let isPulling = false;
+    let refreshTimeout: number | null = null;
+
+    const handleScroll = () => {
+      const scrollTop = container.scrollTop;
+      const isAtTop = scrollTop <= 5; // Small threshold for touch devices
+      lastScrollTopRef.current = scrollTop;
+
+      // If already at top and user tries to scroll further (scrollTop stays at 0)
+      // This happens when browser tries to scroll but we're already at top
+      if (isAtTop && !isRefreshing && !isLoading && !isPulling) {
+        // Debounce to avoid multiple triggers
+        if (refreshTimeout) {
+          window.clearTimeout(refreshTimeout);
+        }
+        refreshTimeout = window.setTimeout(() => {
+          if (container.scrollTop <= 5 && !isRefreshing && !isLoading) {
+            isPulling = true;
+            setIsRefreshing(true);
+            loadMessages(id, true).finally(() => {
+              setIsRefreshing(false);
+              isPulling = false;
+            });
+          }
+        }, 100);
+      }
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0].clientY;
+      touchStartScrollTop = container.scrollTop;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const touchY = e.touches[0].clientY;
+      const scrollTop = container.scrollTop;
+      const isAtTop = scrollTop <= 5;
+      const pullDistance = touchY - touchStartY;
+      const isPullingDown = pullDistance > 30 && isAtTop; // Require 30px pull
+
+      // If pulling down at top, trigger refresh
+      if (isPullingDown && !isRefreshing && !isLoading && !isPulling) {
+        isPulling = true;
+        setIsRefreshing(true);
+        loadMessages(id, true).finally(() => {
+          setIsRefreshing(false);
+          isPulling = false;
+        });
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    container.addEventListener('touchmove', handleTouchMove, { passive: true });
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchmove', handleTouchMove);
+      if (refreshTimeout) {
+        window.clearTimeout(refreshTimeout);
+      }
+    };
+  }, [id, loadMessages, isRefreshing, isLoading]);
 
   // Observe composer height to pad the message list bottom accordingly
   useEffect(() => {
@@ -790,8 +865,21 @@ export function ConversationView() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30" style={{ paddingBottom: `calc(${composerHeight}px + var(--safe-bottom))` }}>
-        {isLoading ? (
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30" 
+        style={{ paddingBottom: `calc(${composerHeight}px + var(--safe-bottom))` }}
+      >
+        {isRefreshing && (
+          <div className="flex items-center justify-center py-2 text-sm text-primary-300">
+            <svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Syncing messages...
+          </div>
+        )}
+        {isLoading && !isRefreshing ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-primary-200">Loading messages...</div>
           </div>
