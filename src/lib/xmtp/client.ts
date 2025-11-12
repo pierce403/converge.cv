@@ -3100,58 +3100,98 @@ export class XmtpClient {
         console.warn('[XMTP] ⚠️  Could not resolve inbox ID for address, using address as peerId:', peerForStore);
       }
       
-      // Fetch profile immediately after resolving inbox ID to get display name and avatar
+      // Send our profile to the new DM immediately (like convos-ios does)
+      // This ensures the peer can see our display name and avatar right away
+      if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x') && dmConversation) {
+        try {
+          const myProfile = await this.loadOwnProfile();
+          if (myProfile && (myProfile.displayName || myProfile.avatarUrl)) {
+            const payload = {
+              type: 'profile',
+              v: 1,
+              displayName: myProfile.displayName?.trim() || undefined,
+              avatarUrl: myProfile.avatarUrl,
+              ts: Date.now(),
+            };
+            const profileContent = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
+            await dmConversation.send(profileContent);
+            console.log('[XMTP] ✅ Sent our profile to new DM');
+          }
+        } catch (profileSendError) {
+          console.warn('[XMTP] Failed to send our profile to new DM (non-fatal):', profileSendError);
+        }
+      }
+      
+      // Fetch peer's profile immediately after resolving inbox ID to get display name and avatar
       let profileDisplayName: string | undefined;
       let profileAvatar: string | undefined;
       if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x')) {
         try {
-          // Use fetchInboxProfile which will:
-          // 1. Check for profile messages in existing DM with this peer
-          // 2. Fall back to preferences/inbox state if no profile messages found
+          // First, try to get profile from any existing DM with this peer
+          // (fetchInboxProfile checks getDmByInboxId which might find an existing DM)
           const profile = await this.fetchInboxProfile(resolvedPeerInboxId);
           profileDisplayName = profile.displayName;
           profileAvatar = profile.avatarUrl;
-          console.log('[XMTP] ✅ Fetched profile for conversation:', {
+          console.log('[XMTP] ✅ Fetched profile via fetchInboxProfile:', {
             inboxId: resolvedPeerInboxId,
             displayName: profileDisplayName,
             hasAvatar: !!profileAvatar,
           });
           
-          // Also try scanning the DM we just created for any profile messages
-          // (in case they were just sent or synced)
-          if ((!profileDisplayName || !profileAvatar) && dmConversation) {
+          // If we didn't get profile from existing DM, check the DM we just created
+          // Also check ALL DMs to see if we have any other DMs with this peer that might have profile messages
+          if ((!profileDisplayName || !profileAvatar) && this.client) {
             try {
-              // Sync messages first to ensure we have the latest
-              await dmConversation.sync();
-              const msgs = await dmConversation.messages();
+              // Check all DMs - sometimes there might be multiple DMs with the same peer
+              const allDms = await this.client.conversations.listDms();
               const myInboxId = this.client.inboxId?.toLowerCase();
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                const m = msgs[i];
-                // Only look at messages from the peer (not from us)
-                const senderInboxId = (m as any).senderInboxId?.toLowerCase();
-                if (senderInboxId === myInboxId) continue; // Skip our own messages
-                
-                const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
-                if (typeof raw !== 'string') continue;
-                if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
-                
+              
+              // Look through all DMs for profile messages from this peer
+              for (const dm of allDms) {
                 try {
-                  const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
-                  const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
-                  if (obj.displayName) profileDisplayName = obj.displayName;
-                  if (obj.avatarUrl) profileAvatar = obj.avatarUrl;
-                  console.log('[XMTP] ✅ Found profile in newly created DM:', {
-                    inboxId: resolvedPeerInboxId,
-                    displayName: profileDisplayName,
-                    hasAvatar: !!profileAvatar,
-                  });
-                  break; // Use the most recent profile message
-                } catch (e) {
-                  console.warn('[XMTP] Failed to parse profile message from DM:', e);
+                  // Get peer inbox ID from DM (might be different format)
+                  const dmPeerId = (dm as any).peerInboxId?.toLowerCase() || (dm as any).peerAddress?.toLowerCase();
+                  if (dmPeerId !== resolvedPeerInboxId.toLowerCase()) continue;
+                  
+                  // Sync and check messages
+                  await dm.sync();
+                  const msgs = await dm.messages();
+                  for (let i = msgs.length - 1; i >= 0; i--) {
+                    const m = msgs[i];
+                    // Only look at messages from the peer (not from us)
+                    const senderInboxId = (m as any).senderInboxId?.toLowerCase();
+                    if (senderInboxId === myInboxId) continue; // Skip our own messages
+                    if (senderInboxId !== resolvedPeerInboxId.toLowerCase()) continue; // Must be from the peer
+                    
+                    const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
+                    if (typeof raw !== 'string') continue;
+                    if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
+                    
+                    try {
+                      const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
+                      const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
+                      if (obj.displayName) profileDisplayName = obj.displayName;
+                      if (obj.avatarUrl) profileAvatar = obj.avatarUrl;
+                      console.log('[XMTP] ✅ Found profile in DM:', {
+                        inboxId: resolvedPeerInboxId,
+                        displayName: profileDisplayName,
+                        hasAvatar: !!profileAvatar,
+                        dmId: dm.id,
+                      });
+                      break; // Use the most recent profile message
+                    } catch (e) {
+                      console.warn('[XMTP] Failed to parse profile message from DM:', e);
+                    }
+                  }
+                  
+                  // If we found profile, stop searching
+                  if (profileDisplayName || profileAvatar) break;
+                } catch (dmError) {
+                  console.warn('[XMTP] Failed to scan DM for profile messages:', dmError);
                 }
               }
-            } catch (dmError) {
-              console.warn('[XMTP] Failed to scan newly created DM for profile messages (non-fatal):', dmError);
+            } catch (allDmsError) {
+              console.warn('[XMTP] Failed to scan all DMs for profile messages (non-fatal):', allDmsError);
             }
           }
         } catch (profileError) {
