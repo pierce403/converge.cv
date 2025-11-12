@@ -2,7 +2,10 @@
  * Date utility functions
  */
 
-export function formatDistanceToNow(timestamp: number): string {
+export function formatDistanceToNow(
+  timestamp: number,
+  options?: { addSuffix?: boolean }
+): string {
   const now = Date.now();
   const diff = now - timestamp;
 
@@ -14,13 +17,27 @@ export function formatDistanceToNow(timestamp: number): string {
   const months = Math.floor(days / 30);
   const years = Math.floor(days / 365);
 
-  if (seconds < 60) return 'just now';
-  if (minutes < 60) return `${minutes}m`;
-  if (hours < 24) return `${hours}h`;
-  if (days < 7) return `${days}d`;
-  if (weeks < 4) return `${weeks}w`;
-  if (months < 12) return `${months}mo`;
-  return `${years}y`;
+  let result: string;
+  if (seconds < 60) {
+    result = 'just now';
+  } else if (minutes < 60) {
+    result = `${minutes}m`;
+  } else if (hours < 24) {
+    result = `${hours}h`;
+  } else if (days < 7) {
+    result = `${days}d`;
+  } else if (weeks < 4) {
+    result = `${weeks}w`;
+  } else if (months < 12) {
+    result = `${months}mo`;
+  } else {
+    result = `${years}y`;
+  }
+
+  if (options?.addSuffix && result !== 'just now') {
+    return `${result} ago`;
+  }
+  return result;
 }
 
 export function formatMessageTime(timestamp: number): string {
