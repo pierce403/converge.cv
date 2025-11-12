@@ -7,7 +7,7 @@ import { PermissionPolicy, PermissionUpdateType } from '@xmtp/browser-sdk';
 import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupDetails } from '@/lib/xmtp';
-import type { Conversation, GroupMember } from '@/types';
+import type { Conversation, DeletedConversationRecord, GroupMember } from '@/types';
 import { DEFAULT_CONTACTS } from '@/lib/default-contacts';
 import { getAddress } from 'viem';
 
@@ -612,12 +612,77 @@ export function useConversations() {
         const mutedUntil = isMuted ? undefined : now + 365 * 24 * 60 * 60 * 1000; // ~1 year
         await storage.putConversation({ ...conversation, mutedUntil });
         updateConversation(conversationId, { mutedUntil });
+        const normalizedPeer =
+          typeof conversation.peerId === 'string' && conversation.peerId
+            ? conversation.peerId.toLowerCase()
+            : conversationId;
+        if (!isMuted) {
+          try {
+            await storage.markConversationDeleted({
+              conversationId,
+              peerId: normalizedPeer,
+              deletedAt: now,
+              reason: 'user-muted',
+            });
+          } catch (markerError) {
+            console.warn('[useConversations] Failed to record mute marker', markerError);
+          }
+        } else {
+          try {
+            await storage.unmarkConversationDeletion(conversationId);
+            if (normalizedPeer) {
+              await storage.unmarkPeerDeletion(normalizedPeer);
+            }
+          } catch (markerError) {
+            console.warn('[useConversations] Failed to clear mute marker', markerError);
+          }
+        }
       } catch (error) {
         console.error('Failed to toggle mute:', error);
       }
     },
-    [updateConversation]
+    [updateConversation],
   );
+
+  const hideConversation = useCallback(
+    async (
+      conversationId: string,
+      options?: { reason?: DeletedConversationRecord['reason'] }
+    ): Promise<void> => {
+      const now = Date.now();
+      try {
+        const storage = await getStorage();
+        const conversation = await storage.getConversation(conversationId);
+        const peerId = conversation?.peerId || conversationId;
+        const normalizedPeer = typeof peerId === 'string' ? peerId.toLowerCase() : conversationId;
+        try {
+          await storage.markConversationDeleted({
+            conversationId,
+            peerId: normalizedPeer,
+            deletedAt: now,
+            reason: options?.reason ?? 'user-hidden',
+          });
+        } catch (markerError) {
+          console.warn('[useConversations] Failed to record conversation hide marker', markerError);
+        }
+
+        if (!conversation) {
+          return;
+        }
+
+        await storage.deleteConversation(conversationId);
+        removeConversation(conversationId);
+        try {
+          await storage.vacuum();
+        } catch (_e) { /* ignore */ }
+      } catch (error) {
+        console.warn('[useConversations] Failed to hide conversation:', error);
+        throw error;
+      }
+    },
+    [removeConversation],
+  );
+
 
   /**
    * Clear unread count
@@ -769,17 +834,9 @@ export function useConversations() {
    */
   const deleteGroup = useCallback(
     async (conversationId: string): Promise<void> => {
-      try {
-        const storage = await getStorage();
-        await storage.deleteConversation(conversationId);
-        removeConversation(conversationId);
-        try { await storage.vacuum(); } catch (_e) { /* ignore */ }
-      } catch (error) {
-        console.warn('[useConversations] Failed to delete local group data:', error);
-        throw error;
-      }
+      await hideConversation(conversationId, { reason: 'user-hidden' });
     },
-    [removeConversation],
+    [hideConversation],
   );
 
   /**
@@ -932,6 +989,7 @@ export function useConversations() {
     togglePin,
     toggleArchive,
     toggleMute,
+    hideConversation,
     markAsRead,
     updateConversationAndPersist,
     updateGroupMetadata,

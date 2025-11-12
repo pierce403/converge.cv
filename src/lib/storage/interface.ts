@@ -36,6 +36,7 @@ export interface StorageDriver {
   listConversations(query?: Query): Promise<Conversation[]>;
   deleteConversation(id: string): Promise<void>;
   markConversationDeleted(record: DeletedConversationRecord): Promise<void>;
+  listDeletedConversations(): Promise<DeletedConversationRecord[]>;
   isConversationDeleted(conversationId: string): Promise<boolean>;
   isPeerDeleted(peerId: string): Promise<boolean>;
   unmarkConversationDeletion(conversationId: string): Promise<void>;

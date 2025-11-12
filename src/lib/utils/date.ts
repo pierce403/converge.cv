@@ -2,11 +2,16 @@
  * Date utility functions
  */
 
-export function formatDistanceToNow(timestamp: number): string {
+interface FormatDistanceOptions {
+  addSuffix?: boolean;
+}
+
+export function formatDistanceToNow(timestamp: number, options?: FormatDistanceOptions): string {
   const now = Date.now();
   const diff = now - timestamp;
+  const absoluteDiff = Math.abs(diff);
 
-  const seconds = Math.floor(diff / 1000);
+  const seconds = Math.floor(absoluteDiff / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
@@ -14,13 +19,33 @@ export function formatDistanceToNow(timestamp: number): string {
   const months = Math.floor(days / 30);
   const years = Math.floor(days / 365);
 
-  if (seconds < 60) return 'just now';
-  if (minutes < 60) return `${minutes}m`;
-  if (hours < 24) return `${hours}h`;
-  if (days < 7) return `${days}d`;
-  if (weeks < 4) return `${weeks}w`;
-  if (months < 12) return `${months}mo`;
-  return `${years}y`;
+  let base: string;
+
+  if (seconds < 60) {
+    base = 'just now';
+  } else if (minutes < 60) {
+    base = `${minutes}m`;
+  } else if (hours < 24) {
+    base = `${hours}h`;
+  } else if (days < 7) {
+    base = `${days}d`;
+  } else if (weeks < 4) {
+    base = `${weeks}w`;
+  } else if (months < 12) {
+    base = `${months}mo`;
+  } else {
+    base = `${years}y`;
+  }
+
+  if (!options?.addSuffix || base === 'just now') {
+    return base;
+  }
+
+  if (diff >= 0) {
+    return `${base} ago`;
+  }
+
+  return `in ${base}`;
 }
 
 export function formatMessageTime(timestamp: number): string {

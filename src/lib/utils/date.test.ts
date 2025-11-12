@@ -50,6 +50,16 @@ describe('Date Utilities', () => {
       const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
       expect(formatDistanceToNow(oneYearAgo)).toBe('1y');
     });
+
+    it('should support suffixes for past timestamps', () => {
+      const twoMinutesAgo = Date.now() - 2 * 60 * 1000;
+      expect(formatDistanceToNow(twoMinutesAgo, { addSuffix: true })).toBe('2m ago');
+    });
+
+    it('should support suffixes for future timestamps', () => {
+      const inFiveMinutes = Date.now() + 5 * 60 * 1000;
+      expect(formatDistanceToNow(inFiveMinutes, { addSuffix: true })).toBe('in 5m');
+    });
   });
 
   describe('formatMessageTime', () => {
