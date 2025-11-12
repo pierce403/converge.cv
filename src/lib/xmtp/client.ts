@@ -1978,7 +1978,6 @@ export class XmtpClient {
           if (!dmId) {
             continue;
           }
-          const dmIdLower = dmId.toLowerCase();
           if (await storage.isConversationDeleted(dmId)) {
             console.info('[XMTP] Skipping deleted DM conversation during history sync:', dmId);
             continue;
@@ -2187,7 +2186,6 @@ export class XmtpClient {
             if (!conv.id) {
               continue;
             }
-            const convIdLower = conv.id.toLowerCase();
             if (await storage.isConversationDeleted(conv.id)) {
               console.info('[XMTP] Skipping deleted group conversation during history sync:', conv.id);
               continue;
