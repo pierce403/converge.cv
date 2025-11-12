@@ -694,15 +694,21 @@ export class XmtpClient {
 
     try {
       // Prefer profile message embedded in DM (our convention) if available
+      // getDmByInboxId gets the DM with this peer (not a self-DM)
       if (this.client) {
         try {
-          // Look for a DM with this inbox and scan recent messages for profile payload
+          // Look for a DM with this peer inbox ID and scan recent messages for profile payload
           const dm = await this.client.conversations.getDmByInboxId(normalizedInboxId);
           if (dm) {
             const msgs = await dm.messages();
+            const myInboxId = this.client.inboxId?.toLowerCase();
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i];
-              const raw = typeof m.content === 'string' ? m.content : m.encodedContent?.content;
+              // Only look at messages from the peer (not from us)
+              const senderInboxId = (m as any).senderInboxId?.toLowerCase();
+              if (senderInboxId === myInboxId) continue; // Skip our own messages
+              
+              const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
               if (typeof raw !== 'string') continue;
               if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
               try {
@@ -3099,6 +3105,9 @@ export class XmtpClient {
       let profileAvatar: string | undefined;
       if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x')) {
         try {
+          // Use fetchInboxProfile which will:
+          // 1. Check for profile messages in existing DM with this peer
+          // 2. Fall back to preferences/inbox state if no profile messages found
           const profile = await this.fetchInboxProfile(resolvedPeerInboxId);
           profileDisplayName = profile.displayName;
           profileAvatar = profile.avatarUrl;
@@ -3107,6 +3116,44 @@ export class XmtpClient {
             displayName: profileDisplayName,
             hasAvatar: !!profileAvatar,
           });
+          
+          // Also try scanning the DM we just created for any profile messages
+          // (in case they were just sent or synced)
+          if ((!profileDisplayName || !profileAvatar) && dmConversation) {
+            try {
+              // Sync messages first to ensure we have the latest
+              await dmConversation.sync();
+              const msgs = await dmConversation.messages();
+              const myInboxId = this.client.inboxId?.toLowerCase();
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                // Only look at messages from the peer (not from us)
+                const senderInboxId = (m as any).senderInboxId?.toLowerCase();
+                if (senderInboxId === myInboxId) continue; // Skip our own messages
+                
+                const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
+                if (typeof raw !== 'string') continue;
+                if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
+                
+                try {
+                  const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
+                  const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
+                  if (obj.displayName) profileDisplayName = obj.displayName;
+                  if (obj.avatarUrl) profileAvatar = obj.avatarUrl;
+                  console.log('[XMTP] ✅ Found profile in newly created DM:', {
+                    inboxId: resolvedPeerInboxId,
+                    displayName: profileDisplayName,
+                    hasAvatar: !!profileAvatar,
+                  });
+                  break; // Use the most recent profile message
+                } catch (e) {
+                  console.warn('[XMTP] Failed to parse profile message from DM:', e);
+                }
+              }
+            } catch (dmError) {
+              console.warn('[XMTP] Failed to scan newly created DM for profile messages (non-fatal):', dmError);
+            }
+          }
         } catch (profileError) {
           console.warn('[XMTP] Failed to fetch profile for new conversation (non-fatal):', profileError);
         }
