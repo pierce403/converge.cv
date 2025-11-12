@@ -705,9 +705,11 @@ export class XmtpClient {
             for (let i = msgs.length - 1; i >= 0; i--) {
               const m = msgs[i];
               // Only look at messages from the peer (not from us)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const senderInboxId = (m as any).senderInboxId?.toLowerCase();
               if (senderInboxId === myInboxId) continue; // Skip our own messages
               
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
               if (typeof raw !== 'string') continue;
               if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
@@ -3150,6 +3152,7 @@ export class XmtpClient {
               for (const dm of allDms) {
                 try {
                   // Get peer inbox ID from DM (might be different format)
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const dmPeerId = (dm as any).peerInboxId?.toLowerCase() || (dm as any).peerAddress?.toLowerCase();
                   if (dmPeerId !== resolvedPeerInboxId.toLowerCase()) continue;
                   
@@ -3159,10 +3162,12 @@ export class XmtpClient {
                   for (let i = msgs.length - 1; i >= 0; i--) {
                     const m = msgs[i];
                     // Only look at messages from the peer (not from us)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const senderInboxId = (m as any).senderInboxId?.toLowerCase();
                     if (senderInboxId === myInboxId) continue; // Skip our own messages
                     if (senderInboxId !== resolvedPeerInboxId.toLowerCase()) continue; // Must be from the peer
                     
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
                     if (typeof raw !== 'string') continue;
                     if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;

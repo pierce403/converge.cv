@@ -47,6 +47,7 @@ export function useMessages() {
         }
 
         // Access the internal XMTP client instance
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const client = (xmtp as any).client;
         if (!client) {
           console.warn('[useMessages] Cannot sync conversation: XMTP client instance not available');
@@ -62,7 +63,9 @@ export function useMessages() {
           }
 
           // Sync messages for this conversation (both DMs and groups support sync())
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (typeof (xmtpConv as any).sync === 'function') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await (xmtpConv as any).sync();
             console.log('[useMessages] ✅ Synced conversation from XMTP:', conversationId);
           } else {
