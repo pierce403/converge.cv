@@ -262,6 +262,12 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 - Multi-identity UI/IndexedDB schema, attachments, group chat support.
 - Re-enable install/update prompts and document XMTP v5 changes in README.
 
+**Key Management Limitations**
+- Wiping local session or MLS keys for specific conversations currently only deletes Dexie records; the XMTP client will resync
+  keys from the network on the next connection. A more robust per-conversation key eviction flow likely requires upstream
+  support for remote key/package revocation or finer-grained sync controls, which we should revisit if the SDK exposes these
+  hooks in the future.
+
 ---
 
 ## Current Sprint: Identity & Wallet Management (2025-10-28)
