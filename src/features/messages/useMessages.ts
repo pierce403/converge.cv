@@ -90,24 +90,58 @@ export function useMessages() {
           if (normalizedAddress) {
             try {
               const xmtp = getXmtpClient();
-              const derivedInboxId = await xmtp.deriveInboxIdFromAddress(normalizedAddress);
-              if (derivedInboxId) {
+              // Use getInboxIdFromAddress first (more reliable for registered users)
+              let derivedInboxId = await xmtp.getInboxIdFromAddress(normalizedAddress);
+              if (!derivedInboxId) {
+                // Fallback to deriveInboxIdFromAddress if getInboxIdFromAddress fails
+                derivedInboxId = await xmtp.deriveInboxIdFromAddress(normalizedAddress);
+              }
+              if (derivedInboxId && !derivedInboxId.startsWith('0x')) {
+                // Only use if it's actually an inbox ID (not an address)
                 actualInboxId = derivedInboxId.toLowerCase();
                 console.log('[useMessages] Derived inbox ID from address:', normalizedAddress, '->', actualInboxId);
+              } else {
+                console.warn('[useMessages] Derived value is still an address, not a valid inbox ID:', derivedInboxId);
               }
             } catch (e) {
-              console.warn('[useMessages] Failed to derive inbox ID from address, using address as inbox ID:', e);
+              console.warn('[useMessages] Failed to derive inbox ID from address:', e);
             }
           }
           
           // Fetch profile from XMTP to get display name and avatar
+          // Use the derived inbox ID, or the address if derivation failed
           let profile = undefined;
           try {
             const xmtp = getXmtpClient();
-            profile = await xmtp.fetchInboxProfile(actualInboxId);
+            const profileLookupKey = actualInboxId.startsWith('0x') ? normalizedAddress || actualInboxId : actualInboxId;
+            profile = await xmtp.fetchInboxProfile(profileLookupKey);
             console.log('[useMessages] Fetched profile for new contact:', profile);
+            
+            // If profile has a valid inbox ID (not an address), use it
+            if (profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10) {
+              actualInboxId = profile.inboxId.toLowerCase();
+              console.log('[useMessages] Using inbox ID from profile:', actualInboxId);
+            }
           } catch (e) {
             console.warn('[useMessages] Failed to fetch profile for new contact, will use fallback:', e);
+          }
+          
+          // Ensure we're not using an address as the inbox ID
+          if (actualInboxId.startsWith('0x')) {
+            console.error('[useMessages] ERROR: Contact inbox ID is still an address:', actualInboxId);
+            // Try one more time to get the inbox ID
+            if (normalizedAddress) {
+              try {
+                const xmtp = getXmtpClient();
+                const lastAttempt = await xmtp.getInboxIdFromAddress(normalizedAddress);
+                if (lastAttempt && !lastAttempt.startsWith('0x')) {
+                  actualInboxId = lastAttempt.toLowerCase();
+                  console.log('[useMessages] Successfully resolved inbox ID on last attempt:', actualInboxId);
+                }
+              } catch (e) {
+                console.error('[useMessages] Final attempt to resolve inbox ID failed:', e);
+              }
+            }
           }
           
           await upsertContactProfile({
@@ -127,7 +161,7 @@ export function useMessages() {
               : []),
             source: 'inbox',
           });
-          console.log('Automatically added new contact:', actualInboxId, 'with display name:', profile?.displayName);
+          console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
         }
 
         // Create message object
