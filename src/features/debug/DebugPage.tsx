@@ -8,6 +8,7 @@ import {
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { WebWorkersPanel } from './WebWorkersPanel';
 import { KeyExplorerModal } from './KeyExplorerModal';
+import { IgnoredConversationsModal } from './IgnoredConversationsModal';
 import buildInfo from '../../build-info.json'; // Import build info
 import { registerServiceWorkerForPush, enablePush, disablePush } from '@/lib/push';
 import { logNetworkEvent } from '@/lib/stores/debug-store';
@@ -50,6 +51,7 @@ export function DebugPage() {
   const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
   const [backendReachable, setBackendReachable] = useState<string>('unknown');
   const [isKeyExplorerOpen, setIsKeyExplorerOpen] = useState(false);
+  const [isIgnoredModalOpen, setIsIgnoredModalOpen] = useState(false);
 
   async function refreshPushStatus() {
     try {
@@ -131,6 +133,13 @@ export function DebugPage() {
               className="rounded-full border border-primary-800/60 bg-primary-950/30 px-3 py-1 text-primary-100 hover:border-primary-700"
             >
               Key Explorer
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsIgnoredModalOpen(true)}
+              className="rounded-full border border-primary-800/60 bg-primary-950/30 px-3 py-1 text-primary-100 hover:border-primary-700"
+            >
+              Ignored conversations
             </button>
             <button
               type="button"
@@ -494,6 +503,7 @@ export function DebugPage() {
         </section>
       </div>
       <KeyExplorerModal isOpen={isKeyExplorerOpen} onClose={() => setIsKeyExplorerOpen(false)} />
+      <IgnoredConversationsModal isOpen={isIgnoredModalOpen} onClose={() => setIsIgnoredModalOpen(false)} />
     </div>
   );
 }

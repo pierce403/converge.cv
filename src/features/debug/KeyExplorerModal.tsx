@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Identifier, SafeInboxState, SafeInstallation } from '@xmtp/browser-sdk';
 import { useAuthStore, useConversationStore } from '@/lib/stores';
-import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupKeySummary } from '@/lib/xmtp';
 
 interface KeyExplorerModalProps {
@@ -41,12 +40,6 @@ interface KeyExplorerNode {
   badge?: string;
   details?: NodeDetail[];
   children?: KeyExplorerNode[];
-  action?: {
-    type: 'deleteKey';
-    targetId: string;
-    targetKind: 'dm' | 'group';
-    label?: string;
-  };
 }
 
 interface ConversationKeyContext {
@@ -246,15 +239,11 @@ function TreeNode({
   level,
   expandedState,
   onToggle,
-  onDeleteKey,
-  pendingActionId,
 }: {
   node: KeyExplorerNode;
   level: number;
   expandedState: Record<string, boolean>;
   onToggle: (id: string) => void;
-  onDeleteKey?: (targetId: string, targetKind: 'dm' | 'group') => void;
-  pendingActionId?: string | null;
 }) {
   const hasChildren = Array.isArray(node.children) && node.children.length > 0;
   const isOpen = expandedState[node.id] ?? false;
@@ -293,18 +282,6 @@ function TreeNode({
             {node.details?.map((detail) => (
               <DetailRow key={`${node.id}-${detail.label}`} detail={detail} />
             ))}
-            {node.action?.type === 'deleteKey' && onDeleteKey && (
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => onDeleteKey(node.action!.targetId, node.action!.targetKind)}
-                  disabled={pendingActionId === node.action.targetId}
-                  className="rounded border border-red-700/70 px-2 py-1 text-[11px] text-red-200 transition hover:border-red-500 hover:bg-red-900/20 disabled:cursor-not-allowed disabled:border-red-900 disabled:text-red-400"
-                >
-                  {pendingActionId === node.action.targetId ? 'Deleting…' : node.action.label ?? 'Delete key'}
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -317,8 +294,6 @@ function TreeNode({
               level={level + 1}
               expandedState={expandedState}
               onToggle={onToggle}
-              onDeleteKey={onDeleteKey}
-              pendingActionId={pendingActionId}
             />
           ))}
         </ul>
@@ -330,13 +305,10 @@ function TreeNode({
 export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
   const identity = useAuthStore((state) => state.identity);
   const conversations = useConversationStore((state) => state.conversations);
-  const removeConversationFromStore = useConversationStore((state) => state.removeConversation);
   const [tree, setTree] = useState<KeyExplorerNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -594,12 +566,6 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
                   children: mlsChildren,
                 },
               ],
-              action: {
-                type: 'deleteKey',
-                targetId: conversation.id,
-                targetKind: 'group',
-                label: 'Delete local key',
-              },
             } satisfies KeyExplorerNode;
           });
 
@@ -632,12 +598,6 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
                   description: 'Per-peer message protection (non-MLS).',
                 },
               ],
-              action: {
-                type: 'deleteKey',
-                targetId: conversation.id,
-                targetKind: 'dm',
-                label: 'Delete local key',
-              },
             } satisfies KeyExplorerNode;
           });
 
@@ -728,47 +688,6 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
     }));
   }, []);
 
-  const handleDeleteKey = useCallback(
-    async (targetId: string, targetKind: 'dm' | 'group') => {
-      if (!targetId) return;
-
-      const confirmationMessage =
-        targetKind === 'dm'
-          ? 'Delete the stored session key for this DM? You may need to refresh history to re-establish secure messaging.'
-          : 'Delete the stored MLS key material for this group? You may need to refresh history or rejoin to regain access.';
-
-      if (typeof window !== 'undefined') {
-        const confirmed = window.confirm(confirmationMessage);
-        if (!confirmed) {
-          return;
-        }
-      }
-
-      setPendingActionId(targetId);
-      setActionError(null);
-
-      try {
-        const storage = await getStorage();
-        await storage.deleteConversation(targetId);
-        removeConversationFromStore(targetId);
-        try {
-          window.dispatchEvent(
-            new CustomEvent('ui:toast', {
-              detail: targetKind === 'dm' ? 'Deleted DM key from local storage.' : 'Deleted group key from local storage.',
-            }),
-          );
-        } catch {
-          // ignore toast failure
-        }
-      } catch (err) {
-        console.error('[KeyExplorer] Failed to delete stored key', targetId, err);
-        setActionError(err instanceof Error ? err.message : 'Failed to delete local key.');
-      } finally {
-        setPendingActionId(null);
-      }
-    },
-    [removeConversationFromStore],
-  );
 
   const webBanner = useMemo(() => {
     if (isNativeRuntime()) return null;
@@ -799,15 +718,11 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
         <header className="space-y-2 pr-10">
           <h2 className="text-2xl font-bold">Key Explorer</h2>
           <p className="text-sm text-primary-200">
-            Read-only view of inbox identities, installations, and MLS key material available on this device.
+            Read-only view of inbox identities, installations, and MLS key material available on this device. Key material is
+            not removable from here.
           </p>
           {webBanner}
         </header>
-        {actionError && (
-          <div className="rounded-lg border border-red-500/60 bg-red-900/30 px-3 py-2 text-xs text-red-200">
-            {actionError}
-          </div>
-        )}
         {error && (
           <div className="rounded-lg border border-red-500/60 bg-red-900/30 px-3 py-2 text-xs text-red-200">
             {error}
@@ -824,8 +739,6 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
                 level={0}
                 expandedState={expanded}
                 onToggle={handleToggle}
-                onDeleteKey={handleDeleteKey}
-                pendingActionId={pendingActionId}
               />
             ))}
           </ul>

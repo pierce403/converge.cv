@@ -59,7 +59,7 @@ export interface DeletedConversationRecord {
   conversationId: string;
   peerId: string;
   deletedAt: number;
-  reason?: 'user-hidden' | 'system';
+  reason?: 'user-hidden' | 'user-muted' | 'system';
 }
 
 export interface Message {

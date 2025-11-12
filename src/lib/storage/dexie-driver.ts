@@ -315,9 +315,13 @@ export class DexieDriver implements StorageDriver {
       conversationId: record.conversationId,
       peerId: normalizedPeer,
       deletedAt: record.deletedAt ?? Date.now(),
-      reason: record.reason,
+      reason: record.reason ?? 'user-hidden',
     };
     await this.dataDb.deletedConversations.put(entry);
+  }
+
+  async listDeletedConversations(): Promise<DeletedConversationRecord[]> {
+    return this.dataDb.deletedConversations.orderBy('deletedAt').reverse().toArray();
   }
 
   async isConversationDeleted(conversationId: string): Promise<boolean> {
