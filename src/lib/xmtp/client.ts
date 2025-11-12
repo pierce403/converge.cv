@@ -2997,11 +2997,46 @@ export class XmtpClient {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           identifier as any
         );
+        
+        // Try multiple methods to get the actual inbox ID
         try {
-          // Resolve to canonical inbox id for storage to avoid duplicates
+          // Method 1: Direct lookup (most reliable for registered users)
           resolvedPeerInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
         } catch (e) {
-          // non-fatal
+          console.warn('[XMTP] getInboxIdFromAddress failed, trying deriveInboxIdFromAddress:', e);
+        }
+        
+        // Method 2: Derive from address if direct lookup failed
+        if (!resolvedPeerInboxId) {
+          try {
+            const derived = await this.deriveInboxIdFromAddress(peerAddressOrInboxId);
+            // Only use if it's actually an inbox ID (not an address)
+            if (derived && !derived.startsWith('0x')) {
+              resolvedPeerInboxId = derived;
+            }
+          } catch (e) {
+            console.warn('[XMTP] deriveInboxIdFromAddress also failed:', e);
+          }
+        }
+        
+        // Method 3: Try to get from Utils if both methods failed
+        // The conversation was created successfully, so the peer is registered
+        if (!resolvedPeerInboxId) {
+          try {
+            const { getXmtpUtils } = await import('./utils-singleton');
+            const utils = await getXmtpUtils();
+            const identifierForLookup = {
+              identifier: toIdentifierHex(peerAddressOrInboxId).toLowerCase(),
+              identifierKind: 'Ethereum' as const,
+            };
+            const inboxId = await utils.getInboxIdForIdentifier(identifierForLookup, 'production');
+            if (inboxId && !inboxId.startsWith('0x')) {
+              resolvedPeerInboxId = inboxId;
+              console.log('[XMTP] ✅ Resolved inbox ID via Utils.getInboxIdForIdentifier:', resolvedPeerInboxId);
+            }
+          } catch (e) {
+            console.warn('[XMTP] Utils.getInboxIdForIdentifier failed:', e);
+          }
         }
       } else {
         console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxIdInput);
@@ -3012,9 +3047,19 @@ export class XmtpClient {
       console.log('[XMTP] ✅ DM conversation created:', {
         id: dmConversation.id,
         createdAtNs: dmConversation.createdAtNs,
+        resolvedPeerInboxId,
       });
-
-      const peerForStore = (resolvedPeerInboxId || originalInput).toLowerCase();
+      
+      // Never use an address as the inbox ID - if we can't resolve it, log a warning
+      // But we'll still use the original input as fallback for the conversation
+      // The actual inbox ID should be resolved later when fetching the profile
+      const peerForStore = resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x')
+        ? resolvedPeerInboxId.toLowerCase()
+        : originalInput.toLowerCase();
+      
+      if (peerForStore.startsWith('0x')) {
+        console.warn('[XMTP] ⚠️  Could not resolve inbox ID for address, using address as peerId:', peerForStore);
+      }
       const conversation: Conversation = {
         id: dmConversation.id,
         topic: dmConversation.id, // Use conversation ID as topic

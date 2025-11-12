@@ -385,12 +385,37 @@ export function useConversations() {
         // This ensures the contact info shows up right away in the chat and contact card
         try {
           const contactStore = useContactStore.getState();
-          const profile = await xmtp.fetchInboxProfile(actualPeerId);
+          
+          // Try to get the actual inbox ID if actualPeerId is still an address
+          let finalInboxId = actualPeerId;
+          if (actualPeerId.startsWith('0x')) {
+            // Try one more time to resolve the inbox ID
+            try {
+              const resolved = await xmtp.getInboxIdFromAddress(actualPeerId);
+              if (resolved && !resolved.startsWith('0x')) {
+                finalInboxId = resolved.toLowerCase();
+                console.log('[useConversations] ✅ Resolved inbox ID from address:', actualPeerId, '->', finalInboxId);
+              }
+            } catch (e) {
+              console.warn('[useConversations] Failed to resolve inbox ID from address:', e);
+            }
+          }
+          
+          // Fetch profile using the resolved inbox ID (or address if resolution failed)
+          const profile = await xmtp.fetchInboxProfile(finalInboxId);
           
           // Only use profile inbox ID if it's valid (not an address)
           const profileInboxId = profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10
             ? profile.inboxId.toLowerCase()
-            : actualPeerId;
+            : finalInboxId;
+          
+          // Final check: never store an address as the inbox ID
+          if (profileInboxId.startsWith('0x')) {
+            console.error('[useConversations] ERROR: Cannot store contact with address as inbox ID:', profileInboxId);
+            // Don't create the contact if we can't get a valid inbox ID
+            // The conversation will still work, but contact info won't be available
+            throw new Error('Could not resolve inbox ID for contact');
+          }
           
           await contactStore.upsertContactProfile({
             inboxId: profileInboxId,
@@ -416,7 +441,7 @@ export function useConversations() {
           });
         } catch (profileError) {
           // Non-fatal - conversation creation succeeded, profile fetch can fail
-          console.warn('[useConversations] Failed to fetch profile for new conversation (non-fatal):', profileError);
+          console.warn('[useConversations] Failed to fetch/store profile for new conversation (non-fatal):', profileError);
         }
 
         // Create conversation object
