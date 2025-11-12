@@ -195,6 +195,32 @@ export function Layout() {
           return;
         }
 
+        // Check if this message is a profile message (cv:profile: prefix)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const messageContent = typeof message.content === 'string' ? message.content : (message as any).encodedContent?.content;
+        const isProfileMessage = typeof messageContent === 'string' && messageContent.startsWith('cv:profile:');
+        
+        let profileFromMessage: { displayName?: string; avatarUrl?: string } | undefined;
+        if (isProfileMessage) {
+          try {
+            const json = messageContent.slice('cv:profile:'.length);
+            const profileData = JSON.parse(json) as { displayName?: string; avatarUrl?: string; type?: string; v?: number };
+            if (profileData.type === 'profile') {
+              profileFromMessage = {
+                displayName: profileData.displayName,
+                avatarUrl: profileData.avatarUrl,
+              };
+              console.log('[Layout] ✅ Extracted profile from incoming message', {
+                senderInboxId,
+                hasDisplayName: !!profileFromMessage.displayName,
+                hasAvatar: !!profileFromMessage.avatarUrl,
+              });
+            }
+          } catch (e) {
+            console.warn('[Layout] Failed to parse profile message:', e);
+          }
+        }
+
         // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact
         const nowTs = Date.now();
         const lastSync = existingContact?.lastSyncedAt ?? 0;
@@ -203,8 +229,27 @@ export function Layout() {
           profile = await xmtp.fetchInboxProfile(senderInboxId);
         }
 
+        // If we got profile from the message, use it (it's more recent than fetchInboxProfile)
+        if (profileFromMessage && profile) {
+          profile = {
+            ...profile,
+            displayName: profileFromMessage.displayName ?? profile.displayName,
+            avatarUrl: profileFromMessage.avatarUrl ?? profile.avatarUrl,
+          };
+        } else if (profileFromMessage && !profile) {
+          // If we have profile from message but no profile from fetch, create a minimal one
+          profile = {
+            inboxId: senderInboxId,
+            displayName: profileFromMessage.displayName,
+            avatarUrl: profileFromMessage.avatarUrl,
+            primaryAddress: undefined,
+            addresses: [],
+            identities: [],
+          };
+        }
+
         let contact = existingContact;
-        if (existingContact && profile) {
+        if (profile) {
           contact = await contactStore.upsertContactProfile({
             inboxId: senderInboxId,
             displayName: profile.displayName,
@@ -373,8 +418,14 @@ export function Layout() {
             }
           } catch (e) { /* ignore */ }
         }
-        console.log('[Layout] Processing message with receiveMessage()');
-        await receiveMessage(conversationId, message, { isHistory: Boolean(isHistory) });
+        
+        // Skip storing profile messages as regular messages (they're metadata, not chat content)
+        if (!isProfileMessage) {
+          console.log('[Layout] Processing message with receiveMessage()');
+          await receiveMessage(conversationId, message, { isHistory: Boolean(isHistory) });
+        } else {
+          console.log('[Layout] Skipping storage of profile message (metadata only)');
+        }
         
         console.log('[Layout] ✅ Message processed successfully');
       } catch (error) {

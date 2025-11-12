@@ -3106,7 +3106,21 @@ export class XmtpClient {
       // This ensures the peer can see our display name and avatar right away
       if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x') && dmConversation) {
         try {
-          const myProfile = await this.loadOwnProfile();
+          // Try to load from network first, then fall back to local identity
+          let myProfile = await this.loadOwnProfile();
+          
+          // If no profile on network, use identity from auth store
+          if (!myProfile || (!myProfile.displayName && !myProfile.avatarUrl)) {
+            const { useAuthStore } = await import('@/lib/stores');
+            const identity = useAuthStore.getState().identity;
+            if (identity) {
+              myProfile = {
+                displayName: identity.displayName,
+                avatarUrl: identity.avatar,
+              };
+            }
+          }
+          
           if (myProfile && (myProfile.displayName || myProfile.avatarUrl)) {
             const payload = {
               type: 'profile',
@@ -3117,7 +3131,12 @@ export class XmtpClient {
             };
             const profileContent = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
             await dmConversation.send(profileContent);
-            console.log('[XMTP] ✅ Sent our profile to new DM');
+            console.log('[XMTP] ✅ Sent our profile to new DM', {
+              hasDisplayName: !!myProfile.displayName,
+              hasAvatar: !!myProfile.avatarUrl,
+            });
+          } else {
+            console.log('[XMTP] No profile to send (no displayName or avatar)');
           }
         } catch (profileSendError) {
           console.warn('[XMTP] Failed to send our profile to new DM (non-fatal):', profileSendError);
