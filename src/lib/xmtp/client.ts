@@ -593,17 +593,11 @@ export class XmtpClient {
         console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed, attempting generateInboxId', error);
       }
 
-      try {
-        const generated = await utils.generateInboxId(identifier);
-        if (generated) {
-          return generated;
-        }
-      } catch (error) {
-        console.warn('[XMTP] deriveInboxIdFromAddress: generateInboxId failed', error);
-      }
-
-      // As a last resort, return the normalized address
-      return normalized;
+      // Don't call generateInboxId - that's only for unregistered users
+      // If we got here, the user is likely registered but we couldn't find their inbox ID
+      // This shouldn't happen, but if it does, return null instead of the address
+      console.warn('[XMTP] deriveInboxIdFromAddress: Could not resolve inbox ID for registered user');
+      return null;
     } catch (error) {
       console.error('[XMTP] deriveInboxIdFromAddress failed:', error);
       return null;
@@ -2930,7 +2924,7 @@ export class XmtpClient {
       console.log('[XMTP] findInboxId identifier payload:', identifier);
 
       // Directly ask the client for the inbox ID associated to this identifier.
-      const inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
+      let inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
           identifier as any
       ));
@@ -2938,6 +2932,27 @@ export class XmtpClient {
       if (inboxId) {
         console.log('[XMTP] ✅ Found inbox ID:', inboxId, 'for address:', address);
         return inboxId;
+      }
+
+      // Try with full address (with 0x) in case the SDK expects it
+      if (address.startsWith('0x')) {
+        try {
+          const identifierWith0x = {
+            identifier: address.toLowerCase(),
+            identifierKind: 'Ethereum' as const,
+          };
+          console.log('[XMTP] Trying findInboxId with 0x prefix:', identifierWith0x);
+          inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              identifierWith0x as any
+          ));
+          if (inboxId) {
+            console.log('[XMTP] ✅ Found inbox ID (with 0x):', inboxId, 'for address:', address);
+            return inboxId;
+          }
+        } catch (e) {
+          console.warn('[XMTP] findInboxIdByIdentifier (with 0x) failed:', e);
+        }
       }
 
       console.warn('[XMTP] ⚠️  No inbox ID found for address:', address);
@@ -3019,7 +3034,7 @@ export class XmtpClient {
           }
         }
         
-        // Method 3: Try to get from Utils if both methods failed
+        // Method 3: Try Utils.getInboxIdForIdentifier if both methods failed
         // The conversation was created successfully, so the peer is registered
         if (!resolvedPeerInboxId) {
           try {
@@ -3036,6 +3051,25 @@ export class XmtpClient {
             }
           } catch (e) {
             console.warn('[XMTP] Utils.getInboxIdForIdentifier failed:', e);
+          }
+        }
+        
+        // Method 4: Try with full address (with 0x) in case the SDK expects it
+        if (!resolvedPeerInboxId && isEthereumAddress(peerAddressOrInboxId)) {
+          try {
+            const { getXmtpUtils } = await import('./utils-singleton');
+            const utils = await getXmtpUtils();
+            const identifierWith0x = {
+              identifier: peerAddressOrInboxId.toLowerCase(),
+              identifierKind: 'Ethereum' as const,
+            };
+            const inboxId = await utils.getInboxIdForIdentifier(identifierWith0x, 'production');
+            if (inboxId && !inboxId.startsWith('0x')) {
+              resolvedPeerInboxId = inboxId;
+              console.log('[XMTP] ✅ Resolved inbox ID via Utils.getInboxIdForIdentifier (with 0x):', resolvedPeerInboxId);
+            }
+          } catch (e) {
+            console.warn('[XMTP] Utils.getInboxIdForIdentifier (with 0x) failed:', e);
           }
         }
       } else {
