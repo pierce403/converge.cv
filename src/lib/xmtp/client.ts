@@ -1854,9 +1854,6 @@ export class XmtpClient {
       await this.client.conversations.sync();
       const convos = await this.client.conversations.list();
       const storage = await getStorage();
-      const ignoredConversationIds = new Set(
-        (await storage.listIgnoredConversationIds()).map((id) => id.toLowerCase())
-      );
       // Build a set of DM ids to avoid misclassifying them as groups
       let dmIdSet = new Set<string>();
       try {
@@ -1874,10 +1871,6 @@ export class XmtpClient {
         for (const c of convos as Array<{ id?: string; createdAtNs?: bigint }>) {
           const id = c?.id as string | undefined;
           if (!id) continue;
-          if (ignoredConversationIds.has(id.toLowerCase())) {
-            console.info('[XMTP] Skipping ignored conversation during sync:', id);
-            continue;
-          }
           const exists = await storage.getConversation(id);
           if (exists) continue;
           // Never classify known DM ids as groups
@@ -1905,11 +1898,6 @@ export class XmtpClient {
             })();
             if (!isMember) {
               console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
-              try {
-                await storage.ignoreConversation({ conversationId: id, reason: 'left-group' });
-              } catch (ignoreErr) {
-                console.warn('[XMTP] Failed to persist ignore marker for departed group:', ignoreErr);
-              }
               continue;
             }
             const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
@@ -1981,9 +1969,6 @@ export class XmtpClient {
       // Backfill DMs into our app store by dispatching the same custom events
       // we use for live streaming messages.
       const storage = await getStorage();
-      const ignoredConversationIds = new Set(
-        (await storage.listIgnoredConversationIds()).map((id) => id.toLowerCase())
-      );
       const dms = await this.client.conversations.listDms();
       console.log(`[XMTP] Backfilling messages for ${dms.length} DM conversations`);
 
@@ -1994,10 +1979,6 @@ export class XmtpClient {
             continue;
           }
           const dmIdLower = dmId.toLowerCase();
-          if (ignoredConversationIds.has(dmIdLower)) {
-            console.info('[XMTP] Skipping ignored DM conversation during history sync:', dmId);
-            continue;
-          }
           if (await storage.isConversationDeleted(dmId)) {
             console.info('[XMTP] Skipping deleted DM conversation during history sync:', dmId);
             continue;
@@ -2207,10 +2188,6 @@ export class XmtpClient {
               continue;
             }
             const convIdLower = conv.id.toLowerCase();
-            if (ignoredConversationIds.has(convIdLower)) {
-              console.info('[XMTP] Skipping ignored group conversation during history sync:', conv.id);
-              continue;
-            }
             if (await storage.isConversationDeleted(conv.id)) {
               console.info('[XMTP] Skipping deleted group conversation during history sync:', conv.id);
               continue;

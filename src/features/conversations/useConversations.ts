@@ -673,27 +673,6 @@ export function useConversations() {
           const updatedConversation = { ...existingConversation, ...updates };
           await storage.putConversation(updatedConversation);
           updateConversation(conversationId, updatedConversation);
-          if (updatedConversation.isGroup) {
-            const myInbox = useAuthStore.getState().identity?.inboxId?.toLowerCase();
-            const memberSet = new Set<string>();
-            updatedConversation.memberInboxes?.forEach((memberInbox) => {
-              if (memberInbox) {
-                memberSet.add(memberInbox.toLowerCase());
-              }
-            });
-            updatedConversation.groupMembers?.forEach((member) => {
-              if (member.inboxId) {
-                memberSet.add(member.inboxId.toLowerCase());
-              }
-            });
-            if (myInbox && memberSet.size > 0 && !memberSet.has(myInbox)) {
-              try {
-                await storage.ignoreConversation({ conversationId, reason: 'left-group' });
-              } catch (ignoreError) {
-                console.warn('[useConversations] Failed to mark group as ignored after leaving:', ignoreError);
-              }
-            }
-          }
         }
       } catch (error) {
         console.error('Failed to update conversation and persist:', error);
@@ -789,113 +768,16 @@ export function useConversations() {
    * before leaving, effectively disbanding the group. Regardless, local data is deleted.
    */
   const deleteGroup = useCallback(
-    async (conversationId: string, deleteForAll = false): Promise<void> => {
-      const storage = await getStorage();
-      const conversation = await storage.getConversation(conversationId);
-      const meInbox = useAuthStore.getState().identity?.inboxId;
-      const meAddr = useAuthStore.getState().identity?.address;
-      const normalizedInbox = typeof meInbox === 'string' ? meInbox.trim() : '';
-      const normalizedAddress = typeof meAddr === 'string' ? normalizeIdentifier(meAddr) : '';
-      const selfIdentifiers = Array.from(
-        new Set(
-          [normalizedInbox, normalizedAddress].filter((value): value is string => Boolean(value))
-        )
-      );
-
+    async (conversationId: string): Promise<void> => {
       try {
-        const xmtp = getXmtpClient();
-        let remoteDetails: GroupDetails | null = null;
-        let remoteDetailsLoaded = false;
-
-        const loadRemoteDetails = async (): Promise<GroupDetails | null> => {
-          if (remoteDetailsLoaded) {
-            return remoteDetails;
-          }
-          remoteDetailsLoaded = true;
-          try {
-            remoteDetails = await xmtp.fetchGroupDetails(conversationId);
-          } catch (error) {
-            console.warn('[useConversations] Failed to fetch remote group details during deleteGroup:', error);
-            remoteDetails = null;
-          }
-          return remoteDetails;
-        };
-
-        if (deleteForAll && normalizedInbox) {
-          const normalizedInboxLower = normalizedInbox.toLowerCase();
-          let isSuperAdmin = Boolean(
-            conversation?.superAdminInboxes?.some(
-              (id) => id && id.toLowerCase() === normalizedInboxLower
-            )
-          );
-
-          if (!isSuperAdmin) {
-            const details = await loadRemoteDetails();
-            if (details) {
-              isSuperAdmin = details.superAdminInboxes.some(
-                (id) => id && id.toLowerCase() === normalizedInboxLower
-              );
-            }
-          }
-
-          if (isSuperAdmin) {
-            const candidates = new Set<string>();
-            const addCandidate = (value?: string | null) => {
-              if (!value) return;
-              const trimmed = value.trim();
-              if (trimmed) {
-                candidates.add(trimmed);
-              }
-            };
-
-            (conversation?.memberInboxes || []).forEach((id) => addCandidate(id));
-            (conversation?.members || []).forEach((id) => {
-              if (id) {
-                candidates.add(normalizeIdentifier(id));
-              }
-            });
-
-            if (candidates.size === 0) {
-              const details = await loadRemoteDetails();
-              details?.members.forEach((member) => {
-                addCandidate(member.inboxId);
-                if (member.address) {
-                  candidates.add(normalizeIdentifier(member.address));
-                }
-              });
-            }
-
-            const allTargets = Array.from(candidates).filter(Boolean);
-            if (allTargets.length) {
-              try {
-                await xmtp.removeMembersFromGroup(conversationId, allTargets);
-              } catch (error) {
-                console.warn('[useConversations] Failed to remove all members while deleting group:', error);
-              }
-            }
-          }
-        }
-
-        if (selfIdentifiers.length) {
-          try {
-            await xmtp.removeMembersFromGroup(conversationId, selfIdentifiers);
-          } catch (error) {
-            console.warn('[useConversations] Failed to leave group on XMTP:', error);
-          }
-        }
+        const storage = await getStorage();
+        await storage.deleteConversation(conversationId);
+        removeConversation(conversationId);
+        try { await storage.vacuum(); } catch (_e) { /* ignore */ }
       } catch (error) {
-        console.warn('[useConversations] Failed to process group deletion on XMTP:', error);
+        console.warn('[useConversations] Failed to delete local group data:', error);
+        throw error;
       }
-
-      // Purge local conversation and its messages regardless of network outcome
-      try { await storage.deleteConversation(conversationId); } catch (_e) { void 0; }
-      try {
-        await storage.ignoreConversation({ conversationId, reason: 'left-group' });
-      } catch (_e) {
-        /* ignore */
-      }
-      removeConversation(conversationId);
-      try { await storage.vacuum(); } catch (_e) { void 0; }
     },
     [removeConversation],
   );
