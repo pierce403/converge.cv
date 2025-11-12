@@ -300,17 +300,33 @@ export function Layout() {
             : undefined;
 
           const updates: Partial<Conversation> = {};
+          
+          // Only use peer contact's display name, never the sender's
           const displayName = peerContact?.preferredName ?? peerContact?.name;
           if (displayName && conversation.displayName !== displayName) {
             updates.displayName = displayName;
-          } else if (!peerContact && resolvedDisplayName && conversation.displayName !== resolvedDisplayName) {
-            updates.displayName = resolvedDisplayName;
           }
+          
+          // Only use peer contact's avatar, never the sender's
           const avatar = peerContact?.preferredAvatar ?? peerContact?.avatar;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
-          } else if (!peerContact && resolvedAvatar && conversation.displayAvatar !== resolvedAvatar) {
-            updates.displayAvatar = resolvedAvatar;
+          }
+          
+          // If peer contact doesn't exist, fetch peer's profile from XMTP (not sender's)
+          if (!peerContact && peerKey && (!displayName || !avatar)) {
+            try {
+              const peerProfile = await xmtp.fetchInboxProfile(peerKey);
+              if (peerProfile.displayName && !displayName && conversation.displayName !== peerProfile.displayName) {
+                updates.displayName = peerProfile.displayName;
+              }
+              if (peerProfile.avatarUrl && !avatar && conversation.displayAvatar !== peerProfile.avatarUrl) {
+                updates.displayAvatar = peerProfile.avatarUrl;
+              }
+            } catch (e) {
+              // Non-fatal - will use fallback formatIdentifier in ConversationView
+              console.warn('[Layout] Failed to fetch peer profile for conversation:', e);
+            }
           }
 
           if (Object.keys(updates).length > 0) {

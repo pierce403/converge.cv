@@ -342,11 +342,7 @@ export function OnboardingPage() {
     setView('processing');
 
     try {
-      const label =
-        keyfileCandidate.label && keyfileCandidate.label.trim().length > 0
-          ? keyfileCandidate.label
-          : `Identity ${shortAddress(keyfileCandidate.address)}`;
-
+      // Don't use label from keyfile - will fetch from XMTP after connection
       const success = await auth.createIdentity(
         keyfileCandidate.address,
         keyfileCandidate.privateKey,
@@ -355,13 +351,45 @@ export function OnboardingPage() {
         {
           register: true,
           enableHistorySync: true,
-          label,
+          // Don't pass label - will fetch from XMTP
           mnemonic: keyfileCandidate.mnemonic,
         }
       );
 
       if (!success) {
         throw new Error('createIdentity returned false');
+      }
+
+      // Fetch display name from XMTP after connection
+      try {
+        const { getXmtpClient } = await import('@/lib/xmtp');
+        const { getStorage } = await import('@/lib/storage');
+        const { useAuthStore } = await import('@/lib/stores');
+        
+        const xmtp = getXmtpClient();
+        
+        // Wait for XMTP connection and inbox ID to be set (with timeout)
+        let attempts = 0;
+        let identity = useAuthStore.getState().identity;
+        while ((!identity?.inboxId || !xmtp.isConnected()) && attempts < 20) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          identity = useAuthStore.getState().identity;
+          attempts++;
+        }
+        
+        if (identity?.inboxId && xmtp.isConnected()) {
+          const profile = await xmtp.fetchInboxProfile(identity.inboxId);
+          if (profile.displayName) {
+            const storage = await getStorage();
+            const updatedIdentity = { ...identity, displayName: profile.displayName };
+            await storage.putIdentity(updatedIdentity);
+            useAuthStore.getState().setIdentity(updatedIdentity);
+            console.log('[Onboarding] ✅ Updated display name from XMTP:', profile.displayName);
+          }
+        }
+      } catch (profileError) {
+        // Non-fatal - continue even if profile fetch fails
+        console.warn('[Onboarding] Failed to fetch display name from XMTP:', profileError);
       }
 
       if (!navigateToPendingTarget()) {

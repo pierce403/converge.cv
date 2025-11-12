@@ -100,12 +100,23 @@ export function useMessages() {
             }
           }
           
+          // Fetch profile from XMTP to get display name and avatar
+          let profile = undefined;
+          try {
+            const xmtp = getXmtpClient();
+            profile = await xmtp.fetchInboxProfile(actualInboxId);
+            console.log('[useMessages] Fetched profile for new contact:', profile);
+          } catch (e) {
+            console.warn('[useMessages] Failed to fetch profile for new contact, will use fallback:', e);
+          }
+          
           await upsertContactProfile({
             inboxId: actualInboxId,
-            displayName: recipientInboxId,
-            primaryAddress: normalizedAddress?.toLowerCase(),
-            addresses: addressList,
-            identities: normalizedAddress
+            displayName: profile?.displayName, // Use XMTP profile display name
+            avatarUrl: profile?.avatarUrl, // Use XMTP profile avatar
+            primaryAddress: profile?.primaryAddress || normalizedAddress?.toLowerCase(),
+            addresses: profile?.addresses || addressList,
+            identities: profile?.identities || (normalizedAddress
               ? [
                   {
                     identifier: normalizedAddress.toLowerCase(),
@@ -113,10 +124,10 @@ export function useMessages() {
                     isPrimary: true,
                   },
                 ]
-              : [],
+              : []),
             source: 'inbox',
           });
-          console.log('Automatically added new contact:', actualInboxId);
+          console.log('Automatically added new contact:', actualInboxId, 'with display name:', profile?.displayName);
         }
 
         // Create message object

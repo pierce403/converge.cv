@@ -52,7 +52,7 @@ export function exportIdentityToKeyfile(identity: Identity): ConvergeKeyfile {
       mnemonic: identity.mnemonic ?? null,
       privateKey: identity.privateKey ?? null,
       derivationPath: identity.mnemonic ? DEFAULT_DERIVATION_PATH : null,
-      label: identity.displayName ?? null,
+      label: null, // Don't export display name - fetch from XMTP on restore
       inboxId: identity.inboxId ?? null,
     },
     meta: {
