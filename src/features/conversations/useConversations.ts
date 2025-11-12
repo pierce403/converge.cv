@@ -444,11 +444,17 @@ export function useConversations() {
           console.warn('[useConversations] Failed to fetch/store profile for new conversation (non-fatal):', profileError);
         }
 
+        // Get profile info from the XMTP conversation (already fetched in createConversation)
+        const profileDisplayName = xmtpConv.displayName;
+        const profileAvatar = xmtpConv.displayAvatar;
+        
         // Create conversation object
         const conversation: Conversation = {
           id: xmtpConv.id,
           peerId: actualPeerId, // Use the actual inbox ID from XMTP
           topic: xmtpConv.topic,
+          displayName: profileDisplayName, // Use display name from XMTP conversation
+          displayAvatar: profileAvatar, // Use avatar from XMTP conversation
           lastMessageAt: Date.now(),
           lastMessagePreview: '',
           unreadCount: 0,

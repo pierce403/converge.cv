@@ -3086,7 +3086,6 @@ export class XmtpClient {
       
       // Never use an address as the inbox ID - if we can't resolve it, log a warning
       // But we'll still use the original input as fallback for the conversation
-      // The actual inbox ID should be resolved later when fetching the profile
       const peerForStore = resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x')
         ? resolvedPeerInboxId.toLowerCase()
         : originalInput.toLowerCase();
@@ -3094,10 +3093,31 @@ export class XmtpClient {
       if (peerForStore.startsWith('0x')) {
         console.warn('[XMTP] ⚠️  Could not resolve inbox ID for address, using address as peerId:', peerForStore);
       }
+      
+      // Fetch profile immediately after resolving inbox ID to get display name and avatar
+      let profileDisplayName: string | undefined;
+      let profileAvatar: string | undefined;
+      if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x')) {
+        try {
+          const profile = await this.fetchInboxProfile(resolvedPeerInboxId);
+          profileDisplayName = profile.displayName;
+          profileAvatar = profile.avatarUrl;
+          console.log('[XMTP] ✅ Fetched profile for conversation:', {
+            inboxId: resolvedPeerInboxId,
+            displayName: profileDisplayName,
+            hasAvatar: !!profileAvatar,
+          });
+        } catch (profileError) {
+          console.warn('[XMTP] Failed to fetch profile for new conversation (non-fatal):', profileError);
+        }
+      }
+      
       const conversation: Conversation = {
         id: dmConversation.id,
         topic: dmConversation.id, // Use conversation ID as topic
         peerId: peerForStore, // Store canonical inbox ID when available
+        displayName: profileDisplayName, // Set display name from profile if available
+        displayAvatar: profileAvatar, // Set avatar from profile if available
         createdAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
         lastMessageAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
         unreadCount: 0,
