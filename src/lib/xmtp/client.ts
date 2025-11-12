@@ -2711,6 +2711,160 @@ export class XmtpClient {
   }
 
   /**
+   * Check conversation history to see if we've sent our profile (displayName/avatar),
+   * and send any missing profile data. Updates conversation record with sent flags.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async ensureProfileSent(conversationId: string, dmConversation?: any): Promise<{
+    sentDisplayName: boolean;
+    sentAvatar: boolean;
+  }> {
+    if (!this.client) {
+      return { sentDisplayName: false, sentAvatar: false };
+    }
+
+    const myInboxId = this.client.inboxId;
+    if (!myInboxId) {
+      return { sentDisplayName: false, sentAvatar: false };
+    }
+
+    try {
+      // Get conversation from storage to check existing flags
+      const storage = await getStorage();
+      const conversation = await storage.getConversation(conversationId);
+      
+      // If both flags are already set, skip checking
+      if (conversation?.profileSentDisplayName && conversation?.profileSentAvatar) {
+        return {
+          sentDisplayName: true,
+          sentAvatar: true,
+        };
+      }
+
+      // Get the DM conversation if not provided
+      let dm = dmConversation;
+      if (!dm) {
+        // Try to get DM by conversation ID
+        try {
+          const allDms = await this.client.conversations.listDms();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dm = allDms.find((d: any) => d.id?.toString() === conversationId);
+        } catch (e) {
+          console.warn('[XMTP] Failed to list DMs for profile check:', e);
+        }
+      }
+
+      if (!dm) {
+        console.log('[XMTP] No DM conversation found for profile check:', conversationId);
+        return { sentDisplayName: false, sentAvatar: false };
+      }
+
+      // Scan all messages to see if we've sent profile messages
+      let foundDisplayName = conversation?.profileSentDisplayName ?? false;
+      let foundAvatar = conversation?.profileSentAvatar ?? false;
+
+      if (!foundDisplayName || !foundAvatar) {
+        try {
+          const messages = await dm.messages();
+          for (const msg of messages) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const senderInboxId = (msg as any).senderInboxId?.toLowerCase();
+            if (senderInboxId !== myInboxId.toLowerCase()) continue;
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const content = typeof msg.content === 'string' ? msg.content : (msg as any).encodedContent?.content;
+            if (typeof content !== 'string' || !content.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
+
+            try {
+              const json = content.slice(XmtpClient.PROFILE_PREFIX.length);
+              const profileData = JSON.parse(json) as { displayName?: string; avatarUrl?: string; type?: string };
+              if (profileData.type === 'profile') {
+                if (profileData.displayName && !foundDisplayName) {
+                  foundDisplayName = true;
+                }
+                if (profileData.avatarUrl && !foundAvatar) {
+                  foundAvatar = true;
+                }
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        } catch (e) {
+          console.warn('[XMTP] Failed to scan messages for profile check:', e);
+        }
+      }
+
+      // Load our profile
+      let myProfile = await this.loadOwnProfile();
+      if (!myProfile || (!myProfile.displayName && !myProfile.avatarUrl)) {
+        const { useAuthStore } = await import('@/lib/stores');
+        const identity = useAuthStore.getState().identity;
+        if (identity) {
+          myProfile = {
+            displayName: identity.displayName,
+            avatarUrl: identity.avatar,
+          };
+        }
+      }
+
+      // Send missing profile data
+      const needsDisplayName = !foundDisplayName && myProfile?.displayName;
+      const needsAvatar = !foundAvatar && myProfile?.avatarUrl;
+
+      if (needsDisplayName || needsAvatar) {
+        const payload = {
+          type: 'profile',
+          v: 1,
+          displayName: myProfile?.displayName?.trim() || undefined,
+          avatarUrl: myProfile?.avatarUrl,
+          ts: Date.now(),
+        };
+        const profileContent = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
+        await dm.send(profileContent);
+        console.log('[XMTP] ✅ Sent missing profile data to conversation', {
+          conversationId,
+          sentDisplayName: needsDisplayName,
+          sentAvatar: needsAvatar,
+        });
+
+        // Update flags based on what we sent
+        if (needsDisplayName && myProfile?.displayName) {
+          foundDisplayName = true;
+        }
+        if (needsAvatar && myProfile?.avatarUrl) {
+          foundAvatar = true;
+        }
+      }
+
+      // Update conversation record with sent flags (both storage and store)
+      if (conversation) {
+        const updates: Partial<Conversation> = {};
+        if (foundDisplayName !== conversation.profileSentDisplayName) {
+          updates.profileSentDisplayName = foundDisplayName;
+        }
+        if (foundAvatar !== conversation.profileSentAvatar) {
+          updates.profileSentAvatar = foundAvatar;
+        }
+        if (Object.keys(updates).length > 0) {
+          await storage.putConversation({ ...conversation, ...updates });
+          // Also update the conversation store
+          const { useConversationStore } = await import('@/lib/stores');
+          useConversationStore.getState().updateConversation(conversationId, updates);
+        }
+      }
+
+      return {
+        sentDisplayName: foundDisplayName,
+        sentAvatar: foundAvatar,
+      };
+    } catch (error) {
+      console.warn('[XMTP] Failed to ensure profile sent:', error);
+      return { sentDisplayName: false, sentAvatar: false };
+    }
+  }
+
+  /**
    * Check if client is connected
    */
   isConnected(): boolean {
@@ -3102,44 +3256,13 @@ export class XmtpClient {
         console.warn('[XMTP] ⚠️  Could not resolve inbox ID for address, using address as peerId:', peerForStore);
       }
       
-      // Send our profile to the new DM immediately (like convos-ios does)
-      // This ensures the peer can see our display name and avatar right away
+      // Ensure our profile (displayName/avatar) is sent to this conversation
+      // This checks message history and sends missing profile data
       if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x') && dmConversation) {
         try {
-          // Try to load from network first, then fall back to local identity
-          let myProfile = await this.loadOwnProfile();
-          
-          // If no profile on network, use identity from auth store
-          if (!myProfile || (!myProfile.displayName && !myProfile.avatarUrl)) {
-            const { useAuthStore } = await import('@/lib/stores');
-            const identity = useAuthStore.getState().identity;
-            if (identity) {
-              myProfile = {
-                displayName: identity.displayName,
-                avatarUrl: identity.avatar,
-              };
-            }
-          }
-          
-          if (myProfile && (myProfile.displayName || myProfile.avatarUrl)) {
-            const payload = {
-              type: 'profile',
-              v: 1,
-              displayName: myProfile.displayName?.trim() || undefined,
-              avatarUrl: myProfile.avatarUrl,
-              ts: Date.now(),
-            };
-            const profileContent = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
-            await dmConversation.send(profileContent);
-            console.log('[XMTP] ✅ Sent our profile to new DM', {
-              hasDisplayName: !!myProfile.displayName,
-              hasAvatar: !!myProfile.avatarUrl,
-            });
-          } else {
-            console.log('[XMTP] No profile to send (no displayName or avatar)');
-          }
+          await this.ensureProfileSent(dmConversation.id, dmConversation);
         } catch (profileSendError) {
-          console.warn('[XMTP] Failed to send our profile to new DM (non-fatal):', profileSendError);
+          console.warn('[XMTP] Failed to ensure profile sent to new DM (non-fatal):', profileSendError);
         }
       }
       

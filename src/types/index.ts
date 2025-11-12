@@ -39,6 +39,8 @@ export interface Conversation {
   createdAt: number;
   displayName?: string;
   displayAvatar?: string;
+  profileSentDisplayName?: boolean; // Track if we've sent our display name to this conversation
+  profileSentAvatar?: boolean; // Track if we've sent our avatar to this conversation
   isGroup?: boolean;
   groupName?: string; // Human-readable name for group chats
   groupImage?: string; // URL or base64 data for group avatar
