@@ -381,6 +381,44 @@ export function useConversations() {
         // instead of the local inboxKey which might just be an address
         const actualPeerId = xmtpConv.peerId?.toLowerCase() || inboxKey;
 
+        // Fetch XMTP profile to get display name and avatar immediately
+        // This ensures the contact info shows up right away in the chat and contact card
+        try {
+          const contactStore = useContactStore.getState();
+          const profile = await xmtp.fetchInboxProfile(actualPeerId);
+          
+          // Only use profile inbox ID if it's valid (not an address)
+          const profileInboxId = profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10
+            ? profile.inboxId.toLowerCase()
+            : actualPeerId;
+          
+          await contactStore.upsertContactProfile({
+            inboxId: profileInboxId,
+            displayName: profile.displayName,
+            avatarUrl: profile.avatarUrl,
+            primaryAddress: profile.primaryAddress || (normalizedInput.startsWith('0x') ? normalizedInput : undefined),
+            addresses: profile.addresses || (normalizedInput.startsWith('0x') ? [normalizedInput] : []),
+            identities: profile.identities || (normalizedInput.startsWith('0x')
+              ? [
+                  {
+                    identifier: normalizedInput,
+                    kind: 'Ethereum',
+                    isPrimary: true,
+                  },
+                ]
+              : []),
+            source: 'inbox',
+          });
+          console.log('[useConversations] ✅ Fetched and stored contact profile:', {
+            inboxId: profileInboxId,
+            displayName: profile.displayName,
+            hasAvatar: !!profile.avatarUrl,
+          });
+        } catch (profileError) {
+          // Non-fatal - conversation creation succeeded, profile fetch can fail
+          console.warn('[useConversations] Failed to fetch profile for new conversation (non-fatal):', profileError);
+        }
+
         // Create conversation object
         const conversation: Conversation = {
           id: xmtpConv.id,
