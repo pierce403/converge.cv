@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useContactStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
-import type { Contact } from '@/lib/stores/contact-store';
+import type { Contact, ContactIdentity } from '@/lib/stores/contact-store';
+import type { Conversation } from '@/types';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { useConversations } from '@/features/conversations/useConversations';
 import { useConversationStore } from '@/lib/stores';
 import { useNavigate } from 'react-router-dom';
+import { isEthereumAddress, resolveENS, resolveENSFromAddress } from '@/lib/utils/ens';
+import { getStorage } from '@/lib/storage';
 
 interface ContactCardModalProps {
   contact: Contact;
@@ -35,6 +38,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const { createConversation, toggleMute } = useConversations();
   const conversations = useConversationStore((s) => s.conversations);
+  const updateConversationInStore = useConversationStore((s) => s.updateConversation);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -107,6 +111,85 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     setRefreshError(null);
     try {
       const xmtp = getXmtpClient();
+      if (!xmtp.isConnected()) {
+        throw new Error('XMTP client not connected. Please connect first.');
+      }
+
+      const normalize = (value: string) => value.trim().toLowerCase();
+      const looksLikeRawHex = (value: string) => /^[0-9a-f]{40}$/i.test(value);
+
+      const ethereumAddresses = new Set<string>();
+      const nonEthereumAddresses = new Set<string>();
+      const addAddress = (value?: string | null) => {
+        if (!value) return;
+        const trimmed = value.trim();
+        if (!trimmed) return;
+        if (isEthereumAddress(trimmed)) {
+          ethereumAddresses.add(normalize(trimmed));
+        } else if (looksLikeRawHex(trimmed)) {
+          ethereumAddresses.add(`0x${normalize(trimmed)}`);
+        } else {
+          nonEthereumAddresses.add(normalize(trimmed));
+        }
+      };
+
+      const otherIdentities = new Map<string, ContactIdentity>();
+      let ensIdentity: ContactIdentity | undefined = contact.identities?.find(
+        (identity) => identity.kind?.toLowerCase() === 'ens'
+      );
+      const ingestIdentity = (identity: ContactIdentity | undefined) => {
+        if (!identity?.identifier || !identity.kind) return;
+        const kindLower = identity.kind.toLowerCase();
+        if (kindLower === 'ethereum') {
+          addAddress(identity.identifier);
+          return;
+        }
+        if (kindLower === 'ens') {
+          ensIdentity = { ...identity };
+          return;
+        }
+        const key = `${kindLower}::${normalize(identity.identifier)}`;
+        const existing = otherIdentities.get(key);
+        otherIdentities.set(key, existing ? { ...existing, ...identity } : { ...identity });
+      };
+
+      addAddress(contact.primaryAddress);
+      contact.addresses?.forEach(addAddress);
+      inboxState?.accountAddresses?.forEach(addAddress);
+      contact.identities?.forEach((identity) => ingestIdentity(identity));
+
+      let latestProfileDisplayName = contact.preferredName ?? contact.name;
+      let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar;
+
+      const ingestProfile = (profile: Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | null) => {
+        if (!profile) return;
+        if (profile.displayName) {
+          latestProfileDisplayName = profile.displayName;
+        }
+        if (profile.avatarUrl) {
+          latestProfileAvatar = profile.avatarUrl;
+        }
+        addAddress(profile.primaryAddress);
+        profile.addresses?.forEach(addAddress);
+        profile.identities?.forEach((identity) =>
+          ingestIdentity({
+            identifier: identity.identifier,
+            kind: identity.kind,
+            isPrimary: identity.isPrimary,
+          })
+        );
+        if (!ensIdentity) {
+          const profileEns = profile.identities?.find((id) => id.kind?.toLowerCase() === 'ens');
+          if (profileEns?.identifier) {
+            ensIdentity = {
+              identifier: profileEns.identifier,
+              kind: profileEns.kind ?? 'ENS',
+              isPrimary: profileEns.isPrimary,
+            };
+          }
+        }
+      };
+
       // Always try to fetch XMTP profile first to refresh display name + avatar
       try {
         const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
@@ -114,57 +197,220 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           console.log('[ContactCardModal] Refreshing profile for', targetInbox);
           const profile = await xmtp.fetchInboxProfile(String(targetInbox));
           console.log('[ContactCardModal] fetchInboxProfile result:', profile);
-          await upsertContactProfile({
-            inboxId: profile.inboxId,
-            displayName: profile.displayName,
-            avatarUrl: profile.avatarUrl,
-            primaryAddress: profile.primaryAddress,
-            addresses: profile.addresses,
-            identities: profile.identities,
-            source: 'inbox',
-            metadata: contact,
-          });
-          // Reflect updates immediately in this modal
-          if (profile.displayName) setPreferredName(profile.displayName);
-          if (profile.avatarUrl) setAvatarUrlState(profile.avatarUrl);
+          ingestProfile(profile);
         }
       } catch (e) {
-        // Profile fetch failures are non-fatal for refresh
         console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
       }
-      
-      // Get inbox ID from address
-      let inboxId = contact.inboxId;
-      if (!inboxId) {
-        if (!xmtp.isConnected()) {
-          setRefreshError('XMTP client not connected. Please connect first.');
-          setIsRefreshing(false);
-          return;
+
+      // Resolve ENS name from address if missing
+      if (!ensIdentity) {
+        const candidateAddress = Array.from(ethereumAddresses)[0];
+        if (candidateAddress) {
+          try {
+            const ensName = await resolveENSFromAddress(candidateAddress);
+            if (ensName) {
+              ensIdentity = {
+                identifier: ensName,
+                kind: 'ENS',
+                isPrimary: true,
+              };
+            }
+          } catch (ensError) {
+            console.warn('[ContactCardModal] Reverse ENS lookup failed:', ensError);
+          }
         }
-        const lookupAddress = contact.primaryAddress ?? contact.addresses?.[0];
-        if (!lookupAddress) {
-          setRefreshError('No primary address available to resolve inbox ID.');
-          setIsRefreshing(false);
-          return;
-        }
-        const resolvedInboxId = await xmtp.getInboxIdFromAddress(lookupAddress);
-        if (!resolvedInboxId) {
-          setRefreshError('No inbox ID found for this address. They may not be registered on XMTP.');
-          setIsRefreshing(false);
-          return;
-        }
-        inboxId = resolvedInboxId;
-        // Update contact with inbox ID and ensure profile stored against new key
-        await upsertContactProfile({
-          inboxId,
-          primaryAddress: lookupAddress.toLowerCase(),
-          addresses: [lookupAddress.toLowerCase()],
-          source: contact.source ?? 'inbox',
-          metadata: contact,
-        });
       }
 
-      // Get inbox state with all linked identities using Utils
+      let ensResolvedAddress: string | null = null;
+      if (ensIdentity?.identifier) {
+        try {
+          ensResolvedAddress = await resolveENS(ensIdentity.identifier);
+          if (ensResolvedAddress && isEthereumAddress(ensResolvedAddress)) {
+            ethereumAddresses.add(normalize(ensResolvedAddress));
+          }
+        } catch (ensLookupError) {
+          console.warn('[ContactCardModal] ENS forward resolution failed:', ensLookupError);
+        }
+      }
+
+      let primaryEthereumAddress: string | undefined;
+      if (ensResolvedAddress && isEthereumAddress(ensResolvedAddress)) {
+        primaryEthereumAddress = normalize(ensResolvedAddress);
+      } else {
+        const preferredSources = [
+          contact.primaryAddress,
+          contact.addresses?.find((addr) => isEthereumAddress(addr ?? '')),
+          Array.from(ethereumAddresses)[0],
+        ];
+        for (const source of preferredSources) {
+          if (source && isEthereumAddress(source)) {
+            primaryEthereumAddress = normalize(source);
+            break;
+          }
+        }
+      }
+
+      if (!primaryEthereumAddress) {
+        throw new Error('Unable to determine a valid Ethereum address for this contact.');
+      }
+
+      ethereumAddresses.add(primaryEthereumAddress);
+
+      // Resolve inbox ID from the primary Ethereum address
+      let latestInboxId: string | undefined;
+      try {
+        const resolvedInboxId = await xmtp.getInboxIdFromAddress(primaryEthereumAddress);
+        if (!resolvedInboxId) {
+          throw new Error('No inbox ID found for this address. They may not be registered on XMTP.');
+        }
+        latestInboxId = normalize(resolvedInboxId);
+      } catch (inboxError) {
+        throw inboxError instanceof Error
+          ? inboxError
+          : new Error('Failed to resolve XMTP inbox ID from address.');
+      }
+
+      // Fetch canonical profile if inbox ID changed
+      if (latestInboxId && latestInboxId !== contact.inboxId?.toLowerCase()) {
+        try {
+          const canonicalProfile = await xmtp.fetchInboxProfile(latestInboxId);
+          ingestProfile(canonicalProfile);
+        } catch (canonicalError) {
+          console.warn('[ContactCardModal] Failed to fetch canonical inbox profile:', canonicalError);
+        }
+      }
+
+      if (ensIdentity) {
+        ensIdentity = {
+          identifier: ensIdentity.identifier,
+          kind: ensIdentity.kind ?? 'ENS',
+          isPrimary: true,
+        };
+      }
+
+      const ethereumAddressList = Array.from(ethereumAddresses);
+      ethereumAddressList.sort((a, b) => (a === primaryEthereumAddress ? -1 : b === primaryEthereumAddress ? 1 : 0));
+      const mergedAddressList = [...ethereumAddressList, ...Array.from(nonEthereumAddresses)];
+
+      const finalIdentities: ContactIdentity[] = [
+        ...ethereumAddressList.map((addr, index) => ({
+          identifier: addr,
+          kind: 'Ethereum',
+          isPrimary: index === 0,
+        })),
+        ...(ensIdentity ? [ensIdentity] : []),
+        ...Array.from(otherIdentities.values()),
+      ];
+
+      const updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier || primaryEthereumAddress;
+      const updatedAvatar = latestProfileAvatar;
+
+      const contactStore = useContactStore.getState();
+      const normalizedInboxId = latestInboxId;
+      const normalizedCurrentInbox = contact.inboxId?.toLowerCase();
+      if (normalizedInboxId) {
+        const conflicting = contactStore.contacts.find(
+          (entry) =>
+            entry.inboxId.toLowerCase() === normalizedInboxId && entry.inboxId.toLowerCase() !== normalizedCurrentInbox
+        );
+        if (conflicting) {
+          try {
+            await removeContact(conflicting.inboxId);
+          } catch (conflictError) {
+            console.warn('[ContactCardModal] Failed to remove conflicting contact during refresh:', conflictError);
+          }
+        }
+      }
+
+      if (!normalizedInboxId) {
+        throw new Error('No inbox ID available after refresh.');
+      }
+
+      const latestMetadata: Partial<Contact> = {
+        ...contact,
+        inboxId: normalizedInboxId,
+        preferredName: contact.preferredName,
+        preferredAvatar: contact.preferredAvatar,
+        notes: contact.notes,
+      };
+
+      const refreshedContact = await upsertContactProfile({
+        inboxId: normalizedInboxId,
+        displayName: updatedDisplayName,
+        avatarUrl: updatedAvatar,
+        primaryAddress: primaryEthereumAddress,
+        addresses: mergedAddressList,
+        identities: finalIdentities,
+        source: contact.source ?? 'inbox',
+        metadata: latestMetadata,
+      });
+
+      setPreferredName(refreshedContact.preferredName ?? refreshedContact.name ?? '');
+      setAvatarUrlState(refreshedContact.preferredAvatar ?? refreshedContact.avatar);
+
+      const displayAvatar =
+        refreshedContact.preferredAvatar ?? refreshedContact.avatar ?? updatedAvatar ?? avatarUrlState;
+      const displayName =
+        refreshedContact.preferredName ?? refreshedContact.name ?? updatedDisplayName ?? contact.name;
+
+      const candidateKeys = new Set(
+        [
+          normalizedCurrentInbox,
+          normalizedInboxId,
+          primaryEthereumAddress,
+          contact.primaryAddress?.toLowerCase(),
+          ...((contact.addresses?.map((addr) => addr?.toLowerCase()).filter(Boolean)) as string[] ?? []),
+        ].filter(Boolean)
+      );
+
+      const conversationsNeedingUpdate = conversations.filter((conversation) => {
+        if (conversation.isGroup) {
+          return false;
+        }
+        const peerLower = conversation.peerId?.toLowerCase?.();
+        return peerLower ? candidateKeys.has(peerLower) : false;
+      });
+
+      if (conversationsNeedingUpdate.length > 0) {
+        const updatesToPersist: Array<{ id: string; updates: Partial<Conversation> }> = [];
+        for (const conversation of conversationsNeedingUpdate) {
+          const updates: Partial<Conversation> = {};
+          if (conversation.peerId.toLowerCase() !== normalizedInboxId) {
+            updates.peerId = normalizedInboxId;
+          }
+          if (displayName && conversation.displayName !== displayName) {
+            updates.displayName = displayName;
+          }
+          if (displayAvatar && conversation.displayAvatar !== displayAvatar) {
+            updates.displayAvatar = displayAvatar;
+          }
+          if (Object.keys(updates).length > 0) {
+            updateConversationInStore(conversation.id, updates);
+            updatesToPersist.push({ id: conversation.id, updates });
+          }
+        }
+        if (updatesToPersist.length > 0) {
+          try {
+            const storage = await getStorage();
+            for (const { id, updates } of updatesToPersist) {
+              const original = conversations.find((conversation) => conversation.id === id);
+              if (original) {
+                await storage.putConversation({ ...original, ...updates });
+              }
+            }
+          } catch (persistError) {
+            console.warn('[ContactCardModal] Failed to persist conversation updates:', persistError);
+          }
+        }
+      }
+
+      setInboxState({
+        inboxId: normalizedInboxId,
+        accountAddresses: ethereumAddressList,
+      });
+
+      // Refresh linked identities from XMTP identity service
       type SafeInboxStateLite = {
         inboxId: string;
         identifiers?: Array<{ identifierKind: string; identifier: string }>;
@@ -174,39 +420,50 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         if (!v || v.startsWith('0x') || v.includes('.') || v.includes('@') || v.includes(' ')) return false;
         return v.length >= 10 && /^[a-z0-9_-]+$/.test(v);
       };
-      if (!looksLikeInboxId(inboxId)) {
-        setRefreshError('No inbox ID available to refresh.');
-        setIsRefreshing(false);
-        return;
-      }
-      const { getXmtpUtils } = await import('@/lib/xmtp/utils-singleton');
-      const utils = await getXmtpUtils();
-      const states = (await utils.inboxStateFromInboxIds([inboxId], 'production')) as unknown as SafeInboxStateLite[];
-      const state = states[0];
-      
-      if (state) {
-        // Extract Ethereum addresses from identifiers
-        const accountAddresses = (state.identifiers || [])
-          .filter((id) => id.identifierKind.toLowerCase() === 'ethereum')
-          .map((id) => {
-            const identifier = id.identifier;
-            return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
-          });
-        const newInboxState = {
-          inboxId: state.inboxId,
-          accountAddresses,
-        };
-        setInboxState(newInboxState);
-
-        await upsertContactProfile({
-          inboxId,
-          primaryAddress: newInboxState.accountAddresses[0]?.toLowerCase(),
-          addresses: newInboxState.accountAddresses.map((addr) => addr.toLowerCase()),
-          source: contact.source ?? 'inbox',
-          metadata: contact,
-        });
-      } else {
-        setRefreshError('Failed to load inbox state');
+      if (looksLikeInboxId(normalizedInboxId)) {
+        try {
+          const { getXmtpUtils } = await import('@/lib/xmtp/utils-singleton');
+          const utils = await getXmtpUtils();
+          const states = (await utils.inboxStateFromInboxIds([normalizedInboxId], 'production')) as unknown as SafeInboxStateLite[];
+          const state = states[0];
+          if (state) {
+            const accountAddresses = (state.identifiers || [])
+              .filter((id) => id.identifierKind.toLowerCase() === 'ethereum')
+              .map((id) => {
+                const identifier = id.identifier;
+                return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
+              });
+            setInboxState({
+              inboxId: state.inboxId,
+              accountAddresses,
+            });
+            const normalizedAccountAddresses = accountAddresses.map((addr) =>
+              addr.startsWith('0x') ? addr.toLowerCase() : `0x${addr.toLowerCase()}`
+            );
+            const refreshedIdentities: ContactIdentity[] = [
+              ...normalizedAccountAddresses.map((addr, index) => ({
+                identifier: addr,
+                kind: 'Ethereum',
+                isPrimary: index === 0,
+              })),
+              ...(ensIdentity ? [ensIdentity] : []),
+              ...Array.from(otherIdentities.values()),
+            ];
+            await upsertContactProfile({
+              inboxId: normalizedInboxId,
+              primaryAddress: normalizedAccountAddresses[0] ?? primaryEthereumAddress,
+              addresses:
+                normalizedAccountAddresses.length > 0
+                  ? [...normalizedAccountAddresses, ...Array.from(nonEthereumAddresses)]
+                  : mergedAddressList,
+              identities: refreshedIdentities,
+              source: contact.source ?? 'inbox',
+              metadata: latestMetadata,
+            });
+          }
+        } catch (stateError) {
+          console.warn('[ContactCardModal] Failed to refresh inbox state identities:', stateError);
+        }
       }
     } catch (error) {
       console.error('Failed to refresh inbox:', error);
