@@ -139,7 +139,6 @@ export function ConversationView() {
     if (!container || !id) return;
 
     let touchStartY = 0;
-    let touchStartScrollTop = 0;
     let isPulling = false;
     let refreshTimeout: number | null = null;
 
@@ -170,7 +169,6 @@ export function ConversationView() {
 
     const handleTouchStart = (e: TouchEvent) => {
       touchStartY = e.touches[0].clientY;
-      touchStartScrollTop = container.scrollTop;
     };
 
     const handleTouchMove = (e: TouchEvent) => {
