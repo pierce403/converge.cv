@@ -10,7 +10,6 @@ import { getContactInfo } from '@/lib/default-contacts';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import { getXmtpClient } from '@/lib/xmtp';
-import { getStorage } from '@/lib/storage';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
@@ -27,7 +26,7 @@ export function ConversationView() {
 
   const {
     conversations,
-    removeConversation,
+    hideConversation,
     deleteGroup,
     toggleMute,
     markAsRead,
@@ -692,7 +691,7 @@ export function ConversationView() {
                     {({ active }) => (
                       <button
                         onClick={async () => {
-                          if (!confirm('Delete this group from this device? Local keys and messages will be removed.')) return;
+                          if (!confirm('Delete this group? It will be removed locally and ignored during future resyncs.')) return;
                           try {
                             await deleteGroup(conversation.id);
                           } catch (e) {
@@ -812,17 +811,14 @@ export function ConversationView() {
                     )}
                   </Menu.Item>
                   <div className="my-1 h-px bg-primary-800/60" />
-                  {/* Delete conversation (local data only) */}
+                  {/* Delete conversation locally */}
                   <Menu.Item>
                     {({ active }) => (
                       <button
                         onClick={async () => {
-                          if (!confirm('Delete this conversation from this device? Local keys and messages will be removed.')) return;
+                          if (!confirm('Delete this conversation? It will be removed locally and ignored during future resyncs.')) return;
                           try {
-                            const storage = await getStorage();
-                            await storage.deleteConversation(conversation.id);
-                            removeConversation(conversation.id);
-                            try { await storage.vacuum(); } catch (_e) { /* ignore */ }
+                            await hideConversation(conversation.id);
                           } catch (e) {
                             alert('Failed to delete conversation');
                             return;
