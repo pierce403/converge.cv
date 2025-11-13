@@ -100,12 +100,14 @@ export function useMessages() {
         setMessages(conversationId, messages);
 
         // Best-effort: aggregate recent reactions from the network so chips render after refresh
-        try {
-          const xmtp = getXmtpClient();
-          await xmtp.backfillReactionsForConversation(conversationId, 300);
-        } catch (e) {
-          // Non-fatal if offline
-        }
+        void (async () => {
+          try {
+            const xmtp = getXmtpClient();
+            await xmtp.backfillReactionsForConversation(conversationId, 300);
+          } catch (e) {
+            // Non-fatal if offline
+          }
+        })();
       } catch (error) {
         console.error('Failed to load messages:', error);
       } finally {
