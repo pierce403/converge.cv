@@ -32,7 +32,16 @@ export function ConversationView() {
     markAsRead,
     setActiveConversation,
   } = useConversations();
-  const { messagesByConversation, isLoading } = useMessageStore();
+  const conversationId = id ?? '';
+  const messages = useMessageStore(
+    (state) => state.messagesByConversation[conversationId] ?? [],
+  );
+  const isConversationLoading = useMessageStore(
+    (state) => state.loadingConversations[conversationId] ?? false,
+  );
+  const hasLoadedConversation = useMessageStore(
+    (state) => state.loadedConversations[conversationId] ?? false,
+  );
   const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
@@ -61,7 +70,6 @@ export function ConversationView() {
   }, [contacts]);
 
   const conversation = conversations.find((c) => c.id === id);
-  const messages = useMemo(() => messagesByConversation[id || ''] || [], [messagesByConversation, id]);
   const [composerHeight, setComposerHeight] = useState<number>(0);
   const composerRef = useRef<HTMLDivElement>(null);
   const lastMarkedRef = useRef<number>(0);
@@ -125,6 +133,9 @@ export function ConversationView() {
     return myInbox ? inboxSet.has(myInbox) : false;
   }, [conversation, identity?.inboxId, identity?.address]);
 
+  const showInitialLoading = isConversationLoading && !isRefreshing && !hasLoadedConversation;
+  const showEmptyState = !showInitialLoading && messages.length === 0 && hasLoadedConversation;
+
   useEffect(() => {
     if (id) {
       loadMessages(id);
@@ -147,13 +158,13 @@ export function ConversationView() {
 
       // If already at top and user tries to scroll further (scrollTop stays at 0)
       // This happens when browser tries to scroll but we're already at top
-      if (isAtTop && !isRefreshing && !isLoading && !isPulling) {
+      if (isAtTop && !isRefreshing && !isConversationLoading && !isPulling) {
         // Debounce to avoid multiple triggers
         if (refreshTimeout) {
           window.clearTimeout(refreshTimeout);
         }
         refreshTimeout = window.setTimeout(() => {
-          if (container.scrollTop <= 5 && !isRefreshing && !isLoading) {
+          if (container.scrollTop <= 5 && !isRefreshing && !isConversationLoading) {
             isPulling = true;
             setIsRefreshing(true);
             loadMessages(id, true).finally(() => {
@@ -177,7 +188,7 @@ export function ConversationView() {
       const isPullingDown = pullDistance > 30 && isAtTop; // Require 30px pull
 
       // If pulling down at top, trigger refresh
-      if (isPullingDown && !isRefreshing && !isLoading && !isPulling) {
+      if (isPullingDown && !isRefreshing && !isConversationLoading && !isPulling) {
         isPulling = true;
         setIsRefreshing(true);
         loadMessages(id, true).finally(() => {
@@ -199,7 +210,7 @@ export function ConversationView() {
         window.clearTimeout(refreshTimeout);
       }
     };
-  }, [id, loadMessages, isRefreshing, isLoading]);
+  }, [id, loadMessages, isRefreshing, isConversationLoading]);
 
   // Observe composer height to pad the message list bottom accordingly
   useEffect(() => {
@@ -853,11 +864,11 @@ export function ConversationView() {
             Syncing messages...
           </div>
         )}
-        {isLoading && !isRefreshing ? (
+        {showInitialLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-primary-200">Loading messages...</div>
           </div>
-        ) : messages.length === 0 ? (
+        ) : showEmptyState ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-16 h-16 bg-primary-900/60 rounded-full flex items-center justify-center mb-4">
               <svg className="w-8 h-8 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">

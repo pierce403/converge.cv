@@ -309,6 +309,7 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -651,6 +652,7 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
 
         if (!cancelled) {
           setTree(builtTree);
+          setHasLoadedOnce(true);
 
           const nextExpanded: Record<string, boolean> = {};
           const markExpanded = (node: KeyExplorerNode, depth = 0) => {
@@ -728,7 +730,12 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
             {error}
           </div>
         )}
-        {loading ? (
+        {loading && hasLoadedOnce && (
+          <div className="rounded-lg border border-primary-800/70 bg-primary-900/30 px-3 py-2 text-xs text-primary-200">
+            Refreshing key data…
+          </div>
+        )}
+        {!hasLoadedOnce && loading ? (
           <div className="flex flex-1 items-center justify-center py-10 text-sm text-primary-300">Loading key data…</div>
         ) : tree.length ? (
           <ul className="space-y-3 pb-6">
