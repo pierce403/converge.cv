@@ -11,7 +11,8 @@ const sortMessagesBySentAt = (messages: Message[]): Message[] =>
 interface MessageState {
   // State - messages grouped by conversation ID
   messagesByConversation: Record<string, Message[]>;
-  isLoading: boolean;
+  loadingConversations: Record<string, boolean>;
+  loadedConversations: Record<string, boolean>;
   isSending: boolean;
 
   // Actions
@@ -19,7 +20,7 @@ interface MessageState {
   addMessage: (conversationId: string, message: Message) => void;
   updateMessage: (messageId: string, updates: Partial<Message>) => void;
   removeMessage: (messageId: string) => void;
-  setLoading: (loading: boolean) => void;
+  setLoading: (conversationId: string, loading: boolean) => void;
   setSending: (sending: boolean) => void;
   clearMessages: (conversationId: string) => void;
 }
@@ -27,7 +28,8 @@ interface MessageState {
 export const useMessageStore = create<MessageState>((set) => ({
   // Initial state
   messagesByConversation: {},
-  isLoading: false,
+  loadingConversations: {},
+  loadedConversations: {},
   isSending: false,
 
   // Actions
@@ -36,6 +38,10 @@ export const useMessageStore = create<MessageState>((set) => ({
       messagesByConversation: {
         ...state.messagesByConversation,
         [conversationId]: sortMessagesBySentAt(messages),
+      },
+      loadedConversations: {
+        ...state.loadedConversations,
+        [conversationId]: true,
       },
     })),
 
@@ -52,6 +58,10 @@ export const useMessageStore = create<MessageState>((set) => ({
         messagesByConversation: {
           ...state.messagesByConversation,
           [conversationId]: updated,
+        },
+        loadedConversations: {
+          ...state.loadedConversations,
+          [conversationId]: true,
         },
       };
     }),
@@ -80,7 +90,16 @@ export const useMessageStore = create<MessageState>((set) => ({
       return { messagesByConversation: newMessages };
     }),
 
-  setLoading: (loading) => set({ isLoading: loading }),
+  setLoading: (conversationId, loading) =>
+    set((state) => {
+      const loadingConversations = { ...state.loadingConversations };
+      if (loading) {
+        loadingConversations[conversationId] = true;
+      } else {
+        delete loadingConversations[conversationId];
+      }
+      return { loadingConversations };
+    }),
 
   setSending: (sending) => set({ isSending: sending }),
 
@@ -88,6 +107,14 @@ export const useMessageStore = create<MessageState>((set) => ({
     set((state) => {
       const newMessages = { ...state.messagesByConversation };
       delete newMessages[conversationId];
-      return { messagesByConversation: newMessages };
+      const loadingConversations = { ...state.loadingConversations };
+      delete loadingConversations[conversationId];
+      const loadedConversations = { ...state.loadedConversations };
+      delete loadedConversations[conversationId];
+      return {
+        messagesByConversation: newMessages,
+        loadingConversations,
+        loadedConversations,
+      };
     }),
 }));

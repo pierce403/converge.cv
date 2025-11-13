@@ -12,7 +12,6 @@ import { getAddress, isAddress } from 'viem';
 
 export function useMessages() {
   const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
-  const isLoading = useMessageStore((state) => state.isLoading);
   const isSending = useMessageStore((state) => state.isSending);
   const setMessages = useMessageStore((state) => state.setMessages);
   const addMessage = useMessageStore((state) => state.addMessage);
@@ -87,8 +86,8 @@ export function useMessages() {
   const loadMessages = useCallback(
     async (conversationId: string, syncFromNetwork = false) => {
       try {
-        setLoading(true);
-        
+        setLoading(conversationId, true);
+
         // If syncing from network, sync the conversation first
         if (syncFromNetwork) {
           await syncConversation(conversationId);
@@ -110,7 +109,7 @@ export function useMessages() {
       } catch (error) {
         console.error('Failed to load messages:', error);
       } finally {
-        setLoading(false);
+        setLoading(conversationId, false);
       }
     },
     [setLoading, setMessages, syncConversation]
@@ -517,7 +516,6 @@ export function useMessages() {
 
   return {
     messagesByConversation,
-    isLoading,
     isSending,
     clearMessages,
     loadMessages,
