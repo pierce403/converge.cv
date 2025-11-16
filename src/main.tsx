@@ -30,9 +30,15 @@ if (
 setupDebugConsole();
 startAppWatchdog();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const rootElement = typeof document !== 'undefined' ? document.getElementById('root') : null;
+
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+} else {
+  console.warn('[main] SSR/RSC rendering disabled – no root element to mount.');
+}
 
