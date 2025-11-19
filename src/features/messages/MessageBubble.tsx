@@ -128,6 +128,41 @@ export function MessageBubble({
       ? messagesByConversation[message.conversationId].find((m) => m.id === message.replyTo)
       : undefined;
 
+  const renderLinkifiedText = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/gi;
+    const segments: Array<{ type: 'text' | 'link'; value: string }> = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = urlRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({ type: 'text', value: text.slice(lastIndex, match.index) });
+      }
+      segments.push({ type: 'link', value: match[0] });
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      segments.push({ type: 'text', value: text.slice(lastIndex) });
+    }
+
+    return segments.map((seg, idx) =>
+      seg.type === 'link' ? (
+        <a
+          key={`link-${idx}`}
+          href={seg.value}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline text-accent-300 hover:text-accent-200 break-all"
+        >
+          {seg.value}
+        </a>
+      ) : (
+        <span key={`text-${idx}`}>{seg.value}</span>
+      )
+    );
+  };
+
   return (
     <div
       className={`flex items-end gap-2 mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
@@ -178,12 +213,16 @@ export function MessageBubble({
             </div>
           )}
           {message.type === 'text' && (
-            <p className="whitespace-pre-wrap break-words">{message.body}</p>
+            <p className="whitespace-pre-wrap break-words">
+              {renderLinkifiedText(message.body)}
+            </p>
           )}
           {message.type === 'system' && (
             <div className="w-full flex justify-center">
               <div className="max-w-full text-center text-xs bg-primary-800/60 border border-primary-700 text-primary-200 px-2 py-1 rounded">
-                {message.body}
+                <span className="whitespace-pre-wrap break-words">
+                  {renderLinkifiedText(message.body)}
+                </span>
               </div>
             </div>
           )}
