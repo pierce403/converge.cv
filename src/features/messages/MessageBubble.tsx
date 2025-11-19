@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { Message } from '@/types';
 import { formatMessageTime } from '@/lib/utils/date';
-import { useAuthStore } from '@/lib/stores';
+import { useAuthStore, useMessageStore } from '@/lib/stores';
 import { MessageActionsModal } from './MessageActionsModal';
 import { useMessages } from './useMessages';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
@@ -122,6 +122,12 @@ export function MessageBubble({
   const avatarClassName =
     'w-8 h-8 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0';
 
+  const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
+  const replyTarget =
+    message.replyTo && messagesByConversation[message.conversationId]
+      ? messagesByConversation[message.conversationId].find((m) => m.id === message.replyTo)
+      : undefined;
+
   return (
     <div
       className={`flex items-end gap-2 mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
@@ -161,6 +167,16 @@ export function MessageBubble({
             (message.reactions.length > 0 ? ' pb-7' : '')
           }
         >
+          {message.replyTo && (
+            <div className="mb-1 max-w-full rounded-lg border border-primary-700/70 bg-primary-950/60 px-2 py-1 text-xs text-primary-200">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-primary-400">
+                Replying to
+              </div>
+              <div className="mt-0.5 line-clamp-2 break-words text-primary-100">
+                {replyTarget?.body || 'Original message'}
+              </div>
+            </div>
+          )}
           {message.type === 'text' && (
             <p className="whitespace-pre-wrap break-words">{message.body}</p>
           )}

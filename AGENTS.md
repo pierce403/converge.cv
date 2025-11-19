@@ -423,8 +423,8 @@ Guidance:
 
 ---
 
-**Last Updated**: 2025-11-19 (Worker tracking and cleanup tools)
-**Updated By**: AI Agent after adding worker cleanup controls and debug UI
+**Last Updated**: 2025-11-19 (Reply rendering and worker cleanup tools)
+**Updated By**: AI Agent after adding reply rendering, worker cleanup controls, and debug UI
 
 ## Latest Changes (2025-10-31)
 
@@ -609,3 +609,9 @@ Updated By: AI Agent (2025-11-05)
   - `Kill XMTP Workers` calls `terminateByUrlSubstring('sqlite3-worker1')` (falling back to `'xmtp'`), targeting XMTP’s SQLite-related worker instances that can accumulate during repeated connects.
   - `Kill All` calls `terminateAll()` to terminate every tracked dedicated worker for the current page in one click.
 - Existing service worker listing and unregister controls are unchanged; the panel is now the primary place to inspect and aggressively clean up web workers if the browser shows many XMTP/sqlite threads.
+
+### Messaging: Reply Rendering
+- XMTP client wrapper (`src/lib/xmtp/client.ts`) now treats `ContentTypeReply` messages as first-class text messages instead of generic `"Reply"` system lines: replies are decoded into an `XmtpMessage` with `replyToId` pointing at the referenced message and `content` set to the reply body.
+- History backfill and live stream classification special-case reply content types, emitting `xmtp:message` events with structured reply metadata rather than `xmtp:system` events.
+- Message store plumbing (`src/features/messages/useMessages.ts`) persists `replyTo` on `Message` records for both locally sent and remotely received replies and filters legacy system-only `"Reply"` placeholders when loading messages from IndexedDB.
+- `MessageBubble` (`src/features/messages/MessageBubble.tsx`) now renders a compact “Replying to …” header above the reply body, resolving the quoted snippet from the target message when available and falling back gracefully if the original message is missing.

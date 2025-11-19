@@ -95,8 +95,14 @@ export function useMessages() {
 
         const storage = await getStorage();
         let messages = await storage.listMessages(conversationId, { limit: 100 });
-        // Filter legacy reaction placeholder bubbles persisted prior to reaction aggregation
-        messages = messages.filter((m) => !(m.type === 'system' && /^reaction$/i.test(m.body)));
+        // Filter legacy reaction and reply placeholder bubbles persisted prior to aggregation/structured handling
+        messages = messages.filter(
+          (m) =>
+            !(
+              m.type === 'system' &&
+              (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))
+            )
+        );
         setMessages(conversationId, messages);
 
         // Best-effort: aggregate recent reactions from the network so chips render after refresh
@@ -427,6 +433,7 @@ export function useMessages() {
           body: content,
           status: 'delivered',
           reactions: [],
+          replyTo: xmtpMessage.replyToId,
         };
 
         // Heuristic de-duplication: if this message is from us (inboxId),

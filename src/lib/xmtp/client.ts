@@ -75,6 +75,7 @@ export interface XmtpMessage {
   content: string | Uint8Array;
   sentAt: number;
   isLocalFallback?: boolean;
+   replyToId?: string;
 }
 
 export type MessageCallback = (message: XmtpMessage) => void;
@@ -2080,6 +2081,36 @@ export class XmtpClient {
                 }
                 continue;
               }
+              // Reply messages: render as normal text bubbles with reply metadata
+              if (lowerType.includes('reply')) {
+                try {
+                  const reply = (m as unknown as { content?: unknown }).content as
+                    | { content?: unknown; reference?: string }
+                    | undefined;
+                  const body =
+                    typeof reply?.content === 'string'
+                      ? reply.content
+                      : this.formatPayload(reply?.content ?? '');
+                  const replyToId = (reply?.reference ?? '').toString() || undefined;
+                  const sentAt = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                  const xmsg: XmtpMessage = {
+                    id: m.id,
+                    conversationId: m.conversationId,
+                    senderAddress: m.senderInboxId,
+                    content: body,
+                    sentAt,
+                    replyToId,
+                  };
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:message', {
+                      detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
+                    })
+                  );
+                } catch (replyErr) {
+                  console.warn('[XMTP] Failed to parse reply (backfill)', replyErr);
+                }
+                continue;
+              }
               const isReadReceipt = lowerType.includes('read') && lowerType.includes('receipt');
               const isGroupUpdated = lowerType.includes('group') && lowerType.includes('updated');
               if (isReadReceipt) {
@@ -2260,6 +2291,36 @@ export class XmtpClient {
                     );
                   } catch (err) {
                     console.warn('[XMTP] Failed to dispatch group-updated events (group backfill)', err);
+                  }
+                  continue;
+                }
+                const isReply = lowerType.includes('reply');
+                if (isReply) {
+                  try {
+                    const reply = (m as unknown as { content?: unknown }).content as
+                      | { content?: unknown; reference?: string }
+                      | undefined;
+                    const body =
+                      typeof reply?.content === 'string'
+                        ? reply.content
+                        : this.formatPayload(reply?.content ?? '');
+                    const replyToId = (reply?.reference ?? '').toString() || undefined;
+                    const sentAt = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                    const xmsg: XmtpMessage = {
+                      id: m.id,
+                      conversationId: m.conversationId,
+                      senderAddress: m.senderInboxId,
+                      content: body,
+                      sentAt,
+                      replyToId,
+                    };
+                    window.dispatchEvent(
+                      new CustomEvent('xmtp:message', {
+                        detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
+                      })
+                    );
+                  } catch (replyErr) {
+                    console.warn('[XMTP] Failed to parse reply (group backfill)', replyErr);
                   }
                   continue;
                 }
@@ -2472,6 +2533,36 @@ export class XmtpClient {
                   );
                 } catch (err) {
                   console.warn('[XMTP] Failed to dispatch group-updated events', err);
+                }
+                continue;
+              }
+              const isReply = lowerType.includes('reply');
+              if (isReply) {
+                try {
+                  const reply = (message as unknown as { content?: unknown }).content as
+                    | { content?: unknown; reference?: string }
+                    | undefined;
+                  const body =
+                    typeof reply?.content === 'string'
+                      ? reply.content
+                      : this.formatPayload(reply?.content ?? '');
+                  const replyToId = (reply?.reference ?? '').toString() || undefined;
+                  const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                  const xmsg: XmtpMessage = {
+                    id: message.id,
+                    conversationId: message.conversationId,
+                    senderAddress: message.senderInboxId,
+                    content: body,
+                    sentAt,
+                    replyToId,
+                  };
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:message', {
+                      detail: { conversationId: message.conversationId, message: xmsg, isHistory: false },
+                    })
+                  );
+                } catch (replyErr) {
+                  console.warn('[XMTP] Failed to parse reply (stream)', replyErr);
                 }
                 continue;
               }
