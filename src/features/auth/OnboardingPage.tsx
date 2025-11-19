@@ -17,6 +17,7 @@ import { resetXmtpClient } from '@/lib/xmtp/client';
 import { deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
 import type { KeyfileIdentity } from '@/lib/keyfile';
 import { useWalletConnection } from '@/lib/wagmi';
+import { setStorageNamespace } from '@/lib/storage';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
@@ -264,7 +265,7 @@ export function OnboardingPage() {
 
   const resetWalletFlow = async () => {
     console.log('[Onboarding] Resetting wallet flow - disconnecting XMTP and wallet...');
-    
+
     // Disconnect XMTP client first to release OPFS locks
     try {
       await resetXmtpClient();
@@ -289,7 +290,7 @@ export function OnboardingPage() {
     setWalletCandidate(null);
     setProbeResult(null);
     setError(null);
-    
+
     console.log('[Onboarding] ✅ Wallet flow reset complete');
   };
 
@@ -319,9 +320,9 @@ export function OnboardingPage() {
         throw new Error('createIdentity returned false');
       }
 
-        // After onboarding, honor deep-link targets (?i=... or ?u=...)
+      // Force a reload to ensure a clean state for the new inbox
       if (!navigateToPendingTarget()) {
-        navigate('/');
+        window.location.assign('/');
       }
     } catch (err) {
       console.error('[Onboarding] Failed to create generated identity:', err);
@@ -365,9 +366,9 @@ export function OnboardingPage() {
         const { getXmtpClient } = await import('@/lib/xmtp');
         const { getStorage } = await import('@/lib/storage');
         const { useAuthStore } = await import('@/lib/stores');
-        
+
         const xmtp = getXmtpClient();
-        
+
         // Wait for XMTP connection and inbox ID to be set (with timeout)
         let attempts = 0;
         let identity = useAuthStore.getState().identity;
@@ -376,7 +377,7 @@ export function OnboardingPage() {
           identity = useAuthStore.getState().identity;
           attempts++;
         }
-        
+
         if (identity?.inboxId && xmtp.isConnected()) {
           const profile = await xmtp.fetchInboxProfile(identity.inboxId);
           if (profile.displayName) {
@@ -393,7 +394,7 @@ export function OnboardingPage() {
       }
 
       if (!navigateToPendingTarget()) {
-        navigate('/');
+        window.location.assign('/');
       }
     } catch (err) {
       console.error('[Onboarding] Failed to import keyfile identity:', err);
@@ -450,6 +451,13 @@ export function OnboardingPage() {
     setView('processing');
 
     try {
+      if (mode === 'connect' && inboxId) {
+        // CRITICAL: Switch storage namespace to the target inbox BEFORE connecting/syncing.
+        // This prevents mixing data with the previously active inbox.
+        await setStorageNamespace(inboxId);
+        setCurrentInbox(inboxId);
+      }
+
       const label = getPreferredLabel(probeResult?.inboxState?.identifiers, walletCandidate.address);
       const success = await auth.createIdentity(
         walletCandidate.address,
@@ -467,13 +475,8 @@ export function OnboardingPage() {
         throw new Error('createIdentity returned false');
       }
 
-      if (mode === 'connect' && inboxId) {
-        setCurrentInbox(inboxId);
-      }
-
-      if (!navigateToPendingTarget()) {
-        navigate('/');
-      }
+      // Force a reload to ensure a clean state for the new inbox
+      window.location.assign('/');
     } catch (err) {
       console.error('[Onboarding] Failed to finalize wallet identity:', err);
       setError(
@@ -496,7 +499,11 @@ export function OnboardingPage() {
       if (!success) {
         throw new Error('Unable to rehydrate identity');
       }
-      navigate('/');
+      if (!success) {
+        throw new Error('Unable to rehydrate identity');
+      }
+      // Reload to ensure clean state
+      window.location.reload();
     } catch (err) {
       console.error('[Onboarding] Failed to open local inbox:', err);
       setError('Unable to open that inbox from local storage. Try reconnecting its identity.');
@@ -801,7 +808,7 @@ export function OnboardingPage() {
                 ) : (
                   <div className="mt-2 space-y-2">
                     <div className="text-sm text-primary-200">
-                      {probeResult.isRegistered 
+                      {probeResult.isRegistered
                         ? 'Inbox detected but ID not found. Try refreshing or check console for details.'
                         : 'No XMTP inbox is registered for this wallet yet.'}
                     </div>
