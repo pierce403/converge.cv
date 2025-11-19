@@ -512,221 +512,237 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
   // Determine display name with priority
   const displayName = preferredName || contact.name;
-  
+
   // Determine avatar (custom > Farcaster)
   const avatarUrl = avatarUrlState;
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   return (
     <>
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-      <div className="bg-primary-900 rounded-lg shadow-xl w-full max-w-md p-6 relative text-primary-50 my-8">
-        {/* Close Button */}
-        <button
-          onClick={onClose}
-          className="absolute top-3 right-3 p-2 rounded-full hover:bg-primary-800 transition-colors"
+      <div
+        className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto"
+        onClick={onClose}
+      >
+        <div
+          className="bg-primary-900 rounded-lg shadow-xl w-full max-w-md p-6 relative text-primary-50 my-8"
+          onClick={(e) => e.stopPropagation()}
         >
-          <svg className="w-6 h-6 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+          {/* Close Button */}
+          <button
+            onClick={onClose}
+            className="absolute top-3 right-3 p-2 rounded-full hover:bg-primary-800 transition-colors"
+          >
+            <svg className="w-6 h-6 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
 
-        <h2 className="text-2xl font-bold mb-6 text-center">Contact Details</h2>
+          <h2 className="text-2xl font-bold mb-6 text-center">Contact Details</h2>
 
-        <div className="flex flex-col items-center mb-6">
-          {/* Avatar */}
-          <div className="w-24 h-24 rounded-full bg-primary-700 flex items-center justify-center text-4xl font-bold text-primary-50 mb-4">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="Contact Avatar" className="w-full h-full rounded-full object-cover" />
-            ) : (
-              displayName.charAt(0).toUpperCase()
+          <div className="flex flex-col items-center mb-6">
+            {/* Avatar */}
+            <div className="w-24 h-24 rounded-full bg-primary-700 flex items-center justify-center text-4xl font-bold text-primary-50 mb-4">
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Contact Avatar" className="w-full h-full rounded-full object-cover" />
+              ) : (
+                displayName.charAt(0).toUpperCase()
+              )}
+            </div>
+
+            {/* Display Name */}
+            <h3 className="text-xl font-semibold mb-2">{displayName}</h3>
+            {contact.preferredName && contact.preferredName !== contact.name && (
+              <p className="text-primary-300 text-sm mb-4">Also known as: {contact.name}</p>
             )}
-          </div>
 
-          {/* Display Name */}
-          <h3 className="text-xl font-semibold mb-2">{displayName}</h3>
-          {contact.preferredName && contact.preferredName !== contact.name && (
-            <p className="text-primary-300 text-sm mb-4">Also known as: {contact.name}</p>
-          )}
+            {/* Farcaster Profile Link */}
+            {contact.farcasterUsername && (
+              <a
+                href={`https://farcaster.xyz/${contact.farcasterUsername}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-accent-400 hover:text-accent-300 mb-4 text-sm underline"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                View on Farcaster
+              </a>
+            )}
 
-          {/* Farcaster Profile Link */}
-          {contact.farcasterUsername && (
-            <a
-              href={`https://farcaster.xyz/${contact.farcasterUsername}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 text-accent-400 hover:text-accent-300 mb-4 text-sm underline"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-              </svg>
-              View on Farcaster
-            </a>
-          )}
-
-          {/* Display Name Input */}
-          <div className="w-full mb-4">
-            <label htmlFor="preferredName" className="block text-sm font-medium text-primary-300 mb-1">
-              Display Name
-            </label>
-            <input
-              id="preferredName"
-              type="text"
-              value={preferredName}
-              onChange={(e) => setPreferredName(e.target.value)}
-              className="input-primary w-full"
-              placeholder="Enter display name"
-            />
-          </div>
-
-          {/* Mute toggle if DM exists */}
-          {dmConversation && (
+            {/* Display Name Input */}
             <div className="w-full mb-4">
-              <div className="flex items-center justify-between">
-                <label className="block text-sm font-medium text-primary-300">Mute conversation</label>
+              <label htmlFor="preferredName" className="block text-sm font-medium text-primary-300 mb-1">
+                Display Name
+              </label>
+              <input
+                id="preferredName"
+                type="text"
+                value={preferredName}
+                onChange={(e) => setPreferredName(e.target.value)}
+                className="input-primary w-full"
+                placeholder="Enter display name"
+              />
+            </div>
+
+            {/* Mute toggle if DM exists */}
+            {dmConversation && (
+              <div className="w-full mb-4">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-primary-300">Mute conversation</label>
+                  <button
+                    onClick={async () => {
+                      try { await toggleMute(dmConversation.id); } catch (_e) { /* ignore */ }
+                    }}
+                    className={`px-3 py-1 rounded ${isMuted ? 'bg-primary-800 text-primary-100' : 'bg-primary-900 text-primary-300 hover:bg-primary-800'}`}
+                  >
+                    {isMuted ? 'Unmute' : 'Mute'}
+                  </button>
+                </div>
+                <p className="text-xs text-primary-400 mt-1">{isMuted ? 'Muted' : 'Not muted'}</p>
+              </div>
+            )}
+
+            {/* Inbox ID Section */}
+            <div className="w-full mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-primary-300">Inbox ID</label>
                 <button
-                  onClick={async () => {
-                    try { await toggleMute(dmConversation.id); } catch (_e) { /* ignore */ }
-                  }}
-                  className={`px-3 py-1 rounded ${isMuted ? 'bg-primary-800 text-primary-100' : 'bg-primary-900 text-primary-300 hover:bg-primary-800'}`}
+                  onClick={handleRefreshInbox}
+                  disabled={isRefreshing}
+                  className="text-xs px-2 py-1 rounded bg-accent-900/50 text-accent-300 hover:bg-accent-800/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                 >
-                  {isMuted ? 'Unmute' : 'Mute'}
+                  {isRefreshing ? (
+                    <>
+                      <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Refreshing...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Refresh
+                    </>
+                  )}
                 </button>
               </div>
-              <p className="text-xs text-primary-400 mt-1">{isMuted ? 'Muted' : 'Not muted'}</p>
-            </div>
-          )}
-
-          {/* Inbox ID Section */}
-          <div className="w-full mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-primary-300">Inbox ID</label>
-              <button
-                onClick={handleRefreshInbox}
-                disabled={isRefreshing}
-                className="text-xs px-2 py-1 rounded bg-accent-900/50 text-accent-300 hover:bg-accent-800/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-              >
-                {isRefreshing ? (
-                  <>
-                    <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Refreshing...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Refresh
-                  </>
-                )}
-              </button>
-            </div>
-            {refreshError && (
-              <p className="text-red-400 text-xs mb-2">{refreshError}</p>
-            )}
-            <div className="flex items-center bg-primary-800 rounded-lg p-2">
-              <span className="flex-1 text-primary-50 text-sm truncate font-mono">
-                {inboxState?.inboxId || contact.inboxId || contact.primaryAddress || 'Unknown'}
-              </span>
-              <button
-                onClick={() =>
-                  handleCopy(
-                    inboxState?.inboxId || contact.inboxId || contact.primaryAddress || '',
-                    'Inbox ID'
-                  )
-                }
-                className="ml-2 p-1 rounded-md hover:bg-primary-700 transition-colors"
-                title="Copy Inbox ID"
-              >
-                <svg className="w-5 h-5 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m-4 0h-4" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Known Connected Identities */}
-          <div className="w-full mb-6">
-            <h3 className="text-lg font-semibold text-primary-50 mb-2">Known Connected Identities</h3>
-            {inboxState && inboxState.accountAddresses.length > 0 ? (
-              <div className="space-y-2">
-                {inboxState.accountAddresses.map((address, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between bg-primary-800 rounded-lg p-2"
-                  >
-                    <span className="flex-1 text-primary-50 text-sm truncate font-mono">{address}</span>
-                    <button
-                      onClick={() => handleCopy(address, 'Address')}
-                      className="ml-2 p-1 rounded-md hover:bg-primary-700 transition-colors"
-                      title="Copy Address"
-                    >
-                      <svg className="w-4 h-4 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m-4 0h-4" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
+              {refreshError && (
+                <p className="text-red-400 text-xs mb-2">{refreshError}</p>
+              )}
+              <div className="flex items-center bg-primary-800 rounded-lg p-2">
+                <span className="flex-1 text-primary-50 text-sm truncate font-mono">
+                  {inboxState?.inboxId || contact.inboxId || contact.primaryAddress || 'Unknown'}
+                </span>
+                <button
+                  onClick={() =>
+                    handleCopy(
+                      inboxState?.inboxId || contact.inboxId || contact.primaryAddress || '',
+                      'Inbox ID'
+                    )
+                  }
+                  className="ml-2 p-1 rounded-md hover:bg-primary-700 transition-colors"
+                  title="Copy Inbox ID"
+                >
+                  <svg className="w-5 h-5 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m-4 0h-4" />
+                  </svg>
+                </button>
               </div>
-            ) : (
-              <p className="text-primary-300 text-sm">
-                {isRefreshing ? 'Loading identities...' : 'Click Refresh to load connected identities'}
-              </p>
-            )}
-          </div>
+            </div>
 
-          {/* Notes */}
-          <div className="w-full mb-6">
-            <label htmlFor="notes" className="block text-sm font-medium text-primary-300 mb-1">
-              Notes (max 500 chars)
-            </label>
-            <textarea
-              id="notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              maxLength={500}
-              rows={4}
-              className="input-primary w-full resize-none"
-              placeholder="Add notes about this contact..."
-            />
-          </div>
+            {/* Known Connected Identities */}
+            <div className="w-full mb-6">
+              <h3 className="text-lg font-semibold text-primary-50 mb-2">Known Connected Identities</h3>
+              {inboxState && inboxState.accountAddresses.length > 0 ? (
+                <div className="space-y-2">
+                  {inboxState.accountAddresses.map((address, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center justify-between bg-primary-800 rounded-lg p-2"
+                    >
+                      <span className="flex-1 text-primary-50 text-sm truncate font-mono">{address}</span>
+                      <button
+                        onClick={() => handleCopy(address, 'Address')}
+                        className="ml-2 p-1 rounded-md hover:bg-primary-700 transition-colors"
+                        title="Copy Address"
+                      >
+                        <svg className="w-4 h-4 text-primary-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m-4 0h-4" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-primary-300 text-sm">
+                  {isRefreshing ? 'Loading identities...' : 'Click Refresh to load connected identities'}
+                </p>
+              )}
+            </div>
 
-          {/* Actions */}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={handleSave}
-              className="btn-primary w-full"
-              disabled={isSaving}
-            >
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </button>
-            <button
-              onClick={() => setShowQR(true)}
-              className="btn-secondary w-full"
-            >
-              Show QR Code
-            </button>
-            <button
-              onClick={handleToggleContact}
-              className="btn-secondary w-full"
-            >
-              {isContact(contact.inboxId) ? 'Remove from Contacts' : 'Add to Contacts'}
-            </button>
-            <button
-              onClick={handleMessage}
-              className="btn-secondary w-full"
-            >
-              Message
-            </button>
+            {/* Notes */}
+            <div className="w-full mb-6">
+              <label htmlFor="notes" className="block text-sm font-medium text-primary-300 mb-1">
+                Notes (max 500 chars)
+              </label>
+              <textarea
+                id="notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                maxLength={500}
+                rows={4}
+                className="input-primary w-full resize-none"
+                placeholder="Add notes about this contact..."
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleSave}
+                className="btn-primary w-full"
+                disabled={isSaving}
+              >
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </button>
+              <button
+                onClick={() => setShowQR(true)}
+                className="btn-secondary w-full"
+              >
+                Show QR Code
+              </button>
+              <button
+                onClick={handleToggleContact}
+                className="btn-secondary w-full"
+              >
+                {isContact(contact.inboxId) ? 'Remove from Contacts' : 'Add to Contacts'}
+              </button>
+              <button
+                onClick={handleMessage}
+                className="btn-secondary w-full"
+              >
+                Message
+              </button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-    {showQR && (
-      <QRCodeOverlay address={contact.inboxId} onClose={() => setShowQR(false)} />
-    )}
-  </>
+      {showQR && (
+        <QRCodeOverlay address={contact.inboxId} onClose={() => setShowQR(false)} />
+      )}
+    </>
   );
 }
