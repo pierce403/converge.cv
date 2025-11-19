@@ -125,60 +125,59 @@ export function ContactsPage() {
                 .toUpperCase();
 
               return (
-              <li
-                key={contact.inboxId}
-                className="bg-primary-900/70 p-3 rounded-lg flex items-center justify-between cursor-pointer hover:bg-primary-800/50 transition-colors"
-                onClick={() => {
-                  setSelectedContact(contact);
-                  setShowContactCard(true);
-                }}
-              >
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-primary-700/80 flex items-center justify-center overflow-hidden flex-shrink-0">
-                    {wantInitials ? (
-                      <span className="text-white font-semibold text-sm" aria-hidden>
-                        {initials}
-                      </span>
-                    ) : (
-                      <img
-                        src={avatarSrc}
-                        alt="Contact avatar"
-                        className="w-full h-full object-cover"
-                      />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-primary-50 font-medium">
-                      {label}
-                    </p>
-                    {contact.source === 'farcaster' && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-accent-900/50 text-accent-300 border border-accent-800/50">
-                        FC
-                      </span>
-                    )}
-                    {contact.isInboxOnly && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-primary-800/50 text-primary-400 border border-primary-700/50">
-                        Inbox
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-primary-300 text-sm truncate">{secondary}</p>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm('Delete this contact?')) {
-                      removeContact(contact.inboxId);
-                    }
+                <li
+                  key={contact.inboxId}
+                  className="bg-primary-900/70 p-3 rounded-lg flex items-center justify-between cursor-pointer hover:bg-primary-800/50 transition-colors"
+                  onClick={() => {
+                    setSelectedContact(contact);
+                    setShowContactCard(true);
                   }}
-                  className="ml-3 text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 border border-red-800/60"
-                  title="Delete contact"
                 >
-                  Delete
-                </button>
-              </li>
-            );
-          })}
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-primary-700/80 flex items-center justify-center overflow-hidden flex-shrink-0">
+                      {wantInitials ? (
+                        <span className="text-white font-semibold text-sm" aria-hidden>
+                          {initials}
+                        </span>
+                      ) : (
+                        <img
+                          src={avatarSrc}
+                          alt="Contact avatar"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <p className="text-primary-50 font-medium truncate">
+                        {label}
+                      </p>
+                      {contact.source === 'farcaster' && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-accent-900/50 text-accent-300 border border-accent-800/50 flex-shrink-0">
+                          FC
+                        </span>
+                      )}
+                      {contact.isInboxOnly && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-primary-800/50 text-primary-400 border border-primary-700/50 flex-shrink-0">
+                          Inbox
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm('Delete this contact?')) {
+                        removeContact(contact.inboxId);
+                      }
+                    }}
+                    className="ml-3 text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 border border-red-800/60"
+                    title="Delete contact"
+                  >
+                    Delete
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </main>
