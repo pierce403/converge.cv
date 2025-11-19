@@ -17,6 +17,9 @@ declare global {
     __workerTracker?: {
       list: () => PublicWorkerInfo[];
       terminate: (id: number) => boolean;
+      terminateAll?: () => number;
+      terminateByUrlSubstring?: (substring: string) => number;
+      pruneTerminated?: () => number;
     };
   }
 }
@@ -66,6 +69,30 @@ export function WebWorkersPanel() {
     refreshWorkers();
   };
 
+  const terminateAllWorkers = () => {
+    const count = window.__workerTracker?.terminateAll?.() ?? 0;
+    if (count > 0) {
+      refreshWorkers();
+    }
+  };
+
+  const terminateXmtpWorkers = () => {
+    const count =
+      window.__workerTracker?.terminateByUrlSubstring?.('sqlite3-worker1') ??
+      window.__workerTracker?.terminateByUrlSubstring?.('xmtp') ??
+      0;
+    if (count > 0) {
+      refreshWorkers();
+    }
+  };
+
+  const pruneTerminatedWorkers = () => {
+    const removed = window.__workerTracker?.pruneTerminated?.() ?? 0;
+    if (removed > 0) {
+      refreshWorkers();
+    }
+  };
+
   const unregisterSw = async (reg: ServiceWorkerRegistration) => {
     setBusy(true);
     setSwError(null);
@@ -91,6 +118,30 @@ export function WebWorkersPanel() {
             title="Enumerate dedicated workers created by this page"
           >
             Refresh Workers
+          </button>
+          <button
+            type="button"
+            onClick={pruneTerminatedWorkers}
+            className="rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700"
+            title="Remove terminated workers from the debug list"
+          >
+            Prune Terminated
+          </button>
+          <button
+            type="button"
+            onClick={terminateXmtpWorkers}
+            className="rounded-lg border border-red-800/60 px-3 py-1 text-xs text-red-300 hover:border-red-600"
+            title="Terminate XMTP-related workers (e.g., sqlite3) if they appear stuck"
+          >
+            Kill XMTP Workers
+          </button>
+          <button
+            type="button"
+            onClick={terminateAllWorkers}
+            className="rounded-lg border border-red-800/60 px-3 py-1 text-xs text-red-300 hover:border-red-600"
+            title="Terminate all running dedicated workers tracked for this page"
+          >
+            Kill All
           </button>
           <button
             type="button"

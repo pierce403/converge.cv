@@ -9,6 +9,9 @@ type WorkerTrackerApi = {
   nextId: number;
   list: () => PublicWorkerInfo[];
   terminate: (id: number) => boolean;
+  terminateAll: () => number;
+  terminateByUrlSubstring: (substring: string) => number;
+  pruneTerminated: () => number;
   get: (id: number) => PublicWorkerInfo | undefined;
 };
 
@@ -71,6 +74,57 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
         return false;
       }
     },
+    terminateAll() {
+      let count = 0;
+      for (const [, info] of this.workers.entries()) {
+        if (info.status !== 'terminated') {
+          try {
+            info.worker.terminate();
+            info.status = 'terminated';
+            count += 1;
+          } catch {
+            // ignore terminate errors
+          }
+        }
+      }
+      if (count > 0) {
+        dispatchUpdate();
+      }
+      return count;
+    },
+    terminateByUrlSubstring(substring: string) {
+      if (!substring) return 0;
+      const needle = substring.toLowerCase();
+      let count = 0;
+      for (const [, info] of this.workers.entries()) {
+        if (info.status === 'terminated') continue;
+        if (!info.scriptUrl.toLowerCase().includes(needle)) continue;
+        try {
+          info.worker.terminate();
+          info.status = 'terminated';
+          count += 1;
+        } catch {
+          // ignore terminate errors
+        }
+      }
+      if (count > 0) {
+        dispatchUpdate();
+      }
+      return count;
+    },
+    pruneTerminated() {
+      let removed = 0;
+      for (const [id, info] of this.workers.entries()) {
+        if (info.status === 'terminated') {
+          this.workers.delete(id);
+          removed += 1;
+        }
+      }
+      if (removed > 0) {
+        dispatchUpdate();
+      }
+      return removed;
+    },
     get(id: number) {
       const info = this.workers.get(id);
       return info ? toPublic(info) : undefined;
@@ -128,4 +182,19 @@ function toPublic(w: WorkerInfo): PublicWorkerInfo {
 
   // Assign patched constructor with correct shape
   anyWindow.Worker = PatchedWorker;
+
+  // Periodically prune terminated workers from the registry so the debug
+  // panel does not grow unbounded over a long-running session. This does
+  // not affect live workers or underlying browser threads.
+  try {
+    window.setInterval(() => {
+      try {
+        tracker.pruneTerminated();
+      } catch {
+        // ignore pruning errors
+      }
+    }, 60_000);
+  } catch {
+    // ignore timer setup failures
+  }
 })();

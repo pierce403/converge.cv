@@ -423,8 +423,8 @@ Guidance:
 
 ---
 
-**Last Updated**: 2025-10-31 (Contacts now keyed by XMTP inbox IDs)
-**Updated By**: AI Agent after refactoring contact storage and group management
+**Last Updated**: 2025-11-19 (Worker tracking and cleanup tools)
+**Updated By**: AI Agent after adding worker cleanup controls and debug UI
 
 ## Latest Changes (2025-10-31)
 
@@ -596,3 +596,16 @@ Guidance:
 - GitHub Pages deploy verified with `gh run list` (latest runs successful).
 
 Updated By: AI Agent (2025-11-05)
+
+## Latest Changes (2025-11-19)
+
+### Worker Tracking & Cleanup
+- `src/lib/debug/worker-tracker.ts` now exposes `terminateAll()`, `terminateByUrlSubstring(substring)`, and `pruneTerminated()` on `window.__workerTracker` to make it easy to shut down large batches of dedicated workers and keep the registry compact over time.
+- A background interval runs every 60 seconds to automatically prune terminated workers from the in-memory registry so the Web Workers debug panel does not grow without bound during long-lived sessions.
+
+### Debug UI: Web Workers Panel
+- `src/features/debug/WebWorkersPanel.tsx` gained new controls:
+  - `Prune Terminated` removes already-terminated workers from the list without touching live threads.
+  - `Kill XMTP Workers` calls `terminateByUrlSubstring('sqlite3-worker1')` (falling back to `'xmtp'`), targeting XMTP’s SQLite-related worker instances that can accumulate during repeated connects.
+  - `Kill All` calls `terminateAll()` to terminate every tracked dedicated worker for the current page in one click.
+- Existing service worker listing and unregister controls are unchanged; the panel is now the primary place to inspect and aggressively clean up web workers if the browser shows many XMTP/sqlite threads.

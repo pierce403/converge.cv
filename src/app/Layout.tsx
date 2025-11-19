@@ -258,7 +258,8 @@ export function Layout() {
         }
 
         let contact = existingContact;
-        if (profile) {
+        // Only automatically add to contacts if they have a display name set
+        if (profile && profile.displayName) {
           contact = await contactStore.upsertContactProfile({
             inboxId: senderInboxId,
             displayName: profile.displayName,
