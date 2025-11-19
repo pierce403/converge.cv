@@ -717,7 +717,7 @@ export function Layout() {
   }, [connectionStatus]);
 
   return (
-    <div className="flex h-screen flex-col text-primary-50">
+    <div className="flex h-full flex-col text-primary-50">
       {/* Sync progress bar */}
       <SyncProgressBar />
       <ToastContainer />

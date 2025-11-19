@@ -38,7 +38,8 @@ Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, enc
 ## Sprint 2: Storage & Crypto Layer ✅
 
 ### Phase 5: Storage Driver Interface ✅
-- [ ] Unit tests for storage operations
+- [x] Fix mobile keyboard UX issues (pushing up layout)
+- [ ] Add unit tests for new featuresage operations
 
 ### Phase 6: Crypto Vault ✅
 - [ ] Unit tests for crypto operations

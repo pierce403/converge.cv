@@ -70,7 +70,7 @@ export function ConversationView() {
   }, [contacts]);
 
   const conversation = conversations.find((c) => c.id === id);
-  const [composerHeight, setComposerHeight] = useState<number>(0);
+
   const composerRef = useRef<HTMLDivElement>(null);
   const lastMarkedRef = useRef<number>(0);
 
@@ -212,17 +212,7 @@ export function ConversationView() {
     };
   }, [id, loadMessages, isRefreshing, isConversationLoading]);
 
-  // Observe composer height to pad the message list bottom accordingly
-  useEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      setComposerHeight(el.getBoundingClientRect().height);
-    });
-    ro.observe(el);
-    setComposerHeight(el.getBoundingClientRect().height);
-    return () => ro.disconnect();
-  }, []);
+
 
   useEffect(() => {
     setContactForModal(null);
@@ -521,12 +511,12 @@ export function ConversationView() {
       addresses: fallbackAddress ? [fallbackAddress] : [],
       identities: fallbackAddress
         ? [
-            {
-              identifier: fallbackAddress,
-              kind: 'Ethereum',
-              isPrimary: true,
-            },
-          ]
+          {
+            identifier: fallbackAddress,
+            kind: 'Ethereum',
+            isPrimary: true,
+          },
+        ]
         : [],
       isInboxOnly: true,
       source: 'inbox',
@@ -573,12 +563,12 @@ export function ConversationView() {
       addresses: addressLower ? [addressLower] : [],
       identities: addressLower
         ? [
-            {
-              identifier: addressLower,
-              kind: 'Ethereum',
-              isPrimary: true,
-            },
-          ]
+          {
+            identifier: addressLower,
+            kind: 'Ethereum',
+            isPrimary: true,
+          },
+        ]
         : [],
       isInboxOnly: true,
       source: 'inbox',
@@ -850,10 +840,9 @@ export function ConversationView() {
       </div>
 
       {/* Messages */}
-      <div 
+      <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30" 
-        style={{ paddingBottom: `calc(${composerHeight}px + var(--safe-bottom))` }}
+        className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30"
       >
         {isRefreshing && (
           <div className="flex items-center justify-center py-2 text-sm text-primary-300">
@@ -942,8 +931,8 @@ export function ConversationView() {
 
               const handleAvatarClick = senderContact
                 ? () => {
-                    setContactForModal(senderContact);
-                  }
+                  setContactForModal(senderContact);
+                }
                 : undefined;
 
               return (
