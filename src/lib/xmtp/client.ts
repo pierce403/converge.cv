@@ -235,10 +235,10 @@ export class XmtpClient {
               c.fieldName === 'group_name'
                 ? 'name'
                 : c.fieldName === 'description'
-                ? 'description'
-                : c.fieldName === 'group_image_url_square'
-                ? 'image'
-                : c.fieldName;
+                  ? 'description'
+                  : c.fieldName === 'group_image_url_square'
+                    ? 'image'
+                    : c.fieldName;
             return c.newValue && c.newValue !== ''
               ? `${field} to "${String(c.newValue).slice(0, 80)}"`
               : `${field}`;
@@ -708,7 +708,7 @@ export class XmtpClient {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const senderInboxId = (m as any).senderInboxId?.toLowerCase();
               if (senderInboxId === myInboxId) continue; // Skip our own messages
-              
+
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
               if (typeof raw !== 'string') continue;
@@ -833,7 +833,7 @@ export class XmtpClient {
     const hasMembersFn = typeof (conversation as { members?: () => Promise<SafeGroupMember[]> }).members === 'function';
     const hasGroupApi =
       typeof (conversation as { addMembersByIdentifiers?: (ids: Identifier[]) => Promise<void> }).addMembersByIdentifiers ===
-        'function' ||
+      'function' ||
       typeof (conversation as { addMembers?: (ids: string[]) => Promise<void> }).addMembers === 'function' ||
       typeof (conversation as { updateName?: (name: string) => Promise<void> }).updateName === 'function' ||
       typeof (conversation as { permissions?: () => Promise<unknown> }).permissions === 'function';
@@ -1560,7 +1560,7 @@ export class XmtpClient {
       console.warn('[XMTP] Connection failed:', error);
       console.warn('[XMTP] Error type:', typeof error);
       console.warn('[XMTP] Error constructor:', error?.constructor?.name);
-      
+
       // Log full error details
       if (error instanceof Error) {
         console.warn('[XMTP] Error message:', error.message);
@@ -1568,18 +1568,18 @@ export class XmtpClient {
       } else {
         console.warn('[XMTP] Error value:', error);
       }
-      
+
       let errorMessage = error instanceof Error ? error.message : String(error);
-      
+
       // Detect the 10/10 installation limit error
       if (errorMessage.includes('10/10 installations') || errorMessage.includes('already registered 10')) {
         errorMessage = '⚠️ Installation limit reached (10/10). Please revoke old installations in Settings → XMTP Installations before connecting.';
         console.warn('[XMTP] ⚠️ INSTALLATION LIMIT REACHED - User must revoke old installations');
       }
-      
+
       setConnectionStatus('error');
       setError(errorMessage);
-      
+
       logNetworkEvent({
         direction: 'status',
         event: 'connect:error',
@@ -1600,12 +1600,12 @@ export class XmtpClient {
 
   async probeIdentity(identity: XmtpIdentity): Promise<IdentityProbeResult> {
     const identityAddress = identity.address.toLowerCase();
-    
+
     // If we already have a client connected for this identity, use it instead of creating a new one
     // This avoids OPFS file handle conflicts
     if (this.client && this.identity?.address.toLowerCase() === identityAddress) {
       console.log('[XMTP] probeIdentity: Using existing connected client for same identity');
-      
+
       try {
         // Use client.inboxId as source of truth (authoritative from client.init)
         let inboxId: string | null = this.client.inboxId || null;
@@ -1615,14 +1615,14 @@ export class XmtpClient {
         if (inboxId) {
           console.log('[XMTP] probeIdentity: ✅ Found inboxId from existing client:', inboxId);
           isRegistered = true; // inboxId presence is authoritative
-          
+
           try {
             inboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true));
             console.log('[XMTP] probeIdentity: Fetched inboxState from existing client:', {
               inboxId: inboxState?.inboxId,
               installationCount: inboxState?.installations?.length ?? 0,
             });
-            
+
             // Use inbox ID from inboxState if available (most reliable)
             if (inboxState?.inboxId) {
               inboxId = inboxState.inboxId;
@@ -1692,7 +1692,7 @@ export class XmtpClient {
       // If it exists, the user has a registered inbox (regardless of isRegistered() result)
       let inboxId: string | null = client.inboxId || null;
       let isRegistered = false;
-      
+
       if (inboxId) {
         console.log('[XMTP] probeIdentity: ✅ Found inboxId from client.init:', inboxId);
         isRegistered = true; // inboxId presence is authoritative
@@ -1718,7 +1718,7 @@ export class XmtpClient {
             hasInstallations: Boolean(inboxState?.installations),
             installationCount: inboxState?.installations?.length ?? 0,
           });
-          
+
           // Use inbox ID from inboxState if available (most reliable)
           if (inboxState?.inboxId) {
             inboxId = inboxState.inboxId;
@@ -1941,7 +1941,9 @@ export class XmtpClient {
       } catch (ensureErr) {
         console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
       }
-      
+
+      useXmtpStore.getState().setLastSyncedAt(Date.now());
+
       logNetworkEvent({
         direction: 'inbound',
         event: 'conversations:sync',
@@ -2045,9 +2047,9 @@ export class XmtpClient {
                     payload: JSON.stringify(obj),
                   });
                 }
-      } catch (e) {
-        console.warn('[XMTP] Failed to process profile backfill message', e);
-      }
+              } catch (e) {
+                console.warn('[XMTP] Failed to process profile backfill message', e);
+              }
               continue;
             }
             // Treat non-text content types in history too
@@ -2056,7 +2058,7 @@ export class XmtpClient {
               // Reactions: aggregate onto target message and skip bubble
               if (lowerType.includes('reaction')) {
                 try {
-              const r = (m as unknown as { content?: unknown }).content as
+                  const r = (m as unknown as { content?: unknown }).content as
                     | { content?: string; reference?: string; action?: string }
                     | undefined;
                   const emoji = (r?.content ?? '').toString();
@@ -2289,13 +2291,13 @@ export class XmtpClient {
                 })
               );
             }
-        } catch (gErr) {
-          if (this.isMissingConversationKeyError(gErr)) {
-            console.info('[XMTP] Skipping group history backfill due to missing key:', conv.id);
-            continue;
+          } catch (gErr) {
+            if (this.isMissingConversationKeyError(gErr)) {
+              console.info('[XMTP] Skipping group history backfill due to missing key:', conv.id);
+              continue;
+            }
+            console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
           }
-          console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
-        }
         }
       } catch (listErr) {
         console.warn('[XMTP] Failed to enumerate conversations for group backfill', listErr);
@@ -2318,13 +2320,13 @@ export class XmtpClient {
 
     try {
       console.log('[XMTP] Starting message stream...');
-      
+
       // Stream all messages (DMs and groups)
       const stream = await this.client.conversations.streamAllMessages();
       this.messageStreamCloser = stream as unknown as { close: () => void };
 
       console.log('[XMTP] ✅ Message stream started');
-      
+
       logNetworkEvent({
         direction: 'status',
         event: 'messages:stream_started',
@@ -2336,16 +2338,16 @@ export class XmtpClient {
         try {
           console.log('[XMTP] 📻 Stream loop started, waiting for messages...');
           let messageCount = 0;
-          
+
           for await (const message of stream) {
             messageCount++;
             console.log(`[XMTP] 📨 Stream yielded message #${messageCount}`);
-            
+
             if (!message) {
               console.warn('[XMTP] ⚠️  Message is null/undefined, skipping');
               continue;
             }
-            
+
             // Skip messages sent by us (they're already in the UI from sendMessage)
             if (this.client && message.senderInboxId === this.client.inboxId) {
               console.log('[XMTP] ⏭️  Skipping our own message:', {
@@ -2355,7 +2357,7 @@ export class XmtpClient {
               });
               continue;
             }
-            
+
             // Log the full message object to see what we're getting
             console.log('[XMTP] Full message object:');
             console.log(message);
@@ -2568,7 +2570,7 @@ export class XmtpClient {
             }));
             console.log('[XMTP] Custom event dispatched');
           }
-          
+
           console.warn('[XMTP] 📻 Stream loop ended naturally (this shouldn\'t happen)');
         } catch (error) {
           console.error('[XMTP] Message stream error:', error);
@@ -2707,7 +2709,7 @@ export class XmtpClient {
       // Get conversation from storage to check existing flags
       const storage = await getStorage();
       const conversation = await storage.getConversation(conversationId);
-      
+
       // If both flags are already set, skip checking
       if (conversation?.profileSentDisplayName && conversation?.profileSentAvatar) {
         return {
@@ -2876,9 +2878,9 @@ export class XmtpClient {
     const isE2E = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_E2E_TEST === 'true');
     const fallbackIdentifier: { identifier: string; identifierKind: 'Ethereum' } | undefined = this.identity?.address
       ? {
-          identifier: toIdentifierHex(this.identity.address).toLowerCase(),
-          identifierKind: 'Ethereum' as const,
-        }
+        identifier: toIdentifierHex(this.identity.address).toLowerCase(),
+        identifierKind: 'Ethereum' as const,
+      }
       : undefined;
 
     if (isE2E) {
@@ -3063,7 +3065,7 @@ export class XmtpClient {
       // Directly ask the client for the inbox ID associated to this identifier.
       let inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          identifier as any
+        identifier as any
       ));
 
       if (inboxId) {
@@ -3081,7 +3083,7 @@ export class XmtpClient {
           console.log('[XMTP] Trying findInboxId with 0x prefix:', identifierWith0x);
           inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              identifierWith0x as any
+            identifierWith0x as any
           ));
           if (inboxId) {
             console.log('[XMTP] ✅ Found inbox ID (with 0x):', inboxId, 'for address:', address);
@@ -3149,7 +3151,7 @@ export class XmtpClient {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           identifier as any
         );
-        
+
         // Try multiple methods to get the actual inbox ID
         try {
           // Method 1: Direct lookup (most reliable for registered users)
@@ -3157,7 +3159,7 @@ export class XmtpClient {
         } catch (e) {
           console.warn('[XMTP] getInboxIdFromAddress failed, trying deriveInboxIdFromAddress:', e);
         }
-        
+
         // Method 2: Derive from address if direct lookup failed
         if (!resolvedPeerInboxId) {
           try {
@@ -3170,7 +3172,7 @@ export class XmtpClient {
             console.warn('[XMTP] deriveInboxIdFromAddress also failed:', e);
           }
         }
-        
+
         // Method 3: Try Utils.getInboxIdForIdentifier if both methods failed
         // The conversation was created successfully, so the peer is registered
         if (!resolvedPeerInboxId) {
@@ -3190,7 +3192,7 @@ export class XmtpClient {
             console.warn('[XMTP] Utils.getInboxIdForIdentifier failed:', e);
           }
         }
-        
+
         // Method 4: Try with full address (with 0x) in case the SDK expects it
         if (!resolvedPeerInboxId && isEthereumAddress(peerAddressOrInboxId)) {
           try {
@@ -3214,23 +3216,23 @@ export class XmtpClient {
         dmConversation = await this.client.conversations.newDm(inboxIdInput);
         resolvedPeerInboxId = inboxIdInput;
       }
-      
+
       console.log('[XMTP] ✅ DM conversation created:', {
         id: dmConversation.id,
         createdAtNs: dmConversation.createdAtNs,
         resolvedPeerInboxId,
       });
-      
+
       // Never use an address as the inbox ID - if we can't resolve it, log a warning
       // But we'll still use the original input as fallback for the conversation
       const peerForStore = resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x')
         ? resolvedPeerInboxId.toLowerCase()
         : originalInput.toLowerCase();
-      
+
       if (peerForStore.startsWith('0x')) {
         console.warn('[XMTP] ⚠️  Could not resolve inbox ID for address, using address as peerId:', peerForStore);
       }
-      
+
       // Ensure our profile (displayName/avatar) is sent to this conversation
       // This checks message history and sends missing profile data
       if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x') && dmConversation) {
@@ -3240,7 +3242,7 @@ export class XmtpClient {
           console.warn('[XMTP] Failed to ensure profile sent to new DM (non-fatal):', profileSendError);
         }
       }
-      
+
       // Fetch peer's profile immediately after resolving inbox ID to get display name and avatar
       let profileDisplayName: string | undefined;
       let profileAvatar: string | undefined;
@@ -3256,7 +3258,7 @@ export class XmtpClient {
             displayName: profileDisplayName,
             hasAvatar: !!profileAvatar,
           });
-          
+
           // If we didn't get profile from existing DM, check the DM we just created
           // Also check ALL DMs to see if we have any other DMs with this peer that might have profile messages
           if ((!profileDisplayName || !profileAvatar) && this.client) {
@@ -3264,7 +3266,7 @@ export class XmtpClient {
               // Check all DMs - sometimes there might be multiple DMs with the same peer
               const allDms = await this.client.conversations.listDms();
               const myInboxId = this.client.inboxId?.toLowerCase();
-              
+
               // Look through all DMs for profile messages from this peer
               for (const dm of allDms) {
                 try {
@@ -3272,7 +3274,7 @@ export class XmtpClient {
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const dmPeerId = (dm as any).peerInboxId?.toLowerCase() || (dm as any).peerAddress?.toLowerCase();
                   if (dmPeerId !== resolvedPeerInboxId.toLowerCase()) continue;
-                  
+
                   // Sync and check messages
                   await dm.sync();
                   const msgs = await dm.messages();
@@ -3283,12 +3285,12 @@ export class XmtpClient {
                     const senderInboxId = (m as any).senderInboxId?.toLowerCase();
                     if (senderInboxId === myInboxId) continue; // Skip our own messages
                     if (senderInboxId !== resolvedPeerInboxId.toLowerCase()) continue; // Must be from the peer
-                    
+
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
                     if (typeof raw !== 'string') continue;
                     if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
-                    
+
                     try {
                       const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
                       const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
@@ -3305,7 +3307,7 @@ export class XmtpClient {
                       console.warn('[XMTP] Failed to parse profile message from DM:', e);
                     }
                   }
-                  
+
                   // If we found profile, stop searching
                   if (profileDisplayName || profileAvatar) break;
                 } catch (dmError) {
@@ -3320,7 +3322,7 @@ export class XmtpClient {
           console.warn('[XMTP] Failed to fetch profile for new conversation (non-fatal):', profileError);
         }
       }
-      
+
       const conversation: Conversation = {
         id: dmConversation.id,
         topic: dmConversation.id, // Use conversation ID as topic
@@ -3500,7 +3502,7 @@ export class XmtpClient {
       }
 
       console.log('[XMTP] Found conversation, sending message...');
-      
+
       // Send the message
       const messageId = await conversation.send(content);
 
@@ -3580,7 +3582,7 @@ export class XmtpClient {
     }
 
     console.log('[XMTP] Checking if can receive messages:', addressOrInboxId);
-    
+
     logNetworkEvent({
       direction: 'outbound',
       event: 'canMessage',
@@ -3593,10 +3595,10 @@ export class XmtpClient {
         identifier: addressOrInboxId.toLowerCase(),
         identifierKind: 'Ethereum' as const,
       };
-      
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const canMsgMap = await this.client.canMessage([identifier as any]);
-      
+
       // The SDK returns a Map where:
       // - If input is an address: key = inbox ID (if registered), value = true
       // - If input is inbox ID: key = inbox ID, value = true
@@ -3609,25 +3611,25 @@ export class XmtpClient {
           break;
         }
       }
-      
+
       console.log(`[XMTP] canMessage result for ${addressOrInboxId}:`, result);
-      
+
       logNetworkEvent({
         direction: 'status',
         event: 'canMessage:result',
         details: `${addressOrInboxId} ${result ? 'can' : 'cannot'} receive messages`,
       });
-      
+
       return result;
     } catch (error) {
       console.error('[XMTP] canMessage check failed:', error);
-      
+
       logNetworkEvent({
         direction: 'status',
         event: 'canMessage:error',
         details: error instanceof Error ? error.message : String(error),
       });
-      
+
       // Fallback: assume true (will fail later if actually can't message)
       console.warn('[XMTP] ⚠️  canMessage failed, assuming inbox is valid');
       return true;
@@ -3640,13 +3642,13 @@ export class XmtpClient {
    */
   async fetchMessageDetails(messageId: string): Promise<
     | {
-        id: string;
-        senderInboxId?: string;
-        sentAtNs?: bigint;
-        deliveryStatus?: unknown;
-        kind?: unknown;
-        contentType?: string;
-      }
+      id: string;
+      senderInboxId?: string;
+      sentAtNs?: bigint;
+      deliveryStatus?: unknown;
+      kind?: unknown;
+      contentType?: string;
+    }
     | null
   > {
     if (!this.client) {

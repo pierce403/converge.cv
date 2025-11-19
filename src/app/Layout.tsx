@@ -28,6 +28,19 @@ export function Layout() {
   const { receiveMessage } = useMessages();
   const loadContacts = useContactStore((state) => state.loadContacts);
   const [showPersonalizationReminder, setShowPersonalizationReminder] = useState(false);
+  const lastSyncedAt = useXmtpStore((state) => state.lastSyncedAt);
+  const [isChecking, setIsChecking] = useState(false);
+
+  const handleCheckInbox = async () => {
+    setIsChecking(true);
+    try {
+      await getXmtpClient().syncConversations();
+    } catch (e) {
+      console.error('Failed to check inbox', e);
+    } finally {
+      setIsChecking(false);
+    }
+  };
 
   const missingDisplayName = Boolean(identity && !identity.displayName?.trim());
   const missingAvatar = Boolean(identity && !identity.avatar?.trim());
@@ -161,7 +174,7 @@ export function Layout() {
         isHistory?: boolean;
       }>;
       const { conversationId, message, isHistory } = customEvent.detail;
-      
+
       console.log('[Layout] Global message listener: received message', {
         conversationId,
         messageId: message.id,
@@ -195,7 +208,7 @@ export function Layout() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const messageContent = typeof message.content === 'string' ? message.content : (message as any).encodedContent?.content;
         const isProfileMessage = typeof messageContent === 'string' && messageContent.startsWith('cv:profile:');
-        
+
         let profileFromMessage: { displayName?: string; avatarUrl?: string } | undefined;
         if (isProfileMessage) {
           try {
@@ -341,19 +354,19 @@ export function Layout() {
             : undefined;
 
           const updates: Partial<Conversation> = {};
-          
+
           // Only use peer contact's display name, never the sender's
           const displayName = peerContact?.preferredName ?? peerContact?.name;
           if (displayName && conversation.displayName !== displayName) {
             updates.displayName = displayName;
           }
-          
+
           // Only use peer contact's avatar, never the sender's
           const avatar = peerContact?.preferredAvatar ?? peerContact?.avatar;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
           }
-          
+
           // If peer contact doesn't exist, fetch peer's profile from XMTP (not sender's)
           if (!peerContact && peerKey && (!displayName || !avatar)) {
             try {
@@ -414,7 +427,7 @@ export function Layout() {
             }
           } catch (e) { /* ignore */ }
         }
-        
+
         // Ensure our profile (displayName/avatar) is sent to this conversation
         // This checks message history and sends missing profile data
         // Do this for both new and existing conversations
@@ -426,7 +439,7 @@ export function Layout() {
             console.warn('[Layout] Failed to ensure profile sent (non-fatal):', profileError);
           }
         }
-        
+
         // Skip storing profile messages as regular messages (they're metadata, not chat content)
         if (!isProfileMessage) {
           console.log('[Layout] Processing message with receiveMessage()');
@@ -434,7 +447,7 @@ export function Layout() {
         } else {
           console.log('[Layout] Skipping storage of profile message (metadata only)');
         }
-        
+
         console.log('[Layout] ✅ Message processed successfully');
       } catch (error) {
         console.error('[Layout] Failed to handle incoming message:', error);
@@ -611,7 +624,7 @@ export function Layout() {
       }
     };
     window.addEventListener('xmtp:group-updated', handleGroupUpdated);
-    
+
     // Handle read receipts for status updates (no bubbles)
     const handleReadReceipt = async (event: Event) => {
       const custom = event as CustomEvent<{ conversationId: string; senderInboxId?: string; sentAt?: number }>;
@@ -640,7 +653,7 @@ export function Layout() {
       }
     };
     window.addEventListener('xmtp:read-receipt', handleReadReceipt);
-    
+
     return () => {
       console.log('[Layout] 🔇 Global message listener unregistered');
       window.removeEventListener('xmtp:message', handleIncomingMessage);
@@ -649,7 +662,7 @@ export function Layout() {
       window.removeEventListener('xmtp:reaction', handleReaction);
       window.removeEventListener('xmtp:group-updated', handleGroupUpdated);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Proactively enrich all loaded contacts from XMTP (no ENS/Farcaster),
@@ -729,6 +742,18 @@ export function Layout() {
           <h1 className="hidden text-lg font-bold text-primary-50 sm:block">Converge</h1>
         </div>
         <div className="flex items-center gap-1">
+          <div className="flex flex-col items-end mr-2">
+            <span className="text-[10px] text-primary-400">
+              Last checked: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never'}
+            </span>
+            <button
+              onClick={handleCheckInbox}
+              disabled={isChecking}
+              className="text-[10px] text-primary-300 hover:text-primary-100 underline disabled:opacity-50"
+            >
+              {isChecking ? 'Checking...' : 'Check now'}
+            </button>
+          </div>
           <Link
             to="/search"
             className="p-2 text-primary-200 hover:text-white border border-primary-800/60 hover:border-primary-700 rounded-lg transition-colors bg-primary-900/40 hover:bg-primary-800/60"
@@ -752,11 +777,10 @@ export function Layout() {
           <Link
             to="/contacts"
             aria-label="Contacts"
-            className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
-              location.pathname === '/contacts'
-                ? 'text-accent-300 bg-primary-900/70 shadow-lg'
-                : 'text-primary-300 hover:text-primary-100'
-            }`}
+            className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${location.pathname === '/contacts'
+              ? 'text-accent-300 bg-primary-900/70 shadow-lg'
+              : 'text-primary-300 hover:text-primary-100'
+              }`}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" role="img" aria-hidden="true">
               <title>Contacts</title>
@@ -770,11 +794,10 @@ export function Layout() {
 
           <Link
             to="/"
-            className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
-              location.pathname === '/'
-                ? 'text-accent-300 bg-primary-900/70 shadow-lg'
-                : 'text-primary-300 hover:text-primary-100'
-            }`}
+            className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${location.pathname === '/'
+              ? 'text-accent-300 bg-primary-900/70 shadow-lg'
+              : 'text-primary-300 hover:text-primary-100'
+              }`}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -784,11 +807,10 @@ export function Layout() {
 
           <Link
             to="/settings"
-            className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${
-              location.pathname === '/settings'
-                ? 'text-accent-300 bg-primary-900/70 shadow-lg'
-                : 'text-primary-300 hover:text-primary-100'
-            }`}
+            className={`flex flex-col items-center px-4 py-2 rounded-lg transition-colors ${location.pathname === '/settings'
+              ? 'text-accent-300 bg-primary-900/70 shadow-lg'
+              : 'text-primary-300 hover:text-primary-100'
+              }`}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
