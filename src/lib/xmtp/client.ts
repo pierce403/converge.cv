@@ -320,11 +320,17 @@ export class XmtpClient {
     }
 
     // 2. Create a temporary client
-    // Use the same DB path to try and reuse existing keys if they exist
-    const dbPath = `xmtp-production-${this.identity.address.toLowerCase()}.db3`;
+    // NOTE: When 10/10 limit is reached, we CANNOT use the existing DB path because if that DB
+    // corresponds to a new/unregistered installation, the network will reject it immediately.
+    // Instead, we create a fresh ephemeral DB with disableAutoRegister: true.
+    // This allows us to authenticate (sign the key bundle) and act as a "manager" client
+    // without actually registering this new ephemeral installation on the network.
+    const randomSuffix = Math.random().toString(36).substring(2, 10);
+    const dbPath = `xmtp-revoke-temp-${randomSuffix}.db3`;
+    
     const signer = await this.createSigner(this.identity);
     
-    console.log('[XMTP] forceRevokeOldestInstallations: Creating temp client with disableAutoRegister');
+    console.log('[XMTP] forceRevokeOldestInstallations: Creating ephemeral temp client (new DB) with disableAutoRegister');
     // Create a temporary client without auto-registering a new installation
     // so we can manage preferences/installations even when 10/10 is reached.
     const temp = await Client.create(signer, {
