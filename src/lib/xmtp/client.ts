@@ -274,43 +274,71 @@ export class XmtpClient {
    */
   async forceRevokeOldestInstallations(keepLatest = 1): Promise<{ revoked: string[] }> {
     if (!this.identity) throw new Error('No identity available');
-    const signer = await this.createSigner(this.identity);
-    // Create a temporary client without auto-registering a new installation
-    // so we can manage preferences/installations even when 10/10 is reached.
-    const temp = await Client.create(signer, {
-      env: 'production',
-      loggingLevel: 'warn',
-      structuredLogging: false,
-      performanceLogging: false,
-      debugEventsEnabled: false,
-      disableAutoRegister: true,
-    });
-    try {
-      const state = await temp.preferences.inboxState(true);
+
+    const performRevocation = async (client: Client<unknown>) => {
+      const state = await client.preferences.inboxState(true);
       const list = (state.installations || []) as unknown as Array<{
         id?: string;
         clientTimestampNs?: bigint;
         [k: string]: unknown;
       }>;
       if (!list.length) return { revoked: [] };
+      
       // Newest first
       list.sort((a, b) => (a.clientTimestampNs && b.clientTimestampNs && a.clientTimestampNs > b.clientTimestampNs ? -1 : 1));
       const toRevoke = list.slice(Math.max(keepLatest, 0));
+      
       const bytes: Uint8Array[] = [];
       const revokedIds: string[] = [];
+      
       for (const inst of toRevoke) {
         const rawBytes = (inst as unknown as { bytes?: Uint8Array; installationId?: Uint8Array; idBytes?: Uint8Array }).bytes
           || (inst as unknown as { installationId?: Uint8Array }).installationId
           || (inst as unknown as { idBytes?: Uint8Array }).idBytes
           || (typeof inst.id === 'string' ? this.hexToBytes(inst.id) : null);
+        
         if (rawBytes) {
           bytes.push(rawBytes);
           if (typeof inst.id === 'string') revokedIds.push(inst.id);
         }
       }
-      if (!bytes.length) throw new Error('No revocable installation bytes found');
-      await temp.revokeInstallations(bytes);
+      
+      if (!bytes.length) return { revoked: [] };
+      await client.revokeInstallations(bytes);
       return { revoked: revokedIds };
+    };
+
+    // 1. Try using existing client if available
+    if (this.client) {
+      try {
+        console.log('[XMTP] forceRevokeOldestInstallations: Attempting with existing client');
+        return await performRevocation(this.client);
+      } catch (err) {
+        console.warn('[XMTP] forceRevokeOldestInstallations: Existing client failed, trying temp client:', err);
+        // Fall through to temp client
+      }
+    }
+
+    // 2. Create a temporary client
+    // Use the same DB path to try and reuse existing keys if they exist
+    const dbPath = `xmtp-production-${this.identity.address.toLowerCase()}.db3`;
+    const signer = await this.createSigner(this.identity);
+    
+    console.log('[XMTP] forceRevokeOldestInstallations: Creating temp client with disableAutoRegister');
+    // Create a temporary client without auto-registering a new installation
+    // so we can manage preferences/installations even when 10/10 is reached.
+    const temp = await Client.create(signer, {
+      env: 'production',
+      dbPath,
+      loggingLevel: 'warn',
+      structuredLogging: false,
+      performanceLogging: false,
+      debugEventsEnabled: false,
+      disableAutoRegister: true,
+    });
+
+    try {
+      return await performRevocation(temp);
     } finally {
       try { await temp.close(); } catch { /* ignore */ }
     }

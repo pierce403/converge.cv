@@ -433,6 +433,13 @@ Guidance:
 - **Root Cause**: The XMTP client was not consistently resolving the local storage path for keys in OPFS, causing it to generate new keys (and thus a new installation ID) on every page reload.
 - **Fix**: Explicitly set `dbPath` in `Client.create` options to `xmtp-production-{address}.db3`. This forces a deterministic file path based on the wallet address, ensuring existing keys are reused across sessions.
 
+### Force Recover Fix (Critical)
+- **Problem**: "Force Recover" button in Settings failed with "Installation limit reached (10/10)" error because it created a new ephemeral client (ID #11) which the network rejected even for management/revocation tasks.
+- **Fix**: Updated `forceRevokeOldestInstallations` in `src/lib/xmtp/client.ts` to:
+  1. Use the existing connected client if available.
+  2. If creating a temporary client, explicitly use the persistent `dbPath` to reuse existing local keys (matching one of the 10 registered installations) instead of generating a new one.
+  3. This allows the revocation logic to proceed as an authenticated, existing installation.
+
 ### Build Failure Fix
 - Fixed a TypeScript error in `IgnoredConversationsModal.tsx` where `formatDistanceToNow` was called with invalid arguments. Updated `src/lib/utils/date.ts` to support the `{ addSuffix: boolean }` option, matching the expected API.
 
