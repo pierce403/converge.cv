@@ -1066,7 +1066,15 @@ export function GroupSettingsPage() {
                   id="groupImage"
                   type="text"
                   value={groupImage}
-                  onChange={(e) => setGroupImage(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '' || isDisplayableImageSrc(value)) {
+                      setGroupImage(value);
+                      setError('');
+                    } else {
+                      setError('Please enter a valid image URL (https only).');
+                    }
+                  }}
                   placeholder="Paste image URL or use Upload"
                   className="input-primary w-full"
                   disabled={!isCurrentUserAdmin}
@@ -1087,6 +1095,9 @@ export function GroupSettingsPage() {
               </div>
             </div>
           </div>
+          {error && (
+            <div className="text-red-500 text-xs mt-2">{error}</div>
+          )}
 
           {/* Group Description */}
           <div>
