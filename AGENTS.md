@@ -437,8 +437,7 @@ Guidance:
 - **Problem**: "Force Recover" button in Settings failed with "Installation limit reached (10/10)" error because it created a new ephemeral client (ID #11) which the network rejected even for management/revocation tasks.
 - **Fix**: Updated `forceRevokeOldestInstallations` in `src/lib/xmtp/client.ts` to:
   1. Use the existing connected client if available.
-  2. If creating a temporary client, explicitly use the persistent `dbPath` to reuse existing local keys (matching one of the 10 registered installations) instead of generating a new one.
-  3. This allows the revocation logic to proceed as an authenticated, existing installation.
+  2. If creating a temporary client is necessary, create a **fresh ephemeral DB** (with a random name) and `disableAutoRegister: true`. This allows the client to start up, sign the key bundle, and act as a manager/revoker without the network interpreting it as a new installation attempt (which would fail at 10/10). Trying to reuse the existing DB path when it might correspond to an unregistered 11th installation was still causing the limit error.
 
 ### Build Failure Fix
 - Fixed a TypeScript error in `IgnoredConversationsModal.tsx` where `formatDistanceToNow` was called with invalid arguments. Updated `src/lib/utils/date.ts` to support the `{ addSuffix: boolean }` option, matching the expected API.
