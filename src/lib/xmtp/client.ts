@@ -1405,8 +1405,13 @@ export class XmtpClient {
       const signer = await this.createSigner(identity);
 
       console.log('[XMTP] Calling Client.create() with signer...');
+      // Explicitly set DB path to ensure persistence stability across reloads
+      // and prevent creating new installations (which hits the 10 limit).
+      const dbPath = `xmtp-production-${identity.address.toLowerCase()}.db3`;
+      
       console.log('[XMTP] Client.create options:', {
         env: 'production',
+        dbPath,
         disableAutoRegister: true,
         loggingLevel: 'warn',
       });
@@ -1414,6 +1419,7 @@ export class XmtpClient {
       try {
         client = await Client.create(signer, {
           env: 'production',
+          dbPath,
           loggingLevel: 'warn',
           structuredLogging: false,
           performanceLogging: false,
@@ -1435,6 +1441,7 @@ export class XmtpClient {
           try {
             client = await Client.create(signer, {
               env: 'production',
+              dbPath,
               loggingLevel: 'warn',
               structuredLogging: false,
               performanceLogging: false,
