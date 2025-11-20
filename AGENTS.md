@@ -439,6 +439,14 @@ Guidance:
   1. Use the existing connected client if available.
   2. If creating a temporary client is necessary, create a **fresh ephemeral DB** (with a random name) and `disableAutoRegister: true`. This allows the client to start up, sign the key bundle, and act as a manager/revoker without the network interpreting it as a new installation attempt (which would fail at 10/10). Trying to reuse the existing DB path when it might correspond to an unregistered 11th installation was still causing the limit error.
 
+### Resync All Fix
+- **Problem**: "Resync All" button cleared local messages but failed to restore them from the network.
+- **Root Cause**: The code was calling `client.conversations.syncAll()`, which does not exist in the JS SDK. This likely threw an error or did nothing, preventing the message fetch loop from running. Furthermore, the loop was only calling `conv.messages()` (which reads from the local SDK cache) without ensuring `conv.sync()` was called first to pull new messages from the network.
+- **Fix**: 
+  1. Removed the invalid `syncAll()` call.
+  2. Added explicit `await this.client.conversations.sync()` to update the conversation list.
+  3. Added explicit `await conv.sync()` inside the loop for every conversation before fetching messages. This ensures that even if the local cache is empty/stale, the SDK forces a network fetch for that conversation's messages.
+
 ### Build Failure Fix
 - Fixed a TypeScript error in `IgnoredConversationsModal.tsx` where `formatDistanceToNow` was called with invalid arguments. Updated `src/lib/utils/date.ts` to support the `{ addSuffix: boolean }` option, matching the expected API.
 
