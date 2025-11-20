@@ -2008,7 +2008,8 @@ export class XmtpClient {
 
     try {
       console.log('[XMTP] Syncing full history (conversations + messages)...');
-      await this.client.conversations.syncAll();
+      // First sync the list of conversations from the network
+      await this.client.conversations.sync();
 
       // Backfill DMs into our app store by dispatching the same custom events
       // we use for live streaming messages.
@@ -2018,6 +2019,13 @@ export class XmtpClient {
 
       for (const dm of dms) {
         try {
+          // Force sync messages for this conversation to ensure we have latest
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (typeof (dm as any).sync === 'function') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (dm as any).sync();
+          }
+
           const dmId = dm.id?.toString();
           if (!dmId) {
             continue;
@@ -2257,6 +2265,13 @@ export class XmtpClient {
         console.log(`[XMTP] Backfilling messages for ${maybeGroups.length} group conversations`);
         for (const conv of maybeGroups) {
           try {
+            // Force sync messages for this conversation
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            if (typeof (conv as any).sync === 'function') {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await (conv as any).sync();
+            }
+
             if (!conv.id) {
               continue;
             }
