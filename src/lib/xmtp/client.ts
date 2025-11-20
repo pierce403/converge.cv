@@ -1899,40 +1899,39 @@ export class XmtpClient {
       // Build a set of DM ids to avoid misclassifying them as groups
       let dmIdSet = new Set<string>();
       try {
-        const dms = (await this.client.conversations.listDms()) as Array<{
-          id?: string;
-          topic: string;
-          peerAddress: string;
-          createdAt: Date;
-          context?: unknown;
-        }>;
+        const dms = await this.client.conversations.listDms();
         
         dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
 
         // Persist DMs to storage to ensure they appear after a resync
         for (const dm of dms) {
-          const id = dm.id || dm.topic;
-          if (!id) continue;
-          
-          const exists = await storage.getConversation(id);
-          if (exists) continue;
+          try {
+            const dmAny = dm as unknown as { id?: string; topic?: string; peerAddress?: string; createdAt?: Date };
+            const id = dmAny.id || dmAny.topic;
+            if (!id) continue;
+            
+            const exists = await storage.getConversation(id);
+            if (exists) continue;
 
-          const createdAt = dm.createdAt ? dm.createdAt.getTime() : Date.now();
-          
-          const conversation: Conversation = {
-            id,
-            topic: dm.topic,
-            peerId: dm.peerAddress, // Will be canonicalized to inboxId by background cleanup
-            createdAt,
-            lastMessageAt: createdAt,
-            unreadCount: 0,
-            pinned: false,
-            archived: false,
-            isGroup: false,
-            lastMessagePreview: '',
-          };
-          
-          await storage.putConversation(conversation);
+            const createdAt = dmAny.createdAt ? dmAny.createdAt.getTime() : Date.now();
+            
+            const conversation: Conversation = {
+              id,
+              topic: dmAny.topic || id,
+              peerId: dmAny.peerAddress || id, // Will be canonicalized to inboxId by background cleanup
+              createdAt,
+              lastMessageAt: createdAt,
+              unreadCount: 0,
+              pinned: false,
+              archived: false,
+              isGroup: false,
+              lastMessagePreview: '',
+            };
+            
+            await storage.putConversation(conversation);
+          } catch (dmErr) {
+            console.warn('[XMTP] Failed to persist DM during sync:', dmErr);
+          }
         }
       } catch (e) {
         // If listDms fails, proceed without the set; group detection below is still conservative
