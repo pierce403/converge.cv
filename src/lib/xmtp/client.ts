@@ -1899,8 +1899,41 @@ export class XmtpClient {
       // Build a set of DM ids to avoid misclassifying them as groups
       let dmIdSet = new Set<string>();
       try {
-        const dms = (await this.client.conversations.listDms()) as Array<{ id?: string }>;
+        const dms = (await this.client.conversations.listDms()) as Array<{
+          id?: string;
+          topic: string;
+          peerAddress: string;
+          createdAt: Date;
+          context?: unknown;
+        }>;
+        
         dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
+
+        // Persist DMs to storage to ensure they appear after a resync
+        for (const dm of dms) {
+          const id = dm.id || dm.topic;
+          if (!id) continue;
+          
+          const exists = await storage.getConversation(id);
+          if (exists) continue;
+
+          const createdAt = dm.createdAt ? dm.createdAt.getTime() : Date.now();
+          
+          const conversation: Conversation = {
+            id,
+            topic: dm.topic,
+            peerId: dm.peerAddress, // Will be canonicalized to inboxId by background cleanup
+            createdAt,
+            lastMessageAt: createdAt,
+            unreadCount: 0,
+            pinned: false,
+            archived: false,
+            isGroup: false,
+            lastMessagePreview: '',
+          };
+          
+          await storage.putConversation(conversation);
+        }
       } catch (e) {
         // If listDms fails, proceed without the set; group detection below is still conservative
         console.warn('[XMTP] listDms failed during syncConversations; continuing without DM filter', e);
