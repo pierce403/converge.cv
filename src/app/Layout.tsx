@@ -111,7 +111,8 @@ export function Layout() {
     if (!lastNagAt || now - lastNagAt >= oneDayMs) {
       setShowPersonalizationReminder(true);
     }
-  }, [identity, missingAvatar, missingDisplayName, readReminderPrefs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity, missingAvatar, missingDisplayName]);
 
   const handleRemindLater = useCallback(() => {
     updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: false });

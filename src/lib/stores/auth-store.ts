@@ -40,4 +40,3 @@ export const useAuthStore = create<AuthState>((set) => ({
       vaultSecrets: null,
     }),
 }));
-
