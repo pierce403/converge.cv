@@ -69,8 +69,8 @@ Store the private key securely on your push notification server.
 
 ### XMTP Configuration
 
-When integrating real XMTP SDK:
-- Update `src/lib/xmtp/client.ts` with actual XMTP v3 client code
+When integrating XMTP SDK changes:
+- Ensure `src/lib/xmtp/client.ts` targets XMTP protocol v3 (currently running @xmtp/browser-sdk v5.0.1)
 - Configure XMTP network (dev/production)
 - Set up any required API keys or endpoints
 
@@ -165,4 +165,3 @@ Check GitHub Actions logs for details. Common issues:
 **Deployment Domain:** https://converge.cv  
 **Repository:** https://github.com/pierce403/converge.cv  
 **Status:** [![Build Status](https://github.com/pierce403/converge.cv/workflows/Build%20and%20Deploy%20to%20GitHub%20Pages/badge.svg)](https://github.com/pierce403/converge.cv/actions)
-

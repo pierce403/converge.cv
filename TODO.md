@@ -1,7 +1,7 @@
-# converge.cv - XMTP v3 PWA Development TODO
+# converge.cv - XMTP protocol v3 PWA Development TODO
 
 ## Project Overview
-Building a Signal-like PWA for XMTP v5 messaging - local-first, installable, encrypted.
+Building a Signal-like PWA for XMTP protocol v3 using the current XMTP SDK v5.0.1 — local-first, installable, encrypted.
 
 ## Latest Updates (2025-10-29)
 

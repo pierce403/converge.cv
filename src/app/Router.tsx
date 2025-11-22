@@ -39,6 +39,7 @@ export function AppRouter() {
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/i/:inboxId" element={<InboxConnectRedirect />} />
         <Route path="/u/:userId" element={<UserConnectRedirect />} />
+        <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
         {isCheckingAuth ? (
           // While checking auth, render all app routes but show loading screen
           // This preserves the URL so it doesn't redirect

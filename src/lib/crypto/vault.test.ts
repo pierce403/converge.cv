@@ -109,7 +109,7 @@ describe('Crypto Vault', () => {
     });
 
     it('should throw error when encrypting without vault key', async () => {
-      expect(() => encryptData('test')).rejects.toThrow('Vault is locked');
+      await expect(() => encryptData('test')).rejects.toThrow('Vault is locked');
     });
 
     it('should throw error when decrypting without vault key', async () => {
@@ -119,7 +119,7 @@ describe('Crypto Vault', () => {
 
       lockVault();
 
-      expect(() => decryptData(encrypted)).rejects.toThrow('Vault is locked');
+      await expect(() => decryptData(encrypted)).rejects.toThrow('Vault is locked');
     });
   });
 
@@ -136,4 +136,3 @@ describe('Crypto Vault', () => {
     });
   });
 });
-

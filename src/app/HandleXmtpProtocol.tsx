@@ -15,23 +15,55 @@ export function HandleXmtpProtocol() {
       return;
     }
 
-    const parts = xmtpUrl.split('/');
-    if (parts.length >= 4 && parts[2] === 'chat') {
-      console.warn('Group invite links are not supported. Redirecting to home.');
-      navigate('/');
+    const emitToast = (message: string) => {
       try {
-        window.dispatchEvent(
-          new CustomEvent('ui:toast', {
-            detail: 'Group links are no longer supported. Ask a member to add you instead.',
-          })
-        );
+        window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
       } catch {
         // ignore toast failures
       }
+    };
+
+    const parseTarget = (raw: string): { type: 'dm' | 'group' | 'unknown'; value?: string } => {
+      try {
+        const u = new URL(raw);
+        const host = (u.host || '').toLowerCase();
+        const segments = (u.pathname || '').split('/').filter(Boolean);
+
+        // Treat "chat" as group invite, which we do not support yet
+        if (host === 'chat' || segments[0] === 'chat') return { type: 'group' };
+
+        // Common forms:
+        // web+xmtp://dm/<inboxId>
+        // web+xmtp://<inboxId>
+        // web+xmtp://xmtp.chat/dm/<inboxId>
+        if (segments[0] === 'dm' && segments[1]) return { type: 'dm', value: segments[1] };
+        if (host === 'dm' && segments[0]) return { type: 'dm', value: segments[0] };
+
+        // If only an identifier is present as host or first segment, use it directly
+        if (!segments[0] && host) return { type: 'dm', value: host };
+        if (segments.length === 1) return { type: 'dm', value: segments[0] };
+      } catch (err) {
+        console.warn('Failed to parse XMTP URL:', err);
+      }
+      return { type: 'unknown' };
+    };
+
+    const result = parseTarget(xmtpUrl);
+
+    if (result.type === 'group') {
+      emitToast('Group links are not supported yet. Ask a member to add you instead.');
+      navigate('/');
       return;
     }
 
-    console.error('Invalid XMTP URL format:', xmtpUrl);
+    if (result.type === 'dm' && result.value) {
+      const target = decodeURIComponent(result.value);
+      emitToast('Opening XMTP conversation…');
+      navigate(`/i/${encodeURIComponent(target)}`);
+      return;
+    }
+
+    emitToast('Unsupported XMTP link.');
     navigate('/');
   }, [location, navigate]);
 

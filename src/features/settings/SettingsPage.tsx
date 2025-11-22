@@ -960,7 +960,7 @@ export function SettingsPage() {
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <span className="text-primary-200">Protocol</span>
-                  <span>XMTP v3</span>
+                  <span>XMTP protocol v3 (SDK v5.0.1)</span>
                 </div>
               </div>
               <div className="p-4">

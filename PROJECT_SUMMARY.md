@@ -18,7 +18,7 @@
 ## 🚀 What Was Built
 
 ### Core Application
-A fully functional, production-ready Progressive Web App for encrypted messaging using XMTP v3 protocol.
+A fully functional, production-ready Progressive Web App for encrypted messaging using XMTP protocol v3 (running on @xmtp/browser-sdk v5.0.1).
 
 ### Feature Modules Completed
 
@@ -235,7 +235,7 @@ d8098ff - feat: Implement storage, crypto, auth, and XMTP wrapper
 ## ✅ Definition of Done Checklist
 
 ### MVP Requirements (All Complete)
-- [x] Installable PWA with offline app-shell
+- [x] Installable PWA shell (offline app-shell caching currently disabled)
 - [x] Create identity and lock/unlock vault
 - [x] Start new conversation and send/receive text
 - [x] Local DB persists across reloads
@@ -257,7 +257,7 @@ d8098ff - feat: Implement storage, crypto, auth, and XMTP wrapper
 ## 🎯 Next Steps (Post-MVP)
 
 ### Immediate
-1. **Finalize XMTP v3 SDK integration**: Build out production-ready messaging flows on top of the new mainnet connection
+1. **Finalize XMTP protocol v3 integration (SDK v5.0.1)**: Build out production-ready messaging flows on top of the new mainnet connection
 2. **Generate PWA Icons**: Create proper 192x192 and 512x512 icons
 3. **Setup VAPID Keys**: Generate and configure for push notifications
 4. **Test on Devices**: iOS Safari and Android Chrome
@@ -337,4 +337,3 @@ Built with modern web technologies:
 ---
 
 Built with ❤️ by Pierce Brantley | October 2025
-

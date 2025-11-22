@@ -1,7 +1,7 @@
 {
   "name": "Converge",
   "short_name": "Converge",
-  "description": "Secure, local-first messaging with XMTP v3",
+  "description": "Secure, local-first messaging with XMTP protocol v3 (XMTP SDK v5.0.1)",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

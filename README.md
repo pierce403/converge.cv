@@ -1,6 +1,6 @@
-# Converge.cv - XMTP v3 PWA
+# Converge.cv - XMTP protocol v3 PWA
 
-A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
+A Signal-like, local-first messaging Progressive Web App built on XMTP protocol v3 (powered by the XMTP SDK v5.0.1).
 
 **🚀 Live Demo**: [converge.cv](https://converge.cv) (coming soon)  
 **📦 Repository**: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
@@ -9,8 +9,8 @@ A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
 
 ### Core Features
 - **Local-First Architecture**: All data encrypted and stored locally on your device
-- **Progressive Web App**: Install on iOS, Android, and desktop - works offline
-- **XMTP v3 Protocol**: Decentralized messaging via the XMTP v3 browser SDK (production network)
+- **Installable PWA shell**: Add to home screen on iOS, Android, and desktop; offline caching is currently disabled while XMTP stability is prioritized
+- **XMTP protocol v3**: Decentralized messaging via the XMTP SDK (currently @xmtp/browser-sdk v5.0.1 on production network)
 - **End-to-End Encrypted**: Military-grade AES-GCM 256-bit encryption with WebCrypto
 - **Passkey Support**: WebAuthn PRF integration prepared for passwordless authentication
 - **Signal-like UX**: Clean, intuitive interface with familiar messaging patterns
@@ -31,11 +31,11 @@ A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
 - Secure key management in memory
 
 ### PWA Features
-- Offline app shell caching
-- Installable on all platforms
+- Installable manifest + minimal service worker (push-only)
+- Offline app shell caching is currently disabled
 - Push notification support (with VAPID setup)
-- Badge API for unread counts
-- Service worker for background sync
+- Badge API for unread counts (future)
+- Background sync (future)
 
 ## 🛠️ Tech Stack
 
@@ -43,8 +43,8 @@ A Signal-like, local-first messaging Progressive Web App built with XMTP v3.
 - **Routing**: react-router-dom
 - **State Management**: Zustand
 - **Styling**: Tailwind CSS
-- **PWA**: vite-plugin-pwa (Workbox)
-- **Messaging**: XMTP v3 browser SDK (production network connection in progress)
+- **PWA**: Installable manifest + minimal push service worker (vite-plugin-pwa/Workbox dependencies are present but currently disabled)
+- **Messaging**: XMTP protocol v3 via XMTP SDK v5.0.1 (production network)
 - **Storage**: Dexie (IndexedDB) with SQLite WASM migration path
 - **Crypto**: WebCrypto API + WebAuthn
 - **Testing**: Vitest + Playwright
@@ -120,11 +120,11 @@ src/
 
 ## 📱 PWA Features
 
-- Installable on all platforms
-- Offline support
-- Web Push notifications
-- Background sync
-- App shell caching
+- Installable manifest
+- Minimal push service worker (offline/app shell caching currently disabled)
+- Web Push notifications (with VAPID)
+- Background sync (planned)
+- App shell caching (planned)
 
 ## 🤝 Contributing
 
@@ -202,11 +202,11 @@ pnpm test:e2e                # Run E2E tests
 - ✅ Encrypted local storage
 - ✅ Search functionality
 - ✅ Settings and vault management
-- ✅ PWA with offline support
+- ✅ Installable PWA shell; offline caching currently disabled
 - ✅ Push notification infrastructure
 
 ### Next Steps
-- [ ] Complete end-to-end XMTP v3 messaging flows
+- [ ] Complete end-to-end XMTP protocol v3 messaging flows
 - [ ] Implement attachment support
 - [ ] Add message reactions (interactive)
 - [ ] Disappearing messages
@@ -244,4 +244,3 @@ Dean Pierce - [@pierce403](https://github.com/pierce403)
 ---
 
 Built with ❤️ using React, TypeScript, and XMTP
-

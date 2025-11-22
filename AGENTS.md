@@ -6,13 +6,13 @@
 
 ## Project Overview
 
-**Converge.cv** - A Signal-like, local-first Progressive Web App for XMTP v3 messaging protocol.
+**Converge.cv** - A Signal-like, local-first Progressive Web App for XMTP protocol v3 (currently running @xmtp/browser-sdk v5.0.1).
 
 - **Live URL**: https://converge.cv
 - **Tech Stack**: React 18 + TypeScript + Vite + Tailwind CSS
 - **State Management**: Zustand
 - **Storage**: Dexie (IndexedDB wrapper)
-- **Messaging Protocol**: XMTP v3 (production network connection scaffolding in place)
+- **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v5.0.1
 - **PWA**: vite-plugin-pwa with Workbox
 - **Deployment**: GitHub Pages (auto-deploy on push to master)
 
@@ -75,8 +75,8 @@ Welcome → handleStart() →
 ## PWA Features
 
 ### Install Prompt
-- Component: `src/components/PWAInstallPrompt.tsx`
-- Shows on mobile: "Install Converge - Install the app for faster access and offline messaging"
+- Component: `src/components/PWAInstallPrompt.tsx` (currently removed/disabled)
+- Original copy referenced “offline messaging”; avoid promising offline until the service worker is re-enabled.
 - Remembers dismissal in localStorage (`pwa-install-dismissed`)
 - Only shows once per device
 
@@ -141,7 +141,7 @@ src/
 ## Development Commands
 
 ```bash
-pnpm dev              # Start dev server (port 3001 currently running)
+pnpm dev              # Start dev server (port 3000)
 pnpm build            # Build for production
 pnpm preview          # Preview production build
 pnpm test --run       # Run Vitest suite once (avoids hanging watch mode)
@@ -184,14 +184,14 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
-- **XMTP v5.0.1 Integration**: ✅ Fully working!
+  - **XMTP SDK v5.0.1 on protocol v3**: ✅ Fully working!
   - **Upgraded from v3.0.5 → v5.0.1** (October 28, 2025)
   - Following xmtp.chat reference implementation
   - Identities properly registered on XMTP production network
   - Wallet generation uses proper secp256k1 (address derived from private key via `viem`)
   - Message streaming active via `conversations.streamAllMessages()`
   - Incoming messages displayed in real-time
-  - Can message and be messaged from xmtp.chat and other XMTP v3+ clients
+  - Can message and be messaged from xmtp.chat and other XMTP protocol v3+ clients
   - **Key difference from v3**: `getIdentifier()` is synchronous in v5 (was async in v3)
 
 ### 🚧 TODO
@@ -213,7 +213,7 @@ pnpm typecheck        # TypeScript type checking
 
 ## Testing Notes
 
-- Dev server runs on port 3001 (not 3000)
+- Dev server runs on port 3000
 - Browser testing done via Playwright MCP tools
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
@@ -369,7 +369,7 @@ if (!isRegistered) {
 ### While Working
 - Keep the no-passphrase principle in mind
 - Maintain the simple onboarding flow
-- Test changes in browser (localhost:3001)
+- Test changes in browser (localhost:3000)
 - Check for linter errors after edits
 - `pnpm install` now runs `scripts/fix-xmtp-wasm-worker.mjs` automatically to patch
   the missing XMTP sqlite worker file inside `node_modules`. If the build complains

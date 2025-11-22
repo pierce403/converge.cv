@@ -186,7 +186,13 @@ export async function encryptData(data: string | ArrayBuffer): Promise<string> {
     throw new Error('Vault is locked');
   }
 
-  const plaintext = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  // Normalize to Uint8Array to satisfy subtle crypto requirements across runtimes
+  const plaintext =
+    typeof data === 'string'
+      ? new TextEncoder().encode(data)
+      : data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : new Uint8Array(data);
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, vaultKey, plaintext);
@@ -259,4 +265,3 @@ export function isVaultUnlocked(): boolean {
 export function generateSalt(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
 }
-

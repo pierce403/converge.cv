@@ -12,7 +12,7 @@ export default defineConfig({
   // },
   plugins: [
     react(),
-    // Service worker disabled - not needed for XMTP v3 (cthulhu.bot works without it)
+    // Service worker disabled - not needed for XMTP protocol v3 (cthulhu.bot works without it)
   ],
   resolve: {
     alias: {
@@ -38,4 +38,3 @@ export default defineConfig({
     sourcemap: true,
   },
 });
-
