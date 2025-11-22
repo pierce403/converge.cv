@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo } from 'react';
-import { Menu, Transition } from '@headlessui/react';
+import { Menu, Transition, Portal } from '@headlessui/react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
 import { useAuthStore, useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
@@ -113,98 +113,100 @@ export function InboxSwitcher() {
         leaveFrom="transform opacity-100 scale-100"
         leaveTo="transform opacity-0 scale-95"
       >
-        {/* Center dropdown under the viewport header and ensure it stays on screen */}
-        <Menu.Items
-          className="fixed left-1/2 -translate-x-1/2 top-16 z-[12010] w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
-        >
-          <div className="mb-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
-            {identity?.inboxId ? (
-              <div className="mt-2 rounded-lg border border-primary-800/60 bg-primary-900/60 p-3 text-xs text-primary-200">
-                <div className="font-semibold text-primary-100">{currentLabel}</div>
-                <div className="mt-1 break-all text-primary-300">Inbox ID: {identity.inboxId}</div>
-                <div className="mt-1 text-primary-400">
-                  Address: {identity.address}
+        <Portal>
+          {/* Center dropdown under the viewport header and ensure it stays on screen */}
+          <Menu.Items
+            className="fixed left-1/2 -translate-x-1/2 top-16 z-[20000] w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
+          >
+            <div className="mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
+              {identity?.inboxId ? (
+                <div className="mt-2 rounded-lg border border-primary-800/60 bg-primary-900/60 p-3 text-xs text-primary-200">
+                  <div className="font-semibold text-primary-100">{currentLabel}</div>
+                  <div className="mt-1 break-all text-primary-300">Inbox ID: {identity.inboxId}</div>
+                  <div className="mt-1 text-primary-400">
+                    Address: {identity.address}
+                  </div>
+                  <div className="mt-2 text-[11px] text-primary-500">
+                    Identities cannot be merged. Moving an identity routes future messages to the destination inbox only.
+                  </div>
                 </div>
-                <div className="mt-2 text-[11px] text-primary-500">
-                  Identities cannot be merged. Moving an identity routes future messages to the destination inbox only.
+              ) : (
+                <div className="mt-2 text-xs text-primary-300">
+                  Connect an identity to see inbox details and linked devices.
                 </div>
-              </div>
-            ) : (
-              <div className="mt-2 text-xs text-primary-300">
-                Connect an identity to see inbox details and linked devices.
-              </div>
-            )}
-          </div>
+              )}
+            </div>
 
-          <div className="my-2 h-px bg-primary-800/60" />
+            <div className="my-2 h-px bg-primary-800/60" />
 
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">On this device</div>
-            {sortedEntries.length === 0 ? (
-              <div className="mt-2 text-xs text-primary-300">No inboxes stored locally yet.</div>
-            ) : (
-              <div className="mt-2 space-y-2">
-                {sortedEntries.map((entry) => (
-                  <Menu.Item key={entry.inboxId}>
-                    {({ active }) => (
-                      <button
-                        onClick={() => handleSwitch(entry)}
-                        disabled={entry.inboxId === currentInboxId}
-                        className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition ${
-                          entry.inboxId === currentInboxId
-                            ? 'cursor-default border-accent-500/60 bg-accent-600/20 text-accent-100'
-                            : active
-                            ? 'border-accent-500/60 bg-primary-900/70 text-primary-100'
-                            : 'border-primary-800/60 bg-primary-900/40 text-primary-200 hover:border-accent-500/60'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-primary-100">{getInboxDisplayLabel(entry)}</span>
-                          <span className="text-[10px] text-primary-400">{entry.hasLocalDB ? 'Local DB' : 'History sync pending'}</span>
-                        </div>
-                        <div className="mt-1 break-all text-[11px] text-primary-300">{entry.inboxId}</div>
-                        <div className="mt-1 text-[11px] text-primary-400">
-                          Primary identity: {entry.primaryDisplayIdentity}
-                        </div>
-                      </button>
-                    )}
-                  </Menu.Item>
-                ))}
-              </div>
-            )}
-          </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">On this device</div>
+              {sortedEntries.length === 0 ? (
+                <div className="mt-2 text-xs text-primary-300">No inboxes stored locally yet.</div>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {sortedEntries.map((entry) => (
+                    <Menu.Item key={entry.inboxId}>
+                      {({ active }) => (
+                        <button
+                          onClick={() => handleSwitch(entry)}
+                          disabled={entry.inboxId === currentInboxId}
+                          className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition ${
+                            entry.inboxId === currentInboxId
+                              ? 'cursor-default border-accent-500/60 bg-accent-600/20 text-accent-100'
+                              : active
+                              ? 'border-accent-500/60 bg-primary-900/70 text-primary-100'
+                              : 'border-primary-800/60 bg-primary-900/40 text-primary-200 hover:border-accent-500/60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-primary-100">{getInboxDisplayLabel(entry)}</span>
+                            <span className="text-[10px] text-primary-400">{entry.hasLocalDB ? 'Local DB' : 'History sync pending'}</span>
+                          </div>
+                          <div className="mt-1 break-all text-[11px] text-primary-300">{entry.inboxId}</div>
+                          <div className="mt-1 text-[11px] text-primary-400">
+                            Primary identity: {entry.primaryDisplayIdentity}
+                          </div>
+                        </button>
+                      )}
+                    </Menu.Item>
+                  ))}
+                </div>
+              )}
+            </div>
 
-          <div className="my-2 h-px bg-primary-800/60" />
+            <div className="my-2 h-px bg-primary-800/60" />
 
-          <Menu.Item>
-            {({ active }) => (
-              <button
-                onClick={() => navigate('/onboarding?connect=1')}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
-                  active ? 'bg-accent-600/20 text-accent-200' : 'text-accent-300 hover:text-accent-200'
-                }`}
-              >
-                Connect to another inbox…
-              </button>
-            )}
-          </Menu.Item>
+            <Menu.Item>
+              {({ active }) => (
+                <button
+                  onClick={() => navigate('/onboarding?connect=1')}
+                  className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
+                    active ? 'bg-accent-600/20 text-accent-200' : 'text-accent-300 hover:text-accent-200'
+                  }`}
+                >
+                  Connect to another inbox…
+                </button>
+              )}
+            </Menu.Item>
 
-          <div className="my-2 h-px bg-primary-800/60" />
+            <div className="my-2 h-px bg-primary-800/60" />
 
-          <Menu.Item>
-            {({ active }) => (
-              <button
-                onClick={handleCreateEphemeral}
-                className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
-                  active ? 'bg-primary-800/70 text-primary-100' : 'text-primary-200 hover:text-primary-100'
-                }`}
-              >
-                Create ephemeral identity
-              </button>
-            )}
-          </Menu.Item>
-        </Menu.Items>
+            <Menu.Item>
+              {({ active }) => (
+                <button
+                  onClick={handleCreateEphemeral}
+                  className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
+                    active ? 'bg-primary-800/70 text-primary-100' : 'text-primary-200 hover:text-primary-100'
+                  }`}
+                >
+                  Create ephemeral identity
+                </button>
+              )}
+            </Menu.Item>
+          </Menu.Items>
+        </Portal>
       </Transition>
     </Menu>
   );
