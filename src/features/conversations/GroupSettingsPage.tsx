@@ -1068,7 +1068,11 @@ export function GroupSettingsPage() {
                   value={groupImage}
                   onChange={(e) => {
                     const value = e.target.value;
-                    if (value === '' || isDisplayableImageSrc(value)) {
+                    // Allow only blank or https image URLs for maximal safety to prevent XSS; block data:, javascript:, etc.
+                    const isSafeImageUrl =
+                      value === '' ||
+                      (/^https:\/\/[^\s]+$/i.test(value) && isDisplayableImageSrc(value));
+                    if (isSafeImageUrl) {
                       setGroupImage(value);
                       setError('');
                     } else {
