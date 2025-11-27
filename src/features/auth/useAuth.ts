@@ -71,23 +71,25 @@ export function useAuth() {
             }
           }
           return;
-        }
+      }
 
-        const xmtp = getXmtpClient();
-        await xmtp.connect(
-          {
-            address,
-            privateKey,
-            chainId,
-            signMessage,
-            displayName: options?.labelOverride,
-          },
-          {
-            register: options?.register !== false,
-            enableHistorySync:
-              options?.enableHistorySync !== undefined ? options.enableHistorySync : true,
-          }
-        );
+      const xmtp = getXmtpClient();
+      const shouldRegister = options?.register === true;
+      const shouldSyncHistory =
+        options?.enableHistorySync !== undefined ? options.enableHistorySync : true;
+      await xmtp.connect(
+        {
+          address,
+          privateKey,
+          chainId,
+          signMessage,
+          displayName: options?.labelOverride,
+        },
+        {
+          register: shouldRegister,
+          enableHistorySync: shouldSyncHistory,
+        }
+      );
 
         const inboxId = xmtp.getInboxId();
         const installationId = xmtp.getInstallationId();
@@ -270,7 +272,7 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        await connectXmtpSafely(identity.address);
+        await connectXmtpSafely(identity.address, undefined, undefined, undefined, { register: true });
 
         return true;
       } catch (error) {
@@ -333,7 +335,7 @@ export function useAuth() {
         setVaultUnlocked(true);
 
         // Connect XMTP
-        await connectXmtpSafely(identity.address);
+        await connectXmtpSafely(identity.address, undefined, undefined, undefined, { register: true });
 
         return true;
       } catch (error) {
@@ -540,7 +542,7 @@ export function useAuth() {
 
       if (identity.privateKey) {
         await connectXmtpSafely(identity.address, identity.privateKey, undefined, undefined, {
-          register: true,
+          register: false,
           enableHistorySync: shouldSyncHistory,
           labelOverride: identity.displayName,
         });
@@ -550,7 +552,7 @@ export function useAuth() {
           return await signMessageAsync({ message });
         };
         await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
-          register: true,
+          register: false,
           enableHistorySync: shouldSyncHistory,
           labelOverride: identity.displayName,
         });
