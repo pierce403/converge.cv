@@ -10,7 +10,7 @@ import { WebWorkersPanel } from './WebWorkersPanel';
 import { KeyExplorerModal } from './KeyExplorerModal';
 import { IgnoredConversationsModal } from './IgnoredConversationsModal';
 import buildInfo from '../../build-info.json'; // Import build info
-import { registerServiceWorkerForPush, enablePush, disablePush } from '@/lib/push';
+import { registerServiceWorkerForPush, enablePushForCurrentUser, disablePush } from '@/lib/push';
 import { logNetworkEvent } from '@/lib/stores/debug-store';
 
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
@@ -243,9 +243,9 @@ export function DebugPage() {
               <button
                 type="button"
                 onClick={async () => {
-                  const inboxId = identity?.inboxId || identity?.address || 'unknown';
-                  const dto = await enablePush(inboxId, identity?.installationId);
-                  logNetworkEvent({ direction: 'outbound', event: 'push:enable', details: dto ? 'subscribed' : 'no-op', payload: dto ? JSON.stringify({ endpoint: dto.endpoint }) : undefined });
+                  const userId = identity?.inboxId || identity?.address || 'unknown';
+                  const result = await enablePushForCurrentUser({ userId, channelId: 'default' });
+                  logNetworkEvent({ direction: 'outbound', event: 'push:enable', details: result.success ? 'subscribed' : result.error || 'failed', payload: result.endpoint ? JSON.stringify({ endpoint: result.endpoint }) : undefined });
                   await refreshPushStatus();
                 }}
                 className="btn-primary"
@@ -256,8 +256,7 @@ export function DebugPage() {
               <button
                 type="button"
                 onClick={async () => {
-                  const inboxId = identity?.inboxId || identity?.address || 'unknown';
-                  await disablePush(inboxId);
+                  await disablePush();
                   logNetworkEvent({ direction: 'outbound', event: 'push:disable', details: 'unsubscribed' });
                   await refreshPushStatus();
                 }}

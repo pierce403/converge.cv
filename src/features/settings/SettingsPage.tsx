@@ -11,7 +11,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
-import { enablePush, disablePush } from '@/lib/push';
+import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 
 export function SettingsPage() {
@@ -59,35 +59,66 @@ export function SettingsPage() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const { disconnectWallet } = useWalletConnection();
   const [showQR, setShowQR] = useState(false);
-  // Track push status (reserved for future display)
-  // Store in ref to avoid TS/ESLint unused checks
-  const pushStatusRef = useRef<'unknown' | 'enabled' | 'disabled'>('unknown');
+  // Track push status
+  const [pushStatus, setPushStatus] = useState<'unknown' | 'enabled' | 'disabled' | 'unsupported'>('unknown');
+  const [isPushLoading, setIsPushLoading] = useState(false);
   const canDownloadKeyfile = Boolean(identity?.privateKey || identity?.mnemonic);
+
+  // Check push status on mount
+  useEffect(() => {
+    const checkPushStatus = async () => {
+      const permission = getPushPermissionStatus();
+      if (permission === 'unsupported') {
+        setPushStatus('unsupported');
+        return;
+      }
+      const enabled = await isPushEnabled();
+      setPushStatus(enabled ? 'enabled' : 'disabled');
+    };
+    checkPushStatus();
+  }, []);
 
   const handleLockVault = () => {
     lock();
   };
 
   const handleEnablePush = async () => {
+    if (isPushLoading) return;
+    setIsPushLoading(true);
     try {
-      if (!identity) return alert('No identity');
-      await enablePush(identity.inboxId || identity.address, undefined);
-      pushStatusRef.current = 'enabled';
-      alert('Notifications enabled');
+      const userId = identity?.inboxId || identity?.address || 'anon';
+      const result = await enablePushForCurrentUser({ userId, channelId: 'default' });
+      
+      if (result.success) {
+        setPushStatus('enabled');
+        alert('Notifications enabled! You will receive push notifications for new messages.');
+      } else {
+        alert(`Failed to enable notifications: ${result.error || 'Unknown error'}`);
+      }
     } catch (e) {
       console.warn('[Settings] Enable push failed', e);
       alert('Failed to enable notifications');
+    } finally {
+      setIsPushLoading(false);
     }
   };
+  
   const handleDisablePush = async () => {
+    if (isPushLoading) return;
+    setIsPushLoading(true);
     try {
-      if (!identity) return;
-      await disablePush(identity.inboxId || identity.address);
-      pushStatusRef.current = 'disabled';
-      alert('Notifications disabled');
+      const success = await disablePush();
+      if (success) {
+        setPushStatus('disabled');
+        alert('Notifications disabled');
+      } else {
+        alert('Failed to disable notifications');
+      }
     } catch (e) {
       console.warn('[Settings] Disable push failed', e);
       alert('Failed to disable notifications');
+    } finally {
+      setIsPushLoading(false);
     }
   };
 
@@ -906,11 +937,40 @@ export function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-medium">Notifications</div>
-                    <div className="text-sm text-primary-200">Web push (requires permission)</div>
+                    <div className="text-sm text-primary-200">
+                      {pushStatus === 'unsupported' 
+                        ? 'Not supported in this browser'
+                        : pushStatus === 'enabled'
+                        ? 'Push notifications are active'
+                        : 'Web push (requires permission)'}
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={handleEnablePush} className="btn-primary text-sm">Enable</button>
-                    <button onClick={handleDisablePush} className="btn-secondary text-sm">Disable</button>
+                  <div className="flex gap-2 items-center">
+                    {pushStatus === 'enabled' && (
+                      <span className="text-sm text-green-500">✓</span>
+                    )}
+                    {pushStatus !== 'unsupported' && (
+                      <>
+                        {pushStatus !== 'enabled' && (
+                          <button 
+                            onClick={handleEnablePush} 
+                            disabled={isPushLoading}
+                            className="btn-primary text-sm disabled:opacity-50"
+                          >
+                            {isPushLoading ? '...' : 'Enable'}
+                          </button>
+                        )}
+                        {pushStatus === 'enabled' && (
+                          <button 
+                            onClick={handleDisablePush} 
+                            disabled={isPushLoading}
+                            className="btn-secondary text-sm disabled:opacity-50"
+                          >
+                            {isPushLoading ? '...' : 'Disable'}
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
