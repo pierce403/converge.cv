@@ -10,6 +10,7 @@ import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
+import { useSignMessage } from 'wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
@@ -57,12 +58,50 @@ export function SettingsPage() {
 
   const [displayName, setDisplayName] = useState<string>(computeInitialDisplayName());
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const { disconnectWallet } = useWalletConnection();
+  const { disconnectWallet, isConnected: isWalletConnected, address: walletAddress } = useWalletConnection();
+  const { signMessageAsync } = useSignMessage();
   const [showQR, setShowQR] = useState(false);
   // Track push status
   const [pushStatus, setPushStatus] = useState<'unknown' | 'enabled' | 'disabled' | 'unsupported'>('unknown');
   const [isPushLoading, setIsPushLoading] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const canDownloadKeyfile = Boolean(identity?.privateKey || identity?.mnemonic);
+
+  // Helper to reconnect to XMTP
+  const handleReconnect = async () => {
+    if (!identity || isReconnecting) return;
+    
+    setIsReconnecting(true);
+    try {
+      const xmtp = getXmtpClient();
+      
+      // If identity has a private key (Converge-generated), use it directly
+      if (identity.privateKey) {
+        await xmtp.connect({ 
+          address: identity.address, 
+          privateKey: identity.privateKey 
+        });
+        return;
+      }
+      
+      // For wallet-connected identities, we need the wallet to be connected
+      if (isWalletConnected && walletAddress?.toLowerCase() === identity.address.toLowerCase()) {
+        await xmtp.connect({ 
+          address: identity.address, 
+          signMessage: async (message: string) => await signMessageAsync({ message })
+        });
+        return;
+      }
+      
+      // Wallet not connected or different address
+      throw new Error('Please reconnect your wallet to sign in. Go to the onboarding page to reconnect.');
+    } catch (error) {
+      console.error('Reconnect failed:', error);
+      // Error will be shown via xmtpError in the store
+    } finally {
+      setIsReconnecting(false);
+    }
+  };
 
   // Check push status on mount
   useEffect(() => {
@@ -687,22 +726,11 @@ export function SettingsPage() {
                       {xmtpError}
                     </div>
                     <button
-                      onClick={async () => {
-                        const xmtp = getXmtpClient();
-                        if (identity) {
-                          try {
-                            await xmtp.connect({ 
-                              address: identity.address, 
-                              privateKey: identity.privateKey 
-                            });
-                          } catch (error) {
-                            console.error('Retry failed:', error);
-                          }
-                        }
-                      }}
-                      className="text-xs text-accent-300 hover:text-accent-200 underline"
+                      onClick={handleReconnect}
+                      disabled={isReconnecting}
+                      className="text-xs text-accent-300 hover:text-accent-200 underline disabled:opacity-50"
                     >
-                      Retry Connection
+                      {isReconnecting ? 'Reconnecting...' : 'Retry Connection'}
                     </button>
                   </div>
                 )}
@@ -710,24 +738,18 @@ export function SettingsPage() {
                   <div className="mt-2">
                     <div className="text-xs text-primary-300 mb-2">
                       Not connected to the XMTP network. Messages won't sync until reconnected.
+                      {!identity?.privateKey && !isWalletConnected && (
+                        <span className="block mt-1 text-yellow-400">
+                          Wallet not connected. Please reconnect your wallet to sign in.
+                        </span>
+                      )}
                     </div>
                     <button
-                      onClick={async () => {
-                        const xmtp = getXmtpClient();
-                        if (identity) {
-                          try {
-                            await xmtp.connect({ 
-                              address: identity.address, 
-                              privateKey: identity.privateKey 
-                            });
-                          } catch (error) {
-                            console.error('Connect failed:', error);
-                          }
-                        }
-                      }}
-                      className="btn-primary text-xs"
+                      onClick={handleReconnect}
+                      disabled={isReconnecting || (!identity?.privateKey && !isWalletConnected)}
+                      className="btn-primary text-xs disabled:opacity-50"
                     >
-                      Connect
+                      {isReconnecting ? 'Connecting...' : 'Connect'}
                     </button>
                   </div>
                 )}
