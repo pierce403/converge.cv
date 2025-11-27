@@ -1,18 +1,16 @@
 /**
  * vapid.party Push Configuration
  * 
- * To enable push notifications:
- * 1. Get your API key from vapid.party dashboard
- * 2. Set it below or via VITE_VAPID_PARTY_API_KEY env var
+ * Push notifications are configured via vapid.party
  */
 
-// vapid.party API key - set this to enable push notifications
-// You can also use VITE_VAPID_PARTY_API_KEY environment variable
-export const VAPID_PARTY_API_KEY = import.meta.env?.VITE_VAPID_PARTY_API_KEY as string | undefined;
+// vapid.party API key
+export const VAPID_PARTY_API_KEY = import.meta.env?.VITE_VAPID_PARTY_API_KEY as string | undefined
+  || 'vp_2e0db7d4671fae9d2901efa5ce8fec49619040d2339181ab';
 
-// Optional: static VAPID public key from vapid.party
-// If not set, we'll fetch it dynamically from the API
-export const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY as string | undefined;
+// VAPID public key from vapid.party
+export const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY as string | undefined
+  || 'BKxwakdVoLv-wLAnJDQqazDTn-09EWYfe-k9ybOEZTIFCGd4cQFgyRcwkbLE3GKTWkS_pWnmVV5m7Tci1m3Jeik';
 
 // vapid.party API base URL
 export const VAPID_PARTY_API_BASE = 'https://vapid.party/api';
