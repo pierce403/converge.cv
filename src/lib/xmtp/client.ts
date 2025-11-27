@@ -183,6 +183,26 @@ export class XmtpClient {
     }
   }
 
+  // Apply cooldown for inboxIds that produce identity/association errors
+  private applyInboxErrorCooldown(inboxId: string, error: unknown): void {
+    try {
+      const msg = error instanceof Error ? error.message : String(error ?? '');
+      // Match common identity-related errors that indicate the inbox doesn't exist or has issues
+      const shouldCooldown = 
+        /invalid hexadecimal digit/i.test(msg) ||
+        /missing identity update/i.test(msg) ||
+        /association error/i.test(msg);
+      
+      if (shouldCooldown) {
+        // 30 minute cooldown to avoid spamming the API
+        this.inboxErrorCooldown.set(inboxId.toLowerCase(), Date.now() + 30 * 60 * 1000);
+        console.info('[XMTP] Cooldown applied to inboxId due to identity error:', inboxId);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // Exponential backoff wrapper for XMTP identity/preferences calls that may hit 429
   private async retryWithBackoff<T>(label: string, fn: () => Promise<T>, opts?: {
     attempts?: number;
@@ -786,9 +806,11 @@ export class XmtpClient {
           if (states?.length) {
             return buildProfile(states[0]?.identifiers ?? []);
           }
-        } catch (error) {
-          console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
-        }
+      } catch (error) {
+        console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+        // Apply cooldown for association/identity errors to reduce noise
+        this.applyInboxErrorCooldown(normalizedInboxId, error);
+      }
       }
 
       const { getXmtpUtils } = await import('./utils-singleton');
@@ -801,17 +823,8 @@ export class XmtpClient {
         }
       } catch (error) {
         console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
-        // Heuristic: if backend reports invalid hexadecimal digit (e.g., "g"),
-        // put this inboxId on cooldown to prevent repeated noisy retries.
-        try {
-          const msg = error instanceof Error ? error.message : String(error ?? '');
-          if (/invalid hexadecimal digit/i.test(msg)) {
-            this.inboxErrorCooldown.set(normalizedInboxId, Date.now() + 30 * 60 * 1000);
-            console.warn('[XMTP] Cooldown applied to inboxId due to identity parse error:', normalizedInboxId);
-          }
-        } catch {
-          // ignore
-        }
+        // Apply cooldown for association/identity errors to reduce noise
+        this.applyInboxErrorCooldown(normalizedInboxId, error);
       }
     } catch (error) {
       console.error('[XMTP] fetchInboxProfile unexpected error:', error);
