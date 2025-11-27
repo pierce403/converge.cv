@@ -706,6 +706,31 @@ export function SettingsPage() {
                     </button>
                   </div>
                 )}
+                {connectionStatus === 'disconnected' && !xmtpError && (
+                  <div className="mt-2">
+                    <div className="text-xs text-primary-300 mb-2">
+                      Not connected to the XMTP network. Messages won't sync until reconnected.
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const xmtp = getXmtpClient();
+                        if (identity) {
+                          try {
+                            await xmtp.connect({ 
+                              address: identity.address, 
+                              privateKey: identity.privateKey 
+                            });
+                          } catch (error) {
+                            console.error('Connect failed:', error);
+                          }
+                        }
+                      }}
+                      className="btn-primary text-xs"
+                    >
+                      Connect
+                    </button>
+                  </div>
+                )}
                 {connectionStatus === 'connecting' && (
                   <div className="mt-2 text-xs text-primary-200">
                     <div className="flex items-center gap-2">
