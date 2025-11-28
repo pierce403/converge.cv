@@ -393,6 +393,10 @@ if (!isRegistered) {
    - Include AGENTS.md updates in the same commit if applicable
    - Never leave uncommitted changes when completing work
 
+## Documentation Expectations
+
+- Whenever a feature is added, removed, or meaningfully modified, **update `FEATURES.md`** with the current behavior and specification details so future agents stay in sync with the shipped experience.
+
 ### Communication Style
 - Ask clarifying questions if passphrase/security features are needed
 - Default to simplicity and low friction
