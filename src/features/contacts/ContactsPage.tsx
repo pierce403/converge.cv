@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { useContactStore } from '@/lib/stores';
+import { useContactStore, useAuthStore, useFarcasterStore } from '@/lib/stores';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import type { Contact } from '@/lib/stores/contact-store';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
+import { FarcasterSyncModal } from '@/components/FarcasterSyncModal';
+import { fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
+import { fetchFarcasterUserFromAPI } from '@/lib/farcaster/service';
 
 export function ContactsPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -12,12 +15,88 @@ export function ContactsPage() {
   const isLoading = useContactStore((state) => state.isLoading);
   const removeContact = useContactStore((state) => state.removeContact);
   const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
+  const syncFarcasterContacts = useContactStore((state) => state.syncFarcasterContacts);
   const [showContactCard, setShowContactCard] = useState(false);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const identity = useAuthStore((state) => state.identity);
+  const [showFarcasterForm, setShowFarcasterForm] = useState(false);
+  const [fidInput, setFidInput] = useState(() => (identity?.farcasterFid ? String(identity.farcasterFid) : ''));
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncCurrent, setSyncCurrent] = useState(0);
+  const [syncTotal, setSyncTotal] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<string | undefined>();
+  const [syncLog, setSyncLog] = useState<string[]>([]);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const hasNeynarKey = useFarcasterStore((state) => state.hasNeynarApiKey());
+  const getNeynarKey = useFarcasterStore((state) => state.getEffectiveNeynarApiKey);
 
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  const resolveFarcasterFid = async (): Promise<number> => {
+    const trimmed = fidInput.trim();
+    if (!trimmed) {
+      throw new Error('Enter a Farcaster FID or username to sync contacts.');
+    }
+
+    if (/^\d+$/.test(trimmed)) {
+      return Number(trimmed);
+    }
+
+    const apiKey = getNeynarKey();
+    const profile = apiKey ? await fetchNeynarUserProfile(trimmed, apiKey) : null;
+    if (profile?.fid) {
+      return profile.fid;
+    }
+
+    const fallbackProfile = await fetchFarcasterUserFromAPI(trimmed);
+    if (fallbackProfile?.fid) {
+      return fallbackProfile.fid;
+    }
+
+    throw new Error('Unable to resolve that Farcaster account.');
+  };
+
+  const handleFarcasterSync = async () => {
+    if (!hasNeynarKey) {
+      alert('Add a Neynar API key in Settings to enable Farcaster sync.');
+      return;
+    }
+
+    try {
+      setIsSyncing(true);
+      setSyncLog([]);
+      const fid = await resolveFarcasterFid();
+      setShowSyncModal(true);
+      await syncFarcasterContacts(fid, (current, total, status) => {
+        setSyncCurrent(current);
+        setSyncTotal(total);
+        if (status) {
+          setSyncStatus(status);
+          setSyncLog((prev) => [...prev, status]);
+        }
+      });
+
+      if (identity && identity.farcasterFid !== fid) {
+        try {
+          const updatedIdentity = { ...identity, farcasterFid: fid };
+          const storage = await (await import('@/lib/storage')).getStorage();
+          await storage.putIdentity(updatedIdentity);
+          useAuthStore.getState().setIdentity(updatedIdentity);
+        } catch (error) {
+          console.warn('Failed to persist Farcaster FID on identity', error);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to sync Farcaster contacts';
+      setSyncStatus(message);
+      alert(message);
+      setShowSyncModal(false);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const searchQuery = searchTerm.toLowerCase();
   const filteredContacts = contacts.filter((contact) => {
@@ -43,6 +122,45 @@ export function ContactsPage() {
       <header className="bg-primary-950/80 border-b border-primary-800/60 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-lg">
         <h2 className="text-xl font-bold text-primary-50">Contacts</h2>
         <div className="flex gap-2">
+          {hasNeynarKey && (
+            <div className="flex items-center gap-2">
+              {showFarcasterForm ? (
+                <>
+                  <input
+                    type="text"
+                    value={fidInput}
+                    onChange={(e) => setFidInput(e.target.value)}
+                    className="input-primary w-40 text-sm"
+                    placeholder="Your FID or username"
+                    aria-label="Farcaster FID or username"
+                    disabled={isSyncing}
+                  />
+                  <button
+                    onClick={handleFarcasterSync}
+                    className="btn-secondary text-sm px-3 py-1"
+                    disabled={isSyncing}
+                  >
+                    {isSyncing ? 'Syncing…' : 'Sync Farcaster'}
+                  </button>
+                  <button
+                    onClick={() => setShowFarcasterForm(false)}
+                    className="btn-secondary text-sm px-3 py-1"
+                    disabled={isSyncing}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setShowFarcasterForm(true)}
+                  className="btn-secondary text-sm px-3 py-1"
+                  title="Sync the Farcaster accounts you follow into contacts"
+                >
+                  Sync Farcaster
+                </button>
+              )}
+            </div>
+          )}
           <button
             onClick={async () => {
               // Refresh all contacts' display name + avatar from XMTP
@@ -156,6 +274,11 @@ export function ContactsPage() {
                           FC
                         </span>
                       )}
+                      {contact.farcasterScore !== undefined && contact.farcasterScore !== null && (
+                        <span className="text-xs px-1 py-0.5 rounded bg-accent-950/50 text-accent-200 border border-accent-900/60 flex-shrink-0">
+                          Score {Math.round(contact.farcasterScore)}
+                        </span>
+                      )}
                       {contact.isInboxOnly && (
                         <span className="text-xs px-1.5 py-0.5 rounded bg-primary-800/50 text-primary-400 border border-primary-700/50 flex-shrink-0">
                           Inbox
@@ -186,6 +309,18 @@ export function ContactsPage() {
         <ContactCardModal
           contact={selectedContact}
           onClose={() => setShowContactCard(false)}
+        />
+      )}
+      {showSyncModal && (
+        <FarcasterSyncModal
+          isOpen={showSyncModal}
+          current={syncCurrent}
+          total={syncTotal}
+          status={syncStatus}
+          log={syncLog}
+          accountName={fidInput}
+          accountFid={Number(fidInput) || undefined}
+          onClose={() => setShowSyncModal(false)}
         />
       )}
     </div>

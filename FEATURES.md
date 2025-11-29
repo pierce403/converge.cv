@@ -39,3 +39,10 @@
 ## Static Hosting and PWA Polish
 - The app is delivered as static HTML/CSS/JS through GitHub Pages and uses Workbox-powered vite-plugin-pwa to precache the shell for quick reloads.
 - Mobile-friendly styles, responsive layout primitives, and install prompts keep the experience "app-like" on phones, with viewport-safe spacing and touch-target sizing to match PWA expectations.
+
+## Farcaster + Neynar Integration
+- Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.
+- Contacts now include a Farcaster sync action when a Neynar key is present, importing followed accounts with usernames, FIDs, scores, follower stats, and power badge metadata.
+- Contact cards surface Farcaster links alongside Neynar scores, follower/following counts, and power badge badges when available.
+- A Farcaster settings panel allows saving the user’s FID and configuring Neynar score/follower/power-badge thresholds that hide incoming messages failing those criteria, with per-conversation toggles to disable filtering quickly.
+- The contacts list highlights Farcaster-derived entries and shows their Neynar score so users can gauge trust at a glance.

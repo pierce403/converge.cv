@@ -7,6 +7,8 @@ import {
   resolveXmtpAddressFromFarcasterUser,
   resolveContactName,
 } from '@/lib/farcaster/service';
+import { fetchFarcasterFollowingWithNeynar, fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
+import { useFarcasterStore } from './farcaster-store';
 
 const normalizeInboxId = (inboxId: string): string => inboxId.toLowerCase();
 
@@ -47,6 +49,11 @@ export interface Contact {
   identities?: ContactIdentity[];
   farcasterUsername?: string;
   farcasterFid?: number;
+  farcasterScore?: number;
+  farcasterFollowerCount?: number;
+  farcasterFollowingCount?: number;
+  farcasterActiveStatus?: string;
+  farcasterPowerBadge?: boolean;
   lastSyncedAt?: number;
 }
 
@@ -121,6 +128,13 @@ const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact =
     addresses,
     identities,
     primaryAddress: updates.primaryAddress ?? existing.primaryAddress ?? addresses[0],
+    farcasterUsername: updates.farcasterUsername ?? existing.farcasterUsername,
+    farcasterFid: updates.farcasterFid ?? existing.farcasterFid,
+    farcasterScore: updates.farcasterScore ?? existing.farcasterScore,
+    farcasterFollowerCount: updates.farcasterFollowerCount ?? existing.farcasterFollowerCount,
+    farcasterFollowingCount: updates.farcasterFollowingCount ?? existing.farcasterFollowingCount,
+    farcasterActiveStatus: updates.farcasterActiveStatus ?? existing.farcasterActiveStatus,
+    farcasterPowerBadge: updates.farcasterPowerBadge ?? existing.farcasterPowerBadge,
   };
 };
 
@@ -178,6 +192,13 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
             kind: 'Ethereum',
             isPrimary: index === 0,
           })),
+    farcasterUsername: contact.farcasterUsername,
+    farcasterFid: contact.farcasterFid,
+    farcasterScore: contact.farcasterScore,
+    farcasterFollowerCount: contact.farcasterFollowerCount,
+    farcasterFollowingCount: contact.farcasterFollowingCount,
+    farcasterActiveStatus: contact.farcasterActiveStatus,
+    farcasterPowerBadge: contact.farcasterPowerBadge,
   };
 };
 
@@ -356,6 +377,16 @@ export const useContactStore = create<ContactState>()(
               addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
               identities,
               lastSyncedAt: Date.now(),
+              farcasterUsername: profile.metadata?.farcasterUsername ?? existing.farcasterUsername,
+              farcasterFid: profile.metadata?.farcasterFid ?? existing.farcasterFid,
+              farcasterScore: profile.metadata?.farcasterScore ?? existing.farcasterScore,
+              farcasterFollowerCount:
+                profile.metadata?.farcasterFollowerCount ?? existing.farcasterFollowerCount,
+              farcasterFollowingCount:
+                profile.metadata?.farcasterFollowingCount ?? existing.farcasterFollowingCount,
+              farcasterActiveStatus:
+                profile.metadata?.farcasterActiveStatus ?? existing.farcasterActiveStatus,
+              farcasterPowerBadge: profile.metadata?.farcasterPowerBadge ?? existing.farcasterPowerBadge,
             })
           : normaliseContactInput({
               inboxId: normalizedInboxId,
@@ -376,6 +407,11 @@ export const useContactStore = create<ContactState>()(
               primaryAddress: profile.primaryAddress ?? computedAddresses[0],
               farcasterUsername: profile.metadata?.farcasterUsername,
               farcasterFid: profile.metadata?.farcasterFid,
+              farcasterScore: profile.metadata?.farcasterScore,
+              farcasterFollowerCount: profile.metadata?.farcasterFollowerCount,
+              farcasterFollowingCount: profile.metadata?.farcasterFollowingCount,
+              farcasterActiveStatus: profile.metadata?.farcasterActiveStatus,
+              farcasterPowerBadge: profile.metadata?.farcasterPowerBadge,
               addresses: computedAddresses,
               identities,
               lastSyncedAt: Date.now(),
@@ -425,9 +461,13 @@ export const useContactStore = create<ContactState>()(
         try {
           onProgress?.(0, 0, 'Fetching your Farcaster following list...');
           const storage = await getStorage();
-          const followedUsers = await fetchFarcasterUserFollowingFromAPI(fid);
+          const farcasterState = useFarcasterStore.getState?.();
+          const neynarKey = farcasterState?.getEffectiveNeynarApiKey?.();
+          const followedUsers = neynarKey
+            ? await fetchFarcasterFollowingWithNeynar(fid, neynarKey)
+            : await fetchFarcasterUserFollowingFromAPI(fid);
           const total = followedUsers.length;
-          
+
           onProgress?.(0, total, `Found ${total} users you follow. Processing contacts...`);
           
           let current = 0;
@@ -438,9 +478,9 @@ export const useContactStore = create<ContactState>()(
           for (let i = 0; i < followedUsers.length; i++) {
             const user = followedUsers[i];
             const userName = user.display_name || user.username || `FID ${user.fid}`;
-            
+
             onProgress?.(current, total, `Processing ${userName} (${i + 1}/${total})...`);
-            
+
             const xmtpAddress = resolveXmtpAddressFromFarcasterUser(user);
             if (!xmtpAddress) {
               skippedContacts.push(user.fid);
@@ -453,7 +493,19 @@ export const useContactStore = create<ContactState>()(
 
             // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
             const nameResolution = await resolveContactName(user, xmtpAddress);
-            
+
+            const neynarProfile = neynarKey ? await fetchNeynarUserProfile(user.fid || user.username, neynarKey) : null;
+            const farcasterScore =
+              neynarProfile?.score ?? (user as { score?: number }).score ?? undefined;
+            const farcasterFollowerCount =
+              neynarProfile?.follower_count ?? (user as { follower_count?: number }).follower_count;
+            const farcasterFollowingCount =
+              neynarProfile?.following_count ?? (user as { following_count?: number }).following_count;
+            const farcasterActiveStatus =
+              neynarProfile?.active_status ?? (user as { active_status?: string }).active_status;
+            const farcasterPowerBadge =
+              neynarProfile?.power_badge ?? (user as { power_badge?: boolean }).power_badge;
+
             const existingContact = get().contacts.find(
               (contact) =>
                 contact.addresses?.some((addr) => normalizeAddress(addr) === normalizeAddress(xmtpAddress))
@@ -477,6 +529,11 @@ export const useContactStore = create<ContactState>()(
               source: 'farcaster',
               farcasterUsername: user.username,
               farcasterFid: user.fid,
+              farcasterScore,
+              farcasterFollowerCount,
+              farcasterFollowingCount,
+              farcasterActiveStatus,
+              farcasterPowerBadge,
               isInboxOnly: false,
               addresses: dedupe([xmtpAddress, existingContact?.primaryAddress, ...(existingContact?.addresses ?? [])]),
               primaryAddress: existingContact?.primaryAddress ?? xmtpAddress,

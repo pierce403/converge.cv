@@ -9,4 +9,5 @@ export * from './xmtp-store';
 export * from './debug-store';
 export * from './inbox-registry-store';
 export * from './contact-store';
+export * from './farcaster-store';
 
