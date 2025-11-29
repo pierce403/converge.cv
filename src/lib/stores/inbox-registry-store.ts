@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { InboxRegistryEntry } from '@/types';
+import { normalizeInboxId } from '@/lib/utils/inbox';
 
 const STORAGE_KEY = 'converge.inboxRegistry.v1';
 const CURRENT_KEY = 'converge.currentInboxId.v1';
@@ -22,11 +23,14 @@ function readEntriesFromStorage(): InboxRegistryEntry[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.map((entry) => ({
-      ...entry,
-      lastOpenedAt: entry.lastOpenedAt ?? 0,
-      hasLocalDB: Boolean(entry.hasLocalDB),
-    }));
+    return parsed
+      .map((entry) => ({
+        ...entry,
+        inboxId: normalizeInboxId(entry.inboxId) || '',
+        lastOpenedAt: entry.lastOpenedAt ?? 0,
+        hasLocalDB: Boolean(entry.hasLocalDB),
+      }))
+      .filter((entry) => entry.inboxId.length > 0);
   } catch (error) {
     console.warn('[InboxRegistry] Failed to read registry from storage:', error);
     return [];
@@ -99,20 +103,29 @@ export const useInboxRegistryStore = create<InboxRegistryState>((set, get) => ({
   },
   upsertEntry: (entry) => {
     const entries = get().entries;
-    const existingIndex = entries.findIndex((e) => e.inboxId === entry.inboxId);
+    const normalizedInboxId = normalizeInboxId(entry.inboxId);
+    if (!normalizedInboxId) {
+      return;
+    }
+    const normalizedEntry = { ...entry, inboxId: normalizedInboxId };
+    const existingIndex = entries.findIndex((e) => e.inboxId === normalizedInboxId);
     let updatedEntries: InboxRegistryEntry[];
     if (existingIndex >= 0) {
       updatedEntries = [...entries];
-      updatedEntries[existingIndex] = { ...updatedEntries[existingIndex], ...entry };
+      updatedEntries[existingIndex] = { ...updatedEntries[existingIndex], ...normalizedEntry };
     } else {
-      updatedEntries = [...entries, entry];
+      updatedEntries = [...entries, normalizedEntry];
     }
     set({ entries: updatedEntries });
     writeEntriesToStorage(updatedEntries);
   },
   updateEntry: (inboxId, updates) => {
+    const normalizedInboxId = normalizeInboxId(inboxId);
+    if (!normalizedInboxId) {
+      return;
+    }
     const entries = get().entries;
-    const index = entries.findIndex((entry) => entry.inboxId === inboxId);
+    const index = entries.findIndex((entry) => entry.inboxId === normalizedInboxId);
     if (index === -1) {
       return;
     }
@@ -127,8 +140,9 @@ export const useInboxRegistryStore = create<InboxRegistryState>((set, get) => ({
     get().setCurrentInbox(inboxId);
   },
   removeEntry: (inboxId) => {
-    const entries = get().entries.filter((entry) => entry.inboxId !== inboxId);
-    const currentInboxId = get().currentInboxId === inboxId ? null : get().currentInboxId;
+    const normalizedInboxId = normalizeInboxId(inboxId);
+    const entries = get().entries.filter((entry) => entry.inboxId !== normalizedInboxId);
+    const currentInboxId = get().currentInboxId === normalizedInboxId ? null : get().currentInboxId;
     set({ entries, currentInboxId });
     writeEntriesToStorage(entries);
     if (currentInboxId === null) {
@@ -136,8 +150,9 @@ export const useInboxRegistryStore = create<InboxRegistryState>((set, get) => ({
     }
   },
   setCurrentInbox: (inboxId) => {
-    set({ currentInboxId: inboxId });
-    writeCurrentInboxId(inboxId);
+    const normalizedInboxId = normalizeInboxId(inboxId);
+    set({ currentInboxId: normalizedInboxId });
+    writeCurrentInboxId(normalizedInboxId);
   },
   reset: () => {
     set({ entries: [], currentInboxId: null, isHydrated: true });

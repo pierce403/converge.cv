@@ -86,7 +86,7 @@ export interface StorageDriver {
   deleteVaultSecrets(): Promise<void>;
 
   // Clear all data
-  clearAllData(): Promise<void>;
+  clearAllData(options?: { opfsAddresses?: string[] }): Promise<void>;
 
   // Search
   searchMessages(query: string, limit?: number): Promise<Message[]>;

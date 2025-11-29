@@ -32,7 +32,7 @@ export function InboxSwitcher() {
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
-  const { checkExistingIdentity, createIdentity } = useAuth();
+  const { burnIdentity, checkExistingIdentity, createIdentity } = useAuth();
 
   useEffect(() => {
     hydrateRegistry();
@@ -115,6 +115,36 @@ export function InboxSwitcher() {
     }
   };
 
+  const handleBurnCurrent = async () => {
+    if (!identity?.inboxId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Burn this inbox on this device? This will delete the stored keys, messages, and contacts for this identity.'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const confirmedTwice = window.confirm('This cannot be undone. Continue?');
+    if (!confirmedTwice) {
+      return;
+    }
+
+    try {
+      const success = await burnIdentity(identity.inboxId);
+      if (!success) {
+        throw new Error('burnIdentity returned false');
+      }
+      await checkExistingIdentity();
+      window.location.reload();
+    } catch (error) {
+      console.error('[InboxSwitcher] Failed to burn identity:', error);
+      alert('Failed to burn this inbox. Please try again.');
+    }
+  };
+
   return (
     <Menu as="div" className="relative inline-block text-left z-[12000]">
       <Menu.Button className="flex items-center gap-3 rounded-full border border-primary-700/70 bg-primary-900/80 px-3 py-1.5 text-left text-sm font-medium text-primary-100 shadow hover:border-accent-400 hover:text-white">
@@ -172,6 +202,12 @@ export function InboxSwitcher() {
                   <div className="mt-2 text-[11px] text-primary-500">
                     Identities cannot be merged. Moving an identity routes future messages to the destination inbox only.
                   </div>
+                  <button
+                    onClick={handleBurnCurrent}
+                    className="mt-3 inline-flex items-center rounded-lg border border-red-500/60 bg-red-900/30 px-3 py-1.5 text-[11px] font-semibold text-red-100 transition hover:border-red-400 hover:bg-red-800/40"
+                  >
+                    Burn this inbox on this device
+                  </button>
                 </div>
               ) : (
                 <div className="mt-2 text-xs text-primary-300">
