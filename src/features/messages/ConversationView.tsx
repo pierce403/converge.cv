@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState, Fragment } from 'react';
+import { useEffect, useRef, useMemo, useState, Fragment, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMessageStore, useAuthStore, useContactStore, useFarcasterStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
@@ -14,6 +14,19 @@ import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
 import { evaluateContactAgainstFilters } from '@/lib/farcaster/filters';
+
+const formatIdentifier = (value: string) => {
+  if (!value) {
+    return '';
+  }
+  if (value.startsWith('0x') && value.length > 10) {
+    return `${value.slice(0, 6)}...${value.slice(-4)}`;
+  }
+  if (value.length > 18) {
+    return `${value.slice(0, 10)}...${value.slice(-4)}`;
+  }
+  return value;
+};
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -403,18 +416,7 @@ export function ConversationView() {
     return getContactInfo(lookupKey);
   }, [conversation, contact]);
 
-  const formatIdentifier = (value: string) => {
-    if (!value) {
-      return '';
-    }
-    if (value.startsWith('0x') && value.length > 10) {
-      return `${value.slice(0, 6)}...${value.slice(-4)}`;
-    }
-    if (value.length > 18) {
-      return `${value.slice(0, 10)}...${value.slice(-4)}`;
-    }
-    return value;
-  };
+
 
   const conversationDisplayName = useMemo(() => {
     if (!conversation) {
@@ -526,20 +528,7 @@ export function ConversationView() {
     } as ContactType;
   }, [conversation, conversationDisplayName, contact, inboxIdForActions, defaultContactInfo]);
 
-  if (!conversation) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <p className="text-slate-400 mb-4">Conversation not found</p>
-          <button onClick={() => navigate('/')} className="btn-primary">
-            Back to Chats
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const resolveContactForSender = (senderLower: string | undefined): ContactType | null => {
+  const resolveContactForSender = useCallback((senderLower: string | undefined): ContactType | null => {
     if (!senderLower) {
       return null;
     }
@@ -576,7 +565,7 @@ export function ConversationView() {
       isInboxOnly: true,
       source: 'inbox',
     } as ContactType;
-  };
+  }, [contactsByInboxId, contactsByAddress, groupMemberProfiles]);
 
   const { visibleMessages, filteredCount } = useMemo(() => {
     if (!farcasterFilters.enabled || !conversation) {
@@ -616,11 +605,6 @@ export function ConversationView() {
     contactsByAddress,
   ]);
 
-  const messagesToDisplay = farcasterFilters.enabled ? visibleMessages : messages;
-  const showFilteredEmpty =
-    farcasterFilters.enabled && hasLoadedConversation && messages.length > 0 && visibleMessages.length === 0;
-  const showVisibleEmpty = !showInitialLoading && messagesToDisplay.length === 0 && hasLoadedConversation;
-
   const filterSummary = useMemo(() => {
     const details: string[] = [];
     if (farcasterFilters.minScore && farcasterFilters.minScore > 0) {
@@ -640,6 +624,24 @@ export function ConversationView() {
     }
     return details.length > 0 ? details.join(' • ') : 'No Farcaster thresholds set';
   }, [farcasterFilters]);
+
+  const messagesToDisplay = farcasterFilters.enabled ? visibleMessages : messages;
+  const showFilteredEmpty =
+    farcasterFilters.enabled && hasLoadedConversation && messages.length > 0 && visibleMessages.length === 0;
+  const showVisibleEmpty = !showInitialLoading && messagesToDisplay.length === 0 && hasLoadedConversation;
+
+  if (!conversation) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <p className="text-slate-400 mb-4">Conversation not found</p>
+          <button onClick={() => navigate('/')} className="btn-primary">
+            Back to Chats
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
     if (isDisplayableImageSrc(avatar)) {
