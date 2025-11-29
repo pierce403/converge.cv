@@ -558,6 +558,15 @@ export function useAuth() {
         }
       }
 
+      // If a preferred inbox was selected (e.g., via the inbox switcher) but no identity
+      // was found in that namespace, avoid falling back to a different inbox. Continuing
+      // with another identity causes the UI to show the wrong avatar/name after the
+      // hard reload triggered by the switcher.
+      if (!identity && registry.currentInboxId) {
+        console.warn('[Auth] Current inbox selected but no identity found for it; aborting auto-login');
+        return false;
+      }
+
       if (!identity) {
         // Fallback: pick the most recently opened from the registry list or the first identity in this namespace
         const currentId = registry.currentInboxId;
