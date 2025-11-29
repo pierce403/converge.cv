@@ -534,7 +534,7 @@ export class DexieDriver implements StorageDriver {
   }
 
   // Clear ALL data
-  async clearAllData(): Promise<void> {
+  async clearAllData(options?: { opfsAddresses?: string[] }): Promise<void> {
     await this.dataDb.transaction('rw', [
       this.dataDb.conversations,
       this.dataDb.messages,
@@ -556,11 +556,22 @@ export class DexieDriver implements StorageDriver {
 
     // Also clear XMTP OPFS database
     try {
+      const targets = (options?.opfsAddresses ?? [])
+        .map((addr) => addr?.toLowerCase?.().trim())
+        .filter((addr) => addr && addr.length > 0) as string[];
+
       const opfsRoot = await navigator.storage.getDirectory();
       // XMTP stores databases with names like "xmtp-production-{address}.db3"
       // @ts-expect-error - OPFS API types
       for await (const [name] of opfsRoot.entries()) {
         if (name.startsWith('xmtp-') && name.endsWith('.db3')) {
+          if (targets.length > 0) {
+            const nameLower = name.toLowerCase();
+            const matched = targets.some((addr) => nameLower.includes(addr.replace(/^0x/, '')));
+            if (!matched) {
+              continue;
+            }
+          }
           await opfsRoot.removeEntry(name);
           console.log('[Storage] ✅ Cleared XMTP database:', name);
         }

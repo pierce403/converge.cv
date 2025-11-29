@@ -4,7 +4,7 @@
 
 import { useCallback } from 'react';
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
-import { getStorage } from '@/lib/storage';
+import { closeStorage, getStorage, getStorageNamespace, setStorageNamespace } from '@/lib/storage';
 import { ensureInboxStorageNamespace } from '@/lib/storage/namespacing';
 import {
   generateVaultKey,
@@ -20,6 +20,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { VaultSecrets, Identity } from '@/types';
 import { useAccount, useSignMessage } from 'wagmi';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
+import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
 
 export function useAuth() {
   const authStore = useAuthStore();
@@ -94,7 +95,8 @@ export function useAuth() {
         }
       );
 
-        const inboxId = xmtp.getInboxId();
+        const inboxIdRaw = xmtp.getInboxId();
+        const inboxId = normalizeInboxId(inboxIdRaw);
         const installationId = xmtp.getInstallationId();
 
         if (inboxId && installationId) {
@@ -476,6 +478,62 @@ export function useAuth() {
     }
   }, [authStore]);
 
+  const burnIdentity = useCallback(
+    async (inboxId: string): Promise<boolean> => {
+      const targetInboxId = normalizeInboxId(inboxId);
+      if (!targetInboxId) {
+        return false;
+      }
+
+      try {
+        const registry = useInboxRegistryStore.getState();
+        registry.hydrate();
+
+        const previousNamespace = getStorageNamespace();
+        const storage = await getStorage();
+        const identities = await storage.listIdentities();
+        const targetIdentity = identities.find((item) => inboxIdsMatch(item.inboxId, targetInboxId));
+        const wasCurrent = inboxIdsMatch(useAuthStore.getState().identity?.inboxId, targetInboxId);
+
+        await setStorageNamespace(targetInboxId);
+        const targetStorage = await getStorage();
+
+        await targetStorage.clearAllData({ opfsAddresses: targetIdentity?.address ? [targetIdentity.address] : undefined });
+        if (targetIdentity?.address) {
+          await targetStorage.deleteIdentityByAddress(targetIdentity.address);
+        }
+
+        await closeStorage();
+        await setStorageNamespace(previousNamespace);
+        await getStorage();
+
+        registry.removeEntry(targetInboxId);
+        if (typeof window !== 'undefined') {
+          const forced = window.localStorage.getItem('converge.forceInboxId.v1');
+          if (forced && inboxIdsMatch(forced, targetInboxId)) {
+            window.localStorage.removeItem('converge.forceInboxId.v1');
+          }
+        }
+
+        if (wasCurrent) {
+          try {
+            await getXmtpClient().disconnect();
+          } catch (error) {
+            console.warn('[Auth] Failed to disconnect XMTP client during burn:', error);
+          }
+          authStore.logout();
+          setVaultSecrets(null);
+        }
+
+        return true;
+      } catch (error) {
+        console.error('[Auth] Failed to burn identity:', error);
+        return false;
+      }
+    },
+    [authStore, setVaultSecrets]
+  );
+
   /**
    * Check if user has existing identity
    */
@@ -488,9 +546,12 @@ export function useAuth() {
       try {
         const forced = typeof window !== 'undefined' ? window.localStorage.getItem('converge.forceInboxId.v1') : null;
         if (forced && forced.trim().length > 0) {
-          registry.setCurrentInbox(forced);
+          const normalizedForced = normalizeInboxId(forced);
+          registry.setCurrentInbox(normalizedForced);
           // Persist storage namespace early so the next getStorage() uses the right shard
-          await (await import('@/lib/storage')).setStorageNamespace(forced);
+          if (normalizedForced) {
+            await setStorageNamespace(normalizedForced);
+          }
           // Clear the one-shot hint
           window.localStorage.removeItem('converge.forceInboxId.v1');
         }
@@ -499,17 +560,22 @@ export function useAuth() {
       }
 
       // Ensure storage namespace is aligned with the current registry inbox before instantiating storage
-      if (registry.currentInboxId) {
+      const normalizedRegistryInbox = normalizeInboxId(registry.currentInboxId);
+      if (normalizedRegistryInbox) {
         try {
-          await (await import('@/lib/storage')).setStorageNamespace(registry.currentInboxId);
+          await setStorageNamespace(normalizedRegistryInbox);
         } catch {
           // ignore
         }
       }
 
       const ensureNamespaceAndReload = async (inboxId: string) => {
-        const { setStorageNamespace } = await import('@/lib/storage');
-        await setStorageNamespace(inboxId);
+        const normalizedInboxId = normalizeInboxId(inboxId);
+        if (!normalizedInboxId) {
+          throw new Error('Invalid inbox id for namespace reload');
+        }
+
+        await setStorageNamespace(normalizedInboxId);
         const targetStorage = await getStorage();
         const identitiesForInbox = await targetStorage.listIdentities();
         return { storage: targetStorage, identities: identitiesForInbox };
@@ -523,17 +589,17 @@ export function useAuth() {
 
       let identity: Identity | undefined;
 
-      if (registry.currentInboxId) {
-        identity = identities.find((item) => item.inboxId === registry.currentInboxId);
+      if (normalizedRegistryInbox) {
+        identity = identities.find((item) => inboxIdsMatch(item.inboxId, normalizedRegistryInbox));
 
         // If we have a registry-selected inbox but the current namespace doesn't contain it,
         // switch namespaces to that inbox and reload identities from that shard.
         if (!identity) {
           try {
-            const result = await ensureNamespaceAndReload(registry.currentInboxId);
+            const result = await ensureNamespaceAndReload(normalizedRegistryInbox);
             storage = result.storage;
             identities = result.identities;
-            identity = identities.find((item) => item.inboxId === registry.currentInboxId);
+            identity = identities.find((item) => inboxIdsMatch(item.inboxId, normalizedRegistryInbox));
           } catch (error) {
             console.warn('[Auth] Failed to switch storage namespace for registry inbox:', error);
           }
@@ -547,7 +613,7 @@ export function useAuth() {
             const result = await ensureNamespaceAndReload(entry.inboxId);
             storage = result.storage;
             identities = result.identities;
-            identity = identities.find((item) => item.inboxId === entry.inboxId);
+            identity = identities.find((item) => inboxIdsMatch(item.inboxId, entry.inboxId));
             if (identity) {
               registry.setCurrentInbox(entry.inboxId);
               break;
@@ -562,7 +628,7 @@ export function useAuth() {
       // was found in that namespace, avoid falling back to a different inbox. Continuing
       // with another identity causes the UI to show the wrong avatar/name after the
       // hard reload triggered by the switcher.
-      if (!identity && registry.currentInboxId) {
+      if (!identity && normalizedRegistryInbox) {
         console.warn('[Auth] Current inbox selected but no identity found for it; aborting auto-login');
         return false;
       }
@@ -571,7 +637,7 @@ export function useAuth() {
         // Fallback: pick the most recently opened from the registry list or the first identity in this namespace
         const currentId = registry.currentInboxId;
         if (currentId) {
-          identity = identities.find((it) => it.inboxId === currentId) || identities[0];
+          identity = identities.find((it) => inboxIdsMatch(it.inboxId, currentId)) || identities[0];
         } else {
           identity = identities[0];
         }
@@ -579,6 +645,11 @@ export function useAuth() {
 
       if (!identity) {
         return false;
+      }
+
+      const normalizedIdentityInboxId = normalizeInboxId(identity.inboxId);
+      if (normalizedIdentityInboxId && identity.inboxId !== normalizedIdentityInboxId) {
+        identity = { ...identity, inboxId: normalizedIdentityInboxId } as Identity;
       }
 
       const secrets = await storage.getVaultSecrets();
@@ -589,7 +660,7 @@ export function useAuth() {
       setVaultUnlocked(true);
 
       const registryEntry = identity.inboxId
-        ? registry.entries.find((entry) => entry.inboxId === identity!.inboxId)
+        ? registry.entries.find((entry) => inboxIdsMatch(entry.inboxId, identity!.inboxId))
         : undefined;
       const shouldSyncHistory = registryEntry ? !registryEntry.hasLocalDB : true;
 
@@ -652,6 +723,7 @@ export function useAuth() {
     unlockWithPasskey,
     lock,
     logout,
+    burnIdentity,
     checkExistingIdentity,
     probeIdentity,
   };
