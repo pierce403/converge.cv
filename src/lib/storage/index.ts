@@ -32,6 +32,10 @@ function sanitizeNamespace(ns: string): string {
   return trimmed.replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
+export function getStorageNamespace(): string {
+  return storageNamespace;
+}
+
 export async function setStorageNamespace(ns: string): Promise<void> {
   const next = sanitizeNamespace(ns);
   if (next === storageNamespace) return;

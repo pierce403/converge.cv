@@ -5,6 +5,7 @@
 import { useCallback } from 'react';
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
+import { ensureInboxStorageNamespace } from '@/lib/storage/namespacing';
 import {
   generateVaultKey,
   deriveKeyFromPassphrase,
@@ -69,6 +70,8 @@ export function useAuth() {
               });
               registry.markOpened(stubInboxId, true);
             }
+
+            await ensureInboxStorageNamespace(stubInboxId, identity);
           }
           return;
       }
@@ -120,6 +123,8 @@ export function useAuth() {
               });
               registry.markOpened(inboxId, true);
             }
+
+            await ensureInboxStorageNamespace(inboxId, identity);
 
             console.log('[Auth] Saved XMTP info to identity:', {
               inboxId,
