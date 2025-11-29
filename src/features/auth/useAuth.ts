@@ -507,20 +507,59 @@ export function useAuth() {
         }
       }
 
-      const storage = await getStorage();
+      const ensureNamespaceAndReload = async (inboxId: string) => {
+        const { setStorageNamespace } = await import('@/lib/storage');
+        await setStorageNamespace(inboxId);
+        const targetStorage = await getStorage();
+        const identitiesForInbox = await targetStorage.listIdentities();
+        return { storage: targetStorage, identities: identitiesForInbox };
+      };
 
-      const identities = await storage.listIdentities();
+      let storage = await getStorage();
+      let identities = await storage.listIdentities();
       if (!identities.length) {
         return false;
       }
 
       let identity: Identity | undefined;
+
       if (registry.currentInboxId) {
         identity = identities.find((item) => item.inboxId === registry.currentInboxId);
+
+        // If we have a registry-selected inbox but the current namespace doesn't contain it,
+        // switch namespaces to that inbox and reload identities from that shard.
+        if (!identity) {
+          try {
+            const result = await ensureNamespaceAndReload(registry.currentInboxId);
+            storage = result.storage;
+            identities = result.identities;
+            identity = identities.find((item) => item.inboxId === registry.currentInboxId);
+          } catch (error) {
+            console.warn('[Auth] Failed to switch storage namespace for registry inbox:', error);
+          }
+        }
+      }
+
+      // If no identity is selected yet, iterate through registry entries to locate the correct namespace
+      if (!identity && registry.entries.length > 0) {
+        for (const entry of registry.entries) {
+          try {
+            const result = await ensureNamespaceAndReload(entry.inboxId);
+            storage = result.storage;
+            identities = result.identities;
+            identity = identities.find((item) => item.inboxId === entry.inboxId);
+            if (identity) {
+              registry.setCurrentInbox(entry.inboxId);
+              break;
+            }
+          } catch (error) {
+            console.warn('[Auth] Failed to switch storage namespace while searching registry entries:', error);
+          }
+        }
       }
 
       if (!identity) {
-        // Fallback: pick the most recently opened from the registry list
+        // Fallback: pick the most recently opened from the registry list or the first identity in this namespace
         const currentId = registry.currentInboxId;
         if (currentId) {
           identity = identities.find((it) => it.inboxId === currentId) || identities[0];
