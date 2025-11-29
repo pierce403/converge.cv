@@ -564,19 +564,44 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
               <p className="text-primary-300 text-sm mb-4">Also known as: {contact.name}</p>
             )}
 
-            {/* Farcaster Profile Link */}
-            {contact.farcasterUsername && (
-              <a
-                href={`https://farcaster.xyz/${contact.farcasterUsername}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 text-accent-400 hover:text-accent-300 mb-4 text-sm underline"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                View on Farcaster
-              </a>
+            {(contact.farcasterUsername || contact.farcasterFid) && (
+              <div className="flex flex-col items-center gap-1 mb-4 text-sm text-primary-200">
+                {contact.farcasterUsername && (
+                  <a
+                    href={`https://farcaster.xyz/${contact.farcasterUsername}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-accent-400 hover:text-accent-300 underline"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    View on Farcaster
+                  </a>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {contact.farcasterScore !== undefined && contact.farcasterScore !== null && (
+                    <span className="px-2 py-1 rounded bg-accent-900/40 text-accent-200 border border-accent-800/60">
+                      Neynar score: {contact.farcasterScore.toFixed(1)}
+                    </span>
+                  )}
+                  {contact.farcasterFollowerCount !== undefined && (
+                    <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
+                      Followers: {contact.farcasterFollowerCount}
+                    </span>
+                  )}
+                  {contact.farcasterFollowingCount !== undefined && (
+                    <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
+                      Following: {contact.farcasterFollowingCount}
+                    </span>
+                  )}
+                  {contact.farcasterPowerBadge && (
+                    <span className="px-2 py-1 rounded bg-accent-950/60 text-accent-200 border border-accent-900/70">
+                      Power Badge
+                    </span>
+                  )}
+                </div>
+              </div>
             )}
 
             {/* Display Name Input */}

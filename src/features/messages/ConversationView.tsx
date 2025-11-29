@@ -1,6 +1,6 @@
 import { useEffect, useRef, useMemo, useState, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useMessageStore, useAuthStore, useContactStore } from '@/lib/stores';
+import { useMessageStore, useAuthStore, useContactStore, useFarcasterStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
@@ -13,6 +13,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
+import { evaluateContactAgainstFilters } from '@/lib/farcaster/filters';
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
@@ -47,6 +48,9 @@ export function ConversationView() {
   const contacts = useContactStore((state) => state.contacts);
   const isContact = useContactStore((state) => state.isContact);
   const loadContacts = useContactStore((state) => state.loadContacts);
+  const farcasterFilters = useFarcasterStore((state) => state.filters);
+  const setFarcasterFilters = useFarcasterStore((state) => state.setFilters);
+  const hasNeynarKey = useFarcasterStore((state) => state.hasNeynarApiKey());
 
   const contactsByInboxId = useMemo(() => {
     const map = new Map<string, ContactType>();
@@ -134,7 +138,6 @@ export function ConversationView() {
   }, [conversation, identity?.inboxId, identity?.address]);
 
   const showInitialLoading = isConversationLoading && !isRefreshing && !hasLoadedConversation;
-  const showEmptyState = !showInitialLoading && messages.length === 0 && hasLoadedConversation;
 
   useEffect(() => {
     if (id) {
@@ -575,6 +578,69 @@ export function ConversationView() {
     } as ContactType;
   };
 
+  const { visibleMessages, filteredCount } = useMemo(() => {
+    if (!farcasterFilters.enabled || !conversation) {
+      return { visibleMessages: messages, filteredCount: 0 };
+    }
+
+    let hidden = 0;
+    const filtered = messages.filter((message) => {
+      const senderLower = message.sender?.toLowerCase?.();
+      let senderContact: ContactType | null | undefined = null;
+
+      if (conversation.isGroup && senderLower) {
+        senderContact = resolveContactForSender(senderLower);
+      } else if (!conversation.isGroup) {
+        senderContact = contact;
+      }
+
+      if (!senderContact && senderLower) {
+        senderContact = contactsByInboxId.get(senderLower) || contactsByAddress.get(senderLower);
+      }
+
+      const result = evaluateContactAgainstFilters(senderContact, farcasterFilters);
+      if (!result.passes) {
+        hidden += 1;
+      }
+      return result.passes;
+    });
+
+    return { visibleMessages: filtered, filteredCount: hidden };
+  }, [
+    messages,
+    farcasterFilters,
+    conversation,
+    resolveContactForSender,
+    contact,
+    contactsByInboxId,
+    contactsByAddress,
+  ]);
+
+  const messagesToDisplay = farcasterFilters.enabled ? visibleMessages : messages;
+  const showFilteredEmpty =
+    farcasterFilters.enabled && hasLoadedConversation && messages.length > 0 && visibleMessages.length === 0;
+  const showVisibleEmpty = !showInitialLoading && messagesToDisplay.length === 0 && hasLoadedConversation;
+
+  const filterSummary = useMemo(() => {
+    const details: string[] = [];
+    if (farcasterFilters.minScore && farcasterFilters.minScore > 0) {
+      details.push(`Neynar score ≥ ${farcasterFilters.minScore}`);
+    }
+    if (farcasterFilters.minFollowerCount && farcasterFilters.minFollowerCount > 0) {
+      details.push(`Followers ≥ ${farcasterFilters.minFollowerCount}`);
+    }
+    if (farcasterFilters.requireActiveStatus) {
+      details.push('Active profiles only');
+    }
+    if (farcasterFilters.requirePowerBadge) {
+      details.push('Power badge required');
+    }
+    if (farcasterFilters.requireFarcasterIdentity) {
+      details.push('Farcaster-linked senders only');
+    }
+    return details.length > 0 ? details.join(' • ') : 'No Farcaster thresholds set';
+  }, [farcasterFilters]);
+
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
     if (isDisplayableImageSrc(avatar)) {
       return <img src={avatar} alt="Conversation avatar" className="w-full h-full rounded-full object-cover" />;
@@ -839,6 +905,29 @@ export function ConversationView() {
         )}
       </div>
 
+      {(hasNeynarKey || farcasterFilters.enabled) && (
+        <div className="px-4 pt-2">
+          <div className="bg-primary-900/50 border border-primary-800/60 rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-sm text-primary-100 font-medium">Farcaster message filters</p>
+              <p className="text-xs text-primary-300">{filterSummary}</p>
+              {farcasterFilters.enabled && filteredCount > 0 && (
+                <p className="text-xs text-accent-300">{filteredCount} message(s) hidden by filter</p>
+              )}
+            </div>
+            <label className="flex items-center gap-2 text-sm text-primary-200">
+              <input
+                type="checkbox"
+                className="form-checkbox text-accent-500 rounded"
+                checked={farcasterFilters.enabled}
+                onChange={(e) => setFarcasterFilters({ enabled: e.target.checked })}
+              />
+              Enable
+            </label>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <div
         ref={messagesContainerRef}
@@ -857,7 +946,17 @@ export function ConversationView() {
           <div className="flex items-center justify-center h-full">
             <div className="text-primary-200">Loading messages...</div>
           </div>
-        ) : showEmptyState ? (
+        ) : showFilteredEmpty ? (
+          <div className="flex flex-col items-center justify-center h-full text-center space-y-2">
+            <div className="w-14 h-14 bg-accent-900/50 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-accent-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <p className="text-primary-200">Messages filtered</p>
+            <p className="text-sm text-primary-300">Adjust the Farcaster filters above to see hidden messages.</p>
+          </div>
+        ) : showVisibleEmpty ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-16 h-16 bg-primary-900/60 rounded-full flex items-center justify-center mb-4">
               <svg className="w-8 h-8 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -874,7 +973,7 @@ export function ConversationView() {
           </div>
         ) : (
           <>
-            {messages.map((message: Message) => {
+            {messagesToDisplay.map((message: Message) => {
               const senderLower = message.sender?.toLowerCase?.();
               let senderInfo: { displayName?: string; avatarUrl?: string; fallback?: string } | undefined;
               let isSelf = false;

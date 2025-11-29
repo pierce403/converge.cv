@@ -9,10 +9,12 @@ export interface FarcasterUser {
       text: string;
     };
   };
-  follower_count: number;
-  following_count: number;
+  follower_count?: number;
+  following_count?: number;
   verifications: string[]; // Ethereum addresses
-  active_status: 'active' | 'inactive';
+  verified_addresses?: { eth_addresses?: string[] };
+  active_status?: 'active' | 'inactive';
+  power_badge?: boolean;
 }
 
 export interface FarcasterFollow {
@@ -26,7 +28,12 @@ export interface FarcasterFollow {
       text: string;
     };
   };
+  follower_count?: number;
+  following_count?: number;
+  active_status?: 'active' | 'inactive';
   verifications: string[];
+  verified_addresses?: { eth_addresses?: string[] };
+  power_badge?: boolean;
 }
 
 /**
@@ -103,6 +110,13 @@ export function resolveXmtpAddressFromFarcasterUser(user: FarcasterUser | Farcas
   if (user.verifications && user.verifications.length > 0) {
     // For now, just take the first verified address
     return user.verifications[0];
+  }
+
+  const ethAddresses = (user as { verified_addresses?: { eth_addresses?: string[] } })?.verified_addresses
+    ?.eth_addresses;
+
+  if (ethAddresses && ethAddresses.length > 0) {
+    return ethAddresses[0];
   }
   return null;
 }

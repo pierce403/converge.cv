@@ -14,6 +14,7 @@ import { useSignMessage } from 'wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
+import { FarcasterSettings } from './FarcasterSettings';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -807,6 +808,8 @@ export function SettingsPage() {
               </button>
             </div>
           </section>
+
+          <FarcasterSettings />
 
           {/* Account Actions */}
           <section>
