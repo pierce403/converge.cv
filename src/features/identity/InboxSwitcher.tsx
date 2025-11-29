@@ -8,6 +8,15 @@ import type { InboxRegistryEntry } from '@/types';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
+const dispatchStepToast = (message: string) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
+  } catch (e) {
+    console.warn('[InboxSwitcher] Failed to dispatch toast:', e);
+  }
+};
+
 export function InboxSwitcher() {
   const navigate = useNavigate();
   const { identity } = useAuthStore();
@@ -32,10 +41,14 @@ export function InboxSwitcher() {
   const currentAvatar = useMemo(() => identity?.avatar, [identity?.avatar]);
 
   const handleSwitch = async (entry: InboxRegistryEntry) => {
+    const nextLabel = getInboxDisplayLabel(entry);
+    dispatchStepToast(`Switching to ${nextLabel}…`);
     setCurrentInbox(entry.inboxId);
     // Swap storage namespace to the selected inbox and hard reload state
     try {
+      dispatchStepToast(`Closing ${currentLabel || 'current inbox'}…`);
       await closeStorage();
+      dispatchStepToast('Preparing inbox storage…');
       await setStorageNamespace(entry.inboxId);
       // One-shot hint for next boot to force this inbox selection
       if (typeof window !== 'undefined') {
@@ -43,8 +56,11 @@ export function InboxSwitcher() {
       }
     } catch (e) {
       console.warn('[InboxSwitcher] Failed to reset storage (continuing):', e);
+      dispatchStepToast('Storage reset failed — continuing switch');
     }
+    dispatchStepToast('Loading selected inbox…');
     await checkExistingIdentity();
+    dispatchStepToast('Reloading for new inbox…');
     // Reload the app to ensure in-memory stores hydrate from the new namespace
     setTimeout(() => window.location.reload(), 50);
   };

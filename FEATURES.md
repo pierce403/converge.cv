@@ -4,6 +4,7 @@
 - Landing flow keeps the experience minimal by defaulting to a single-step landing view and switching into wallet selection when the user arrives with `?connect=1` (e.g., from the inbox switcher).
 - Registry hydration runs on load so previously used inboxes are listed with last-opened timestamps and buttons to reopen them without re-onboarding.
 - Wallet connect, probing, and keyfile import are unified under a single `view` state machine (`'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'`) so all entry points share status messaging and error handling.
+- Switching inboxes emits step-by-step toasts (closing current inbox, preparing storage, loading the target inbox, reloading) so users see progress while the app swaps namespaces.
 
 ### Inbox Switcher Isolation
 - Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, drafts, and keys never leak across inboxes.
