@@ -4,6 +4,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
+import { OperationProgressBar } from '@/components/OperationProgressBar';
 import { useAuthStore, useConversationStore, useContactStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
@@ -733,6 +734,7 @@ export function Layout() {
 
   return (
     <div className="flex h-full flex-col text-primary-50">
+      <OperationProgressBar />
       {/* Sync progress bar */}
       <SyncProgressBar />
       <ToastContainer />

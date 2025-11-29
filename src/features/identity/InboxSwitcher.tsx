@@ -8,12 +8,21 @@ import type { InboxRegistryEntry } from '@/types';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
-const dispatchStepToast = (message: string) => {
+const dispatchOperationStep = (detail: {
+  message: string;
+  step: number;
+  total: number;
+  state?: 'running' | 'complete';
+}) => {
   if (typeof window === 'undefined') return;
   try {
-    window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
+    window.dispatchEvent(
+      new CustomEvent('ui:operation-status', {
+        detail: { id: 'inbox-switch', ...detail },
+      })
+    );
   } catch (e) {
-    console.warn('[InboxSwitcher] Failed to dispatch toast:', e);
+    console.warn('[InboxSwitcher] Failed to dispatch inbox switch status:', e);
   }
 };
 
@@ -42,13 +51,21 @@ export function InboxSwitcher() {
 
   const handleSwitch = async (entry: InboxRegistryEntry) => {
     const nextLabel = getInboxDisplayLabel(entry);
-    dispatchStepToast(`Switching to ${nextLabel}…`);
+    const steps = [
+      `Switching to ${nextLabel}…`,
+      `Closing ${currentLabel || 'current inbox'}…`,
+      'Preparing inbox storage…',
+      'Loading selected inbox…',
+      'Reloading for new inbox…',
+    ];
+    const totalSteps = steps.length;
+    dispatchOperationStep({ message: steps[0], step: 1, total: totalSteps });
     setCurrentInbox(entry.inboxId);
     // Swap storage namespace to the selected inbox and hard reload state
     try {
-      dispatchStepToast(`Closing ${currentLabel || 'current inbox'}…`);
+      dispatchOperationStep({ message: steps[1], step: 2, total: totalSteps });
       await closeStorage();
-      dispatchStepToast('Preparing inbox storage…');
+      dispatchOperationStep({ message: steps[2], step: 3, total: totalSteps });
       await setStorageNamespace(entry.inboxId);
       // One-shot hint for next boot to force this inbox selection
       if (typeof window !== 'undefined') {
@@ -56,11 +73,20 @@ export function InboxSwitcher() {
       }
     } catch (e) {
       console.warn('[InboxSwitcher] Failed to reset storage (continuing):', e);
-      dispatchStepToast('Storage reset failed — continuing switch');
+      dispatchOperationStep({
+        message: 'Storage reset failed — continuing switch',
+        step: 3,
+        total: totalSteps,
+      });
     }
-    dispatchStepToast('Loading selected inbox…');
+    dispatchOperationStep({ message: steps[3], step: 4, total: totalSteps });
     await checkExistingIdentity();
-    dispatchStepToast('Reloading for new inbox…');
+    dispatchOperationStep({
+      message: steps[4],
+      step: totalSteps,
+      total: totalSteps,
+      state: 'complete',
+    });
     // Reload the app to ensure in-memory stores hydrate from the new namespace
     setTimeout(() => window.location.reload(), 50);
   };
