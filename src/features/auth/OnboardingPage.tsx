@@ -82,11 +82,14 @@ const formatInstallationTimestamp = (value?: bigint): { absolute: string; relati
   }
 };
 
+const ensure0xPrefix = (value: string): string =>
+  value.startsWith('0x') ? value : `0x${value}`;
+
 const formatIdentifier = (identifier: Identifier): string => {
   const kind = identifier.identifierKind.toLowerCase();
 
   if (kind === 'ethereum') {
-    return `0x${identifier.identifier}`;
+    return ensure0xPrefix(identifier.identifier);
   }
 
   return identifier.identifier;
@@ -107,7 +110,7 @@ const getPreferredLabel = (identifiers: Identifier[] | undefined, address: strin
 
   const ethereumIdentifier = identifiers.find((item) => item.identifierKind.toLowerCase() === 'ethereum');
   if (ethereumIdentifier) {
-    return `0x${ethereumIdentifier.identifier}`;
+    return ensure0xPrefix(ethereumIdentifier.identifier);
   }
 
   return `Wallet ${shortAddress(address)}`;
