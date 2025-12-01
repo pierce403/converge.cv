@@ -203,6 +203,74 @@ export class XmtpClient {
     }
   }
 
+  // Attempt to recover a malformed inboxId by re-deriving it from any stored addresses.
+  // If recovery fails, drop the local contact so we stop reusing the bad identifier.
+  private async recoverMalformedInboxId(normalizedInboxId: string): Promise<string | null> {
+    try {
+      const contactStore = useContactStore.getState?.();
+      const contact =
+        contactStore?.getContactByInboxId(normalizedInboxId) ??
+        contactStore?.getContactByAddress(normalizedInboxId);
+
+      if (!contact) {
+        return null;
+      }
+
+      const knownAddresses = Array.from(
+        new Set(
+          [contact.primaryAddress, ...(contact.addresses ?? [])]
+            .filter(Boolean)
+            .map((addr) => addr!.toLowerCase())
+        )
+      );
+
+      for (const address of knownAddresses) {
+        try {
+          const derived = await this.deriveInboxIdFromAddress(address);
+          if (derived && derived.toLowerCase() !== normalizedInboxId) {
+            await contactStore.upsertContactProfile({
+              inboxId: derived,
+              displayName: contact.preferredName ?? contact.name,
+              avatarUrl: contact.preferredAvatar ?? contact.avatar,
+              primaryAddress: contact.primaryAddress ?? address,
+              addresses: knownAddresses,
+              identities: contact.identities,
+              source: contact.source ?? 'inbox',
+              metadata: { ...contact, lastSyncedAt: Date.now() },
+            });
+
+            try {
+              const storage = await getStorage();
+              await storage.deleteContact(normalizedInboxId);
+            } catch (err) {
+              console.warn('[XMTP] Failed to delete malformed contact during recovery', err);
+            }
+
+            console.info('[XMTP] Recovered inboxId from network and migrated contact', {
+              from: normalizedInboxId,
+              to: derived,
+            });
+
+            return derived.toLowerCase();
+          }
+        } catch (err) {
+          console.warn('[XMTP] deriveInboxIdFromAddress failed during inboxId recovery', err);
+        }
+      }
+
+      try {
+        await contactStore.removeContact(normalizedInboxId);
+        console.warn('[XMTP] Removed malformed inboxId from local contacts', normalizedInboxId);
+      } catch (err) {
+        console.warn('[XMTP] Failed to remove malformed inboxId from contacts', err);
+      }
+    } catch (error) {
+      console.warn('[XMTP] recoverMalformedInboxId failed', error);
+    }
+
+    return null;
+  }
+
   // Exponential backoff wrapper for XMTP identity/preferences calls that may hit 429
   private async retryWithBackoff<T>(label: string, fn: () => Promise<T>, opts?: {
     attempts?: number;
@@ -659,8 +727,14 @@ export class XmtpClient {
     }
   }
 
-  async fetchInboxProfile(inboxId: string): Promise<InboxProfile> {
+  async fetchInboxProfile(
+    inboxId: string,
+    opts?: {
+      allowRecovery?: boolean;
+    }
+  ): Promise<InboxProfile> {
     let normalizedInboxId = inboxId.toLowerCase();
+    const allowRecovery = opts?.allowRecovery ?? true;
 
     // Heuristic: skip remote lookups for values that clearly aren't inbox IDs
     // (e.g., ENS names like "deanpierce.eth" or arbitrary labels). This avoids
@@ -747,6 +821,20 @@ export class XmtpClient {
       };
     };
 
+    const handleIdentityError = async (error: unknown): Promise<InboxProfile | null> => {
+      this.applyInboxErrorCooldown(normalizedInboxId, error);
+      if (!allowRecovery) {
+        return null;
+      }
+
+      const recovered = await this.recoverMalformedInboxId(normalizedInboxId);
+      if (recovered && recovered !== normalizedInboxId) {
+        return await this.fetchInboxProfile(recovered, { allowRecovery: false });
+      }
+
+      return null;
+    };
+
     try {
       // Prefer profile message embedded in DM (our convention) if available
       // getDmByInboxId gets the DM with this peer (not a self-DM)
@@ -799,6 +887,10 @@ export class XmtpClient {
           }
         } catch (error) {
           console.warn('[XMTP] fetchInboxProfile: getLatestInboxState failed, falling back to inboxStateFromInboxIds', error);
+          const recovered = await handleIdentityError(error);
+          if (recovered) {
+            return recovered;
+          }
         }
 
         try {
@@ -806,11 +898,13 @@ export class XmtpClient {
           if (states?.length) {
             return buildProfile(states[0]?.identifiers ?? []);
           }
-      } catch (error) {
-        console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
-        // Apply cooldown for association/identity errors to reduce noise
-        this.applyInboxErrorCooldown(normalizedInboxId, error);
-      }
+        } catch (error) {
+          console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+          const recovered = await handleIdentityError(error);
+          if (recovered) {
+            return recovered;
+          }
+        }
       }
 
       const { getXmtpUtils } = await import('./utils-singleton');
@@ -823,8 +917,10 @@ export class XmtpClient {
         }
       } catch (error) {
         console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
-        // Apply cooldown for association/identity errors to reduce noise
-        this.applyInboxErrorCooldown(normalizedInboxId, error);
+        const recovered = await handleIdentityError(error);
+        if (recovered) {
+          return recovered;
+        }
       }
     } catch (error) {
       console.error('[XMTP] fetchInboxProfile unexpected error:', error);
