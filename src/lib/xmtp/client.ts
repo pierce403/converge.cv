@@ -2856,6 +2856,20 @@ export class XmtpClient {
       if (!dm) {
         return null;
       }
+
+      // Even if history sync is disabled (e.g., because the inbox registry believes a
+      // local DB already exists), we still need to pull the self-DM from the network so
+      // `loadOwnProfile()` can find the latest profile message. Without this explicit
+      // sync, `dm.messages()` only returns whatever is already in the local cache,
+      // which can be empty after clearing IndexedDB—leading to missing display names on
+      // reconnect. Force a targeted sync here so profile hydration always has fresh
+      // data, independent of the global history-sync toggle.
+      try {
+        await dm.sync();
+      } catch (syncError) {
+        console.warn('[XMTP] Failed to sync self-DM before loading profile:', syncError);
+      }
+
       const msgs = await dm.messages();
       // Scan newest → oldest for a profile record
       for (let i = msgs.length - 1; i >= 0; i--) {
