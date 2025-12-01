@@ -1,9 +1,12 @@
-import { Fragment, useEffect, useMemo } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import { Menu, Transition, Portal } from '@headlessui/react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
 import { useAuthStore, useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
-import { setStorageNamespace, closeStorage } from '@/lib/storage';
+import { setStorageNamespace, closeStorage, getStorage } from '@/lib/storage';
+import { QRCodeOverlay } from '@/components/QRCodeOverlay';
+import { getXmtpClient } from '@/lib/xmtp';
 import type { InboxRegistryEntry } from '@/types';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
@@ -29,10 +32,17 @@ const dispatchOperationStep = (detail: {
 export function InboxSwitcher() {
   const navigate = useNavigate();
   const { identity } = useAuthStore();
+  const setIdentity = useAuthStore((s) => s.setIdentity);
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
   const { burnIdentity, checkExistingIdentity, createIdentity } = useAuth();
+  const [displayNameInput, setDisplayNameInput] = useState(identity?.displayName ?? '');
+  const [isSavingName, setIsSavingName] = useState(false);
+  const [isSavingAvatar, setIsSavingAvatar] = useState(false);
+  const [isSyncingProfile, setIsSyncingProfile] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     hydrateRegistry();
@@ -48,6 +58,98 @@ export function InboxSwitcher() {
 
   const currentBadge = identity?.displayName ? identity.displayName.charAt(0).toUpperCase() : currentLabel.charAt(0).toUpperCase();
   const currentAvatar = useMemo(() => identity?.avatar, [identity?.avatar]);
+
+  useEffect(() => {
+    setDisplayNameInput(identity?.displayName ?? '');
+  }, [identity?.displayName, identity?.inboxId]);
+
+  const handleSaveDisplayName = async () => {
+    if (!identity) return;
+    const nextName = displayNameInput.trim();
+    setIsSavingName(true);
+    try {
+      const storage = await getStorage();
+      const updated = { ...identity, displayName: nextName || undefined };
+      await storage.putIdentity(updated);
+      setIdentity(updated);
+      try {
+        await getXmtpClient().saveProfile(updated.displayName, updated.avatar);
+      } catch (err) {
+        console.warn('[InboxSwitcher] Failed to save display name to network (non-fatal):', err);
+      }
+    } catch (error) {
+      console.error('[InboxSwitcher] Failed to save display name:', error);
+      alert('Failed to update display name. Please try again.');
+    } finally {
+      setIsSavingName(false);
+    }
+  };
+
+  const handleAvatarSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    if (!identity) return;
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      event.target.value = '';
+      return;
+    }
+
+    const readAsDataURL = (f: File) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string) ?? '');
+        reader.onerror = reject;
+        reader.readAsDataURL(f);
+      });
+
+    setIsSavingAvatar(true);
+    try {
+      const dataUri = await readAsDataURL(file);
+      const storage = await getStorage();
+      const updated = { ...identity, avatar: dataUri };
+      await storage.putIdentity(updated);
+      setIdentity(updated);
+      try {
+        await getXmtpClient().saveProfile(updated.displayName, dataUri);
+      } catch (err) {
+        console.warn('[InboxSwitcher] Failed to save avatar to network (non-fatal):', err);
+      }
+    } catch (error) {
+      console.error('[InboxSwitcher] Failed to update avatar:', error);
+      alert('Failed to update avatar. Please try again.');
+    } finally {
+      setIsSavingAvatar(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleSyncProfile = async () => {
+    if (!identity) return;
+    setIsSyncingProfile(true);
+    try {
+      const xmtp = getXmtpClient();
+      const profile = await xmtp.loadOwnProfile();
+      if (profile && (profile.displayName || profile.avatarUrl)) {
+        const storage = await getStorage();
+        const updated = { ...identity };
+        if (profile.displayName) {
+          updated.displayName = profile.displayName;
+          setDisplayNameInput(profile.displayName);
+        }
+        if (profile.avatarUrl) {
+          (updated as typeof updated & { avatar?: string }).avatar = profile.avatarUrl;
+        }
+        await storage.putIdentity(updated);
+        setIdentity(updated);
+      }
+    } catch (error) {
+      console.warn('[InboxSwitcher] Failed to sync profile from network:', error);
+      alert('Could not sync profile from the network. Please try again.');
+    } finally {
+      setIsSyncingProfile(false);
+    }
+  };
 
   const handleSwitch = async (entry: InboxRegistryEntry) => {
     const nextLabel = getInboxDisplayLabel(entry);
@@ -190,6 +292,69 @@ export function InboxSwitcher() {
           <Menu.Items
             className="fixed left-1/2 -translate-x-1/2 top-16 z-[20000] w-80 max-w-[92vw] max-h-[70vh] overflow-auto origin-top rounded-xl border border-primary-800/80 bg-primary-950/95 p-3 text-primary-100 shadow-2xl backdrop-blur"
           >
+            <div className="mb-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">Profile</div>
+              <div className="mt-2 rounded-lg border border-primary-800/60 bg-primary-900/60 p-3">
+                <div className="flex items-center gap-3">
+                  {currentAvatar ? (
+                    <span className="inline-flex h-12 w-12 items-center justify-center overflow-hidden rounded-full border border-primary-800 bg-primary-950">
+                      <img src={currentAvatar} alt="Avatar" className="h-full w-full object-cover" />
+                    </span>
+                  ) : (
+                    <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-accent-600 text-lg font-semibold text-white">
+                      {currentBadge}
+                    </span>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <label className="text-[11px] font-semibold uppercase tracking-wide text-primary-400">Display name</label>
+                    <input
+                      value={displayNameInput}
+                      onChange={(e) => setDisplayNameInput(e.target.value)}
+                      placeholder={identity?.address ? shortAddress(identity.address) : 'Enter display name'}
+                      className="mt-1 w-full rounded-md border border-primary-800/70 bg-primary-950/70 px-2 py-1 text-sm text-primary-100 placeholder-primary-600 focus:border-accent-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={handleSaveDisplayName}
+                    disabled={!identity || isSavingName}
+                    className="inline-flex items-center rounded-md border border-accent-500/60 bg-accent-600/20 px-3 py-1.5 text-xs font-semibold text-accent-100 transition hover:border-accent-400 hover:bg-accent-600/30 disabled:cursor-not-allowed disabled:border-primary-800 disabled:bg-primary-900/60 disabled:text-primary-500"
+                  >
+                    {isSavingName ? 'Saving…' : 'Save display name'}
+                  </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!identity || isSavingAvatar}
+                    className="inline-flex items-center rounded-md border border-primary-700/70 bg-primary-900 px-3 py-1.5 text-xs font-semibold text-primary-100 transition hover:border-accent-400 hover:text-white disabled:cursor-not-allowed disabled:border-primary-800 disabled:text-primary-500"
+                  >
+                    {isSavingAvatar ? 'Updating avatar…' : 'Update avatar'}
+                  </button>
+                  <button
+                    onClick={handleSyncProfile}
+                    disabled={!identity || isSyncingProfile}
+                    className="inline-flex items-center rounded-md border border-primary-700/70 bg-primary-900 px-3 py-1.5 text-xs font-semibold text-primary-100 transition hover:border-accent-400 hover:text-white disabled:cursor-not-allowed disabled:border-primary-800 disabled:text-primary-500"
+                  >
+                    {isSyncingProfile ? 'Syncing…' : 'Sync from network'}
+                  </button>
+                  <button
+                    onClick={() => setShowQR(true)}
+                    disabled={!identity}
+                    className="inline-flex items-center rounded-md border border-primary-700/70 bg-primary-900 px-3 py-1.5 text-xs font-semibold text-primary-100 transition hover:border-accent-400 hover:text-white disabled:cursor-not-allowed disabled:border-primary-800 disabled:text-primary-500"
+                  >
+                    Show QR Code
+                  </button>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarSelected}
+                />
+              </div>
+            </div>
+
             <div className="mb-2">
               <div className="text-xs font-semibold uppercase tracking-wide text-primary-400">This identity&apos;s inbox</div>
               {identity?.inboxId ? (
@@ -286,6 +451,7 @@ export function InboxSwitcher() {
           </Menu.Items>
         </Portal>
       </Transition>
+      {showQR && identity && <QRCodeOverlay address={identity.address} onClose={() => setShowQR(false)} />}
     </Menu>
   );
 }
