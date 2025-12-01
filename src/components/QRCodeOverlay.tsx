@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 
 interface QRCodeOverlayProps {
@@ -14,8 +15,10 @@ export function QRCodeOverlay({ address, onClose }: QRCodeOverlayProps) {
     QRCode.toDataURL(payload, { margin: 1, width: 300 }).then(setQr).catch(() => setQr(''));
   }, [address]);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[25000] flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <div className="relative" onClick={(e) => e.stopPropagation()}>
         {/* Close button */}
         <button
@@ -52,7 +55,8 @@ export function QRCodeOverlay({ address, onClose }: QRCodeOverlayProps) {
           Share this QR code for others to message you on XMTP
         </p>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
