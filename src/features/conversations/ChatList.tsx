@@ -181,9 +181,9 @@ export function ChatList() {
 
           const displayName = conversation.isGroup
             ? conversation.groupName || 'Group Chat'
-            : conversation.displayName
-              || contact?.preferredName
+            : contact?.preferredName
               || contact?.name
+              || conversation.displayName
               || defaultContactInfo?.name
               || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
 
