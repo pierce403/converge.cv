@@ -6,6 +6,7 @@ import {
   isPushEnabled,
 } from './subscribe';
 import { registerServiceWorkerForPush } from './index';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 const originalFetch = global.fetch;
 

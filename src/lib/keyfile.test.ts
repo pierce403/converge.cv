@@ -8,6 +8,7 @@ import {
   parseKeyfile,
   serializeKeyfile,
 } from './keyfile';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 vi.mock('viem/accounts', async (importActual) => {
   const actual = await importActual<typeof import('viem/accounts')>();

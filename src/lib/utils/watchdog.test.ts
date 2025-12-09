@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startAppWatchdog } from './watchdog';
 import { logErrorEvent } from '@/lib/stores';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 vi.mock('@/lib/stores', () => ({
   logErrorEvent: vi.fn(),

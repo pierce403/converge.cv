@@ -6,6 +6,7 @@ import {
   fetchFarcasterUserFromAPI,
   fetchFarcasterUserFollowingFromAPI,
 } from './service';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 describe('farcaster service helpers', () => {
   beforeEach(() => {

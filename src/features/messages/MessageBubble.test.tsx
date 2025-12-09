@@ -3,6 +3,7 @@ import { fireEvent, render, screen, act } from '@testing-library/react';
 import { MessageBubble } from './MessageBubble';
 import { useMessageStore, useAuthStore } from '@/lib/stores';
 import type { Message } from '@/types';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 const deleteMessage = vi.fn(async () => undefined);
 const reactToMessage = vi.fn(async () => undefined);
