@@ -153,7 +153,7 @@ export async function fetchFarcasterFollowingWithNeynar(
     let guard = 0;
 
     do {
-      const url = new URL(`/user/following`, NEYNAR_BASE);
+      const url = new URL(`/following`, NEYNAR_BASE);
       url.searchParams.set('fid', String(fid));
       url.searchParams.set('limit', '150');
       if (cursor) url.searchParams.set('cursor', cursor);
