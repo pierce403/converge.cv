@@ -3021,27 +3021,55 @@ export class XmtpClient {
     console.log('[XMTP] loadOwnProfile: Looking for profile in self-DM for inbox:', inboxId);
     
     try {
-      const dm = await this.client.conversations.getDmByInboxId(inboxId);
+      // IMPORTANT: First sync conversations from the network to ensure we have the self-DM
+      // This is necessary when history sync was skipped (hasLocalDB: true) but the local
+      // cache was actually cleared. Without this, getDmByInboxId returns null.
+      try {
+        console.log('[XMTP] loadOwnProfile: Syncing conversations first...');
+        await this.client.conversations.sync();
+      } catch (convSyncErr) {
+        console.warn('[XMTP] loadOwnProfile: Conversation sync failed (continuing):', convSyncErr);
+      }
+      
+      let dm = await this.client.conversations.getDmByInboxId(inboxId);
+      
+      // If still no self-DM, try listing all DMs - sometimes the index isn't updated immediately
       if (!dm) {
-        console.log('[XMTP] loadOwnProfile: No self-DM found, will try preferences API');
-        // Try fallback to preferences API for profile info
+        console.log('[XMTP] loadOwnProfile: getDmByInboxId returned null, checking all DMs...');
+        try {
+          const allDms = await this.client.conversations.listDms();
+          console.log('[XMTP] loadOwnProfile: Found', allDms.length, 'total DMs');
+          // Look for self-DM by checking peer inbox ID
+          for (const d of allDms) {
+            try {
+              const peerId = await d.peerInboxId();
+              if (peerId?.toLowerCase() === inboxId.toLowerCase()) {
+                console.log('[XMTP] loadOwnProfile: Found self-DM via listDms');
+                dm = d;
+                break;
+              }
+            } catch {
+              // Ignore errors getting peer ID
+            }
+          }
+        } catch (listErr) {
+          console.warn('[XMTP] loadOwnProfile: listDms failed:', listErr);
+        }
+      }
+      
+      if (!dm) {
+        console.log('[XMTP] loadOwnProfile: No self-DM found after sync, trying preferences API');
         return await this.loadProfileFromPreferences(inboxId);
       }
 
-      // Even if history sync is disabled (e.g., because the inbox registry believes a
-      // local DB already exists), we still need to pull the self-DM from the network so
-      // `loadOwnProfile()` can find the latest profile message. Without this explicit
-      // sync, `dm.messages()` only returns whatever is already in the local cache,
-      // which can be empty after clearing IndexedDB—leading to missing display names on
-      // reconnect. Force a targeted sync here so profile hydration always has fresh
-      // data, independent of the global history-sync toggle.
+      // Force sync the self-DM messages from network
       let syncSucceeded = false;
       try {
+        console.log('[XMTP] loadOwnProfile: Syncing self-DM messages...');
         await dm.sync();
         syncSucceeded = true;
       } catch (syncError) {
         const errMsg = syncError instanceof Error ? syncError.message : String(syncError);
-        // Check if this is a partial success (messages synced despite intent errors)
         if (errMsg.includes('synced') && errMsg.includes('succeeded')) {
           console.debug('[XMTP] loadOwnProfile: Self-DM sync had errors but messages synced');
           syncSucceeded = true;
@@ -3072,16 +3100,12 @@ export class XmtpClient {
       
       console.log('[XMTP] loadOwnProfile: No profile messages found in self-DM, sync succeeded:', syncSucceeded);
       
-      // If sync failed and no profile found, try preferences API as fallback
-      if (!syncSucceeded) {
-        return await this.loadProfileFromPreferences(inboxId);
-      }
+      // If no profile found, try preferences API as fallback
+      return await this.loadProfileFromPreferences(inboxId);
     } catch (error) {
       console.warn('[XMTP] loadOwnProfile: Error accessing self-DM:', error);
-      // Try fallback to preferences API
       return await this.loadProfileFromPreferences(inboxId);
     }
-    return null;
   }
   
   /**
