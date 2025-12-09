@@ -55,7 +55,8 @@ describe('push helpers', () => {
 
     expect(result.success).toBe(true);
     expect(pushManager.subscribe).toHaveBeenCalled();
-    const lastCall = (fetch as unknown as Mock).mock.calls.at(-1);
+    const fetchMock = fetch as unknown as Mock;
+    const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
     expect(lastCall?.[1]?.body).toContain('inbox-1');
 
     await disablePush();
