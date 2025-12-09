@@ -1,14 +1,22 @@
 import type { FarcasterFollow, FarcasterUser } from './service';
 
 const NEYNAR_BASE = 'https://api.neynar.com/v2/farcaster';
+const NEYNAR_FALLBACK_BASE = 'https://api.neynar.com/farcaster';
 
 const getHeaders = (apiKey?: string) => {
   const key = apiKey?.trim();
   return {
     accept: 'application/json',
     'content-type': 'application/json',
-    ...(key ? { api_key: key } : {}),
+    ...(key ? { api_key: key, 'X-API-KEY': key } : {}),
   };
+};
+
+const fetchWithFallback = async (path: string, apiKey?: string): Promise<Response> => {
+  const headers = getHeaders(apiKey);
+  const primary = await fetch(`${NEYNAR_BASE}${path}`, { headers });
+  if (primary.status !== 404) return primary;
+  return fetch(`${NEYNAR_FALLBACK_BASE}${path}`, { headers });
 };
 
 export interface NeynarUserResult {
@@ -56,9 +64,7 @@ export async function fetchNeynarUserProfile(
   try {
     const isNumeric = typeof identifier === 'number' || /^\d+$/.test(String(identifier));
     const queryParam = isNumeric ? `fid=${identifier}` : `username=${encodeURIComponent(String(identifier))}`;
-    const response = await fetch(`${NEYNAR_BASE}/user?${queryParam}`, {
-      headers: getHeaders(apiKey),
-    });
+    const response = await fetchWithFallback(`/user?${queryParam}`, apiKey);
 
     if (!response.ok) {
       console.warn('[Neynar] Failed to fetch user profile', response.status);
@@ -83,11 +89,11 @@ export async function fetchNeynarUserByVerification(
   const trimmed = address?.trim();
   if (!trimmed) return null;
   try {
-    const url = new URL(`${NEYNAR_BASE}/user/by-verifications`);
+    const url = new URL(`/user/by-verifications`, NEYNAR_BASE);
     url.searchParams.set('verifications', trimmed.toLowerCase());
     url.searchParams.set('limit', '1');
 
-    const response = await fetch(url.toString(), { headers: getHeaders(apiKey) });
+    const response = await fetchWithFallback(url.pathname + url.search, apiKey);
     if (!response.ok) {
       console.warn('[Neynar] Failed to fetch user by verification', response.status);
       return null;
@@ -147,12 +153,12 @@ export async function fetchFarcasterFollowingWithNeynar(
     let guard = 0;
 
     do {
-      const url = new URL(`${NEYNAR_BASE}/user/following`);
+      const url = new URL(`/user/following`, NEYNAR_BASE);
       url.searchParams.set('fid', String(fid));
       url.searchParams.set('limit', '150');
       if (cursor) url.searchParams.set('cursor', cursor);
 
-      const response = await fetch(url.toString(), { headers: getHeaders(apiKey) });
+      const response = await fetchWithFallback(url.pathname + url.search, apiKey);
       if (!response.ok) {
         console.warn('[Neynar] Failed to fetch following', response.status);
         break;
