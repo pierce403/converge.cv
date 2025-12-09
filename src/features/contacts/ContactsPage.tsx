@@ -29,12 +29,15 @@ export function ContactsPage() {
   const [showSyncModal, setShowSyncModal] = useState(false);
   const hasNeynarKey = useFarcasterStore((state) => state.hasNeynarApiKey());
   const getNeynarKey = useFarcasterStore((state) => state.getEffectiveNeynarApiKey);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const isEphemeralIdentity = Boolean(identity?.mnemonic || identity?.privateKey);
 
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
 
   const resolveFarcasterFid = async (): Promise<number> => {
+    setResolveError(null);
     const trimmed = fidInput.trim();
     const apiKey = getNeynarKey();
     const addressCandidates: string[] = [];
@@ -56,7 +59,12 @@ export function ContactsPage() {
     }
 
     if (!trimmed) {
-      throw new Error('Enter a Farcaster FID or username to sync contacts.');
+      const message =
+        identity?.address && !isEphemeralIdentity
+          ? 'No Farcaster account is connected to your primary address.'
+          : 'Enter a Farcaster FID or username to sync contacts.';
+      setResolveError(message);
+      throw new Error(message);
     }
 
     if (/^\d+$/.test(trimmed)) {
@@ -73,7 +81,12 @@ export function ContactsPage() {
       return fallbackProfile.fid;
     }
 
-    throw new Error(addressCandidates.length > 0 ? 'Unable to resolve a Farcaster account from that Ethereum address.' : 'Unable to resolve that Farcaster account.');
+    const message =
+      addressCandidates.length > 0
+        ? 'Unable to resolve a Farcaster account from that Ethereum address.'
+        : 'Unable to resolve that Farcaster account.';
+    setResolveError(message);
+    throw new Error(message);
   };
 
   const handleFarcasterSync = async () => {
@@ -177,6 +190,22 @@ export function ContactsPage() {
                   Sync Farcaster
                 </button>
               )}
+            </div>
+          )}
+          {resolveError && identity?.address && !isEphemeralIdentity && (
+            <div className="text-xs text-primary-300 bg-primary-900/60 border border-primary-800 rounded px-3 py-2">
+              <p className="mb-2">
+                We couldn’t find a Farcaster account for your primary address {identity.address.slice(0, 6)}…
+                {identity.address.slice(-4)}. External wallets are preferred for Farcaster account security.
+              </p>
+              <a
+                href="https://warpcast.com/~/signup"
+                target="_blank"
+                rel="noreferrer"
+                className="btn-secondary text-xs px-3 py-1 inline-block"
+              >
+                Sign up for Farcaster with your wallet
+              </a>
             </div>
           )}
           <button

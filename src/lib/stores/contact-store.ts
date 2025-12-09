@@ -463,6 +463,7 @@ export const useContactStore = create<ContactState>()(
           const storage = await getStorage();
           const farcasterState = useFarcasterStore.getState?.();
           const neynarKey = farcasterState?.getEffectiveNeynarApiKey?.();
+          const xmtp = getXmtpClient();
           const followedUsers = neynarKey
             ? await fetchFarcasterFollowingWithNeynar(fid, neynarKey)
             : await fetchFarcasterUserFollowingFromAPI(fid);
@@ -519,6 +520,13 @@ export const useContactStore = create<ContactState>()(
               existingContact?.inboxId ??
               (await getXmtpClient().deriveInboxIdFromAddress?.(xmtpAddress)) ??
               xmtpAddress;
+
+            const canReceive = xmtp?.canMessage ? await xmtp.canMessage(inboxId) : true;
+            if (!canReceive) {
+              skippedContacts.push(user.fid);
+              onProgress?.(current, total, `Skipping ${userName} - no XMTP inbox for ${xmtpAddress}`);
+              continue;
+            }
 
             const contact: Contact = normaliseContactInput({
               inboxId,
