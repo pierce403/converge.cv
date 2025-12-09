@@ -331,11 +331,13 @@ export function ContactsPage() {
                           FC
                         </span>
                       )}
-                      {contact.farcasterScore !== undefined && contact.farcasterScore !== null && (
-                        <span className="text-xs px-1 py-0.5 rounded bg-accent-950/50 text-accent-200 border border-accent-900/60 flex-shrink-0">
-                          Score {Math.round(contact.farcasterScore)}
-                        </span>
-                      )}
+                      {contact.farcasterScore !== undefined &&
+                        contact.farcasterScore !== null &&
+                        Number.isFinite(contact.farcasterScore) && (
+                          <span className="text-xs px-1 py-0.5 rounded bg-accent-950/50 text-accent-200 border border-accent-900/60 flex-shrink-0">
+                            Score {contact.farcasterScore.toFixed(2)}
+                          </span>
+                        )}
                       {contact.isInboxOnly && (
                         <span className="text-xs px-1.5 py-0.5 rounded bg-primary-800/50 text-primary-400 border border-primary-700/50 flex-shrink-0">
                           Inbox
