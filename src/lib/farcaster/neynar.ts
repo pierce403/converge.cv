@@ -155,7 +155,8 @@ export async function fetchFarcasterFollowingWithNeynar(
     do {
       const url = new URL(`/following`, NEYNAR_BASE);
       url.searchParams.set('fid', String(fid));
-      url.searchParams.set('limit', '150');
+      // Neynar caps limit at 100; keep below to avoid 400 errors.
+      url.searchParams.set('limit', '100');
       if (cursor) url.searchParams.set('cursor', cursor);
 
       const response = await fetchWithFallback(url.pathname + url.search, apiKey);
