@@ -302,12 +302,28 @@ export function InstallationsSettings() {
 
         {!isLoading && installations.length > 0 && (
           <div className="space-y-2">
+            {/* Guidance for users */}
+            <div className="text-xs text-primary-300 bg-primary-950/40 p-2 rounded border border-primary-800/40 mb-3">
+              <span className="font-medium">Safe to revoke:</span>{' '}
+              <span className="text-yellow-400">Expired</span>,{' '}
+              <span className="text-red-400">Error</span>, or{' '}
+              <span className="text-orange-400">Likely stale</span> (old, unused) installations.
+              Avoid revoking <span className="text-green-400">recent</span> installations as they may be active on other devices.
+            </div>
             {installations.map((installation) => {
               const isCurrentDevice = installation.id === currentInstallationId;
               const isRevoking = revokingId === installation.id;
               const hasError = !!installation.keyPackageStatus?.validationError;
               const expiry = formatExpiry(installation.keyPackageStatus?.lifetime?.notAfter);
               const isExpired = expiry === 'Expired';
+              
+              // Determine if installation is likely stale (created > 30 days ago and not current device)
+              const createdMs = installation.clientTimestampNs 
+                ? Number(installation.clientTimestampNs / 1000000n) 
+                : 0;
+              const ageInDays = createdMs ? Math.floor((Date.now() - createdMs) / (24 * 60 * 60 * 1000)) : 0;
+              const isLikelyStale = !isCurrentDevice && ageInDays > 30 && !hasError && !isExpired;
+              const isRecent = !isCurrentDevice && ageInDays <= 7;
 
               return (
                 <div
@@ -317,6 +333,10 @@ export function InstallationsSettings() {
                       ? 'bg-accent-500/10 border-accent-400/30'
                       : hasError || isExpired
                       ? 'bg-red-500/10 border-red-500/30'
+                      : isLikelyStale
+                      ? 'bg-orange-500/10 border-orange-500/30'
+                      : isRecent
+                      ? 'bg-green-500/5 border-green-500/20'
                       : 'bg-primary-950/30 border-primary-800/60'
                   }`}
                 >
@@ -331,13 +351,23 @@ export function InstallationsSettings() {
                             This Device
                           </span>
                         )}
+                        {isRecent && (
+                          <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded" title="Created within the last 7 days - likely an active device">
+                            Recent
+                          </span>
+                        )}
+                        {isLikelyStale && (
+                          <span className="text-xs px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded" title="Created over 30 days ago - likely safe to revoke">
+                            Likely stale
+                          </span>
+                        )}
                         {hasError && (
-                          <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-400 rounded">
+                          <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-400 rounded" title="This installation has errors - safe to revoke">
                             Error
                           </span>
                         )}
                         {isExpired && (
-                          <span className="text-xs px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded">
+                          <span className="text-xs px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded" title="Key package expired - safe to revoke">
                             Expired
                           </span>
                         )}
