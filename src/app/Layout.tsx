@@ -43,14 +43,27 @@ export function Layout() {
     }
   };
 
-  const missingDisplayName = Boolean(identity && !identity.displayName?.trim());
+  // Treat auto-generated labels (e.g., "Identity 0x1234…") as "missing" a real display name
+  const isAutoLabel = (val?: string | null) => {
+    if (!val) return true;
+    const v = val.trim();
+    return v.startsWith('Identity ') || v.startsWith('Wallet ');
+  };
+  
+  const missingDisplayName = Boolean(identity && isAutoLabel(identity.displayName));
   const missingAvatar = Boolean(identity && !identity.avatar?.trim());
+  
+  // Only nag about display name - avatar is truly optional
+  // Avatar info is still shown in the modal but we don't require it
+  const shouldShowPersonalizationNag = missingDisplayName;
 
-  // Use identity-specific reminder key so a new/other identity gets prompted immediately
+  // Use address-based reminder key (stable from identity creation, unlike inboxId which comes later)
   const getReminderKey = useCallback(() => {
-    const id = identity?.inboxId?.toLowerCase?.() || identity?.address?.toLowerCase?.();
-    return id ? `personalization-reminder:${id}` : 'personalization-reminder';
-  }, [identity?.inboxId, identity?.address]);
+    // Always use address - it's available immediately and doesn't change
+    // Using inboxId would cause key to change mid-session when XMTP connects
+    const addr = identity?.address?.toLowerCase?.();
+    return addr ? `personalization-reminder:${addr}` : 'personalization-reminder';
+  }, [identity?.address]);
 
   const readReminderPrefs = useCallback((): { lastNagAt?: number; dismissedForever?: boolean } => {
     if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
@@ -94,7 +107,8 @@ export function Layout() {
       return;
     }
 
-    if (!missingDisplayName && !missingAvatar) {
+    // Only nag if display name is missing (avatar is optional)
+    if (!shouldShowPersonalizationNag) {
       setShowPersonalizationReminder(false);
       return;
     }
@@ -107,13 +121,22 @@ export function Layout() {
 
     const now = Date.now();
     const lastNagAt = prefs.lastNagAt ?? 0;
-    const oneDayMs = 24 * 60 * 60 * 1000;
+    // Use a short cooldown (30 seconds) to prevent re-showing immediately after saving
+    // This handles race conditions during navigation/remounts
+    const cooldownMs = 30_000;
 
+    if (lastNagAt && now - lastNagAt < cooldownMs) {
+      // Recently interacted with, don't show yet
+      setShowPersonalizationReminder(false);
+      return;
+    }
+
+    const oneDayMs = 24 * 60 * 60 * 1000;
     if (!lastNagAt || now - lastNagAt >= oneDayMs) {
       setShowPersonalizationReminder(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity, missingAvatar, missingDisplayName]);
+  }, [identity, shouldShowPersonalizationNag]);
 
   const handleRemindLater = useCallback(() => {
     updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: false });
@@ -826,7 +849,7 @@ export function Layout() {
           <DebugLogPanel />
         </div>
       </nav>
-      {showPersonalizationReminder && identity && (missingDisplayName || missingAvatar) && (
+      {showPersonalizationReminder && identity && shouldShowPersonalizationNag && (
         <PersonalizationReminderModal
           missingDisplayName={missingDisplayName}
           missingAvatar={missingAvatar}

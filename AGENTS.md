@@ -479,3 +479,55 @@ Guidance:
 
 ### Testing / Coverage (Local Note)
 - NPM registry still blocks `@vitest/coverage-v8` downloads (403). Use `pnpm test:coverage` to collect V8 coverage via `NODE_V8_COVERAGE` and aggregate results with `scripts/report-v8-coverage.mjs` (writes `coverage/summary.json`).
+
+### E2E Testing with Playwright (2025-12-09)
+
+**Location**: `tests/e2e/two-browser-messaging.spec.ts`
+
+**Key Issues Discovered**:
+
+1. **"Make it yours" Modal Double-Show Bug**:
+   - **Root Cause 1**: The localStorage reminder key was based on `inboxId || address`. When XMTP connects, `inboxId` gets set, changing the key. Prefs written to the address-based key weren't found when reading from the inboxId-based key.
+   - **Fix**: Always use address-based key (it's stable from identity creation).
+   - **Root Cause 2**: Modal showed if EITHER displayName OR avatar was missing. Avatar is optional.
+   - **Fix**: Only nag about displayName, not avatar. `shouldShowPersonalizationNag = missingDisplayName`.
+   - **Root Cause 3**: Auto-generated labels like "Identity 0x1234…" were not treated as "missing".
+   - **Fix**: Added `isAutoLabel()` check - treat "Identity X" and "Wallet X" prefixes as missing.
+
+2. **Playwright Two-Browser Test**:
+   - The test creates two separate browser contexts and runs them against the same local preview server.
+   - **Critical**: Don't use `isVisible()` for buttons - it checks instantly without waiting. Use `waitFor({ state: 'visible' })` instead.
+   - **Critical**: The test timeout (120s default) may not be enough for XMTP connections. Consider 300s+.
+   - **E2E Mode**: When `VITE_E2E_TEST=true`, the app uses stub inboxIds instead of real XMTP connections.
+   - The auth store is exposed on `window.useAuthStore` only in E2E mode.
+
+3. **Onboarding Flow After Identity Creation**:
+   - After `handleCreateGeneratedIdentity`, the app does `window.location.assign('/')` which causes a full page reload.
+   - On reload, `checkExistingIdentity()` runs and loads identity from storage.
+   - The inboxId should be set either from storage (if saved) or via XMTP connection.
+
+**Test Structure**:
+```typescript
+// Correct pattern for waiting for elements:
+const button = page.getByRole('button', { name: /create new identity/i });
+await button.waitFor({ state: 'visible', timeout: 30000 });
+await button.click();
+
+// NOT this (checks instantly, doesn't wait):
+if (await button.isVisible()) { ... }
+```
+
+**Running E2E Tests**:
+```bash
+pnpm exec playwright test tests/e2e/two-browser-messaging.spec.ts --headed
+```
+
+**Limitation**: In E2E mode (`VITE_E2E_TEST=true`), XMTP connections are stubbed. This means:
+- Each browser can onboard and create identities ✓
+- Each browser can open the "New Chat" UI and send messages ✓
+- Messages are NOT synced between browsers (no real XMTP network)
+- Cross-browser message verification won't work without real XMTP
+
+For true two-browser messaging tests, either:
+1. Remove `VITE_E2E_TEST=true` from the Playwright config to use real XMTP
+2. Or accept that E2E tests only validate UI flows, not actual messaging

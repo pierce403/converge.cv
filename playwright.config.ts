@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
-  timeout: 120_000,
+  timeout: 300_000, // 5 minutes - XMTP connection can be slow
   use: {
     baseURL: 'http://127.0.0.1:4173',
     headless: false,

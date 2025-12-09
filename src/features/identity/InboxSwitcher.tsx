@@ -306,8 +306,9 @@ export function InboxSwitcher() {
                     </span>
                   )}
                   <div className="flex-1 min-w-0">
-                    <label className="text-[11px] font-semibold uppercase tracking-wide text-primary-400">Display name</label>
+                    <label htmlFor="inbox-display-name" className="text-[11px] font-semibold uppercase tracking-wide text-primary-400">Display name</label>
                     <input
+                      id="inbox-display-name"
                       value={displayNameInput}
                       onChange={(e) => setDisplayNameInput(e.target.value)}
                       placeholder={identity?.address ? shortAddress(identity.address) : 'Enter display name'}
