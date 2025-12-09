@@ -10,7 +10,7 @@ import {
 } from './keyfile';
 
 vi.mock('viem/accounts', async (importActual) => {
-  const actual = await importActual<typeof import('viem/accounts')>('viem/accounts');
+  const actual = await importActual<typeof import('viem/accounts')>();
   return {
     ...actual,
     mnemonicToAccount: vi.fn((mnemonic: string) => {

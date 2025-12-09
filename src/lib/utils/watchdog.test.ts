@@ -33,9 +33,7 @@ describe('watchdog', () => {
       return 1;
     }) as any;
 
-    let intervalCb: () => void = () => {};
     (globalThis as any).window.setInterval = vi.fn((cb) => {
-      intervalCb = cb;
       // trigger immediately
       cb();
       return 1;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
   disablePush,
   enablePushForCurrentUser,
@@ -48,14 +48,14 @@ describe('push helpers', () => {
     vi.stubGlobal('navigator', navigatorMock);
     vi.stubGlobal('Notification', notificationMock);
     global.fetch = vi.fn(
-      async (_url, init) => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
-    ) as unknown as vi.Mock;
+      async (_url, _init) => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    ) as unknown as Mock;
 
     const result = await enablePushForCurrentUser({ userId: 'inbox-1', channelId: 'main' });
 
     expect(result.success).toBe(true);
     expect(pushManager.subscribe).toHaveBeenCalled();
-    const lastCall = (fetch as unknown as vi.Mock).mock.calls.at(-1);
+    const lastCall = (fetch as unknown as Mock).mock.calls.at(-1);
     expect(lastCall?.[1]?.body).toContain('inbox-1');
 
     await disablePush();
@@ -63,9 +63,8 @@ describe('push helpers', () => {
   });
 
   it('reports unsupported permission state when Notification is missing', () => {
-    // @ts-expect-error - simulate missing API
-    delete (globalThis as any).Notification;
-    // @ts-expect-error
+    const globals = globalThis as any;
+    delete globals.Notification;
     delete (window as any).Notification;
     expect(getPushPermissionStatus()).toBe('unsupported');
   });

@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { useConversations, groupDetailsToConversationUpdates } from './useConversations';
 import { useConversationStore, useAuthStore } from '@/lib/stores';
 import type { Conversation } from '@/types';
-import type { GroupDetails } from '@xmtp/browser-sdk';
+type GroupDetailsLike = Parameters<typeof groupDetailsToConversationUpdates>[0];
 
 let conversationRecord: Conversation;
 
@@ -150,7 +150,7 @@ describe('groupDetailsToConversationUpdates', () => {
       // Unused fields for this test
       permissionsV2: undefined,
       pinnedFrameUrl: undefined,
-    } as unknown as GroupDetails;
+    } as unknown as GroupDetailsLike;
 
     const updates = groupDetailsToConversationUpdates(details);
 

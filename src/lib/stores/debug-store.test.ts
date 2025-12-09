@@ -4,7 +4,7 @@ import { useDebugStore, logConsoleEvent, logNetworkEvent, logErrorEvent } from '
 describe('debug store', () => {
   beforeEach(() => {
     useDebugStore.setState({ consoleEntries: [], networkEntries: [], errorEntries: [] });
-    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('uuid-1');
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('00000000-0000-0000-0000-000000000001');
   });
 
   it('records and clears console, network, and error logs', () => {

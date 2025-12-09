@@ -72,9 +72,9 @@ describe('farcaster service helpers', () => {
   it('resolves contact name with ENS, fcast.id, and base.eth priority', async () => {
     const user = { display_name: 'Display', username: 'user' } as any;
     const mockEns = {
-      resolveENSFromAddress: vi.fn(async () => null),
-      resolveFcastId: vi.fn(async () => null),
-      resolveBaseEthName: vi.fn(async () => null),
+      resolveENSFromAddress: vi.fn<() => Promise<string | null>>(async () => null),
+      resolveFcastId: vi.fn<() => Promise<string | null>>(async () => null),
+      resolveBaseEthName: vi.fn<() => Promise<string | null>>(async () => null),
     };
     vi.doMock('@/lib/utils/ens', () => mockEns);
 

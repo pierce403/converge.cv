@@ -13,7 +13,7 @@ describe('wagmi signers', () => {
     const signMessage = vi.fn(async (msg: string) => `0x${Buffer.from(msg).toString('hex')}`);
     const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF1234', signMessage);
 
-    const id = signer.getIdentifier();
+    const id = await Promise.resolve(signer.getIdentifier());
     expect(id.identifier).toBe('0xabcdefabcdef1234567890abcdefabcdef1234');
     expect(id.identifierKind).toBe('Ethereum');
 
@@ -26,8 +26,10 @@ describe('wagmi signers', () => {
     const signMessage = vi.fn(async () => '0x1234');
     const signer = createSCWSigner('0xFACEFACEfacefaceFACEFACEfaceFACEFACE0000', signMessage, 8453);
 
-    expect(signer.getIdentifier().identifier).toBe('0xfacefacefacefacefacefacefacefaceface0000');
-    expect(signer.getChainId?.()).toBe(BigInt(8453));
+    const id = await Promise.resolve(signer.getIdentifier());
+    expect(id.identifier).toBe('0xfacefacefacefacefacefacefacefaceface0000');
+    const chainId = (signer as { getChainId?: () => bigint }).getChainId?.();
+    expect(chainId).toBe(BigInt(8453));
     await signer.signMessage('msg');
     expect(signMessage).toHaveBeenCalled();
   });
@@ -37,7 +39,8 @@ describe('wagmi signers', () => {
       '0x8a4c3bcdde28b6b64656c4c993be7b8bd4e7f88a68a651d81a1c4efc148f2f6d'
     );
 
-    expect(signer.getIdentifier().identifier).toBe('0x1234567890abcdef1234567890abcdef12345678');
+    const id = await Promise.resolve(signer.getIdentifier());
+    expect(id.identifier).toBe('0x1234567890abcdef1234567890abcdef12345678');
     const bytes = await signer.signMessage('ping');
     expect(bytes.length).toBeGreaterThan(0);
   });
