@@ -528,6 +528,8 @@ pnpm exec playwright test tests/e2e/two-browser-messaging.spec.ts --headed
 - Messages are NOT synced between browsers (no real XMTP network)
 - Cross-browser message verification won't work without real XMTP
 
-For true two-browser messaging tests, either:
-1. Remove `VITE_E2E_TEST=true` from the Playwright config to use real XMTP
-2. Or accept that E2E tests only validate UI flows, not actual messaging
+### UI Refinement (2025-12-09)
+- **Message Composer Alignment**:
+  - Rotating the send icon 90 degrees to point right (more intuitive).
+  - Enforced equal height (42px) for the text input, attachment button, and send button to ensure perfect alignment.
+  - Added transparent borders to buttons to match the input's box model.

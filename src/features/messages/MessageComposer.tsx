@@ -61,7 +61,7 @@ export function MessageComposer({ onSend, disabled = false, replyToMessage, onCa
           {/* Attachment button */}
           <button
             type="button"
-            className="p-2 text-primary-300 hover:text-primary-100 hover:bg-primary-900/50 rounded-lg transition-colors flex-shrink-0 border border-transparent"
+            className="h-[42px] w-[42px] flex items-center justify-center text-primary-300 hover:text-primary-100 hover:bg-primary-900/50 rounded-lg transition-colors flex-shrink-0 border border-transparent"
             disabled={disabled}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -82,7 +82,7 @@ export function MessageComposer({ onSend, disabled = false, replyToMessage, onCa
               onChange={handleInput}
               onKeyDown={handleKeyDown}
               placeholder="Type a message..."
-              className="w-full px-4 py-2 bg-primary-950/60 border border-primary-800 rounded-lg text-primary-100 placeholder-primary-300 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950 focus:border-transparent resize-none overflow-y-auto backdrop-blur"
+              className="w-full px-4 py-2 min-h-[42px] bg-primary-950/60 border border-primary-800 rounded-lg text-primary-100 placeholder-primary-300 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950 focus:border-transparent resize-none overflow-y-auto backdrop-blur"
               rows={1}
               disabled={disabled}
               style={{ maxHeight: '120px' }}
@@ -94,7 +94,7 @@ export function MessageComposer({ onSend, disabled = false, replyToMessage, onCa
             type="button"
             onClick={handleSend}
             disabled={disabled || !message.trim()}
-            className="p-2 bg-accent-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-lg border border-transparent"
+            className="h-[42px] w-[42px] flex items-center justify-center bg-accent-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-lg border border-transparent"
           >
             <svg className="w-6 h-6 rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
