@@ -2183,10 +2183,25 @@ export class XmtpClient {
       for (const dm of dms) {
         try {
           // Force sync messages for this conversation to ensure we have latest
+          // The SDK may throw an error even when sync partially succeeds (e.g., if an
+          // intent failed but messages were still synced). We catch and continue since
+          // messages() can still return valid data after a partial sync.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (typeof (dm as any).sync === 'function') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (dm as any).sync();
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await (dm as any).sync();
+            } catch (syncErr) {
+              // Check if the error message indicates a partial success
+              const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
+              if (errMsg.includes('synced') && errMsg.includes('succeeded')) {
+                // Partial success - some messages synced, continue with what we have
+                console.debug('[XMTP] DM sync had errors but messages were synced, continuing:', dm.id, errMsg);
+              } else {
+                // Real sync failure - log but continue to next DM
+                console.warn('[XMTP] DM sync failed:', dm.id, syncErr);
+              }
+            }
           }
 
           const dmId = dm.id?.toString();
@@ -2429,10 +2444,21 @@ export class XmtpClient {
         for (const conv of maybeGroups) {
           try {
             // Force sync messages for this conversation
+            // The SDK may throw an error even when sync partially succeeds (e.g., if an
+            // intent failed but messages were still synced). We catch and continue.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             if (typeof (conv as any).sync === 'function') {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              await (conv as any).sync();
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                await (conv as any).sync();
+              } catch (syncErr) {
+                const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
+                if (errMsg.includes('synced') && errMsg.includes('succeeded')) {
+                  console.debug('[XMTP] Group sync had errors but messages were synced, continuing:', conv.id, errMsg);
+                } else {
+                  console.warn('[XMTP] Group sync failed:', conv.id, syncErr);
+                }
+              }
             }
 
             if (!conv.id) {
