@@ -2037,19 +2037,38 @@ export class XmtpClient {
         // Persist DMs to storage to ensure they appear after a resync
         for (const dm of dms) {
           try {
-            const dmAny = dm as unknown as { id?: string; topic?: string; peerAddress?: string; createdAt?: Date };
-            const id = dmAny.id || dmAny.topic;
+            const id = dm.id?.toString();
             if (!id) continue;
             
             const exists = await storage.getConversation(id);
             if (exists) continue;
 
-            const createdAt = dmAny.createdAt ? dmAny.createdAt.getTime() : Date.now();
+            // Get the peer's inbox ID using the async method
+            // This is the actual identity of the person we're chatting with
+            let peerInboxId: string | undefined;
+            try {
+              // peerInboxId() is an async method on the DM type
+              peerInboxId = await dm.peerInboxId();
+            } catch (peerIdErr) {
+              console.warn('[XMTP] Failed to get peerInboxId for DM:', id, peerIdErr);
+            }
+
+            // CRITICAL: Never use the conversation ID as the peer ID!
+            // If we can't get the peer inbox ID, skip this conversation - it will
+            // be populated properly when messages are backfilled
+            if (!peerInboxId) {
+              console.warn('[XMTP] Skipping DM without peerInboxId:', id);
+              continue;
+            }
+
+            const createdAt = dm.createdAtNs 
+              ? Number(dm.createdAtNs / BigInt(1_000_000)) 
+              : Date.now();
             
             const conversation: Conversation = {
               id,
-              topic: dmAny.topic || id,
-              peerId: dmAny.peerAddress || id, // Will be canonicalized to inboxId by background cleanup
+              topic: id, // Use conversation ID as topic for DMs
+              peerId: peerInboxId.toLowerCase(), // The peer's inbox ID - this is the identity
               createdAt,
               lastMessageAt: createdAt,
               unreadCount: 0,
@@ -2060,6 +2079,7 @@ export class XmtpClient {
             };
             
             await storage.putConversation(conversation);
+            console.log('[XMTP] ✅ Persisted DM with peerId:', peerInboxId.slice(0, 10) + '...');
           } catch (dmErr) {
             console.warn('[XMTP] Failed to persist DM during sync:', dmErr);
           }
@@ -3534,44 +3554,22 @@ export class XmtpClient {
 
       let resolvedPeerInboxId: string | null = null;
       if (isEthereumAddress(peerAddressOrInboxId)) {
-        console.log('[XMTP] Detected Ethereum address, creating conversation via identifier...');
+        console.log('[XMTP] Detected Ethereum address, resolving inbox ID first...');
 
-        // For Identifier payloads passed to the XMTP API, the identity service
-        // expects raw hex without the 0x prefix. Normalize and strip prefix.
-        const normalizedAddress = this.normalizeEthereumAddress(peerAddressOrInboxId).toLowerCase();
-        const identifier = {
-          identifier: toIdentifierHex(normalizedAddress),
-          identifierKind: 'Ethereum' as const,
-        };
-
-        dmConversation = await this.client.conversations.newDmWithIdentifier(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          identifier as any
-        );
-
-        // Try multiple methods to get the actual inbox ID
+        // IMPORTANT: Resolve the inbox ID BEFORE creating the DM
+        // The SDK's newDmWithIdentifier checks local cache which may not have the peer
+        // Instead, we resolve the inbox ID via network lookup, then use newDm(inboxId)
+        
+        // Try multiple methods to get the inbox ID
         try {
-          // Method 1: Direct lookup (most reliable for registered users)
+          // Method 1: Direct lookup using client.findInboxIdByIdentifier (queries network)
           resolvedPeerInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
+          console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdFromAddress:', resolvedPeerInboxId);
         } catch (e) {
-          console.warn('[XMTP] getInboxIdFromAddress failed, trying deriveInboxIdFromAddress:', e);
+          console.warn('[XMTP] getInboxIdFromAddress failed, trying Utils API:', e);
         }
 
-        // Method 2: Derive from address if direct lookup failed
-        if (!resolvedPeerInboxId) {
-          try {
-            const derived = await this.deriveInboxIdFromAddress(peerAddressOrInboxId);
-            // Only use if it's actually an inbox ID (not an address)
-            if (derived && !derived.startsWith('0x')) {
-              resolvedPeerInboxId = derived;
-            }
-          } catch (e) {
-            console.warn('[XMTP] deriveInboxIdFromAddress also failed:', e);
-          }
-        }
-
-        // Method 3: Try Utils.getInboxIdForIdentifier if both methods failed
-        // The conversation was created successfully, so the peer is registered
+        // Method 2: Use Utils.getInboxIdForIdentifier (network lookup)
         if (!resolvedPeerInboxId) {
           try {
             const { getXmtpUtils } = await import('./utils-singleton');
@@ -3590,8 +3588,8 @@ export class XmtpClient {
           }
         }
 
-        // Method 4: Try with full address (with 0x) in case the SDK expects it
-        if (!resolvedPeerInboxId && isEthereumAddress(peerAddressOrInboxId)) {
+        // Method 3: Try with 0x prefix variant
+        if (!resolvedPeerInboxId) {
           try {
             const { getXmtpUtils } = await import('./utils-singleton');
             const utils = await getXmtpUtils();
@@ -3602,11 +3600,29 @@ export class XmtpClient {
             const inboxId = await utils.getInboxIdForIdentifier(identifierWith0x, 'production');
             if (inboxId && !inboxId.startsWith('0x')) {
               resolvedPeerInboxId = inboxId;
-              console.log('[XMTP] ✅ Resolved inbox ID via Utils.getInboxIdForIdentifier (with 0x):', resolvedPeerInboxId);
+              console.log('[XMTP] ✅ Resolved inbox ID via Utils (with 0x):', resolvedPeerInboxId);
             }
           } catch (e) {
             console.warn('[XMTP] Utils.getInboxIdForIdentifier (with 0x) failed:', e);
           }
+        }
+
+        // If we resolved the inbox ID, use newDm(inboxId) instead of newDmWithIdentifier
+        if (resolvedPeerInboxId) {
+          console.log('[XMTP] Creating DM with resolved inbox ID:', resolvedPeerInboxId);
+          dmConversation = await this.client.conversations.newDm(resolvedPeerInboxId);
+        } else {
+          // Fallback to newDmWithIdentifier (may fail if not in local cache)
+          console.log('[XMTP] No inbox ID resolved, falling back to newDmWithIdentifier...');
+          const normalizedAddress = this.normalizeEthereumAddress(peerAddressOrInboxId).toLowerCase();
+          const identifier = {
+            identifier: toIdentifierHex(normalizedAddress),
+            identifierKind: 'Ethereum' as const,
+          };
+          dmConversation = await this.client.conversations.newDmWithIdentifier(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            identifier as any
+          );
         }
       } else {
         console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxIdInput);
@@ -3667,10 +3683,15 @@ export class XmtpClient {
               // Look through all DMs for profile messages from this peer
               for (const dm of allDms) {
                 try {
-                  // Get peer inbox ID from DM (might be different format)
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  const dmPeerId = (dm as any).peerInboxId?.toLowerCase() || (dm as any).peerAddress?.toLowerCase();
-                  if (dmPeerId !== resolvedPeerInboxId.toLowerCase()) continue;
+                  // Get peer inbox ID from DM using the async method
+                  let dmPeerId: string | undefined;
+                  try {
+                    dmPeerId = (await dm.peerInboxId())?.toLowerCase();
+                  } catch {
+                    // Skip DMs we can't get peer ID for
+                    continue;
+                  }
+                  if (!dmPeerId || dmPeerId !== resolvedPeerInboxId.toLowerCase()) continue;
 
                   // Sync and check messages
                   await dm.sync();
