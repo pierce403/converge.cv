@@ -165,13 +165,18 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         (c) => !c.isGroup && c.peerId?.toLowerCase?.() === contact.inboxId?.toLowerCase?.()
       );
 
+      const initialPriority: 'farcaster' | 'xmtp' | 'message' =
+        contact.source === 'farcaster' || contact.farcasterFid || contact.farcasterUsername
+          ? 'farcaster'
+          : 'xmtp';
+
       let latestProfileDisplayName =
         contact.preferredName ??
         contact.name ??
         conversationMatch?.displayName;
       let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar ?? conversationMatch?.displayAvatar;
-      let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
-      let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
+      let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = initialPriority;
+      let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = initialPriority;
 
       const preferName = (
         next: string | null | undefined,
@@ -369,7 +374,13 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         ...Array.from(otherIdentities.values()),
       ];
 
-      const updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier || primaryEthereumAddress;
+      const isHexAddress = (value?: string | null) =>
+        Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
+
+      let updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier || primaryEthereumAddress;
+      if (isHexAddress(updatedDisplayName) && contact.name && !isHexAddress(contact.name)) {
+        updatedDisplayName = contact.preferredName ?? contact.name;
+      }
       const updatedAvatar = latestProfileAvatar;
 
       const contactStore = useContactStore.getState();
