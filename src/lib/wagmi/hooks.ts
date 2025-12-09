@@ -24,6 +24,14 @@ export function useWalletConnection() {
     [connectors, connectAsync]
   );
 
+  const connectDefaultWallet = useCallback(async () => {
+    const connector = connectors[0];
+    if (!connector) {
+      throw new Error('No wallet connectors are available.');
+    }
+    return await connectAsync({ connector });
+  }, [connectAsync, connectors]);
+
   const disconnectWallet = useCallback(async () => {
     await disconnectAsync();
   }, [disconnectAsync]);
@@ -36,7 +44,8 @@ export function useWalletConnection() {
     isConnecting,
     isDisconnecting,
     connectWallet,
+    connectDefaultWallet,
     disconnectWallet,
+    connectors,
   };
 }
-

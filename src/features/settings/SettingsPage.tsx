@@ -59,7 +59,7 @@ export function SettingsPage() {
 
   const [displayName, setDisplayName] = useState<string>(computeInitialDisplayName());
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const { disconnectWallet, isConnected: isWalletConnected, address: walletAddress } = useWalletConnection();
+  const { disconnectWallet, connectDefaultWallet, isConnected: isWalletConnected, address: walletAddress } = useWalletConnection();
   const { signMessageAsync } = useSignMessage();
   const [showQR, setShowQR] = useState(false);
   // Track push status
@@ -71,34 +71,40 @@ export function SettingsPage() {
   // Helper to reconnect to XMTP
   const handleReconnect = async () => {
     if (!identity || isReconnecting) return;
-    
+
     setIsReconnecting(true);
     try {
       const xmtp = getXmtpClient();
-      
+
       // If identity has a private key (Converge-generated), use it directly
       if (identity.privateKey) {
-        await xmtp.connect({ 
-          address: identity.address, 
-          privateKey: identity.privateKey 
+        await xmtp.connect({
+          address: identity.address,
+          privateKey: identity.privateKey,
         });
         return;
       }
-      
-      // For wallet-connected identities, we need the wallet to be connected
-      if (isWalletConnected && walletAddress?.toLowerCase() === identity.address.toLowerCase()) {
-        await xmtp.connect({ 
-          address: identity.address, 
-          signMessage: async (message: string) => await signMessageAsync({ message })
-        });
-        return;
+
+      // For wallet-connected identities, ensure the wallet is connected to the right address
+      let effectiveWallet = walletAddress?.toLowerCase();
+      if (!isWalletConnected || effectiveWallet !== identity.address.toLowerCase()) {
+        const result = await connectDefaultWallet();
+        const connectedAccounts = (result as { accounts?: string[] } | undefined)?.accounts;
+        const connected = connectedAccounts?.[0];
+        effectiveWallet = typeof connected === 'string' ? connected.toLowerCase() : effectiveWallet;
       }
-      
-      // Wallet not connected or different address
-      throw new Error('Please reconnect your wallet to sign in. Go to the onboarding page to reconnect.');
+
+      if (effectiveWallet !== identity.address.toLowerCase()) {
+        throw new Error('Please connect the wallet that owns this identity to continue.');
+      }
+
+      await xmtp.connect({
+        address: identity.address,
+        signMessage: async (message: string) => await signMessageAsync({ message }),
+      });
     } catch (error) {
       console.error('Reconnect failed:', error);
-      // Error will be shown via xmtpError in the store
+      alert(error instanceof Error ? error.message : 'Failed to reconnect wallet');
     } finally {
       setIsReconnecting(false);
     }
@@ -747,7 +753,7 @@ export function SettingsPage() {
                     </div>
                     <button
                       onClick={handleReconnect}
-                      disabled={isReconnecting || (!identity?.privateKey && !isWalletConnected)}
+                      disabled={isReconnecting || !identity}
                       className="btn-primary text-xs disabled:opacity-50"
                     >
                       {isReconnecting ? 'Connecting...' : 'Connect'}
