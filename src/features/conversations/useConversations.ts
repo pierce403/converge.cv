@@ -157,12 +157,26 @@ export function useConversations() {
             updates.peerId = canonicalInboxId;
           }
 
-          const displayName =
+          const isHexAddress = (value?: string) =>
+            Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
+
+          const contactDisplayName =
             updatedContact?.preferredName ||
             updatedContact?.name ||
-            profile.displayName ||
-            profile.primaryAddress ||
-            canonicalInboxId;
+            existingContact?.preferredName ||
+            existingContact?.name;
+          const profileDisplayName = profile.displayName || profile.primaryAddress || canonicalInboxId;
+          let displayName = contactDisplayName || profileDisplayName;
+
+          // Avoid downgrading a human-friendly name to a hex address if we already have one
+          if (
+            displayName &&
+            isHexAddress(displayName) &&
+            (contactDisplayName || (!isHexAddress(conversation.displayName) && conversation.displayName))
+          ) {
+            displayName = contactDisplayName || conversation.displayName || displayName;
+          }
+
           if (displayName && conversation.displayName !== displayName) {
             updates.displayName = displayName;
           }
