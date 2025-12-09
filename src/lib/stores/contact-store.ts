@@ -503,6 +503,14 @@ export const useContactStore = create<ContactState>()(
           const shorten = (addr?: string | null) =>
             addr && addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr ?? '';
 
+          if (total === 0) {
+            const reason = neynarKey
+              ? 'Neynar returned 0 follows. Check your API key and Farcaster FID.'
+              : 'No Farcaster API configured and no Neynar key available.';
+            report(0, 0, reason, { action: 'error', fid });
+            return;
+          }
+
           report(0, total, `Found ${total} users you follow. Processing contacts...`, { action: 'fetch' });
           
           let current = 0;

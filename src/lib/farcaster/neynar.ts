@@ -160,8 +160,15 @@ export async function fetchFarcasterFollowingWithNeynar(
 
       const response = await fetchWithFallback(url.pathname + url.search, apiKey);
       if (!response.ok) {
-        console.warn('[Neynar] Failed to fetch following', response.status);
-        break;
+        let body: string | undefined;
+        try {
+          body = await response.text();
+        } catch {
+          // ignore
+        }
+        const message = `[Neynar] Failed to fetch following (${response.status})${body ? `: ${body.slice(0, 120)}` : ''}`;
+        console.warn(message);
+        throw new Error(message);
       }
 
       const payload = (await response.json()) as NeynarFollowingResponse;
@@ -174,6 +181,6 @@ export async function fetchFarcasterFollowingWithNeynar(
     return users;
   } catch (error) {
     console.warn('[Neynar] Error fetching following', error);
-    return [];
+    throw error;
   }
 }
