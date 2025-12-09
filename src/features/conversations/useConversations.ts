@@ -26,7 +26,7 @@ const normalizeIdentifier = (value: string): string => {
   return trimmed;
 };
 
-const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conversation> => {
+export const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conversation> => {
   const memberIdentifiers = details.members.map((member) =>
     member.address ? normalizeIdentifier(member.address) : member.inboxId
   );

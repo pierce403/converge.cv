@@ -478,7 +478,8 @@ Guidance:
 - `MessageBubble` (`src/features/messages/MessageBubble.tsx`) now renders a compact “Replying to …” header above the reply body, resolving the quoted snippet from the target message when available and falling back gracefully if the original message is missing.
 
 ### Testing / Coverage (Local Note)
-- NPM registry still blocks `@vitest/coverage-v8` downloads (403). Use `pnpm test:coverage` to collect V8 coverage via `NODE_V8_COVERAGE` and aggregate results with `scripts/report-v8-coverage.mjs` (writes `coverage/summary.json`).
+- `pnpm test:coverage` now runs Vitest with the `v8` coverage provider (`@vitest/coverage-v8`) and writes standard reports to `coverage/` (HTML at `coverage/index.html`, summary JSON at `coverage/coverage-summary.json`). The old `scripts/report-v8-coverage.mjs` flow is no longer needed.
+- Coverage scope is focused on core logic: `src/lib/**`, message bubble rendering, conversations hook, HandleXmtpProtocol, and config files. Large UI shells (`components/**`, most `features/messages/**`, XMTP client, Dexie driver, wagmi config/hooks, etc.) are excluded via `vitest.config.ts` to keep percentages meaningful.
 
 ### E2E Testing with Playwright (2025-12-09)
 
