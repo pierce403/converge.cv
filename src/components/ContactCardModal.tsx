@@ -171,7 +171,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         conversationMatch?.displayName;
       let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar ?? conversationMatch?.displayAvatar;
 
-      const preferName = (next?: string | null, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
+      const preferName = (next: string | null | undefined, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
         if (!next) return;
         // Priority order: Farcaster > ENS > XMTP > Message history (existing)
         const currentPriority = (() => {
@@ -186,7 +186,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         }
       };
 
-      const preferAvatar = (next?: string | null, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
+      const preferAvatar = (next: string | null | undefined, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
         if (!next) return;
         const currentPriority = (() => {
           if (latestProfileAvatar === contact.preferredAvatar || latestProfileAvatar === contact.avatar) return 'message';
