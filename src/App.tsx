@@ -7,10 +7,11 @@ import { useAuthStore } from './lib/stores';
 const isClient = typeof window !== 'undefined' && typeof document !== 'undefined';
 
 function App() {
-  // Expose stores globally in E2E test mode
+  // Expose stores globally for E2E tests and debugging
   useEffect(() => {
-    if (import.meta.env.VITE_E2E_TEST === 'true') {
-      console.log('[E2E] Exposing useAuthStore globally');
+    // Always expose in non-production for testing and debugging
+    if (import.meta.env.DEV || import.meta.env.VITE_E2E_TEST === 'true' || window.location.hostname === '127.0.0.1') {
+      console.log('[App] Exposing useAuthStore globally for testing');
       // @ts-expect-error exposing for E2E tests
       window.useAuthStore = useAuthStore;
     }

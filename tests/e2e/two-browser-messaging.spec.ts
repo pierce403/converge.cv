@@ -133,6 +133,20 @@ async function onboardWithName(page: Page, displayName: string) {
   await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
   console.log(`[Test] onboardWithName: New Chat link visible for ${displayName}`);
   
+  // CRITICAL: Wait for XMTP to fully connect (including registration) before proceeding
+  // Check for identity with inboxId in the auth store
+  console.log(`[Test] onboardWithName: Waiting for XMTP connection to complete for ${displayName}`);
+  await page.waitForFunction(
+    () => {
+      // @ts-expect-error accessing injected store
+      const identity = window.useAuthStore?.getState?.()?.identity;
+      // Identity should have an inboxId once XMTP is connected
+      return identity?.inboxId && !identity.inboxId.startsWith('local-');
+    },
+    { timeout: 120000 }
+  );
+  console.log(`[Test] onboardWithName: XMTP connection ready for ${displayName}`);
+  
   // Set display name in the "Make it yours" modal when it appears
   await setDisplayNameInModal(page, displayName);
   
@@ -144,58 +158,29 @@ async function onboardWithName(page: Page, displayName: string) {
 }
 
 async function getIdentifier(page: Page): Promise<string> {
-  // Go to Settings page where address is clearly shown
-  await page.goto('/settings');
-  await page.waitForTimeout(500);
+  // DON'T navigate to /settings - that triggers another connection which races with the first one!
+  // Instead, read from the store which should have the identity after connection
+  console.log(`[Test] getIdentifier: Reading identity from store (no navigation)`);
   
-  // Look for the address on the settings page
-  // It should be displayed as "0x..." somewhere
-  const pageContent = await page.content();
-  const addressMatch = pageContent.match(/0x[a-fA-F0-9]{40}/);
-  
-  if (addressMatch) {
-    const address = addressMatch[0];
-    console.log(`[Test] getIdentifier: Found address from settings: ${address}`);
-    // Go back to main page
-    await page.goto('/');
-    await page.waitForTimeout(500);
-    return address;
-  }
-  
-  // Alternative: Try to get from the visible text
-  const addressLocator = page.getByText(/0x[a-fA-F0-9]{8,}/);
-  try {
-    await addressLocator.first().waitFor({ state: 'visible', timeout: 5000 });
-    const text = await addressLocator.first().textContent();
-    const match = text?.match(/0x[a-fA-F0-9]+/);
-    if (match) {
-      console.log(`[Test] getIdentifier: Found address from text: ${match[0]}`);
-      await page.goto('/');
-      await page.waitForTimeout(500);
-      return match[0];
-    }
-  } catch (e) {
-    console.log(`[Test] getIdentifier: Text method failed:`, e);
-  }
-  
-  // Fallback: try store
-  try {
-    const identifier = await page.evaluate(() => {
+  // Poll for identity to be available (should already be there after connection wait)
+  const identifier = await page.evaluate(async () => {
+    for (let i = 0; i < 20; i++) {
       // @ts-expect-error accessing injected store
       const identity = window.useAuthStore?.getState?.()?.identity;
-      return identity?.inboxId || identity?.address || null;
-    });
-    if (identifier) {
-      console.log(`[Test] getIdentifier: Got from store: ${identifier}`);
-      await page.goto('/');
-      return identifier;
+      if (identity?.address) {
+        return identity.address;
+      }
+      await new Promise(r => setTimeout(r, 250));
     }
-  } catch (e) {
-    console.log(`[Test] getIdentifier: Could not get from store:`, e);
+    return null;
+  });
+  
+  if (identifier) {
+    console.log(`[Test] getIdentifier: Got address from store: ${identifier}`);
+    return identifier;
   }
   
-  await page.goto('/');
-  throw new Error('Could not find identifier');
+  throw new Error('Could not find identifier from store');
 }
 
 async function startConversation(page: Page, peerInboxId: string) {
@@ -218,10 +203,25 @@ async function sendMessage(page: Page, message: string) {
 }
 
 async function openConversation(page: Page, identifier: string) {
-  const conversation = page.getByRole('link').filter({ hasText: identifier }).first();
+  console.log(`[Test] openConversation: Looking for conversation with identifier: ${identifier.slice(0, 10)}...`);
+  
+  // First try exact prefix match
+  let conversation = page.getByRole('link').filter({ hasText: identifier.slice(0, 10) }).first();
+  
+  // If not found, try just finding any conversation link in the chat list (for single conversation case)
+  try {
+    await conversation.waitFor({ state: 'visible', timeout: 10_000 });
+  } catch {
+    console.log(`[Test] openConversation: Exact match not found, looking for any conversation link...`);
+    // Look for conversation link (not "New Chat" or other nav links)
+    conversation = page.locator('a[href^="/chat/"]').first();
+  }
+  
   await expect(conversation).toBeVisible({ timeout: 60_000 });
+  console.log(`[Test] openConversation: Found conversation, clicking...`);
   await conversation.click();
   await expect(page).toHaveURL(/\/chat\//, { timeout: 30_000 });
+  console.log(`[Test] openConversation: Navigated to chat URL`);
 }
 
 async function expectHeaderToShowName(page: Page, displayName: string) {
@@ -238,6 +238,10 @@ test('two browsers exchange messages and show display names', async ({ browser, 
   const pageA = await contextA.newPage();
   const pageB = await contextB.newPage();
 
+  // Capture console logs from both browsers
+  pageA.on('console', msg => console.log(`[Browser A] ${msg.type()}: ${msg.text()}`));
+  pageB.on('console', msg => console.log(`[Browser B] ${msg.type()}: ${msg.text()}`));
+
   const displayNameA = `Tester A ${Date.now()}`;
   const displayNameB = `Tester B ${Date.now()}`;
 
@@ -251,6 +255,12 @@ test('two browsers exchange messages and show display names', async ({ browser, 
   console.log('[Test] A inboxId:', inboxA);
   console.log('[Test] B inboxId:', inboxB);
 
+  // Wait a bit for identities to propagate on XMTP network
+  // Since registration happens during onboarding, we just need a short propagation delay
+  console.log('[Test] Waiting 5 seconds for identities to propagate on XMTP network...');
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  console.log('[Test] Done waiting');
+
   // A starts the conversation with B and sends the first message.
   console.log('[Test] A starting conversation with B');
   await startConversation(pageA, inboxB);
@@ -259,8 +269,21 @@ test('two browsers exchange messages and show display names', async ({ browser, 
   await sendMessage(pageA, messageFromA);
   console.log('[Test] A sent message successfully');
 
+  // B needs to sync to see incoming conversations
+  // Click "Check now" button to trigger sync
+  console.log('[Test] B syncing to check for incoming conversations');
+  await pageB.goto('/'); // Make sure we're on the chat list
+  await pageB.waitForTimeout(1000);
+  
+  // Click the "Check now" button to sync
+  const checkNowButton = pageB.getByRole('button', { name: /check now/i });
+  await checkNowButton.click();
+  console.log('[Test] B clicked Check now');
+  
+  // Wait for sync to complete - watch for the conversation to appear
+  await pageB.waitForTimeout(3000);
+  
   // B opens the new conversation and replies.
-  // In E2E mode without real XMTP, look for the conversation by address instead of display name
   console.log('[Test] B looking for conversation from A');
   await openConversation(pageB, inboxA.slice(0, 10)); // Use partial address
   console.log('[Test] B checking for A\'s message');

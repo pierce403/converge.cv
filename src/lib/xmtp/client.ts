@@ -918,7 +918,7 @@ export class XmtpClient {
           }
         } catch (error) {
           if (!this.isExpectedIdentityError(error)) {
-            console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+          console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
           }
           const recovered = await handleIdentityError(error);
           if (recovered) {
@@ -937,7 +937,7 @@ export class XmtpClient {
         }
       } catch (error) {
         if (!this.isExpectedIdentityError(error)) {
-          console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+        console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
         }
         const recovered = await handleIdentityError(error);
         if (recovered) {

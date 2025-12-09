@@ -11,7 +11,8 @@ export default defineConfig({
   },
   webServer: {
     // Build once, then serve a static preview for stability in E2E
-    command: 'VITE_E2E_TEST=true pnpm build && pnpm preview -- --host 127.0.0.1 --port 4173',
+    // Using real XMTP connections (no VITE_E2E_TEST flag)
+    command: 'pnpm build && pnpm preview -- --host 127.0.0.1 --port 4173',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

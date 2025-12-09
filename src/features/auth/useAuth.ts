@@ -78,9 +78,9 @@ export function useAuth() {
       }
 
       const xmtp = getXmtpClient();
-      const shouldRegister = options?.register === true;
-      const shouldSyncHistory =
-        options?.enableHistorySync !== undefined ? options.enableHistorySync : true;
+    const shouldRegister = options?.register === true;
+    const shouldSyncHistory =
+      options?.enableHistorySync !== undefined ? options.enableHistorySync : true;
       await xmtp.connect(
         {
           address,
