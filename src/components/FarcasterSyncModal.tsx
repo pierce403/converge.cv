@@ -35,6 +35,7 @@ export function FarcasterSyncModal({
   const [isClosing, setIsClosing] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
   const checksEndRef = useRef<HTMLDivElement>(null);
+  const isComplete = total > 0 && current >= total;
 
   // Auto-scroll to bottom when new log entries are added
   useEffect(() => {
@@ -48,20 +49,6 @@ export function FarcasterSyncModal({
       checksEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [checks]);
-
-  useEffect(() => {
-    // Auto-close when sync completes
-    if (isOpen && current === total && total > 0) {
-      const timer = setTimeout(() => {
-        setIsClosing(true);
-        setTimeout(() => {
-          onClose();
-          setIsClosing(false);
-        }, 300);
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [isOpen, current, total, onClose]);
 
   if (!isOpen) return null;
 
@@ -89,8 +76,14 @@ export function FarcasterSyncModal({
       <div className={`bg-primary-900 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col relative text-primary-50 transition-opacity ${isClosing ? 'opacity-0' : 'opacity-100'}`}>
         {/* Header */}
         <div className="flex flex-col items-center p-6 border-b border-primary-800">
-          {/* Spinner */}
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500 mb-4"></div>
+          {/* Spinner / Complete icon */}
+          {isComplete ? (
+            <div className="rounded-full h-12 w-12 border-2 border-accent-500 flex items-center justify-center mb-4 text-accent-300 text-xl font-bold">
+              ✓
+            </div>
+          ) : (
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500 mb-4"></div>
+          )}
           
           {/* Progress Text */}
           <h3 className="text-xl font-bold mb-2">Syncing Farcaster Contacts</h3>
@@ -199,7 +192,7 @@ export function FarcasterSyncModal({
             }}
             className="text-primary-300 hover:text-primary-50 text-sm underline w-full text-center"
           >
-            Dismiss (sync continues in background)
+            {isComplete ? 'Close' : 'Dismiss (sync continues in background)'}
           </button>
         </div>
       </div>
