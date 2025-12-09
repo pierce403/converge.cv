@@ -496,7 +496,18 @@ export const useContactStore = create<ContactState>()(
           const farcasterState = useFarcasterStore.getState?.();
           const neynarKey = farcasterState?.getEffectiveNeynarApiKey?.();
           const xmtp = getXmtpClient();
-          const followedUsers = neynarKey
+          const usingNeynar = Boolean(neynarKey);
+
+          report(
+            0,
+            0,
+            usingNeynar
+              ? 'Using Neynar API to fetch your following list...'
+              : 'Using Farcaster API base (VITE_FARCASTER_API_BASE) to fetch following list...',
+            { action: 'fetch', fid }
+          );
+
+          const followedUsers = usingNeynar
             ? await fetchFarcasterFollowingWithNeynar(fid, neynarKey)
             : await fetchFarcasterUserFollowingFromAPI(fid);
           const total = followedUsers.length;
@@ -504,9 +515,9 @@ export const useContactStore = create<ContactState>()(
             addr && addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr ?? '';
 
           if (total === 0) {
-            const reason = neynarKey
-              ? 'Neynar returned 0 follows. Check your API key and Farcaster FID.'
-              : 'No Farcaster API configured and no Neynar key available.';
+            const reason = usingNeynar
+              ? 'Neynar returned 0 follows. Verify your Neynar API key, plan limits, and Farcaster FID.'
+              : 'No Farcaster following API configured (set VITE_FARCASTER_API_BASE) and no Neynar key available.';
             report(0, 0, reason, { action: 'error', fid });
             return;
           }
