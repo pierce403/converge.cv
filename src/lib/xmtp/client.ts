@@ -172,6 +172,8 @@ export class XmtpClient {
   private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
   private inboxErrorCooldown: Map<string, number> = new Map();
+  // Track which inboxIds have already logged an error this session (to reduce noise)
+  private inboxErrorLogged: Set<string> = new Set();
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -183,20 +185,33 @@ export class XmtpClient {
     }
   }
 
+  // Check if an error is an expected identity/association error (not worth logging repeatedly)
+  private isExpectedIdentityError(error: unknown): boolean {
+    try {
+      const msg = error instanceof Error ? error.message : String(error ?? '');
+      return (
+        /invalid hexadecimal digit/i.test(msg) ||
+        /missing identity update/i.test(msg) ||
+        /association error/i.test(msg)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   // Apply cooldown for inboxIds that produce identity/association errors
   private applyInboxErrorCooldown(inboxId: string, error: unknown): void {
     try {
-      const msg = error instanceof Error ? error.message : String(error ?? '');
-      // Match common identity-related errors that indicate the inbox doesn't exist or has issues
-      const shouldCooldown = 
-        /invalid hexadecimal digit/i.test(msg) ||
-        /missing identity update/i.test(msg) ||
-        /association error/i.test(msg);
-      
-      if (shouldCooldown) {
+      if (this.isExpectedIdentityError(error)) {
+        const key = inboxId.toLowerCase();
         // 30 minute cooldown to avoid spamming the API
-        this.inboxErrorCooldown.set(inboxId.toLowerCase(), Date.now() + 30 * 60 * 1000);
-        console.info('[XMTP] Cooldown applied to inboxId due to identity error:', inboxId);
+        this.inboxErrorCooldown.set(key, Date.now() + 30 * 60 * 1000);
+        
+        // Only log once per inbox ID per session to reduce console noise
+        if (!this.inboxErrorLogged.has(key)) {
+          this.inboxErrorLogged.add(key);
+          console.debug('[XMTP] Identity lookup failed for inboxId (30min cooldown applied):', inboxId);
+        }
       }
     } catch {
       // ignore
@@ -886,7 +901,10 @@ export class XmtpClient {
             return buildProfile(latest.identifiers ?? []);
           }
         } catch (error) {
-          console.warn('[XMTP] fetchInboxProfile: getLatestInboxState failed, falling back to inboxStateFromInboxIds', error);
+          // Only log unexpected errors at warn level; expected identity errors are handled quietly
+          if (!this.isExpectedIdentityError(error)) {
+            console.warn('[XMTP] fetchInboxProfile: getLatestInboxState failed', error);
+          }
           const recovered = await handleIdentityError(error);
           if (recovered) {
             return recovered;
@@ -899,7 +917,9 @@ export class XmtpClient {
             return buildProfile(states[0]?.identifiers ?? []);
           }
         } catch (error) {
-          console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+          if (!this.isExpectedIdentityError(error)) {
+            console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+          }
           const recovered = await handleIdentityError(error);
           if (recovered) {
             return recovered;
@@ -916,7 +936,9 @@ export class XmtpClient {
           return buildProfile(state.identifiers);
         }
       } catch (error) {
-        console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+        if (!this.isExpectedIdentityError(error)) {
+          console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+        }
         const recovered = await handleIdentityError(error);
         if (recovered) {
           return recovered;
