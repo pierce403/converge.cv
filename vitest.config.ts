@@ -9,18 +9,6 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     exclude: [...configDefaults.exclude, 'tests/e2e/**', 'tmp/**'], // include Vitest defaults, skip Playwright, and ignore reference fixtures under tmp
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      exclude: [
-        'node_modules/',
-        'src/test/',
-        '**/*.d.ts',
-        '**/*.config.*',
-        '**/mockData',
-        'dist/',
-      ],
-    },
   },
   resolve: {
     alias: {

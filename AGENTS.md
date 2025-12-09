@@ -476,3 +476,6 @@ Guidance:
 - History backfill and live stream classification special-case reply content types, emitting `xmtp:message` events with structured reply metadata rather than `xmtp:system` events.
 - Message store plumbing (`src/features/messages/useMessages.ts`) persists `replyTo` on `Message` records for both locally sent and remotely received replies and filters legacy system-only `"Reply"` placeholders when loading messages from IndexedDB.
 - `MessageBubble` (`src/features/messages/MessageBubble.tsx`) now renders a compact “Replying to …” header above the reply body, resolving the quoted snippet from the target message when available and falling back gracefully if the original message is missing.
+
+### Testing / Coverage (Local Note)
+- NPM registry still blocks `@vitest/coverage-v8` downloads (403). Use `pnpm test:coverage` to collect V8 coverage via `NODE_V8_COVERAGE` and aggregate results with `scripts/report-v8-coverage.mjs` (writes `coverage/summary.json`).

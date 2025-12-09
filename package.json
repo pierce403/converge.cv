@@ -12,6 +12,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest",
+    "test:coverage": "rm -rf .v8-coverage coverage && NODE_V8_COVERAGE=.v8-coverage vitest run --reporter basic && node scripts/report-v8-coverage.mjs",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
