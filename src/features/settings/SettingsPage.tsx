@@ -59,13 +59,22 @@ export function SettingsPage() {
 
   const [displayName, setDisplayName] = useState<string>(computeInitialDisplayName());
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const { disconnectWallet, connectDefaultWallet, isConnected: isWalletConnected, address: walletAddress } = useWalletConnection();
+  const {
+    disconnectWallet,
+    connectDefaultWallet,
+    connectWallet,
+    connectors,
+    isConnected: isWalletConnected,
+    address: walletAddress,
+  } = useWalletConnection();
   const { signMessageAsync } = useSignMessage();
   const [showQR, setShowQR] = useState(false);
   // Track push status
   const [pushStatus, setPushStatus] = useState<'unknown' | 'enabled' | 'disabled' | 'unsupported'>('unknown');
   const [isPushLoading, setIsPushLoading] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [showConnectorList, setShowConnectorList] = useState(false);
   const canDownloadKeyfile = Boolean(identity?.privateKey || identity?.mnemonic);
 
   // Helper to reconnect to XMTP
@@ -74,6 +83,8 @@ export function SettingsPage() {
 
     setIsReconnecting(true);
     try {
+      setConnectError(null);
+      setShowConnectorList(false);
       const xmtp = getXmtpClient();
 
       // If identity has a private key (Converge-generated), use it directly
@@ -87,11 +98,17 @@ export function SettingsPage() {
 
       // For wallet-connected identities, ensure the wallet is connected to the right address
       let effectiveWallet = walletAddress?.toLowerCase();
-      if (!isWalletConnected || effectiveWallet !== identity.address.toLowerCase()) {
-        const result = await connectDefaultWallet();
-        const connectedAccounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
-        const connected = connectedAccounts?.[0];
-        effectiveWallet = typeof connected === 'string' ? connected.toLowerCase() : effectiveWallet;
+      try {
+        if (!isWalletConnected || effectiveWallet !== identity.address.toLowerCase()) {
+          const result = await connectDefaultWallet();
+          const connectedAccounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
+          const connected = connectedAccounts?.[0];
+          effectiveWallet = typeof connected === 'string' ? connected.toLowerCase() : effectiveWallet;
+        }
+      } catch (connectErr) {
+        setConnectError('No wallet provider found. Choose a wallet below to reconnect.');
+        setShowConnectorList(true);
+        throw connectErr;
       }
 
       if (effectiveWallet !== identity.address.toLowerCase()) {
@@ -104,7 +121,12 @@ export function SettingsPage() {
       });
     } catch (error) {
       console.error('Reconnect failed:', error);
-      alert(error instanceof Error ? error.message : 'Failed to reconnect wallet');
+      if (!showConnectorList && !isWalletConnected) {
+        setShowConnectorList(true);
+      }
+      if (error instanceof Error && !connectError) {
+        setConnectError(error.message);
+      }
     } finally {
       setIsReconnecting(false);
     }
@@ -751,6 +773,11 @@ export function SettingsPage() {
                         </span>
                       )}
                     </div>
+                    {connectError && (
+                      <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 mb-2">
+                        {connectError}
+                      </div>
+                    )}
                     <button
                       onClick={handleReconnect}
                       disabled={isReconnecting || !identity}
@@ -758,6 +785,33 @@ export function SettingsPage() {
                     >
                       {isReconnecting ? 'Connecting...' : 'Connect'}
                     </button>
+                    {showConnectorList && connectors.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        <div className="text-xs text-primary-300">Choose a wallet to reconnect:</div>
+                        <div className="flex flex-wrap gap-2">
+                          {connectors.map((c) => (
+                            <button
+                              key={c.id}
+                              onClick={async () => {
+                                try {
+                                  setConnectError(null);
+                                  await connectWallet(c.name as WalletConnectorType);
+                                  await handleReconnect();
+                                } catch (err) {
+                                  setConnectError(
+                                    err instanceof Error ? err.message : 'Failed to connect wallet'
+                                  );
+                                }
+                              }}
+                              className="btn-secondary text-xs px-3 py-1"
+                              disabled={isReconnecting}
+                            >
+                              {c.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 {connectionStatus === 'connecting' && (
