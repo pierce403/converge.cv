@@ -102,6 +102,40 @@ export async function fetchNeynarUserByVerification(
   }
 }
 
+export async function fetchNeynarUserByIdentifier(
+  identifier: number | string,
+  apiKey?: string
+): Promise<(FarcasterUser & { score?: number; power_badge?: boolean }) | null> {
+  if (!apiKey) return null;
+
+  const trimmed = String(identifier).trim();
+  const isAddress = /^0x[a-fA-F0-9]{40}$/.test(trimmed);
+
+  // Prefer verification lookups when possible
+  if (isAddress) {
+    const byVerification = await fetchNeynarUserByVerification(trimmed, apiKey);
+    if (byVerification) return byVerification;
+  }
+
+  try {
+    const response = await fetch(`${NEYNAR_BASE}/user?username=${encodeURIComponent(trimmed)}`, {
+      headers: getHeaders(apiKey),
+    });
+    if (!response.ok) {
+      if (response.status !== 404) {
+        console.warn('[Neynar] Failed to fetch user by identifier', response.status);
+      }
+      return null;
+    }
+    const data = (await response.json()) as NeynarUserResult;
+    const user = data.result?.user || (data as { user?: FarcasterUser }).user;
+    return user ? mapNeynarUser(user) : null;
+  } catch (error) {
+    console.warn('[Neynar] Error fetching user by identifier', error);
+    return null;
+  }
+}
+
 export async function fetchFarcasterFollowingWithNeynar(
   fid: number,
   apiKey?: string

@@ -39,8 +39,8 @@ const resolveDefaultNeynarKey = (): string | undefined => {
     const envKey = (process.env as Record<string, string | undefined>)?.VITE_NEYNAR_API_KEY;
     if (envKey) return envKey;
   }
-  // Fallback to the Converge client key (provided by the user; not a secret)
-  return 'e6927a99-c548-421f-a230-ee8bf11e8c48';
+  // Fallback to the Converge Neynar API key (provided by the user; not a secret)
+  return 'F523CE9D-47C9-494D-954F-2C628D170E4A';
 };
 
 export const useFarcasterStore = create<FarcasterState>()(

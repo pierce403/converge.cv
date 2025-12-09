@@ -207,6 +207,58 @@ export async function resolveFidFromAddress(address: string, neynarApiKey?: stri
 }
 
 /**
+ * Resolve a Farcaster FID from a flexible identifier (address, ENS, username, or FID string).
+ * Prefers Neynar verification lookups when an API key is available.
+ */
+export async function resolveFidFromIdentifier(identifier: number | string, neynarApiKey?: string): Promise<number | null> {
+  const raw = String(identifier).trim();
+
+  // Numeric FID input
+  if (/^\d+$/.test(raw)) {
+    const fidNum = Number(raw);
+    if (Number.isFinite(fidNum)) {
+      return fidNum;
+    }
+  }
+
+  // Direct Ethereum address
+  if (/^0x[a-fA-F0-9]{40}$/.test(raw)) {
+    const viaAddress = await resolveFidFromAddress(raw, neynarApiKey);
+    if (viaAddress) return viaAddress;
+  }
+
+  // ENS name: resolve to address, then verification lookup
+  if (raw.endsWith('.eth')) {
+    try {
+      const { resolveAddressOrENS } = await import('@/lib/utils/ens');
+      const address = await resolveAddressOrENS(raw);
+      if (address) {
+        const viaEns = await resolveFidFromAddress(address, neynarApiKey);
+        if (viaEns) return viaEns;
+      }
+    } catch (error) {
+      console.warn('[Farcaster] ENS resolution failed for identifier', raw, error);
+    }
+  }
+
+  // Neynar username lookup (may fail if not a Farcaster username)
+  if (neynarApiKey) {
+    const neynarUser = await fetchNeynarUserByIdentifier(raw, neynarApiKey);
+    if (neynarUser?.fid) {
+      return neynarUser.fid;
+    }
+  }
+
+  // Backend API fallback (if configured)
+  const apiUser = await fetchFarcasterUserFromAPI(raw);
+  if (apiUser?.fid) {
+    return apiUser.fid;
+  }
+
+  return null;
+}
+
+/**
  * Resolves contact name with priority: ENS > .fcast.id > .base.eth > Farcaster name
  * @param user Farcaster user object
  * @param ethAddress Ethereum address
@@ -250,3 +302,4 @@ export async function resolveContactName(
     name: user.display_name || user.username,
   };
 }
+import { fetchNeynarUserByIdentifier } from './neynar';

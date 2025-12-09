@@ -5,8 +5,7 @@ import { ContactCardModal } from '@/components/ContactCardModal';
 import type { Contact } from '@/lib/stores/contact-store';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { FarcasterSyncModal } from '@/components/FarcasterSyncModal';
-import { fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
-import { fetchFarcasterUserFromAPI, resolveFidFromAddress } from '@/lib/farcaster/service';
+import { resolveFidFromAddress, resolveFidFromIdentifier } from '@/lib/farcaster/service';
 
 export function ContactsPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -71,14 +70,9 @@ export function ContactsPage() {
       return Number(trimmed);
     }
 
-    const profile = apiKey ? await fetchNeynarUserProfile(trimmed, apiKey) : null;
-    if (profile?.fid) {
-      return profile.fid;
-    }
-
-    const fallbackProfile = await fetchFarcasterUserFromAPI(trimmed);
-    if (fallbackProfile?.fid) {
-      return fallbackProfile.fid;
+    const fid = await resolveFidFromIdentifier(trimmed, apiKey);
+    if (fid) {
+      return fid;
     }
 
     const message =
