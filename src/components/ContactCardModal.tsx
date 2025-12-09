@@ -6,9 +6,11 @@ import type { Conversation } from '@/types';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { useConversations } from '@/features/conversations/useConversations';
 import { useConversationStore } from '@/lib/stores';
+import { useFarcasterStore } from '@/lib/stores/farcaster-store';
 import { useNavigate } from 'react-router-dom';
 import { isEthereumAddress, resolveENS, resolveENSFromAddress } from '@/lib/utils/ens';
 import { getStorage } from '@/lib/storage';
+import { fetchNeynarUserByVerification, fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
 
 interface ContactCardModalProps {
   contact: Contact;
@@ -39,6 +41,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const { createConversation, toggleMute } = useConversations();
   const conversations = useConversationStore((s) => s.conversations);
   const updateConversationInStore = useConversationStore((s) => s.updateConversation);
+  const farcasterStore = useFarcasterStore();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -158,8 +161,43 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       inboxState?.accountAddresses?.forEach(addAddress);
       contact.identities?.forEach((identity) => ingestIdentity(identity));
 
-      let latestProfileDisplayName = contact.preferredName ?? contact.name;
-      let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar;
+      const conversationMatch = conversations.find(
+        (c) => !c.isGroup && c.peerId?.toLowerCase?.() === contact.inboxId?.toLowerCase?.()
+      );
+
+      let latestProfileDisplayName =
+        contact.preferredName ??
+        contact.name ??
+        conversationMatch?.displayName;
+      let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar ?? conversationMatch?.displayAvatar;
+
+      const preferName = (next?: string | null, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
+        if (!next) return;
+        // Priority order: Farcaster > ENS > XMTP > Message history (existing)
+        const currentPriority = (() => {
+          if (latestProfileDisplayName === contact.preferredName || latestProfileDisplayName === contact.name) return 'message';
+          if (latestProfileDisplayName === conversationMatch?.displayName) return 'message';
+          // If already set from Farcaster/ENS/XMTP we can't perfectly track; assume current is strong unless overwritten below.
+          return 'xmtp';
+        })();
+        const rank = { farcaster: 3, ens: 2, xmtp: 1, message: 0 } as const;
+        if (rank[priority] >= rank[currentPriority as keyof typeof rank]) {
+          latestProfileDisplayName = next;
+        }
+      };
+
+      const preferAvatar = (next?: string | null, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
+        if (!next) return;
+        const currentPriority = (() => {
+          if (latestProfileAvatar === contact.preferredAvatar || latestProfileAvatar === contact.avatar) return 'message';
+          if (latestProfileAvatar === conversationMatch?.displayAvatar) return 'message';
+          return 'xmtp';
+        })();
+        const rank = { farcaster: 3, ens: 2, xmtp: 1, message: 0 } as const;
+        if (rank[priority] >= rank[currentPriority as keyof typeof rank]) {
+          latestProfileAvatar = next;
+        }
+      };
 
       const ingestProfile = (profile: Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | null) => {
         if (!profile) return;
@@ -190,20 +228,32 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         }
       };
 
-      // Always try to fetch XMTP profile first to refresh display name + avatar
-      try {
-        const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
-        if (targetInbox) {
-          console.log('[ContactCardModal] Refreshing profile for', targetInbox);
-          const profile = await xmtp.fetchInboxProfile(String(targetInbox));
-          console.log('[ContactCardModal] fetchInboxProfile result:', profile);
-          ingestProfile(profile);
+      // Farcaster first (if available)
+      const neynarKey = farcasterStore.getEffectiveNeynarApiKey?.();
+      const farcasterFid = contact.farcasterFid;
+      const farcasterUsername = contact.farcasterUsername;
+      const candidateEthAddresses = Array.from(ethereumAddresses);
+
+      if (neynarKey) {
+        try {
+          let fcProfile =
+            (farcasterFid ? await fetchNeynarUserProfile(farcasterFid, neynarKey) : null) ||
+            (farcasterUsername ? await fetchNeynarUserProfile(farcasterUsername, neynarKey) : null);
+
+          if (!fcProfile && candidateEthAddresses.length > 0) {
+            fcProfile = await fetchNeynarUserByVerification(candidateEthAddresses[0], neynarKey);
+          }
+
+          if (fcProfile) {
+            preferName(fcProfile.display_name || fcProfile.username, 'farcaster');
+            preferAvatar(fcProfile.pfp_url, 'farcaster');
+          }
+        } catch (fcError) {
+          console.warn('[ContactCardModal] Farcaster refresh failed:', fcError);
         }
-      } catch (e) {
-        console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
       }
 
-      // Resolve ENS name from address if missing
+      // ENS second
       if (!ensIdentity) {
         const candidateAddress = Array.from(ethereumAddresses)[0];
         if (candidateAddress) {
@@ -215,6 +265,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                 kind: 'ENS',
                 isPrimary: true,
               };
+              preferName(ensName, 'ens');
             }
           } catch (ensError) {
             console.warn('[ContactCardModal] Reverse ENS lookup failed:', ensError);
@@ -271,11 +322,28 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           : new Error('Failed to resolve XMTP inbox ID from address.');
       }
 
+      // XMTP profile last (message history)
+      try {
+        const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
+        if (targetInbox) {
+          console.log('[ContactCardModal] Refreshing profile for', targetInbox);
+          const profile = await xmtp.fetchInboxProfile(String(targetInbox));
+          console.log('[ContactCardModal] fetchInboxProfile result:', profile);
+          ingestProfile(profile);
+          preferName(profile?.displayName, 'xmtp');
+          preferAvatar(profile?.avatarUrl, 'xmtp');
+        }
+      } catch (e) {
+        console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
+      }
+
       // Fetch canonical profile if inbox ID changed
       if (latestInboxId && latestInboxId !== contact.inboxId?.toLowerCase()) {
         try {
           const canonicalProfile = await xmtp.fetchInboxProfile(latestInboxId);
           ingestProfile(canonicalProfile);
+          preferName(canonicalProfile?.displayName, 'xmtp');
+          preferAvatar(canonicalProfile?.avatarUrl, 'xmtp');
         } catch (canonicalError) {
           console.warn('[ContactCardModal] Failed to fetch canonical inbox profile:', canonicalError);
         }
