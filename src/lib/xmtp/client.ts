@@ -75,7 +75,7 @@ export interface XmtpMessage {
   content: string | Uint8Array;
   sentAt: number;
   isLocalFallback?: boolean;
-   replyToId?: string;
+  replyToId?: string;
 }
 
 export type MessageCallback = (message: XmtpMessage) => void;
@@ -206,7 +206,7 @@ export class XmtpClient {
         const key = inboxId.toLowerCase();
         // 30 minute cooldown to avoid spamming the API
         this.inboxErrorCooldown.set(key, Date.now() + 30 * 60 * 1000);
-        
+
         // Only log once per inbox ID per session to reduce console noise
         if (!this.inboxErrorLogged.has(key)) {
           this.inboxErrorLogged.add(key);
@@ -386,26 +386,26 @@ export class XmtpClient {
         [k: string]: unknown;
       }>;
       if (!list.length) return { revoked: [] };
-      
+
       // Newest first
       list.sort((a, b) => (a.clientTimestampNs && b.clientTimestampNs && a.clientTimestampNs > b.clientTimestampNs ? -1 : 1));
       const toRevoke = list.slice(Math.max(keepLatest, 0));
-      
+
       const bytes: Uint8Array[] = [];
       const revokedIds: string[] = [];
-      
+
       for (const inst of toRevoke) {
         const rawBytes = (inst as unknown as { bytes?: Uint8Array; installationId?: Uint8Array; idBytes?: Uint8Array }).bytes
           || (inst as unknown as { installationId?: Uint8Array }).installationId
           || (inst as unknown as { idBytes?: Uint8Array }).idBytes
           || (typeof inst.id === 'string' ? this.hexToBytes(inst.id) : null);
-        
+
         if (rawBytes) {
           bytes.push(rawBytes);
           if (typeof inst.id === 'string') revokedIds.push(inst.id);
         }
       }
-      
+
       if (!bytes.length) return { revoked: [] };
       await client.revokeInstallations(bytes);
       return { revoked: revokedIds };
@@ -430,9 +430,9 @@ export class XmtpClient {
     // without actually registering this new ephemeral installation on the network.
     const randomSuffix = Math.random().toString(36).substring(2, 10);
     const dbPath = `xmtp-revoke-temp-${randomSuffix}.db3`;
-    
+
     const signer = await this.createSigner(this.identity);
-    
+
     console.log('[XMTP] forceRevokeOldestInstallations: Creating ephemeral temp client (new DB) with disableAutoRegister');
     // Create a temporary client without auto-registering a new installation
     // so we can manage preferences/installations even when 10/10 is reached.
@@ -705,13 +705,19 @@ export class XmtpClient {
   async deriveInboxIdFromAddress(address: string): Promise<string | null> {
     try {
       const normalized = this.normalizeEthereumAddress(address);
-      try {
-        const existing = await this.getInboxIdFromAddress(normalized);
-        if (existing) {
-          return existing;
+
+      // Optimization: Check if client is connected before calling getInboxIdFromAddress
+      // This prevents "Client not connected" errors from filling the logs
+      if (this.client) {
+        try {
+          const existing = await this.getInboxIdFromAddress(normalized);
+          if (existing) {
+            return existing;
+          }
+        } catch (error) {
+          // Only warn if it's not the expected "Client not connected" error (though strict check above should prevent it)
+          console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to Utils', error);
         }
-      } catch (error) {
-        console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to Utils', error);
       }
 
       const { getXmtpUtils } = await import('./utils-singleton');
@@ -723,12 +729,19 @@ export class XmtpClient {
       };
 
       try {
-        const resolved = await utils.getInboxIdForIdentifier(identifier, 'production');
+        // Add timeout to prevent hanging if the worker/network is unresponsive
+        const resolved = await Promise.race([
+          utils.getInboxIdForIdentifier(identifier, 'production'),
+          new Promise<string | undefined>((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout waiting for Utils')), 5000)
+          )
+        ]);
+
         if (resolved) {
           return resolved;
         }
       } catch (error) {
-        console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed, attempting generateInboxId', error);
+        console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed or timed out', error);
       }
 
       // Don't call generateInboxId - that's only for unregistered users
@@ -918,7 +931,7 @@ export class XmtpClient {
           }
         } catch (error) {
           if (!this.isExpectedIdentityError(error)) {
-          console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+            console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
           }
           const recovered = await handleIdentityError(error);
           if (recovered) {
@@ -937,7 +950,7 @@ export class XmtpClient {
         }
       } catch (error) {
         if (!this.isExpectedIdentityError(error)) {
-        console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+          console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
         }
         const recovered = await handleIdentityError(error);
         if (recovered) {
@@ -1573,7 +1586,7 @@ export class XmtpClient {
       // Explicitly set DB path to ensure persistence stability across reloads
       // and prevent creating new installations (which hits the 10 limit).
       const dbPath = `xmtp-production-${identity.address.toLowerCase()}.db3`;
-      
+
       console.log('[XMTP] Client.create options:', {
         env: 'production',
         dbPath,
@@ -2031,7 +2044,7 @@ export class XmtpClient {
       let dmIdSet = new Set<string>();
       try {
         const dms = await this.client.conversations.listDms();
-        
+
         dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
 
         // Persist DMs to storage to ensure they appear after a resync
@@ -2039,7 +2052,7 @@ export class XmtpClient {
           try {
             const id = dm.id?.toString();
             if (!id) continue;
-            
+
             const exists = await storage.getConversation(id);
             if (exists) continue;
 
@@ -2061,10 +2074,10 @@ export class XmtpClient {
               continue;
             }
 
-            const createdAt = dm.createdAtNs 
-              ? Number(dm.createdAtNs / BigInt(1_000_000)) 
+            const createdAt = dm.createdAtNs
+              ? Number(dm.createdAtNs / BigInt(1_000_000))
               : Date.now();
-            
+
             const conversation: Conversation = {
               id,
               topic: id, // Use conversation ID as topic for DMs
@@ -2077,7 +2090,7 @@ export class XmtpClient {
               isGroup: false,
               lastMessagePreview: '',
             };
-            
+
             await storage.putConversation(conversation);
             console.log('[XMTP] ✅ Persisted DM with peerId:', peerInboxId.slice(0, 10) + '...');
           } catch (dmErr) {
@@ -3017,9 +3030,9 @@ export class XmtpClient {
       console.log('[XMTP] loadOwnProfile: No inbox ID');
       return null;
     }
-    
+
     console.log('[XMTP] loadOwnProfile: Looking for profile in self-DM for inbox:', inboxId);
-    
+
     try {
       // IMPORTANT: First sync conversations from the network to ensure we have the self-DM
       // This is necessary when history sync was skipped (hasLocalDB: true) but the local
@@ -3030,9 +3043,9 @@ export class XmtpClient {
       } catch (convSyncErr) {
         console.warn('[XMTP] loadOwnProfile: Conversation sync failed (continuing):', convSyncErr);
       }
-      
+
       let dm = await this.client.conversations.getDmByInboxId(inboxId);
-      
+
       // If still no self-DM, try listing all DMs - sometimes the index isn't updated immediately
       if (!dm) {
         console.log('[XMTP] loadOwnProfile: getDmByInboxId returned null, checking all DMs...');
@@ -3056,7 +3069,7 @@ export class XmtpClient {
           console.warn('[XMTP] loadOwnProfile: listDms failed:', listErr);
         }
       }
-      
+
       if (!dm) {
         console.log('[XMTP] loadOwnProfile: No self-DM found after sync, trying preferences API');
         return await this.loadProfileFromPreferences(inboxId);
@@ -3080,7 +3093,7 @@ export class XmtpClient {
 
       const msgs = await dm.messages();
       console.log('[XMTP] loadOwnProfile: Found', msgs.length, 'messages in self-DM');
-      
+
       // Scan newest → oldest for a profile record
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
@@ -3097,9 +3110,9 @@ export class XmtpClient {
           console.warn('[XMTP] Failed to parse profile message', e);
         }
       }
-      
+
       console.log('[XMTP] loadOwnProfile: No profile messages found in self-DM, sync succeeded:', syncSucceeded);
-      
+
       // If no profile found, try preferences API as fallback
       return await this.loadProfileFromPreferences(inboxId);
     } catch (error) {
@@ -3107,7 +3120,7 @@ export class XmtpClient {
       return await this.loadProfileFromPreferences(inboxId);
     }
   }
-  
+
   /**
    * Fallback: Try to load profile info from XMTP preferences/identity API
    */
@@ -3583,7 +3596,7 @@ export class XmtpClient {
         // IMPORTANT: Resolve the inbox ID BEFORE creating the DM
         // The SDK's newDmWithIdentifier checks local cache which may not have the peer
         // Instead, we resolve the inbox ID via network lookup, then use newDm(inboxId)
-        
+
         // Try multiple methods to get the inbox ID
         try {
           // Method 1: Direct lookup using client.findInboxIdByIdentifier (queries network)

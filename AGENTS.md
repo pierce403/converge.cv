@@ -528,6 +528,12 @@ pnpm exec playwright test tests/e2e/two-browser-messaging.spec.ts --headed
 - Messages are NOT synced between browsers (no real XMTP network)
 - Cross-browser message verification won't work without real XMTP
 
+### Bug Fixes (2025-12-09)
+- **XMTP Client Connection Hang**: Fixed a critical issue where `deriveInboxIdFromAddress` would hang indefinitely when the Utils worker failed to respond or the network was unstable.
+  - Added a timeout to the `utils.getInboxIdForIdentifier` call.
+  - Added a check for client existence before calling `getInboxIdFromAddress` to prevent "Client not connected" error noise.
+  - This resolves the "Creating..." stuck state when starting new chats.
+
 ### UI Refinement (2025-12-09)
 - **Message Composer Alignment**:
   - Rotating the send icon 90 degrees to point right (more intuitive).
