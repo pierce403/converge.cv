@@ -3466,8 +3466,11 @@ export class XmtpClient {
       if (isEthereumAddress(peerAddressOrInboxId)) {
         console.log('[XMTP] Detected Ethereum address, creating conversation via identifier...');
 
+        // For Identifier payloads passed to the XMTP API, the identity service
+        // expects raw hex without the 0x prefix. Normalize and strip prefix.
+        const normalizedAddress = this.normalizeEthereumAddress(peerAddressOrInboxId).toLowerCase();
         const identifier = {
-          identifier: peerAddressOrInboxId.toLowerCase(),
+          identifier: toIdentifierHex(normalizedAddress),
           identifierKind: 'Ethereum' as const,
         };
 
