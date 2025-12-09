@@ -170,32 +170,30 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         contact.name ??
         conversationMatch?.displayName;
       let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar ?? conversationMatch?.displayAvatar;
+      let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
+      let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
 
-      const preferName = (next: string | null | undefined, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
+      const preferName = (
+        next: string | null | undefined,
+        priority: 'farcaster' | 'ens' | 'xmtp' | 'message'
+      ) => {
         if (!next) return;
-        // Priority order: Farcaster > ENS > XMTP > Message history (existing)
-        const currentPriority = (() => {
-          if (latestProfileDisplayName === contact.preferredName || latestProfileDisplayName === contact.name) return 'message';
-          if (latestProfileDisplayName === conversationMatch?.displayName) return 'message';
-          // If already set from Farcaster/ENS/XMTP we can't perfectly track; assume current is strong unless overwritten below.
-          return 'xmtp';
-        })();
         const rank = { farcaster: 3, ens: 2, xmtp: 1, message: 0 } as const;
-        if (rank[priority] >= rank[currentPriority as keyof typeof rank]) {
+        if (rank[priority] >= rank[namePriority]) {
           latestProfileDisplayName = next;
+          namePriority = priority;
         }
       };
 
-      const preferAvatar = (next: string | null | undefined, priority: 'farcaster' | 'ens' | 'xmtp' | 'message') => {
+      const preferAvatar = (
+        next: string | null | undefined,
+        priority: 'farcaster' | 'ens' | 'xmtp' | 'message'
+      ) => {
         if (!next) return;
-        const currentPriority = (() => {
-          if (latestProfileAvatar === contact.preferredAvatar || latestProfileAvatar === contact.avatar) return 'message';
-          if (latestProfileAvatar === conversationMatch?.displayAvatar) return 'message';
-          return 'xmtp';
-        })();
         const rank = { farcaster: 3, ens: 2, xmtp: 1, message: 0 } as const;
-        if (rank[priority] >= rank[currentPriority as keyof typeof rank]) {
+        if (rank[priority] >= rank[avatarPriority]) {
           latestProfileAvatar = next;
+          avatarPriority = priority;
         }
       };
 
