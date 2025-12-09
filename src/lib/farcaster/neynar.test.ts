@@ -79,7 +79,24 @@ describe('neynar helpers', () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            result: { users: [{ fid: 1, custody_address: '', username: 'a', display_name: 'a', pfp_url: '', profile: { bio: { text: '' } }, verifications: [], score: 5 }], next: { cursor: 'next' } },
+            result: {
+              users: [
+                {
+                  object: 'follow',
+                  user: {
+                    fid: 1,
+                    custody_address: '',
+                    username: 'a',
+                    display_name: 'a',
+                    pfp_url: '',
+                    profile: { bio: { text: '' } },
+                    verifications: [],
+                    score: 5,
+                  },
+                },
+              ],
+              next: { cursor: 'next' },
+            },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         )
@@ -87,7 +104,23 @@ describe('neynar helpers', () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            result: { users: [{ fid: 2, custody_address: '', username: 'b', display_name: 'b', pfp_url: '', profile: { bio: { text: '' } }, verifications: [], power_badge: true }] },
+            result: {
+              users: [
+                {
+                  object: 'follow',
+                  user: {
+                    fid: 2,
+                    custody_address: '',
+                    username: 'b',
+                    display_name: 'b',
+                    pfp_url: '',
+                    profile: { bio: { text: '' } },
+                    verifications: [],
+                    power_badge: true,
+                  },
+                },
+              ],
+            },
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         )
@@ -97,5 +130,7 @@ describe('neynar helpers', () => {
     expect(users).toHaveLength(2);
     expect(users[0].score).toBe(5);
     expect(users[1].power_badge).toBe(true);
+    expect(users[0].fid).toBe(1);
+    expect(users[1].fid).toBe(2);
   });
 });

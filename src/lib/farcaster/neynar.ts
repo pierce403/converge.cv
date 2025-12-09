@@ -48,13 +48,23 @@ const extractScoreValue = (score: unknown): number | undefined => {
   return undefined;
 };
 
+const unwrapUser = (
+  entry: (FarcasterUser | FarcasterFollow | { user?: FarcasterUser }) & {
+    score?: { value?: number } | number;
+    power_badge?: boolean;
+  }
+): (FarcasterUser & { score?: number; power_badge?: boolean }) => {
+  const user = (entry as { user?: FarcasterUser }).user ?? entry;
+  return {
+    ...(user as FarcasterUser),
+    score: extractScoreValue((user as { score?: unknown }).score ?? entry.score),
+    power_badge: user.power_badge ?? entry.power_badge,
+  };
+};
+
 export const mapNeynarUser = (
   user: (FarcasterUser | FarcasterFollow) & { score?: { value?: number } | number; power_badge?: boolean }
-) => ({
-  ...user,
-  score: extractScoreValue(user.score),
-  power_badge: user.power_badge ?? (user as FarcasterUser).power_badge,
-});
+) => unwrapUser(user);
 
 export async function fetchNeynarUserProfile(
   identifier: number | string,
