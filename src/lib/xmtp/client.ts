@@ -2989,16 +2989,23 @@ export class XmtpClient {
    */
   async loadOwnProfile(): Promise<{ displayName?: string; avatarUrl?: string } | null> {
     if (!this.client) {
+      console.log('[XMTP] loadOwnProfile: No client connected');
       return null;
     }
     const inboxId = this.client.inboxId;
     if (!inboxId) {
+      console.log('[XMTP] loadOwnProfile: No inbox ID');
       return null;
     }
+    
+    console.log('[XMTP] loadOwnProfile: Looking for profile in self-DM for inbox:', inboxId);
+    
     try {
       const dm = await this.client.conversations.getDmByInboxId(inboxId);
       if (!dm) {
-        return null;
+        console.log('[XMTP] loadOwnProfile: No self-DM found, will try preferences API');
+        // Try fallback to preferences API for profile info
+        return await this.loadProfileFromPreferences(inboxId);
       }
 
       // Even if history sync is disabled (e.g., because the inbox registry believes a
@@ -3008,13 +3015,24 @@ export class XmtpClient {
       // which can be empty after clearing IndexedDB—leading to missing display names on
       // reconnect. Force a targeted sync here so profile hydration always has fresh
       // data, independent of the global history-sync toggle.
+      let syncSucceeded = false;
       try {
         await dm.sync();
+        syncSucceeded = true;
       } catch (syncError) {
-        console.warn('[XMTP] Failed to sync self-DM before loading profile:', syncError);
+        const errMsg = syncError instanceof Error ? syncError.message : String(syncError);
+        // Check if this is a partial success (messages synced despite intent errors)
+        if (errMsg.includes('synced') && errMsg.includes('succeeded')) {
+          console.debug('[XMTP] loadOwnProfile: Self-DM sync had errors but messages synced');
+          syncSucceeded = true;
+        } else {
+          console.warn('[XMTP] loadOwnProfile: Failed to sync self-DM:', syncError);
+        }
       }
 
       const msgs = await dm.messages();
+      console.log('[XMTP] loadOwnProfile: Found', msgs.length, 'messages in self-DM');
+      
       // Scan newest → oldest for a profile record
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
@@ -3024,15 +3042,41 @@ export class XmtpClient {
         try {
           const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
           const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
-          console.log('[XMTP] ✅ Loaded profile from network');
+          console.log('[XMTP] ✅ Loaded profile from self-DM:', { displayName: obj.displayName, hasAvatar: !!obj.avatarUrl });
           logNetworkEvent({ direction: 'inbound', event: 'profile:load', details: 'Profile loaded from self-DM' });
           return { displayName: obj.displayName, avatarUrl: obj.avatarUrl };
         } catch (e) {
           console.warn('[XMTP] Failed to parse profile message', e);
         }
       }
+      
+      console.log('[XMTP] loadOwnProfile: No profile messages found in self-DM, sync succeeded:', syncSucceeded);
+      
+      // If sync failed and no profile found, try preferences API as fallback
+      if (!syncSucceeded) {
+        return await this.loadProfileFromPreferences(inboxId);
+      }
     } catch (error) {
-      console.warn('[XMTP] No profile found on network:', error);
+      console.warn('[XMTP] loadOwnProfile: Error accessing self-DM:', error);
+      // Try fallback to preferences API
+      return await this.loadProfileFromPreferences(inboxId);
+    }
+    return null;
+  }
+  
+  /**
+   * Fallback: Try to load profile info from XMTP preferences/identity API
+   */
+  private async loadProfileFromPreferences(inboxId: string): Promise<{ displayName?: string; avatarUrl?: string } | null> {
+    try {
+      console.log('[XMTP] loadProfileFromPreferences: Trying preferences API for:', inboxId);
+      const profile = await this.fetchInboxProfile(inboxId);
+      if (profile.displayName || profile.avatarUrl) {
+        console.log('[XMTP] ✅ Loaded profile from preferences API:', { displayName: profile.displayName, hasAvatar: !!profile.avatarUrl });
+        return { displayName: profile.displayName, avatarUrl: profile.avatarUrl };
+      }
+    } catch (e) {
+      console.warn('[XMTP] loadProfileFromPreferences: Failed:', e);
     }
     return null;
   }
