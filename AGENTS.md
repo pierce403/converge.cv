@@ -382,7 +382,7 @@ if (!isRegistered) {
 3. Document new architectural decisions
 4. Update the "Current State" section
 5. Note any new dependencies or tools added
-6. Always run the full test suite (`pnpm build` and `pnpm test --run`) before handing work back to the user to keep the deploy pipeline green.
+6. Always run the full CI-equivalent checks before handing work back: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build` (matches the GitHub Pages workflow order: typecheck → lint → build/deploy).
 7. **ALWAYS COMMIT AND PUSH ALL CHANGES** - This is mandatory after completing any work:
    ```bash
    git add -A
