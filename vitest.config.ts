@@ -43,7 +43,6 @@ export default defineConfig({
         'src/features/messages/useMessages.ts',
         'src/features/messages/index.ts',
         'src/lib/storage/dexie-driver.ts',
-        'src/lib/keyfile.ts',
         'src/lib/utils/debug-console.ts',
         'src/lib/utils/ens.ts',
         'src/lib/utils/useVisualViewport.ts',

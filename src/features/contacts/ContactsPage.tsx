@@ -6,7 +6,7 @@ import type { Contact } from '@/lib/stores/contact-store';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { FarcasterSyncModal } from '@/components/FarcasterSyncModal';
 import { fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
-import { fetchFarcasterUserFromAPI } from '@/lib/farcaster/service';
+import { fetchFarcasterUserFromAPI, resolveFidFromAddress } from '@/lib/farcaster/service';
 
 export function ContactsPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -36,6 +36,25 @@ export function ContactsPage() {
 
   const resolveFarcasterFid = async (): Promise<number> => {
     const trimmed = fidInput.trim();
+    const apiKey = getNeynarKey();
+    const addressCandidates: string[] = [];
+
+    if (trimmed && /^0x[a-fA-F0-9]{40}$/.test(trimmed)) {
+      addressCandidates.push(trimmed);
+    } else if (!trimmed && identity?.address) {
+      addressCandidates.push(identity.address);
+    }
+
+    for (const address of addressCandidates) {
+      const fid = await resolveFidFromAddress(address, apiKey);
+      if (fid) {
+        if (!trimmed) {
+          setFidInput(String(fid));
+        }
+        return fid;
+      }
+    }
+
     if (!trimmed) {
       throw new Error('Enter a Farcaster FID or username to sync contacts.');
     }
@@ -44,7 +63,6 @@ export function ContactsPage() {
       return Number(trimmed);
     }
 
-    const apiKey = getNeynarKey();
     const profile = apiKey ? await fetchNeynarUserProfile(trimmed, apiKey) : null;
     if (profile?.fid) {
       return profile.fid;
@@ -55,7 +73,7 @@ export function ContactsPage() {
       return fallbackProfile.fid;
     }
 
-    throw new Error('Unable to resolve that Farcaster account.');
+    throw new Error(addressCandidates.length > 0 ? 'Unable to resolve a Farcaster account from that Ethereum address.' : 'Unable to resolve that Farcaster account.');
   };
 
   const handleFarcasterSync = async () => {

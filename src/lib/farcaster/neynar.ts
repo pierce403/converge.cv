@@ -25,6 +25,13 @@ export interface NeynarFollowingResponse {
   next?: { cursor?: string };
 }
 
+export interface NeynarUsersByVerificationResponse {
+  result?: {
+    users?: Array<FarcasterUser & { score?: { value?: number } | number; power_badge?: boolean }>;
+  };
+  users?: Array<FarcasterUser & { score?: { value?: number } | number; power_badge?: boolean }>;
+}
+
 const extractScoreValue = (score: unknown): number | undefined => {
   if (typeof score === 'number') return score;
   if (score && typeof score === 'object' && 'value' in score && typeof (score as { value?: unknown }).value === 'number') {
@@ -64,6 +71,33 @@ export async function fetchNeynarUserProfile(
     return { ...user, score: extractScoreValue((user as { score?: unknown }).score) };
   } catch (error) {
     console.warn('[Neynar] Error fetching user profile', error);
+    return null;
+  }
+}
+
+export async function fetchNeynarUserByVerification(
+  address: string,
+  apiKey?: string
+): Promise<(FarcasterUser & { score?: number; power_badge?: boolean }) | null> {
+  if (!apiKey) return null;
+  const trimmed = address?.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(`${NEYNAR_BASE}/user/by-verifications`);
+    url.searchParams.set('verifications', trimmed.toLowerCase());
+    url.searchParams.set('limit', '1');
+
+    const response = await fetch(url.toString(), { headers: getHeaders(apiKey) });
+    if (!response.ok) {
+      console.warn('[Neynar] Failed to fetch user by verification', response.status);
+      return null;
+    }
+
+    const data = (await response.json()) as NeynarUsersByVerificationResponse;
+    const user = data.result?.users?.[0] || data.users?.[0];
+    return user ? mapNeynarUser(user) : null;
+  } catch (error) {
+    console.warn('[Neynar] Error fetching user by verification', error);
     return null;
   }
 }

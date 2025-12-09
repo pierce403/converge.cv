@@ -425,10 +425,31 @@ Guidance:
   - `curl -L https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt -o tmp/xmtp-llms-full.txt`
 - Treat these as required context when implementing or debugging anything that involves LLMs, assistants, or message flows that may be model-driven.
 
+### Farcaster / Neynar Docs (Load for Farcaster features)
+- Neynar API reference: https://docs.neynar.com/reference/overview
+- Users by verification endpoint: https://docs.neynar.com/reference/get-users-by-verifications
+- General Neynar developer docs: https://docs.neynar.com
+
+Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
+
 ---
 
-**Last Updated**: 2025-11-20 (XMTP Client persistence fix and build fixes)
+**Last Updated**: 2025-12-10 (Neynar lookup + coverage)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-10)
+
+### Neynar Default Key + FID Resolution
+- Default Neynar key baked in as the Converge client key (not a demo) for Farcaster sync when no env key is provided.
+- `resolveFidFromAddress` now tries Neynar’s verification lookup first, enabling FID discovery from an ETH address (e.g., the user’s XMTP identity) before ENS/REST fallbacks.
+- Contacts page can auto-resolve a FID from the signed-in wallet when no FID is typed, then sync Farcaster contacts via Neynar.
+
+### Coverage + Tests
+- Vitest coverage scope focuses on core logic (`src/lib/**`, targeted UI hooks/components) with exclusions for heavy UI/XMTP/storage workers defined in `vitest.config.ts`.
+- Additional unit tests cover keyfile export/import, contact/conversation/message/debug stores, push subscription permissions, Neynar helpers, and Farcaster helpers. Line coverage sits around ~58% within the included scope (see `coverage/coverage-summary.json`).
+
+### E2E Rename
+- Two-browser messaging Playwright spec renamed to `tests/e2e/ping-pong.spec.ts` (stubs XMTP when `VITE_E2E_TEST=true`).
 
 ## Latest Changes (2025-11-20)
 
@@ -483,7 +504,7 @@ Guidance:
 
 ### E2E Testing with Playwright (2025-12-09)
 
-**Location**: `tests/e2e/two-browser-messaging.spec.ts`
+**Location**: `tests/e2e/ping-pong.spec.ts` (renamed from two-browser-messaging)
 
 **Key Issues Discovered**:
 
@@ -520,7 +541,7 @@ if (await button.isVisible()) { ... }
 
 **Running E2E Tests**:
 ```bash
-pnpm exec playwright test tests/e2e/two-browser-messaging.spec.ts --headed
+pnpm exec playwright test tests/e2e/ping-pong.spec.ts --headed
 ```
 
 **Limitation**: In E2E mode (`VITE_E2E_TEST=true`), XMTP connections are stubbed. This means:

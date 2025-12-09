@@ -61,6 +61,14 @@ describe('farcaster service helpers', () => {
     expect(fid).toBe(42);
   });
 
+  it('uses Neynar verification lookup when an API key is provided', async () => {
+    const neynar = await import('./neynar');
+    vi.spyOn(neynar, 'fetchNeynarUserByVerification').mockResolvedValueOnce({ fid: 555 } as any);
+
+    const fid = await resolveFidFromAddress('0xabc', 'key');
+    expect(fid).toBe(555);
+  });
+
   it('resolves contact name with ENS, fcast.id, and base.eth priority', async () => {
     const user = { display_name: 'Display', username: 'user' } as any;
     const mockEns = {

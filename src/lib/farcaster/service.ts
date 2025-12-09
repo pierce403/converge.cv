@@ -128,15 +128,30 @@ export function resolveXmtpAddressFromFarcasterUser(user: FarcasterUser | Farcas
  * 2. ETH address -> Farcaster API (if supports address lookup)
  * 3. ETH address -> Try as username (if address format matches)
  * @param address Ethereum address
+ * @param neynarApiKey Optional Neynar API key for direct verification lookup
  * @returns FID number or null if not found
  */
-export async function resolveFidFromAddress(address: string): Promise<number | null> {
+export async function resolveFidFromAddress(address: string, neynarApiKey?: string): Promise<number | null> {
   console.log(`[Farcaster] Resolving FID for address: ${address}`);
+  const normalizedAddress = address.toLowerCase();
   
   try {
+    if (neynarApiKey) {
+      try {
+        const { fetchNeynarUserByVerification } = await import('./neynar');
+        const neynarUser = await fetchNeynarUserByVerification(normalizedAddress, neynarApiKey);
+        if (neynarUser?.fid) {
+          console.log(`[Farcaster] ✅ Found FID ${neynarUser.fid} via Neynar verification lookup`);
+          return neynarUser.fid;
+        }
+      } catch (error) {
+        console.warn('[Farcaster] Neynar verification lookup failed', error);
+      }
+    }
+
     // Step 1: Reverse lookup ENS name from Ethereum address
     const { resolveENSFromAddress } = await import('@/lib/utils/ens');
-    const ensName = await resolveENSFromAddress(address);
+    const ensName = await resolveENSFromAddress(normalizedAddress);
     
     if (ensName) {
       console.log(`[Farcaster] ✅ Found ENS name: ${ensName}`);
@@ -165,16 +180,16 @@ export async function resolveFidFromAddress(address: string): Promise<number | n
     }
     
     // Step 2: Try direct address lookup (API might support it)
-    console.log(`[Farcaster] Trying direct address lookup: ${address.toLowerCase()}`);
-    const userByAddress = await fetchFarcasterUserFromAPI(address.toLowerCase());
+    console.log(`[Farcaster] Trying direct address lookup: ${normalizedAddress}`);
+    const userByAddress = await fetchFarcasterUserFromAPI(normalizedAddress);
     if (userByAddress && userByAddress.fid) {
       console.log(`[Farcaster] ✅ Found FID ${userByAddress.fid} via direct address lookup`);
       return userByAddress.fid;
     }
     
     // Step 3: Try without 0x prefix
-    if (address.startsWith('0x')) {
-      const addressWithoutPrefix = address.slice(2).toLowerCase();
+    if (normalizedAddress.startsWith('0x')) {
+      const addressWithoutPrefix = normalizedAddress.slice(2);
       console.log(`[Farcaster] Trying address without 0x prefix: ${addressWithoutPrefix}`);
       const userByAddressNoPrefix = await fetchFarcasterUserFromAPI(addressWithoutPrefix);
       if (userByAddressNoPrefix && userByAddressNoPrefix.fid) {

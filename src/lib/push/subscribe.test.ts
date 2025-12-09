@@ -70,6 +70,23 @@ describe('push helpers', () => {
     expect(getPushPermissionStatus()).toBe('unsupported');
   });
 
+  it('returns error when permission denied', async () => {
+    const navigatorMock = {
+      serviceWorker: {
+        ready: Promise.resolve({ pushManager: { subscribe: vi.fn() } } as any),
+      },
+    } as unknown as Navigator;
+    vi.stubGlobal('navigator', navigatorMock);
+    const notificationMock = function Notification() {} as unknown as typeof Notification;
+    (notificationMock as any).requestPermission = vi.fn(async () => 'denied');
+    (notificationMock as any).permission = 'denied';
+    vi.stubGlobal('Notification', notificationMock);
+
+    const result = await enablePushForCurrentUser();
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/supported|permission/i);
+  });
+
   it('returns false when no service worker registration exists', async () => {
     const navigatorMock = {
       serviceWorker: { getRegistration: vi.fn(async () => null) },
