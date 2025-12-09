@@ -23,92 +23,6 @@ async function setDisplayNameInModal(page: Page, displayName: string) {
   }
 }
 
-async function dismissPersonalizationReminder(page: Page) {
-  try {
-    const modalHeader = page.getByText(/make it yours/i);
-    await modalHeader.waitFor({ state: 'visible', timeout: 5000 });
-    await page.getByText("Don't remind me again").click();
-    await page.locator('.fixed.inset-0').filter({ hasText: /make it yours/i }).waitFor({ state: 'detached', timeout: 10000 });
-  } catch (error) {
-    // Modal did not appear; nothing to dismiss.
-  }
-}
-
-async function completeOnboarding(page: Page) {
-  await page.goto('/');
-
-  try {
-    await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 15000 });
-  } catch (error) {
-    // Loading indicator not present; continue.
-  }
-
-  const startButtons = page.getByRole('button', { name: /get started|create new identity|generate|create/i });
-  if (await startButtons.isVisible()) {
-    await startButtons.click();
-  }
-
-  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
-  await dismissPersonalizationReminder(page);
-}
-
-async function waitForInboxId(page: Page) {
-  // Log store state for debugging
-  const debugState = await page.evaluate(() => {
-    // @ts-expect-error accessing injected store
-    const store = window.useAuthStore;
-    if (!store) return { error: 'store not found on window' };
-    const state = store.getState?.();
-    if (!state) return { error: 'getState() returned nothing' };
-    return {
-      hasIdentity: !!state.identity,
-      address: state.identity?.address,
-      inboxId: state.identity?.inboxId,
-      displayName: state.identity?.displayName,
-    };
-  });
-  console.log('[Test] waitForInboxId: Current store state:', JSON.stringify(debugState));
-
-  // Wait for either inboxId OR address - in E2E mode we can use address
-  await page.waitForFunction(() => {
-    // @ts-expect-error accessing injected store
-    const identity = window.useAuthStore?.getState?.()?.identity;
-    return identity?.inboxId || identity?.address;
-  }, { timeout: 120_000 });
-
-  // Get inboxId or fall back to address
-  const identifier = await page.evaluate(() => {
-    // @ts-expect-error accessing injected store
-    const identity = window.useAuthStore?.getState?.()?.identity;
-    return identity?.inboxId || identity?.address || null;
-  });
-
-  console.log('[Test] waitForInboxId: Got identifier:', identifier);
-  expect(identifier).toBeTruthy();
-  return identifier as string;
-}
-
-async function setDisplayName(page: Page, displayName: string) {
-  const switcherButton = page.getByRole('button', { name: /current inbox/i });
-  await expect(switcherButton).toBeVisible();
-  await switcherButton.click();
-
-  const nameInput = page.getByLabel('Display name');
-  await expect(nameInput).toBeVisible();
-  await nameInput.fill(displayName);
-
-  const saveButton = page.getByRole('button', { name: /save display name/i });
-  await expect(saveButton).toBeEnabled();
-  await saveButton.click();
-
-  // Wait for the button text to return to idle state, then close the menu.
-  await expect(saveButton).toHaveText(/save display name/i, { timeout: 15_000 });
-  await page.keyboard.press('Escape');
-
-  // Verify the switcher button shows the updated label.
-  await expect(switcherButton).toContainText(displayName);
-}
-
 async function onboardWithName(page: Page, displayName: string) {
   console.log(`[Test] onboardWithName: Starting for ${displayName}`);
   
@@ -222,11 +136,6 @@ async function openConversation(page: Page, identifier: string) {
   await conversation.click();
   await expect(page).toHaveURL(/\/chat\//, { timeout: 30_000 });
   console.log(`[Test] openConversation: Navigated to chat URL`);
-}
-
-async function expectHeaderToShowName(page: Page, displayName: string) {
-  const headerName = page.locator('header').getByText(displayName, { exact: false });
-  await expect(headerName).toBeVisible({ timeout: 20_000 });
 }
 
 test('two browsers exchange messages and show display names', async ({ browser, baseURL }) => {
