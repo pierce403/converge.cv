@@ -89,7 +89,7 @@ export function SettingsPage() {
       let effectiveWallet = walletAddress?.toLowerCase();
       if (!isWalletConnected || effectiveWallet !== identity.address.toLowerCase()) {
         const result = await connectDefaultWallet();
-        const connectedAccounts = (result as { accounts?: string[] } | undefined)?.accounts;
+        const connectedAccounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
         const connected = connectedAccounts?.[0];
         effectiveWallet = typeof connected === 'string' ? connected.toLowerCase() : effectiveWallet;
       }
