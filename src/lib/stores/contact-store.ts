@@ -77,8 +77,22 @@ interface ContactState {
   unblockContact: (inboxId: string) => Promise<void>;
   syncFarcasterContacts: (
     fid: number,
-    onProgress?: (current: number, total: number, status?: string) => void
+    onProgress?: (
+      current: number,
+      total: number,
+      status?: string,
+      details?: FarcasterSyncProgressDetail
+    ) => void
   ) => Promise<void>;
+}
+
+export type FarcasterSyncAction = 'fetch' | 'process' | 'check' | 'skip' | 'save' | 'update' | 'complete' | 'error';
+
+export interface FarcasterSyncProgressDetail {
+  userName?: string;
+  address?: string;
+  fid?: number;
+  action?: FarcasterSyncAction;
 }
 
 export interface ContactProfileInput {
@@ -456,10 +470,28 @@ export const useContactStore = create<ContactState>()(
         return finalContact;
       },
 
-      syncFarcasterContacts: async (fid: number, onProgress?: (current: number, total: number, status?: string) => void) => {
+      syncFarcasterContacts: async (
+        fid: number,
+        onProgress?: (
+          current: number,
+          total: number,
+          status?: string,
+          details?: FarcasterSyncProgressDetail
+        ) => void
+      ) => {
+        const report = (
+          current: number,
+          total: number,
+          status?: string,
+          details?: FarcasterSyncProgressDetail
+        ) => {
+          onProgress?.(current, total, status, details);
+        };
+
         set({ isLoading: true });
         try {
-          onProgress?.(0, 0, 'Fetching your Farcaster following list...');
+
+          report(0, 0, 'Fetching your Farcaster following list...', { action: 'fetch' });
           const storage = await getStorage();
           const farcasterState = useFarcasterStore.getState?.();
           const neynarKey = farcasterState?.getEffectiveNeynarApiKey?.();
@@ -468,8 +500,10 @@ export const useContactStore = create<ContactState>()(
             ? await fetchFarcasterFollowingWithNeynar(fid, neynarKey)
             : await fetchFarcasterUserFollowingFromAPI(fid);
           const total = followedUsers.length;
+          const shorten = (addr?: string | null) =>
+            addr && addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr ?? '';
 
-          onProgress?.(0, total, `Found ${total} users you follow. Processing contacts...`);
+          report(0, total, `Found ${total} users you follow. Processing contacts...`, { action: 'fetch' });
           
           let current = 0;
           const newContacts: Contact[] = [];
@@ -480,17 +514,30 @@ export const useContactStore = create<ContactState>()(
             const user = followedUsers[i];
             const userName = user.display_name || user.username || `FID ${user.fid}`;
 
-            onProgress?.(current, total, `Processing ${userName} (${i + 1}/${total})...`);
+            report(current, total, `Processing ${userName} (${i + 1}/${total})...`, {
+              action: 'process',
+              fid: user.fid,
+              userName,
+            });
 
             const xmtpAddress = resolveXmtpAddressFromFarcasterUser(user);
             if (!xmtpAddress) {
               skippedContacts.push(user.fid);
-              onProgress?.(current, total, `Skipping ${userName} - no verified Ethereum address`);
+              report(current, total, `Skipping ${userName} - no verified Ethereum address`, {
+                action: 'skip',
+                fid: user.fid,
+                userName,
+              });
               continue;
             }
 
             current++;
-            onProgress?.(current, total, `Resolving names for ${userName}...`);
+            report(current, total, `Checking ${userName} (${shorten(xmtpAddress)}) for XMTP...`, {
+              action: 'check',
+              fid: user.fid,
+              userName,
+              address: xmtpAddress,
+            });
 
             // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
             const nameResolution = await resolveContactName(user, xmtpAddress);
@@ -512,9 +559,19 @@ export const useContactStore = create<ContactState>()(
                 contact.addresses?.some((addr) => normalizeAddress(addr) === normalizeAddress(xmtpAddress))
             );
             
-            onProgress?.(current, total, existingContact 
-              ? `Updating existing contact: ${nameResolution.preferredName || nameResolution.name}...`
-              : `Adding new contact: ${nameResolution.preferredName || nameResolution.name}...`);
+            report(
+              current,
+              total,
+              existingContact
+                ? `Updating existing contact: ${nameResolution.preferredName || nameResolution.name}...`
+                : `Adding new contact: ${nameResolution.preferredName || nameResolution.name}...`,
+              {
+                action: existingContact ? 'update' : 'save',
+                fid: user.fid,
+                userName: nameResolution.preferredName || nameResolution.name || userName,
+                address: xmtpAddress,
+              }
+            );
             
             const inboxId =
               existingContact?.inboxId ??
@@ -524,7 +581,12 @@ export const useContactStore = create<ContactState>()(
             const canReceive = xmtp?.canMessage ? await xmtp.canMessage(inboxId) : true;
             if (!canReceive) {
               skippedContacts.push(user.fid);
-              onProgress?.(current, total, `Skipping ${userName} - no XMTP inbox for ${xmtpAddress}`);
+              report(current, total, `Skipping ${userName} - no XMTP inbox for ${shorten(inboxId)}`, {
+                action: 'skip',
+                fid: user.fid,
+                userName,
+                address: inboxId,
+              });
               continue;
             }
 
@@ -565,7 +627,12 @@ export const useContactStore = create<ContactState>()(
               newContacts.push(contact);
             }
             
-            onProgress?.(current, total, `Saved: ${nameResolution.preferredName || nameResolution.name}`);
+            report(current, total, `Saved: ${nameResolution.preferredName || nameResolution.name}`, {
+              action: existingContact ? 'update' : 'save',
+              fid: user.fid,
+              userName: nameResolution.preferredName || nameResolution.name,
+              address: inboxId,
+            });
           }
 
           if (newContacts.length > 0) {
@@ -574,11 +641,11 @@ export const useContactStore = create<ContactState>()(
           
           const summary = `Sync complete! ${newContacts.length} new, ${updatedContacts.length} updated, ${skippedContacts.length} skipped`;
           console.log(`Synced ${newContacts.length} new Farcaster contacts.`);
-          onProgress?.(total, total, summary);
+          report(total, total, summary, { action: 'complete' });
         } catch (error) {
           console.error('Failed to sync Farcaster contacts:', error);
           const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-          onProgress?.(0, 0, `Error: ${errorMsg}`);
+          report(0, 0, `Error: ${errorMsg}`, { action: 'error' });
         } finally {
           set({ isLoading: false });
         }

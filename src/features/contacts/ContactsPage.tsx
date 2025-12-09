@@ -4,7 +4,7 @@ import { useContactStore, useAuthStore, useFarcasterStore } from '@/lib/stores';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import type { Contact } from '@/lib/stores/contact-store';
 import { isDisplayableImageSrc } from '@/lib/utils/image';
-import { FarcasterSyncModal } from '@/components/FarcasterSyncModal';
+import { FarcasterSyncModal, FarcasterSyncCheck } from '@/components/FarcasterSyncModal';
 import { resolveFidFromAddress, resolveFidFromIdentifier } from '@/lib/farcaster/service';
 
 export function ContactsPage() {
@@ -26,6 +26,7 @@ export function ContactsPage() {
   const [syncStatus, setSyncStatus] = useState<string | undefined>();
   const [syncLog, setSyncLog] = useState<string[]>([]);
   const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncChecks, setSyncChecks] = useState<FarcasterSyncCheck[]>([]);
   const hasNeynarKey = useFarcasterStore((state) => state.hasNeynarApiKey());
   const getNeynarKey = useFarcasterStore((state) => state.getEffectiveNeynarApiKey);
   const [resolveError, setResolveError] = useState<string | null>(null);
@@ -92,14 +93,29 @@ export function ContactsPage() {
     try {
       setIsSyncing(true);
       setSyncLog([]);
+      setSyncChecks([]);
       const fid = await resolveFarcasterFid();
       setShowSyncModal(true);
-      await syncFarcasterContacts(fid, (current, total, status) => {
+      await syncFarcasterContacts(fid, (current, total, status, details) => {
         setSyncCurrent(current);
         setSyncTotal(total);
         if (status) {
           setSyncStatus(status);
           setSyncLog((prev) => [...prev, status]);
+        }
+
+        if (details?.address || details?.userName) {
+          setSyncChecks((prev) => [
+            ...prev,
+            {
+              statusText: status ?? details.action ?? 'Processing',
+              address: details.address,
+              userName: details.userName,
+              fid: details.fid,
+              action: details.action,
+              at: Date.now(),
+            },
+          ]);
         }
       });
 
@@ -359,6 +375,7 @@ export function ContactsPage() {
           total={syncTotal}
           status={syncStatus}
           log={syncLog}
+          checks={syncChecks}
           accountName={fidInput}
           accountFid={Number(fidInput) || undefined}
           onClose={() => setShowSyncModal(false)}
