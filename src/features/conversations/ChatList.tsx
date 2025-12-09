@@ -337,14 +337,15 @@ export function ChatList() {
           disabled={isResyncing}
           onClick={async () => {
             if (isResyncing) return;
-            if (!confirm('This will delete all local conversations and reload from XMTP. Continue?')) {
+            if (!confirm('This will delete all local conversations and the XMTP database, then reload everything fresh from the network. Continue?')) {
               return;
             }
             setIsResyncing(true);
             try {
-              // Visibly clear current list
-              setConversations([]);
-              // Delete from storage (also deletes messages per conversation)
+              const xmtp = getXmtpClient();
+              const currentIdentity = useAuthStore.getState().identity;
+              
+              // 1) Preserve read state before clearing
               const storage = await getStorage();
               const existing = await storage.listConversations();
               const preservedReadState = new Map<string, { lastReadAt?: number; lastReadMessageId?: string | null }>();
@@ -357,22 +358,43 @@ export function ChatList() {
                 }
               }
               setResyncReadState(preservedReadState);
-              for (const c of existing) {
+              
+              // 2) Visibly clear current list
+              setConversations([]);
+              
+              // 3) Disconnect XMTP to release OPFS locks
+              console.log('[Resync] Disconnecting XMTP client...');
+              try {
+                await xmtp.disconnect();
+                // Wait for OPFS locks to be released
+                await new Promise(resolve => setTimeout(resolve, 500));
+              } catch (e) {
+                console.warn('[Resync] XMTP disconnect failed:', e);
+              }
+              
+              // 4) Clear XMTP OPFS database to remove corrupted MLS state
+              console.log('[Resync] Clearing XMTP database...');
+              try {
+                const opfsAddresses = currentIdentity?.address ? [currentIdentity.address] : [];
+                await storage.clearAllData({ opfsAddresses });
+              } catch (e) {
+                console.warn('[Resync] Failed to clear XMTP database:', e);
+              }
+              
+              // 5) Reconnect to XMTP (creates fresh database)
+              console.log('[Resync] Reconnecting to XMTP...');
+              if (currentIdentity) {
                 try {
-                  await storage.deleteConversation(c.id);
+                  await xmtp.connect(currentIdentity, { enableHistorySync: true });
                 } catch (e) {
-                  console.warn('Failed to delete conversation during resync:', e);
+                  console.warn('[Resync] XMTP reconnect failed:', e);
                 }
               }
-              // Ask XMTP to sync and backfill messages so conversations are recreated from real data
-              try {
-                const xmtp = getXmtpClient();
-                await xmtp.syncConversations();
-                await xmtp.syncHistory();
-              } catch (e) {
-                console.warn('[Resync] XMTP sync failed (continuing to reload local):', e);
-              }
+              
+              // 6) Load conversations from fresh sync
               await loadConversations();
+              
+              // 7) Restore read state
               const resyncedState = getResyncReadState();
               if (resyncedState && resyncedState.size > 0) {
                 try {
@@ -400,8 +422,9 @@ export function ChatList() {
               } else {
                 clearResyncReadState();
               }
+              
               try {
-                window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Resynced conversations' }));
+                window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Resynced conversations from network' }));
               } catch (e) {
                 /* ignore */
               }
