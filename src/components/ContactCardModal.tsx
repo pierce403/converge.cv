@@ -156,6 +156,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       };
 
       addAddress(contact.primaryAddress);
+      addAddress(contact.inboxId);
       contact.addresses?.forEach(addAddress);
       inboxState?.accountAddresses?.forEach(addAddress);
       contact.identities?.forEach((identity) => ingestIdentity(identity));
@@ -318,11 +319,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         try {
           const resolvedInboxId = await xmtp.getInboxIdFromAddress(primaryEthereumAddress);
           if (!resolvedInboxId) {
-            // If connected but lookup fails, maybe not registered. Log but don't hard throw blocking everything else?
-            // Actually original code threw. Let's keep throw behavior IF we attempt it, or just warn.
-            // Original: throw error. Let's stick to warning if we want to be "smooth".
-            // But if we can't find inbox ID, we can't verify messaging.
-            // Let's warn and continue, using existing logic.
             console.warn('No inbox ID found for this address. They may not be registered on XMTP.');
           } else {
             latestInboxId = normalize(resolvedInboxId);
