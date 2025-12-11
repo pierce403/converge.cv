@@ -237,19 +237,21 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const farcasterUsername = contact.farcasterUsername;
       const candidateEthAddresses = Array.from(ethereumAddresses);
 
+      let fcResolvedProfile: (Awaited<ReturnType<typeof fetchNeynarUserProfile>> & { power_badge?: boolean }) | null = null;
+
       if (neynarKey) {
         try {
-          let fcProfile =
+          fcResolvedProfile =
             (farcasterFid ? await fetchNeynarUserProfile(farcasterFid, neynarKey) : null) ||
             (farcasterUsername ? await fetchNeynarUserProfile(farcasterUsername, neynarKey) : null);
 
-          if (!fcProfile && candidateEthAddresses.length > 0) {
-            fcProfile = await fetchNeynarUserByVerification(candidateEthAddresses[0], neynarKey);
+          if (!fcResolvedProfile && candidateEthAddresses.length > 0) {
+            fcResolvedProfile = await fetchNeynarUserByVerification(candidateEthAddresses[0], neynarKey);
           }
 
-          if (fcProfile) {
-            preferName(fcProfile.username, 'farcaster');
-            preferAvatar(fcProfile.pfp_url, 'farcaster');
+          if (fcResolvedProfile) {
+            preferName(fcResolvedProfile.username, 'farcaster');
+            preferAvatar(fcResolvedProfile.pfp_url, 'farcaster');
           }
         } catch (fcError) {
           console.warn('[ContactCardModal] Farcaster refresh failed:', fcError);
@@ -410,6 +412,13 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         preferredName: contact.preferredName,
         preferredAvatar: contact.preferredAvatar,
         notes: contact.notes,
+        farcasterUsername: fcResolvedProfile?.username ?? contact.farcasterUsername,
+        farcasterFid: fcResolvedProfile?.fid ?? contact.farcasterFid,
+        farcasterScore: fcResolvedProfile?.score ?? contact.farcasterScore,
+        farcasterFollowerCount: fcResolvedProfile?.follower_count ?? contact.farcasterFollowerCount,
+        farcasterFollowingCount: fcResolvedProfile?.following_count ?? contact.farcasterFollowingCount,
+        farcasterActiveStatus: fcResolvedProfile?.active_status ?? contact.farcasterActiveStatus,
+        farcasterPowerBadge: fcResolvedProfile?.power_badge ?? contact.farcasterPowerBadge,
       };
 
       const refreshedContact = await upsertContactProfile({
