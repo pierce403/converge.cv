@@ -426,45 +426,7 @@ export function SettingsPage() {
           }
         };
 
-        // Helper: clear all IndexedDB databases for this origin (in addition to app logout)
-        const clearAllIndexedDB = async () => {
-          try {
-            // Prefer standards method when available
-            const idbWithDatabases = indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> };
-            const dbs: { name?: string }[] | undefined = await idbWithDatabases?.databases?.();
-            if (Array.isArray(dbs)) {
-              await Promise.all(
-                dbs
-                  .map((db) => db?.name)
-                  .filter((n): n is string => Boolean(n))
-                  .map((name) =>
-                    new Promise<void>((resolve) => {
-                      const req = indexedDB.deleteDatabase(name);
-                      req.onsuccess = () => resolve();
-                      req.onerror = () => resolve();
-                      req.onblocked = () => resolve();
-                    })
-                  )
-              );
-            } else {
-              // Fallback: delete our known DBs explicitly
-              const known = ['ConvergeDB', 'ConvergeGlobal'];
-              await Promise.all(
-                known.map(
-                  (name) =>
-                    new Promise<void>((resolve) => {
-                      const req = indexedDB.deleteDatabase(name);
-                      req.onsuccess = () => resolve();
-                      req.onerror = () => resolve();
-                      req.onblocked = () => resolve();
-                    })
-                )
-              );
-            }
-          } catch (err) {
-            console.warn('[Settings] Failed to enumerate/delete some IndexedDB databases (non-fatal):', err);
-          }
-        };
+
 
         // 1) Disconnect wallet to prevent auto-reconnect on next load
         try {
@@ -543,25 +505,59 @@ export function SettingsPage() {
           console.warn('[Settings] Failed to clear SW caches or unregister SW (non-fatal):', e);
         }
 
-        // 6) Close storage connections explicitly before deletion to prevent blocking
-        try {
-          await closeStorage();
-          console.log('[Settings] Storage connections closed');
-        } catch (e) {
-          console.warn('[Settings] Failed to close storage (non-fatal):', e);
-        }
-
-        // 7) As a final sweep, delete all IndexedDB databases on this origin
-        await clearAllIndexedDB();
-
-        // 8) Hard reload the page to ensure a completely clean slate
-        window.location.reload();
+        // 6) Trigger a hard reload with a clear flag to wipe databases on fresh load
+        // This avoids "blocked" events from open connections in the current session
+        console.log('[Settings] scheduling clear-all-data via reload');
+        window.location.href = '/settings?clear_all_data=true';
       } catch (error) {
         console.error('Failed to clear data:', error);
         alert('Failed to clear data');
       }
     }
   };
+
+  // One-time effect to handle the "clear all data" flag on reload
+  useEffect(() => {
+    const performClear = async () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('clear_all_data') === 'true') {
+        console.log('[Settings] Detected clear_all_data flag - wiping databases...');
+        try {
+          // Ensure no storage is open
+          await closeStorage();
+
+          // Delete all databases
+          const idbWithDatabases = indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> };
+          const dbs = await idbWithDatabases?.databases?.();
+          if (Array.isArray(dbs)) {
+            for (const db of dbs) {
+              if (db.name) {
+                console.log('Deleting DB:', db.name);
+                await new Promise<void>((resolve) => {
+                  const req = indexedDB.deleteDatabase(db.name!);
+                  req.onsuccess = () => resolve();
+                  req.onerror = () => resolve(); // Proceed even on error
+                  req.onblocked = () => {
+                    console.warn('DB delete blocked:', db.name);
+                    resolve(); // Proceed anyway
+                  };
+                });
+              }
+            }
+          }
+
+          console.log('[Settings] Wipe complete. Cleaning URL and resetting.');
+          // Remove the flag and reload to home
+          window.location.href = '/';
+        } catch (e) {
+          console.error('Critical failure during wipe:', e);
+          // Force home anyway
+          window.location.href = '/';
+        }
+      }
+    };
+    performClear();
+  }, []);
 
   const loadStorageSize = async () => {
     setIsLoadingSize(true);
