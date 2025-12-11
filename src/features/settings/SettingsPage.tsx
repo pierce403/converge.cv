@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
-import { getStorage } from '@/lib/storage';
+import { getStorage, closeStorage } from '@/lib/storage';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
@@ -30,7 +30,7 @@ export function SettingsPage() {
       'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Orange', 'Pink', 'Brown', 'Black', 'White',
     ];
     const animals = [
-      'Orca','Dolphin','Whale','Penguin','Seal','Otter','Shark','Turtle','Eagle','Falcon','Hawk','Owl','Fox','Wolf','Bear','Tiger','Lion','Zebra','Giraffe','Elephant','Monkey','Panda','Koala','Kangaroo','Rabbit','Deer','Horse','Bison','Buffalo','Camel','Hippo','Rhino','Leopard','Cheetah','Jaguar','Goat','Sheep','Cow','Pig','Dog','Cat','Goose','Duck','Swan','Frog','Toad','Lizard','Snake','Chimpanzee','Gorilla',
+      'Orca', 'Dolphin', 'Whale', 'Penguin', 'Seal', 'Otter', 'Shark', 'Turtle', 'Eagle', 'Falcon', 'Hawk', 'Owl', 'Fox', 'Wolf', 'Bear', 'Tiger', 'Lion', 'Zebra', 'Giraffe', 'Elephant', 'Monkey', 'Panda', 'Koala', 'Kangaroo', 'Rabbit', 'Deer', 'Horse', 'Bison', 'Buffalo', 'Camel', 'Hippo', 'Rhino', 'Leopard', 'Cheetah', 'Jaguar', 'Goat', 'Sheep', 'Cow', 'Pig', 'Dog', 'Cat', 'Goose', 'Duck', 'Swan', 'Frog', 'Toad', 'Lizard', 'Snake', 'Chimpanzee', 'Gorilla',
     ];
     const s = (seed || 'converge').toLowerCase();
     let h = 2166136261 >>> 0; // FNV-1a 32-bit
@@ -157,7 +157,7 @@ export function SettingsPage() {
     try {
       const userId = identity?.inboxId || identity?.address || 'anon';
       const result = await enablePushForCurrentUser({ userId, channelId: 'default' });
-      
+
       if (result.success) {
         setPushStatus('enabled');
         alert('Notifications enabled! You will receive push notifications for new messages.');
@@ -171,7 +171,7 @@ export function SettingsPage() {
       setIsPushLoading(false);
     }
   };
-  
+
   const handleDisablePush = async () => {
     if (isPushLoading) return;
     setIsPushLoading(true);
@@ -237,7 +237,7 @@ export function SettingsPage() {
       const reader = new FileReader();
       reader.onload = async (event) => {
         const dataUri = event.target?.result as string;
-        
+
         // Update identity with avatar
         if (identity) {
           const storage = await getStorage();
@@ -345,13 +345,13 @@ export function SettingsPage() {
         const cacheNames = await caches.keys();
         await Promise.all(cacheNames.map(name => caches.delete(name)));
       }
-      
+
       // Unregister service worker
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
         await Promise.all(registrations.map(reg => reg.unregister()));
       }
-      
+
       alert('Cache cleared! Refresh the page to see the latest version.');
     } catch (error) {
       console.error('Failed to clear cache:', error);
@@ -543,10 +543,18 @@ export function SettingsPage() {
           console.warn('[Settings] Failed to clear SW caches or unregister SW (non-fatal):', e);
         }
 
-        // 6) As a final sweep, delete all IndexedDB databases on this origin
+        // 6) Close storage connections explicitly before deletion to prevent blocking
+        try {
+          await closeStorage();
+          console.log('[Settings] Storage connections closed');
+        } catch (e) {
+          console.warn('[Settings] Failed to close storage (non-fatal):', e);
+        }
+
+        // 7) As a final sweep, delete all IndexedDB databases on this origin
         await clearAllIndexedDB();
 
-        // 7) Hard reload the page to ensure a completely clean slate
+        // 8) Hard reload the page to ensure a completely clean slate
         window.location.reload();
       } catch (error) {
         console.error('Failed to clear data:', error);
@@ -1049,11 +1057,11 @@ export function SettingsPage() {
                   <div>
                     <div className="font-medium">Notifications</div>
                     <div className="text-sm text-primary-200">
-                      {pushStatus === 'unsupported' 
+                      {pushStatus === 'unsupported'
                         ? 'Not supported in this browser'
                         : pushStatus === 'enabled'
-                        ? 'Push notifications are active'
-                        : 'Web push (requires permission)'}
+                          ? 'Push notifications are active'
+                          : 'Web push (requires permission)'}
                     </div>
                   </div>
                   <div className="flex gap-2 items-center">
@@ -1063,8 +1071,8 @@ export function SettingsPage() {
                     {pushStatus !== 'unsupported' && (
                       <>
                         {pushStatus !== 'enabled' && (
-                          <button 
-                            onClick={handleEnablePush} 
+                          <button
+                            onClick={handleEnablePush}
                             disabled={isPushLoading}
                             className="btn-primary text-sm disabled:opacity-50"
                           >
@@ -1072,8 +1080,8 @@ export function SettingsPage() {
                           </button>
                         )}
                         {pushStatus === 'enabled' && (
-                          <button 
-                            onClick={handleDisablePush} 
+                          <button
+                            onClick={handleDisablePush}
                             disabled={isPushLoading}
                             className="btn-secondary text-sm disabled:opacity-50"
                           >
