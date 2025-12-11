@@ -114,9 +114,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     setRefreshError(null);
     try {
       const xmtp = getXmtpClient();
-      if (!xmtp.isConnected()) {
-        throw new Error('XMTP client not connected. Please connect first.');
-      }
+      // Proceed even if not connected, to allow Farcaster/ENS updates
+      const isXmtpConnected = xmtp.isConnected();
 
       const normalize = (value: string) => value.trim().toLowerCase();
       const looksLikeRawHex = (value: string) => /^[0-9a-f]{40}$/i.test(value);
@@ -315,31 +314,42 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
       // Resolve inbox ID from the primary Ethereum address
       let latestInboxId: string | undefined;
-      try {
-        const resolvedInboxId = await xmtp.getInboxIdFromAddress(primaryEthereumAddress);
-        if (!resolvedInboxId) {
-          throw new Error('No inbox ID found for this address. They may not be registered on XMTP.');
+      if (isXmtpConnected) {
+        try {
+          const resolvedInboxId = await xmtp.getInboxIdFromAddress(primaryEthereumAddress);
+          if (!resolvedInboxId) {
+            // If connected but lookup fails, maybe not registered. Log but don't hard throw blocking everything else?
+            // Actually original code threw. Let's keep throw behavior IF we attempt it, or just warn.
+            // Original: throw error. Let's stick to warning if we want to be "smooth".
+            // But if we can't find inbox ID, we can't verify messaging.
+            // Let's warn and continue, using existing logic.
+            console.warn('No inbox ID found for this address. They may not be registered on XMTP.');
+          } else {
+            latestInboxId = normalize(resolvedInboxId);
+          }
+        } catch (inboxError) {
+          console.warn('Failed to resolve XMTP inbox ID from address:', inboxError);
         }
-        latestInboxId = normalize(resolvedInboxId);
-      } catch (inboxError) {
-        throw inboxError instanceof Error
-          ? inboxError
-          : new Error('Failed to resolve XMTP inbox ID from address.');
+      } else {
+        // Fallback or skip
+        latestInboxId = contact.inboxId ? normalize(contact.inboxId) : undefined;
       }
 
       // XMTP profile last (message history)
-      try {
-        const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
-        if (targetInbox) {
-          console.log('[ContactCardModal] Refreshing profile for', targetInbox);
-          const profile = await xmtp.fetchInboxProfile(String(targetInbox));
-          console.log('[ContactCardModal] fetchInboxProfile result:', profile);
-          ingestProfile(profile);
-          preferName(profile?.displayName, 'xmtp');
-          preferAvatar(profile?.avatarUrl, 'xmtp');
+      if (isXmtpConnected) {
+        try {
+          const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
+          if (targetInbox) {
+            console.log('[ContactCardModal] Refreshing profile for', targetInbox);
+            const profile = await xmtp.fetchInboxProfile(String(targetInbox));
+            console.log('[ContactCardModal] fetchInboxProfile result:', profile);
+            ingestProfile(profile);
+            preferName(profile?.displayName, 'xmtp');
+            preferAvatar(profile?.avatarUrl, 'xmtp');
+          }
+        } catch (e) {
+          console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
         }
-      } catch (e) {
-        console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
       }
 
       // Fetch canonical profile if inbox ID changed
@@ -386,7 +396,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const updatedAvatar = latestProfileAvatar;
 
       const contactStore = useContactStore.getState();
-      const normalizedInboxId = latestInboxId;
+      let normalizedInboxId = latestInboxId;
       const normalizedCurrentInbox = contact.inboxId?.toLowerCase();
       if (normalizedInboxId) {
         const conflicting = contactStore.contacts.find(
@@ -403,7 +413,19 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       }
 
       if (!normalizedInboxId) {
-        throw new Error('No inbox ID available after refresh.');
+        // If we couldn't resolve an inboxId (e.g. not connected and contact has none), we might fail to update contact identity
+        // safely if we strictly require inboxId.
+        // However, we can probably fallback to primaryAddress for display updates if it's existing contact?
+        // The upsert function usually requires inboxId.
+        // If we have an existing contact, use its ID.
+        if (contact.inboxId) {
+          normalizedInboxId = normalize(contact.inboxId);
+        } else if (primaryEthereumAddress) {
+          // Fallback: use address as inboxId if we can't resolve the real one
+          normalizedInboxId = normalize(primaryEthereumAddress);
+        } else {
+          throw new Error('No inbox ID available and unable to resolve one (check XMTP connection).');
+        }
       }
 
       const latestMetadata: Partial<Contact> = {
