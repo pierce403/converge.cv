@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+git status
+
 WORKFLOW_NAME=${WORKFLOW_NAME:-"Build and Deploy to GitHub Pages"}
 POLL_INTERVAL=${1:-10}
 
