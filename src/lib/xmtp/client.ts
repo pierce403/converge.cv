@@ -741,16 +741,16 @@ export class XmtpClient {
           return resolved;
         }
       } catch (error) {
-        console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed or timed out', error);
+        console.warn(`[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed or timed out for address ${normalized}`, error);
       }
 
       // Don't call generateInboxId - that's only for unregistered users
       // If we got here, the user is likely registered but we couldn't find their inbox ID
       // This shouldn't happen, but if it does, return null instead of the address
-      console.warn('[XMTP] deriveInboxIdFromAddress: Could not resolve inbox ID for registered user');
+      console.warn(`[XMTP] deriveInboxIdFromAddress: Could not resolve inbox ID for address ${normalized}`);
       return null;
     } catch (error) {
-      console.error('[XMTP] deriveInboxIdFromAddress failed:', error);
+      console.error(`[XMTP] deriveInboxIdFromAddress failed for ${address}:`, error);
       return null;
     }
   }

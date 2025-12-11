@@ -321,6 +321,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // Use deriveInboxIdFromAddress which handles offline fallback via Utils
       let latestInboxId: string | undefined;
       try {
+        console.log('[ContactCardModal] Resolving Inbox ID for address:', primaryEthereumAddress);
         const resolvedInboxId = await xmtp.deriveInboxIdFromAddress(primaryEthereumAddress);
         if (resolvedInboxId) {
           latestInboxId = normalize(resolvedInboxId);
@@ -416,11 +417,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         // If we have an existing contact, use its ID.
         if (contact.inboxId) {
           normalizedInboxId = normalize(contact.inboxId);
-        } else if (primaryEthereumAddress) {
-          // Fallback: use address as inboxId if we can't resolve the real one
-          normalizedInboxId = normalize(primaryEthereumAddress);
         } else {
-          throw new Error('No inbox ID available and unable to resolve one (check XMTP connection).');
+          throw new Error('No inbox ID available and unable to resolve one from network (possible timeout). check XMTP connection.');
         }
       }
 
