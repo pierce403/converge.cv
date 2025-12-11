@@ -195,17 +195,20 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
   return {
     ...contact,
     inboxId: normalizedInboxId,
-    name: contact.name || contact.preferredName || normalizedInboxId,
+    name:
+      contact.name && (!contact.name.startsWith('0x') || contact.name.length < 30)
+        ? contact.name
+        : contact.preferredName || contact.farcasterUsername || contact.name || normalizedInboxId,
     addresses,
     primaryAddress: contact.primaryAddress ?? addresses[0],
     identities:
       contact.identities && contact.identities.length > 0
         ? contact.identities
         : addresses.map((address, index) => ({
-            identifier: address,
-            kind: 'Ethereum',
-            isPrimary: index === 0,
-          })),
+          identifier: address,
+          kind: 'Ethereum',
+          isPrimary: index === 0,
+        })),
     farcasterUsername: contact.farcasterUsername,
     farcasterFid: contact.farcasterFid,
     farcasterScore: contact.farcasterScore,
@@ -375,61 +378,61 @@ export const useContactStore = create<ContactState>()(
           profile.identities && profile.identities.length > 0
             ? profile.identities
             : computedAddresses.map((address, index) => ({
-                identifier: address,
-                kind: 'Ethereum',
-                isPrimary: index === 0,
-              }));
+              identifier: address,
+              kind: 'Ethereum',
+              isPrimary: index === 0,
+            }));
 
         const baseContact: Contact = existing
           ? mergeContactData(existing, {
-              name: profile.displayName ?? existing.name,
-              preferredName: profile.displayName ?? existing.preferredName,
-              avatar: profile.avatarUrl ?? existing.avatar,
-              preferredAvatar: profile.avatarUrl ?? existing.preferredAvatar,
-              primaryAddress: profile.primaryAddress ?? existing.primaryAddress,
-              source: profile.source ?? existing.source,
-              addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
-              identities,
-              lastSyncedAt: Date.now(),
-              farcasterUsername: profile.metadata?.farcasterUsername ?? existing.farcasterUsername,
-              farcasterFid: profile.metadata?.farcasterFid ?? existing.farcasterFid,
-              farcasterScore: profile.metadata?.farcasterScore ?? existing.farcasterScore,
-              farcasterFollowerCount:
-                profile.metadata?.farcasterFollowerCount ?? existing.farcasterFollowerCount,
-              farcasterFollowingCount:
-                profile.metadata?.farcasterFollowingCount ?? existing.farcasterFollowingCount,
-              farcasterActiveStatus:
-                profile.metadata?.farcasterActiveStatus ?? existing.farcasterActiveStatus,
-              farcasterPowerBadge: profile.metadata?.farcasterPowerBadge ?? existing.farcasterPowerBadge,
-            })
+            name: profile.displayName ?? existing.name,
+            preferredName: profile.displayName ?? existing.preferredName,
+            avatar: profile.avatarUrl ?? existing.avatar,
+            preferredAvatar: profile.avatarUrl ?? existing.preferredAvatar,
+            primaryAddress: profile.primaryAddress ?? existing.primaryAddress,
+            source: profile.source ?? existing.source,
+            addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
+            identities,
+            lastSyncedAt: Date.now(),
+            farcasterUsername: profile.metadata?.farcasterUsername ?? existing.farcasterUsername,
+            farcasterFid: profile.metadata?.farcasterFid ?? existing.farcasterFid,
+            farcasterScore: profile.metadata?.farcasterScore ?? existing.farcasterScore,
+            farcasterFollowerCount:
+              profile.metadata?.farcasterFollowerCount ?? existing.farcasterFollowerCount,
+            farcasterFollowingCount:
+              profile.metadata?.farcasterFollowingCount ?? existing.farcasterFollowingCount,
+            farcasterActiveStatus:
+              profile.metadata?.farcasterActiveStatus ?? existing.farcasterActiveStatus,
+            farcasterPowerBadge: profile.metadata?.farcasterPowerBadge ?? existing.farcasterPowerBadge,
+          })
           : normaliseContactInput({
-              inboxId: normalizedInboxId,
-              name:
-                profile.displayName ??
-                profile.metadata?.preferredName ??
-                computedAddresses[0] ??
-                normalizedInboxId,
-              avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
-              preferredName: profile.displayName ?? profile.metadata?.preferredName,
-              preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
-              description: profile.metadata?.description,
-              notes: profile.metadata?.notes,
-              source: profile.source ?? profile.metadata?.source ?? 'inbox',
-              createdAt: profile.metadata?.createdAt ?? Date.now(),
-              isBlocked: profile.metadata?.isBlocked ?? false,
-              isInboxOnly: profile.metadata?.isInboxOnly ?? false,
-              primaryAddress: profile.primaryAddress ?? computedAddresses[0],
-              farcasterUsername: profile.metadata?.farcasterUsername,
-              farcasterFid: profile.metadata?.farcasterFid,
-              farcasterScore: profile.metadata?.farcasterScore,
-              farcasterFollowerCount: profile.metadata?.farcasterFollowerCount,
-              farcasterFollowingCount: profile.metadata?.farcasterFollowingCount,
-              farcasterActiveStatus: profile.metadata?.farcasterActiveStatus,
-              farcasterPowerBadge: profile.metadata?.farcasterPowerBadge,
-              addresses: computedAddresses,
-              identities,
-              lastSyncedAt: Date.now(),
-            } as Contact);
+            inboxId: normalizedInboxId,
+            name:
+              profile.displayName ??
+              profile.metadata?.preferredName ??
+              computedAddresses[0] ??
+              normalizedInboxId,
+            avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+            preferredName: profile.displayName ?? profile.metadata?.preferredName,
+            preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+            description: profile.metadata?.description,
+            notes: profile.metadata?.notes,
+            source: profile.source ?? profile.metadata?.source ?? 'inbox',
+            createdAt: profile.metadata?.createdAt ?? Date.now(),
+            isBlocked: profile.metadata?.isBlocked ?? false,
+            isInboxOnly: profile.metadata?.isInboxOnly ?? false,
+            primaryAddress: profile.primaryAddress ?? computedAddresses[0],
+            farcasterUsername: profile.metadata?.farcasterUsername,
+            farcasterFid: profile.metadata?.farcasterFid,
+            farcasterScore: profile.metadata?.farcasterScore,
+            farcasterFollowerCount: profile.metadata?.farcasterFollowerCount,
+            farcasterFollowingCount: profile.metadata?.farcasterFollowingCount,
+            farcasterActiveStatus: profile.metadata?.farcasterActiveStatus,
+            farcasterPowerBadge: profile.metadata?.farcasterPowerBadge,
+            addresses: computedAddresses,
+            identities,
+            lastSyncedAt: Date.now(),
+          } as Contact);
 
         const existingNormalizedInboxId = existing ? normalizeInboxId(existing.inboxId) : null;
         const finalContact: Contact =
@@ -441,8 +444,8 @@ export const useContactStore = create<ContactState>()(
           const withoutLegacyId =
             existing && existingNormalizedInboxId && existingNormalizedInboxId !== normalizedInboxId
               ? state.contacts.filter(
-                  (contact) => normalizeInboxId(contact.inboxId) !== existingNormalizedInboxId
-                )
+                (contact) => normalizeInboxId(contact.inboxId) !== existingNormalizedInboxId
+              )
               : state.contacts;
 
           const replacementIndex = withoutLegacyId.findIndex(
@@ -523,7 +526,7 @@ export const useContactStore = create<ContactState>()(
           }
 
           report(0, total, `Found ${total} users you follow. Processing contacts...`, { action: 'fetch' });
-          
+
           let current = 0;
           const newContacts: Contact[] = [];
           const updatedContacts: Contact[] = [];
@@ -577,7 +580,7 @@ export const useContactStore = create<ContactState>()(
               (contact) =>
                 contact.addresses?.some((addr) => normalizeAddress(addr) === normalizeAddress(xmtpAddress))
             );
-            
+
             report(
               current,
               total,
@@ -591,7 +594,7 @@ export const useContactStore = create<ContactState>()(
                 address: xmtpAddress,
               }
             );
-            
+
             const inboxId =
               existingContact?.inboxId ??
               (await getXmtpClient().deriveInboxIdFromAddress?.(xmtpAddress)) ??
@@ -645,7 +648,7 @@ export const useContactStore = create<ContactState>()(
               await storage.putContact(contact);
               newContacts.push(contact);
             }
-            
+
             report(current, total, `Saved: ${nameResolution.preferredName || nameResolution.name}`, {
               action: existingContact ? 'update' : 'save',
               fid: user.fid,
@@ -657,7 +660,7 @@ export const useContactStore = create<ContactState>()(
           if (newContacts.length > 0) {
             set((state) => ({ contacts: [...state.contacts, ...newContacts] }));
           }
-          
+
           const summary = `Sync complete! ${newContacts.length} new, ${updatedContacts.length} updated, ${skippedContacts.length} skipped`;
           console.log(`Synced ${newContacts.length} new Farcaster contacts.`);
           report(total, total, summary, { action: 'complete' });

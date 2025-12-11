@@ -1,7 +1,7 @@
 import type { FarcasterFollow, FarcasterUser } from './service';
 
-const NEYNAR_BASE = 'https://api.neynar.com/v2/farcaster';
-const NEYNAR_FALLBACK_BASE = 'https://api.neynar.com/farcaster';
+const NEYNAR_BASE = '/api/neynar/v2/farcaster';
+const NEYNAR_FALLBACK_BASE = '/api/neynar/farcaster';
 
 const getHeaders = (apiKey?: string) => {
   const key = apiKey?.trim();
