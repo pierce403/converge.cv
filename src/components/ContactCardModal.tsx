@@ -317,24 +317,18 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         throw new Error('Unable to determine a valid Ethereum address for this contact.');
       }
 
-      ethereumAddresses.add(primaryEthereumAddress);
-
       // Resolve inbox ID from the primary Ethereum address
+      // Use deriveInboxIdFromAddress which handles offline fallback via Utils
       let latestInboxId: string | undefined;
-      if (isXmtpConnected) {
-        try {
-          const resolvedInboxId = await xmtp.getInboxIdFromAddress(primaryEthereumAddress);
-          if (!resolvedInboxId) {
-            console.warn('No inbox ID found for this address. They may not be registered on XMTP.');
-          } else {
-            latestInboxId = normalize(resolvedInboxId);
-          }
-        } catch (inboxError) {
-          console.warn('Failed to resolve XMTP inbox ID from address:', inboxError);
+      try {
+        const resolvedInboxId = await xmtp.deriveInboxIdFromAddress(primaryEthereumAddress);
+        if (resolvedInboxId) {
+          latestInboxId = normalize(resolvedInboxId);
+        } else {
+          console.warn('No inbox ID found for this address on the network.');
         }
-      } else {
-        // Fallback or skip
-        latestInboxId = contact.inboxId ? normalize(contact.inboxId) : undefined;
+      } catch (inboxError) {
+        console.warn('Failed to resolve XMTP inbox ID from address:', inboxError);
       }
 
       // XMTP profile last (message history)
