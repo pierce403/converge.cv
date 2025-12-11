@@ -44,6 +44,12 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const farcasterStore = useFarcasterStore();
   const navigate = useNavigate();
 
+  // Use live contact from store to ensure reactivity (e.g. after refresh)
+  const contacts = useContactStore((s) => s.contacts);
+  const liveContact = contacts.find((c) =>
+    c.inboxId?.toLowerCase() === contact.inboxId?.toLowerCase()
+  ) ?? contact;
+
   useEffect(() => {
     setPreferredName(contact.preferredName || '');
     setNotes(contact.notes || '');
@@ -615,7 +621,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const isMuted = Boolean(dmConversation?.mutedUntil && dmConversation.mutedUntil > Date.now());
 
   // Determine display name with priority
-  const displayName = preferredName || contact.name;
+  const displayName = preferredName || liveContact.name;
 
   // Determine avatar (custom > Farcaster)
   const avatarUrl = avatarUrlState;
@@ -664,15 +670,15 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
             {/* Display Name */}
             <h3 className="text-xl font-semibold mb-2">{displayName}</h3>
-            {contact.preferredName && contact.preferredName !== contact.name && (
-              <p className="text-primary-300 text-sm mb-4">Also known as: {contact.name}</p>
+            {liveContact.preferredName && liveContact.preferredName !== liveContact.name && (
+              <p className="text-primary-300 text-sm mb-4">Also known as: {liveContact.name}</p>
             )}
 
-            {(contact.farcasterUsername || contact.farcasterFid) && (
+            {(liveContact.farcasterUsername || liveContact.farcasterFid) && (
               <div className="flex flex-col items-center gap-1 mb-4 text-sm text-primary-200">
-                {contact.farcasterUsername && (
+                {liveContact.farcasterUsername && (
                   <a
-                    href={`https://farcaster.xyz/${contact.farcasterUsername}`}
+                    href={`https://farcaster.xyz/${liveContact.farcasterUsername}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 text-accent-400 hover:text-accent-300 underline"
@@ -684,22 +690,22 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                   </a>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
-                  {contact.farcasterScore !== undefined && contact.farcasterScore !== null && (
+                  {liveContact.farcasterScore !== undefined && liveContact.farcasterScore !== null && (
                     <span className="px-2 py-1 rounded bg-accent-900/40 text-accent-200 border border-accent-800/60">
-                      Neynar score: {contact.farcasterScore.toFixed(1)}
+                      Neynar score: {liveContact.farcasterScore.toFixed(1)}
                     </span>
                   )}
-                  {contact.farcasterFollowerCount !== undefined && (
+                  {liveContact.farcasterFollowerCount !== undefined && (
                     <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
-                      Followers: {contact.farcasterFollowerCount}
+                      Followers: {liveContact.farcasterFollowerCount}
                     </span>
                   )}
-                  {contact.farcasterFollowingCount !== undefined && (
+                  {liveContact.farcasterFollowingCount !== undefined && (
                     <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
-                      Following: {contact.farcasterFollowingCount}
+                      Following: {liveContact.farcasterFollowingCount}
                     </span>
                   )}
-                  {contact.farcasterPowerBadge && (
+                  {liveContact.farcasterPowerBadge && (
                     <span className="px-2 py-1 rounded bg-accent-950/60 text-accent-200 border border-accent-900/70">
                       Power Badge
                     </span>
