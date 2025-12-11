@@ -1,7 +1,7 @@
 import type { FarcasterFollow, FarcasterUser } from './service';
 
-const NEYNAR_BASE = '/api/neynar/v2/farcaster';
-const NEYNAR_FALLBACK_BASE = '/api/neynar/farcaster';
+const NEYNAR_BASE = 'https://api.neynar.com/v2/farcaster';
+const NEYNAR_FALLBACK_BASE = 'https://api.neynar.com/farcaster';
 
 const getHeaders = (apiKey?: string) => {
   const key = apiKey?.trim();
@@ -73,16 +73,22 @@ export async function fetchNeynarUserProfile(
   if (!apiKey) return null;
   try {
     const isNumeric = typeof identifier === 'number' || /^\d+$/.test(String(identifier));
-    const queryParam = isNumeric ? `fid=${identifier}` : `username=${encodeURIComponent(String(identifier))}`;
-    const response = await fetchWithFallback(`/user?${queryParam}`, apiKey);
+    // Use /user/bulk for FIDs and /user/by_username for usernames
+    const path = isNumeric
+      ? `/user/bulk?fids=${identifier}`
+      : `/user/by_username?username=${encodeURIComponent(String(identifier))}`;
+
+    const response = await fetchWithFallback(path, apiKey);
 
     if (!response.ok) {
       console.warn('[Neynar] Failed to fetch user profile', response.status);
       return null;
     }
 
-    const data = (await response.json()) as NeynarUserResult;
-    const user = data.result?.user || (data as { user?: FarcasterUser }).user;
+    const data = (await response.json()) as NeynarUserResult & { users?: FarcasterUser[] };
+    // /user/bulk returns { users: [...] }, /user/by_username returns { user: ... }
+    const user = data.result?.user || (data as { user?: FarcasterUser }).user || (data as any).users?.[0] || (data.result as any)?.users?.[0];
+
     if (!user) return null;
     return { ...user, score: extractScoreValue((user as { score?: unknown }).score) };
   } catch (error) {
@@ -99,18 +105,30 @@ export async function fetchNeynarUserByVerification(
   const trimmed = address?.trim();
   if (!trimmed) return null;
   try {
-    const url = new URL(`/user/by-verifications`, NEYNAR_BASE);
-    url.searchParams.set('verifications', trimmed.toLowerCase());
-    url.searchParams.set('limit', '1');
+    // Correct V2 endpoint is bulk-by-address
+    const url = new URL(`https://api.neynar.com/v2/farcaster/user/bulk-by-address`);
+    url.searchParams.set('addresses', trimmed.toLowerCase());
 
-    const response = await fetchWithFallback(url.pathname + url.search, apiKey);
+    // We can't easily use fetchWithFallback cleanly with full URLs, but since we know the endpoint...
+    // Let's manually construct the path to use fetchWithFallback which expects a relative path
+    const relativePath = `/user/bulk-by-address?addresses=${encodeURIComponent(trimmed.toLowerCase())}`;
+
+    const response = await fetchWithFallback(relativePath, apiKey);
     if (!response.ok) {
       console.warn('[Neynar] Failed to fetch user by verification', response.status);
       return null;
     }
 
-    const data = (await response.json()) as NeynarUsersByVerificationResponse;
-    const user = data.result?.users?.[0] || data.users?.[0];
+    // Response structure is { [address]: [user1, user2] }
+    // type is actually map of address -> user[]
+    const data = (await response.json()) as Record<string, FarcasterUser[]>;
+    // Check if data is array or object, based on Neynar API behavior
+    // Sometimes wrapped in { result: ... }? It seems bulk-by-address returns Key-Value object
+    // API Docs say: { "0x...": [ { ...user... } ] }
+
+    const users = Object.values(data)[0];
+    const user = Array.isArray(users) ? users[0] : null;
+
     return user ? mapNeynarUser(user) : null;
   } catch (error) {
     console.warn('[Neynar] Error fetching user by verification', error);
@@ -134,9 +152,7 @@ export async function fetchNeynarUserByIdentifier(
   }
 
   try {
-    const response = await fetch(`${NEYNAR_BASE}/user?username=${encodeURIComponent(trimmed)}`, {
-      headers: getHeaders(apiKey),
-    });
+    const response = await fetchWithFallback(`/user/by_username?username=${encodeURIComponent(trimmed)}`, apiKey);
     if (!response.ok) {
       if (response.status !== 404) {
         console.warn('[Neynar] Failed to fetch user by identifier', response.status);
