@@ -87,6 +87,7 @@ export async function fetchNeynarUserProfile(
 
     const data = (await response.json()) as NeynarUserResult & { users?: FarcasterUser[] };
     // /user/bulk returns { users: [...] }, /user/by_username returns { user: ... }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const user = data.result?.user || (data as { user?: FarcasterUser }).user || (data as any).users?.[0] || (data.result as any)?.users?.[0];
 
     if (!user) return null;
