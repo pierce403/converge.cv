@@ -248,7 +248,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           }
 
           if (fcProfile) {
-            preferName(fcProfile.display_name || fcProfile.username, 'farcaster');
+            preferName(fcProfile.username, 'farcaster');
             preferAvatar(fcProfile.pfp_url, 'farcaster');
           }
         } catch (fcError) {
