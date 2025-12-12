@@ -9,6 +9,7 @@ import { formatDistanceToNow } from '@/lib/utils/date';
 import { WebWorkersPanel } from './WebWorkersPanel';
 import { KeyExplorerModal } from './KeyExplorerModal';
 import { IgnoredConversationsModal } from './IgnoredConversationsModal';
+import { DatabaseExplorerPanel } from './DatabaseExplorerPanel';
 import buildInfo from '../../build-info.json'; // Import build info
 import { registerServiceWorkerForPush, enablePushForCurrentUser, disablePush, VAPID_PARTY_API_KEY, VAPID_PUBLIC_KEY } from '@/lib/push';
 import { VAPID_PARTY_API_BASE } from '@/lib/push/config';
@@ -373,6 +374,8 @@ export function DebugPage() {
         </section>
 
         <WebWorkersPanel />
+
+        <DatabaseExplorerPanel />
 
         <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
           <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">

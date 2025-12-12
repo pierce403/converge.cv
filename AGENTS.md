@@ -451,6 +451,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Added rate limiting/backoff helpers for Neynar + ENS RPC calls (Vitest-safe no-delay).
 - Updated Farcaster contact sync to bulk-fetch Neynar profiles (`fetchNeynarUsersBulk`) and persist enriched stats; added store unit tests.
 
+### Debug
+- Added a Database Explorer panel on `/debug` to inspect Dexie-backed tables (contacts, conversations, messages) with string filtering + paging.
+
 ## Latest Changes (2025-12-10)
 
 ### Neynar Default Key + FID Resolution
