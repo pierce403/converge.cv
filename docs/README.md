@@ -14,6 +14,7 @@ This folder contains Converge.cv developer documentation and pointers to the can
 ## Guides
 
 - **Local development**: [`development.md`](development.md)
+- **Contact management**: [`contacts.md`](contacts.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)
 
 ## Conventions
@@ -21,4 +22,3 @@ This folder contains Converge.cv developer documentation and pointers to the can
 - Put new docs in `docs/` unless there’s a strong reason to keep them at repo root.
 - When behavior changes, update `FEATURES.md` (source of truth for shipped UX).
 - For agent context / user preferences, update `AGENTS.md`.
-
