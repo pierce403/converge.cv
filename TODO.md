@@ -1,203 +1,124 @@
-# converge.cv - XMTP protocol v3 PWA Development TODO
+# converge.cv — TODO
+
+**Last updated**: 2025-12-12
+
+This file is a living backlog. The old “Sprint/Phase” roadmap from early development is now out of date; use git history if you need to recover it.
 
 ## Project Overview
-Building a Signal-like PWA for XMTP protocol v3 using the current XMTP SDK v5.0.1 — local-first, installable, encrypted.
 
-## Latest Updates (2025-10-29)
+- Signal-like, local-first PWA for **XMTP protocol v3**
+- Current SDK: `@xmtp/browser-sdk` **v5.0.1**
+- UI: React 18 + Vite + Tailwind
+- State: Zustand
+- Storage: Dexie (IndexedDB) + XMTP OPFS database
 
-## Latest Updates (2025-10-28)
+## What Changed Since TODO.md Was Last Updated (2025-11-22)
 
-## Follow-ups From Recent Changes
-- [ ] Add automated tests covering `storage.clearAllData()` to ensure Dexie + OPFS wipes stay intact.
-- [ ] Add integration test for the `canMessage` + inbox ID resolution flow to prevent regressions.
-- [ ] Document the XMTP v5 upgrade and new installation management tools in README.
+High-level themes pulled from `git log` since commit `e6de012` (2025-11-22).
 
----
+### 2025-12-12
 
-## Sprint 1: Foundation & Setup
+- Added developer docs directory + index.
+- Added detailed docs for **contact management** and **conversation management**.
+- Fixed Neynar verification lookup parsing (bulk-by-address response variants).
 
-### Phase 1: Project Initialization ✅
+### 2025-12-11
 
-### Phase 2: PWA Infrastructure
-- [ ] Install vite-plugin-pwa & configure manifest
-- [ ] Create service worker (sw.ts) with Workbox
-- [ ] Add PWA icons (192x192, 512x512)
-- [ ] Setup app shell caching strategy
-- [ ] Test install on mobile/desktop
+- Hardened “clear data / resync” flows (close storage before wipes; reload-trigger pattern).
+- Improved contact refresh correctness (Farcaster/ENS/XMTP precedence, offline-friendly refresh, persist Farcaster fields).
+- Updated `FEATURES.md` (Unified Contact Card details).
 
-### Phase 3: Dependencies & Configuration
-- [ ] Install core deps: zustand, react-router-dom, dexie
-- [ ] Install headless UI components
-- [ ] Setup TypeScript paths & aliases
-- [ ] Configure Vitest for testing
+### 2025-12-09
 
-### Phase 4: Project Structure ✅
+- Major Farcaster sync improvements (Neynar integration, FID resolution, better UI/error reporting).
+- Wallet reconnect UX improvements (show wallet chooser when provider missing; reconnect button in settings).
+- Testing improvements (broader unit coverage, E2E test stabilization).
+- XMTP stability fixes (prevent inbox-id derivation hangs; fix DM creation identity confusion).
 
----
+### 2025-11-26 → 2025-11-30
 
-## Sprint 2: Storage & Crypto Layer ✅
+- Added inbox switching UX improvements (status banner, toasts) and fixed per-namespace persistence.
+- Added Web Push notifications via `vapid.party` + Debug page controls.
+- More robust profile loading + identifier normalization.
 
-### Phase 5: Storage Driver Interface ✅
-- [x] Fix mobile keyboard UX issues (pushing up layout)
-- [ ] Add unit tests for new featuresage operations
+## Top Priorities (P0)
 
-### Phase 6: Crypto Vault ✅
-- [ ] Unit tests for crypto operations
+- [ ] **Encrypt private keys at rest in IndexedDB** (device-based; keep no-passphrase default).
+- [ ] **Fix conversation mute semantics** so muting doesn’t drop inbound messages.
+  - See gotcha in `docs/conversations.md`.
+- [ ] **Fix persisted previews for system messages** (`DexieDriver.putMessage` treats non-text as attachments).
+  - See gotcha in `docs/conversations.md`.
+- [ ] Add automated tests for `storage.clearAllData()` (Dexie + OPFS wipes) and the “Resync All” flow.
+- [ ] Clean up / reconcile service worker approach:
+  - [ ] Decide whether to keep minimal `public/sw.js` (push-only) vs re-enable `vite-plugin-pwa`/Workbox.
+  - [ ] If re-enabling full PWA caching, ensure we **don’t promise “offline messaging”** in UI copy.
 
----
+## Messaging Roadmap
 
-## Sprint 3: XMTP Integration ✅
+### Attachments (ContentTypeRemoteAttachment)
 
-### Phase 7: XMTP Client Wrapper ✅
+- [ ] Decide on upload backend (must use real creds; no placeholders).
+- [ ] UI: file picker → upload progress → inline preview (images) → download.
+- [ ] Storage: store attachment metadata + encrypted bytes/refs (Dexie `attachments` + `attachmentData`).
 
----
+### Message lifecycle / UX
 
-## Sprint 4: Core Features - Auth & Onboarding ✅
+- [ ] Typing indicators.
+- [ ] Disappearing messages (timer + local cleanup).
+- [ ] Delivery/read state UX (map receipts to visible status where it helps).
 
-### Phase 8: Authentication Flow ✅
+## Conversations
 
----
+- [ ] Add “Archived conversations” view or stop hiding archived items.
+- [ ] Revisit conversation deletion vs ignore markers:
+  - [ ] “Delete locally” vs “Ignore forever” should likely be separate actions.
 
-## Sprint 5: Core Features - Messaging UI ✅
+## Groups
 
-### Phase 9: Chat List ✅
+- [ ] Improve group chat UX beyond basic functionality:
+  - [ ] Group settings polish (members/admins list, promote/demote, add/remove).
+  - [ ] Permission policy editor (policyType/policySet).
+  - [ ] Leave group flow and “disband” flow (super admin).
 
-### Phase 10: Conversation View ✅
+## Farcaster / Contacts
 
-### Phase 11: New Chat Flow ✅
+- [ ] Replace placeholder bot addresses in `src/lib/default-contacts.ts` with real XMTP-enabled identities (when verified).
+- [ ] ENS enrichment:
+  - [ ] Implement `.fcast.id` and `.base.eth` lookups (currently stubbed in `src/lib/utils/ens.ts`).
+- [ ] Farcaster sync hardening:
+  - [ ] Rate limiting/backoff for Neynar + RPC calls.
+  - [ ] Better progress/error UX for large following lists.
 
----
+## Push Notifications
 
-## Sprint 6: Advanced Messaging Features
+- [ ] Decide push architecture for “real” messaging notifications.
+  - Current `vapid.party` integration can register + subscribe, but fully reliable messaging push usually needs a server/relay.
+- [ ] Notification routing: deep link to the right conversation and handle focus/reuse.
 
-### Phase 12: Rich Messaging
-- [ ] Attachment support (file picker)
-- [ ] Attachment storage & encryption
-- [ ] Attachment preview & download
-- [ ] Message reactions UI
-- [ ] Disappearing messages timer
-- [ ] Message status (pending/sent/failed)
+## Testing & Quality
 
-### Phase 12b: XMTP Content Types — Sending Roadmap
-- [x] Reactions (ContentTypeReaction)
-  - UX: Long press → modal → quick emoji row; optimistic update to bubble reactions
-  - Notes: Inbound reactions currently render as system messages; next step is to aggregate onto target bubble and suppress system line
-- [x] Replies (ContentTypeReply, text only)
-  - UX: Long press → Reply; composer shows "Replying to …" banner; send as reply with inner text content
-  - Notes: Inbound replies currently surface as system messages; next step is to render reply preview/quote and navigate to referenced message
-- [x] Read Receipts (ContentTypeReadReceipt)
-  - UX: Fire-and-forget when viewing messages; no visible UI yet beyond status placeholders
-  - Notes: Map to message.status when SDK exposes delivery/read events consistently
-- [ ] Typing Indicators
-  - UX: Debounced typing start/stop from composer; show inline "User is typing…"
-  - Notes: Confirm official content type availability or recommended approach in v5; add config to disable
-- [ ] Attachments (ContentTypeRemoteAttachment)
-  - UX: Add paperclip → file picker; show upload progress; inline thumbnail for images
-  - Blocker: Requires upload endpoint to host encrypted payload; propose env `VITE_ATTACHMENT_UPLOAD_URL` or Web3.storage integration without placeholder keys
-- [ ] Invitations
-  - UX: Group invite send via share link is available; consider in-protocol invite content type if/when standardized
+- [ ] Add unit test coverage for the StorageDriver “conversation + message” primitives.
+- [ ] Add unit/integration tests for inbox-id resolution + `canMessage` regression prevention.
+- [ ] Playwright E2E:
+  - [ ] Onboarding flow
+  - [ ] Create DM
+  - [ ] Send message in E2E mode (stub)
+  - [ ] Inbox switching
 
-### Phase 13: Message Lifecycle
-- [ ] Send queue implementation
-- [ ] Offline message queuing
-- [ ] Retry failed messages
-- [ ] Cleanup expired messages
-- [ ] Sync cursor per conversation
+## Documentation
 
----
+- [ ] Update root `README.md` with:
+  - [ ] XMTP v5 upgrade notes + installation management UX
+  - [ ] Push notifications (vapid.party)
+  - [ ] Docs index (`docs/`)
+- [ ] Keep `FEATURES.md` updated as shipped UX changes.
 
-## Sprint 7: Push Notifications & Service Worker
+## Future / Stretch
 
-### Phase 14: Web Push Setup ✅
-- [ ] Service worker push handler (needs real implementation)
-- [ ] VAPID key generation (documented)
-
-### Phase 15: SW Bridge & Background Sync ✅
-- [ ] Background sync registration (future)
-- [ ] Runtime caching for attachments (Workbox handles basics)
-
----
-
-## Sprint 8: Settings & Polish
-
-### Phase 16: Settings Screen ✅
-
-### Phase 17: Search ✅
-
----
-
-## Sprint 9: Testing & Quality
-
-### Phase 18: Unit Tests
-- [ ] Storage driver tests
-- [ ] Crypto vault tests
-- [ ] XMTP wrapper tests
-- [ ] Component tests (key UI)
-
-### Phase 19: E2E Tests (Playwright)
-- [ ] Onboarding flow test
-- [ ] Create conversation test
-- [ ] Send/receive message test
-- [ ] Offline mode test
-- [ ] Lock/unlock test
-
-### Phase 20: Accessibility & Performance
-- [ ] Keyboard navigation
-- [ ] Screen reader support
-- [ ] Focus management
-- [ ] Reduced motion support
-- [ ] Performance profiling
-- [ ] Lighthouse audit
-
----
-
-## Sprint 10: Documentation & Deploy
-
-### Phase 21: Documentation
-- [ ] README.md with setup instructions
-- [ ] Architecture documentation
-- [ ] API documentation
-- [ ] Deployment guide
-- [ ] User guide
-
-### Phase 22: CI/CD
-- [ ] GitHub Actions workflow
-- [ ] TypeScript check
-- [ ] Lint & format check
-- [ ] Run tests
-- [ ] Build & deploy to GitHub Pages
-
-### Phase 23: Final Polish
-- [ ] Browser testing (Chrome, Firefox, Safari)
-- [ ] Mobile testing (iOS Safari, Android Chrome)
-- [ ] PWA install testing
-- [ ] Performance optimization
-- [ ] Security audit
-
----
-
-## Things We Don't Know How to Do Cleanly Yet
-
-### Farcaster Contact Sync
-- FID resolution from ENS addresses - The API endpoint for resolving Farcaster FIDs from Ethereum addresses via ENS names is unreliable and has unclear error handling
-- API endpoint reliability - The `/api/farcaster/user/{identifier}` and `/api/farcaster/following/{fid}` endpoints may fail or return inconsistent data
-- Contact merging logic - Merging inbox-only contacts (from incoming messages) with Farcaster-synced contacts requires careful handling of inbox IDs and identity resolution
-- Clean UX for sync progress and errors - The sync process involves multiple API calls and ENS lookups that can fail at various stages, making it difficult to provide clear feedback to users
-
-**Note**: The underlying infrastructure (FarcasterSyncModal component, syncFarcasterContacts function, Contact fields) remains in place for future implementation when we have a cleaner approach.
-
----
-
-## Future Enhancements (Post-MVP)
-
-### SQLite WASM Migration
-- [ ] Implement SQLiteDriver (OPFS)
+- [ ] SQLite WASM migration (OPFS)
 - [ ] Full-text search (FTS5)
-- [ ] Schema migration from Dexie
-- [ ] Performance benchmarking
-
-### Advanced Features
-- [ ] Group chat admin UI
+- [ ] Performance profiling / Lighthouse
+- [ ] Accessibility audit
 - [ ] Voice messages
 - [ ] Video attachments
 - [ ] Link previews
