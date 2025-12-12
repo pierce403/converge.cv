@@ -15,6 +15,7 @@ This folder contains Converge.cv developer documentation and pointers to the can
 
 - **Local development**: [`development.md`](development.md)
 - **Contact management**: [`contacts.md`](contacts.md)
+- **Conversation management**: [`conversations.md`](conversations.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)
 
 ## Conventions
