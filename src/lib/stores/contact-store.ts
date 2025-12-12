@@ -7,7 +7,7 @@ import {
   resolveXmtpAddressFromFarcasterUser,
   resolveContactName,
 } from '@/lib/farcaster/service';
-import { fetchFarcasterFollowingWithNeynar, fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
+import { fetchFarcasterFollowingWithNeynar, fetchNeynarUsersBulk } from '@/lib/farcaster/neynar';
 import { useFarcasterStore } from './farcaster-store';
 
 const normalizeInboxId = (inboxId: string): string => inboxId.toLowerCase();
@@ -531,6 +531,23 @@ export const useContactStore = create<ContactState>()(
           const newContacts: Contact[] = [];
           const updatedContacts: Contact[] = [];
           const skippedContacts: number[] = [];
+          const neynarProfilesByFid = (() => {
+            if (!usingNeynar) return null;
+            return new Map<number, Awaited<ReturnType<typeof fetchNeynarUsersBulk>>[number]>();
+          })();
+
+          if (usingNeynar && neynarProfilesByFid) {
+            report(0, total, 'Fetching Farcaster profiles in bulk (Neynar)…', { action: 'fetch', fid });
+            const profiles = await fetchNeynarUsersBulk(
+              followedUsers.map((user) => user.fid).filter((fid) => Number.isFinite(fid) && fid > 0),
+              neynarKey
+            );
+            for (const profile of profiles) {
+              if (profile?.fid) {
+                neynarProfilesByFid.set(profile.fid, profile);
+              }
+            }
+          }
 
           for (let i = 0; i < followedUsers.length; i++) {
             const user = followedUsers[i];
@@ -564,7 +581,7 @@ export const useContactStore = create<ContactState>()(
             // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
             const nameResolution = await resolveContactName(user, xmtpAddress);
 
-            const neynarProfile = neynarKey ? await fetchNeynarUserProfile(user.fid || user.username, neynarKey) : null;
+            const neynarProfile = neynarProfilesByFid?.get(user.fid);
             const farcasterScore =
               neynarProfile?.score ?? (user as { score?: number }).score ?? undefined;
             const farcasterFollowerCount =

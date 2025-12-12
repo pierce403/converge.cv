@@ -157,7 +157,7 @@ Contacts are persisted in IndexedDB (Dexie) via `putContact/getContact/listConta
 
 The contact store is wrapped with Zustand `persist`, but it intentionally stores **no contacts**:
 
-- Persist config: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L675)
+- Persist config: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L694)
 
 ```ts
 partialize: (_state) => ({}),
@@ -206,14 +206,16 @@ ENS utilities live in:
 Currently:
 
 - Reverse ENS (`0x...` → `name.eth`) is real (`resolveENSFromAddress`).
-- `.fcast.id` and `.base.eth` lookups are currently TODO stubs (they return `null`).
-  See: [`src/lib/utils/ens.ts`](../src/lib/utils/ens.ts#L101)
+- `.fcast.id` lookups resolve via Neynar verification (when a Neynar key is available):
+  [`resolveFcastId`](../src/lib/utils/ens.ts#L154)
+- `.base.eth` lookups are a filtered reverse ENS result:
+  [`resolveBaseEthName`](../src/lib/utils/ens.ts#L188)
 
 ENS integration shows up in two main places:
 
 1) Farcaster sync name selection prefers ENS when available:
 
-- [`src/lib/farcaster/service.ts`](../src/lib/farcaster/service.ts#L261)
+- [`src/lib/farcaster/service.ts`](../src/lib/farcaster/service.ts#L267)
 
 2) Contact card “Refresh inbox” can add an ENS identity and prefer it over XMTP displayName:
 
@@ -230,7 +232,8 @@ Core behavior:
 - Fetches your following list (Neynar if available, else `VITE_FARCASTER_API_BASE`).
 - Extracts an Ethereum address from Farcaster verifications.
 - Resolves a preferred name using `resolveContactName` (ENS > .fcast.id > .base.eth > Farcaster display).
-- Optionally enriches stats via `fetchNeynarUserProfile`.
+- Enriches stats via Neynar bulk fetch (`fetchNeynarUsersBulk`, chunked by 100):
+  [`src/lib/farcaster/neynar.ts`](../src/lib/farcaster/neynar.ts#L166)
 - Attempts to resolve the XMTP inbox ID for the verified address.
 
 Farcaster-specific fields are stored on the `Contact` record (not as `ContactIdentity`), e.g. `farcasterFid`, `farcasterUsername`.
@@ -252,7 +255,7 @@ Implementation:
 
 Key detail: if an existing record is found but the canonical `inboxId` differs, the store deletes the legacy record:
 
-- [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L464)
+- [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L468)
 
 ### Contact refresh merge priority (Contact Card)
 
@@ -292,4 +295,3 @@ Examples:
 Your local `Identity` record stores `farcasterFid` to make Farcaster sync easier to re-run.
 
 - `Identity.farcasterFid`: [`src/types/index.ts`](../src/types/index.ts#L114)
-

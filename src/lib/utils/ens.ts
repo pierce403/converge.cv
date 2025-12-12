@@ -6,11 +6,58 @@ import { normalize } from 'viem/ens';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
 
-// Create a public client for ENS resolution
-const publicClient = createPublicClient({
-  chain: mainnet,
-  transport: http('https://eth.llamarpc.com'), // Free public RPC
-});
+type EnsPublicClient = Pick<ReturnType<typeof createPublicClient>, 'getEnsAddress' | 'getEnsName'>;
+
+let ensClient: EnsPublicClient | null = null;
+
+function getEnsClient(): EnsPublicClient {
+  if (ensClient) {
+    return ensClient;
+  }
+  // Create a public client for ENS resolution
+  ensClient = createPublicClient({
+    chain: mainnet,
+    transport: http('https://eth.llamarpc.com'), // Free public RPC
+  });
+  return ensClient;
+}
+
+// Allow tests (or future environments) to inject a client.
+export function setEnsClient(next: EnsPublicClient | null): void {
+  ensClient = next;
+}
+
+const isVitest = () =>
+  typeof process !== 'undefined' &&
+  Boolean((process.env as Record<string, string | undefined>)?.VITEST);
+
+async function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  if (isVitest()) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withRetry<T>(fn: () => Promise<T>, opts?: { maxAttempts?: number }): Promise<T> {
+  const maxAttempts = Math.max(1, opts?.maxAttempts ?? 2);
+  let attempt = 0;
+  let backoffMs = 250;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      await sleep(backoffMs);
+      backoffMs = Math.min(1500, Math.round(backoffMs * 1.75));
+    }
+  }
+  // Unreachable, but TS wants a return.
+  return await fn();
+}
+
+const fcastIdCache = new Map<string, string | null>();
 
 /**
  * Check if a string is an ENS name
@@ -38,7 +85,7 @@ export async function resolveENS(ensName: string): Promise<string | null> {
     console.log('[ENS] Normalized name:', normalized);
     
     // Resolve to address
-    const address = await publicClient.getEnsAddress({ name: normalized });
+    const address = await withRetry(() => getEnsClient().getEnsAddress({ name: normalized }));
     
     if (address) {
       console.log('[ENS] ✅ Resolved to:', address);
@@ -83,7 +130,9 @@ export async function resolveENSFromAddress(address: string): Promise<string | n
 
     console.log('[ENS] Reverse resolving ENS name for address:', address);
     
-    const ensName = await publicClient.getEnsName({ address: address as `0x${string}` });
+    const ensName = await withRetry(() =>
+      getEnsClient().getEnsName({ address: address as `0x${string}` })
+    );
     
     if (ensName) {
       console.log('[ENS] ✅ Resolved to:', ensName);
@@ -99,16 +148,34 @@ export async function resolveENSFromAddress(address: string): Promise<string | n
 }
 
 /**
- * Resolve .fcast.id name from address (if API available)
- * Note: This is a placeholder - actual implementation depends on Farcaster API
+ * Resolve a `.fcast.id` name from an Ethereum address.
+ *
+ * Implementation: uses Neynar verification lookups when a Neynar API key is configured.
  */
 export async function resolveFcastId(address: string): Promise<string | null> {
   try {
-    // TODO: Implement .fcast.id resolution when API is available
-    // This might require calling a Farcaster API endpoint
+    if (!isEthereumAddress(address)) {
+      return null;
+    }
+    const normalized = address.trim().toLowerCase();
+    if (fcastIdCache.has(normalized)) {
+      return fcastIdCache.get(normalized) ?? null;
+    }
     console.log('[Fcast.id] Resolving .fcast.id for address:', address);
-    // For now, return null - can be implemented when API is available
-    return null;
+
+    const { useFarcasterStore } = await import('@/lib/stores/farcaster-store');
+    const key = useFarcasterStore.getState().getEffectiveNeynarApiKey?.();
+    if (!key) {
+      fcastIdCache.set(normalized, null);
+      return null;
+    }
+
+    const { fetchNeynarUserByVerification } = await import('@/lib/farcaster/neynar');
+    const user = await fetchNeynarUserByVerification(normalized, key);
+    const username = user?.username?.trim();
+    const resolved = username ? `${username}.fcast.id` : null;
+    fcastIdCache.set(normalized, resolved);
+    return resolved;
   } catch (error) {
     console.error('[Fcast.id] Failed to resolve:', error);
     return null;
@@ -116,15 +183,15 @@ export async function resolveFcastId(address: string): Promise<string | null> {
 }
 
 /**
- * Resolve basename ending in .base.eth from address (if API available)
- * Note: This is a placeholder - actual implementation depends on Base API
+ * Return the reverse-ENS name only if it ends with `.base.eth`.
  */
 export async function resolveBaseEthName(address: string): Promise<string | null> {
   try {
-    // TODO: Implement .base.eth resolution when API is available
-    // This might require calling a Base name service API
     console.log('[Base.eth] Resolving .base.eth for address:', address);
-    // For now, return null - can be implemented when API is available
+    const ensName = await resolveENSFromAddress(address);
+    if (ensName && ensName.toLowerCase().endsWith('.base.eth')) {
+      return ensName;
+    }
     return null;
   } catch (error) {
     console.error('[Base.eth] Failed to resolve:', error);

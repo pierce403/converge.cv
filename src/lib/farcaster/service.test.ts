@@ -80,20 +80,21 @@ describe('farcaster service helpers', () => {
     vi.doMock('@/lib/utils/ens', () => mockEns);
 
     let result = await resolveContactName(user, '0xabc');
-    expect(result.preferredName).toBeUndefined();
+    expect(result.preferredName).toBe('user.fcast.id');
+    expect(mockEns.resolveFcastId).not.toHaveBeenCalled();
 
     mockEns.resolveENSFromAddress.mockResolvedValueOnce('alice.eth');
     result = await resolveContactName(user, '0xabc');
     expect(result.preferredName).toBe('alice.eth');
 
-    mockEns.resolveENSFromAddress.mockResolvedValueOnce(null);
-    mockEns.resolveFcastId.mockResolvedValueOnce('bob.fcast.id');
+    mockEns.resolveENSFromAddress.mockResolvedValueOnce('charlie.base.eth');
     result = await resolveContactName(user, '0xabc');
-    expect(result.preferredName).toBe('bob.fcast.id');
+    expect(result.preferredName).toBe('user.fcast.id');
 
+    const noUsername = { display_name: 'Display', username: '' } as any;
+    mockEns.resolveENSFromAddress.mockResolvedValueOnce('charlie.base.eth');
     mockEns.resolveFcastId.mockResolvedValueOnce(null);
-    mockEns.resolveBaseEthName.mockResolvedValueOnce('charlie.base.eth');
-    result = await resolveContactName(user, '0xabc');
+    result = await resolveContactName(noUsername, '0xabc');
     expect(result.preferredName).toBe('charlie.base.eth');
   });
 });

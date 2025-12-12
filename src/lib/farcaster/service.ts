@@ -270,36 +270,42 @@ export async function resolveContactName(
 ): Promise<{ name: string; preferredName?: string }> {
   const { resolveENSFromAddress, resolveFcastId, resolveBaseEthName } = await import('@/lib/utils/ens');
   
-  // Priority 1: Try ENS (.eth)
+  const farcasterName = user.display_name || user.username;
+
+  // Priority 1: Try ENS (.eth). Treat `.base.eth` separately.
+  let baseEthCandidate: string | undefined;
   const ensName = await resolveENSFromAddress(ethAddress);
   if (ensName) {
-    return {
-      name: user.display_name || user.username,
-      preferredName: ensName,
-    };
+    const lower = ensName.toLowerCase();
+    if (lower.endsWith('.base.eth')) {
+      baseEthCandidate = ensName;
+    } else if (lower.endsWith('.eth')) {
+      return { name: farcasterName, preferredName: ensName };
+    }
   }
 
   // Priority 2: Try .fcast.id
-  const fcastId = await resolveFcastId(ethAddress);
-  if (fcastId) {
+  const username = typeof user.username === 'string' ? user.username.trim() : '';
+  const fcastId = username ? `${username}.fcast.id` : await resolveFcastId(ethAddress);
+  if (fcastId && fcastId.trim().length > 0) {
     return {
-      name: user.display_name || user.username,
+      name: farcasterName,
       preferredName: fcastId,
     };
   }
 
   // Priority 3: Try .base.eth
-  const baseEthName = await resolveBaseEthName(ethAddress);
+  const baseEthName = baseEthCandidate ?? (await resolveBaseEthName(ethAddress));
   if (baseEthName) {
     return {
-      name: user.display_name || user.username,
+      name: farcasterName,
       preferredName: baseEthName,
     };
   }
 
   // Fallback: Use Farcaster name
   return {
-    name: user.display_name || user.username,
+    name: farcasterName,
   };
 }
 import { fetchNeynarUserByIdentifier } from './neynar';

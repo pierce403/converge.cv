@@ -12,11 +12,69 @@ const getHeaders = (apiKey?: string) => {
   };
 };
 
+const shouldRetryStatus = (status: number): boolean =>
+  status === 429 || status === 502 || status === 503 || status === 504;
+
+const parseRetryAfterMs = (response: Response): number | undefined => {
+  const raw = response.headers.get('retry-after') || response.headers.get('Retry-After');
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(30_000, Math.max(0, Math.round(seconds * 1000)));
+  }
+  return undefined;
+};
+
+const isVitest = () =>
+  typeof process !== 'undefined' &&
+  Boolean((process.env as Record<string, string | undefined>)?.VITEST);
+
+const sleep = async (ms: number): Promise<void> => {
+  if (ms <= 0) return;
+  if (isVitest()) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+const fetchWithRetry = async (
+  url: string,
+  init: RequestInit,
+  options?: { maxAttempts?: number }
+): Promise<Response> => {
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? 4);
+  let attempt = 0;
+  let backoffMs = 400;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      const response = await fetch(url, init);
+      if (!response) {
+        throw new Error('Fetch returned an empty response');
+      }
+      if (!shouldRetryStatus(response.status) || attempt >= maxAttempts) {
+        return response;
+      }
+      const retryAfter = parseRetryAfterMs(response);
+      const delay = retryAfter ?? Math.min(5000, backoffMs);
+      await sleep(delay);
+    } catch (error) {
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      await sleep(Math.min(5000, backoffMs));
+    }
+    backoffMs = Math.min(5000, Math.round(backoffMs * 1.75));
+  }
+
+  // Should be unreachable, but TS wants a return.
+  return fetch(url, init);
+};
+
 const fetchWithFallback = async (path: string, apiKey?: string): Promise<Response> => {
   const headers = getHeaders(apiKey);
-  const primary = await fetch(`${NEYNAR_BASE}${path}`, { headers });
+  const primary = await fetchWithRetry(`${NEYNAR_BASE}${path}`, { headers });
   if (primary.status !== 404) return primary;
-  return fetch(`${NEYNAR_FALLBACK_BASE}${path}`, { headers });
+  return fetchWithRetry(`${NEYNAR_FALLBACK_BASE}${path}`, { headers });
 };
 
 export interface NeynarUserResult {
@@ -34,6 +92,13 @@ export interface NeynarFollowingResponse {
 }
 
 export interface NeynarUsersByVerificationResponse {
+  result?: {
+    users?: Array<FarcasterUser & { score?: { value?: number } | number; power_badge?: boolean }>;
+  };
+  users?: Array<FarcasterUser & { score?: { value?: number } | number; power_badge?: boolean }>;
+}
+
+export interface NeynarUserBulkResponse {
   result?: {
     users?: Array<FarcasterUser & { score?: { value?: number } | number; power_badge?: boolean }>;
   };
@@ -96,6 +161,48 @@ export async function fetchNeynarUserProfile(
     console.warn('[Neynar] Error fetching user profile', error);
     return null;
   }
+}
+
+export async function fetchNeynarUsersBulk(
+  fids: number[],
+  apiKey?: string
+): Promise<Array<FarcasterUser & { score?: number; power_badge?: boolean }>> {
+  if (!apiKey) return [];
+
+  const unique = Array.from(
+    new Set(
+      (Array.isArray(fids) ? fids : [])
+        .map((fid) => Number(fid))
+        .filter((fid) => Number.isFinite(fid) && fid > 0)
+    )
+  );
+  if (unique.length === 0) {
+    return [];
+  }
+
+  const results: Array<FarcasterUser & { score?: number; power_badge?: boolean }> = [];
+  const chunkSize = 100;
+
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    try {
+      const response = await fetchWithFallback(`/user/bulk?fids=${chunk.join(',')}`, apiKey);
+      if (!response.ok) {
+        console.warn('[Neynar] Failed to fetch bulk users', response.status);
+        continue;
+      }
+
+      const data = (await response.json()) as NeynarUserBulkResponse & { result?: { users?: FarcasterUser[] } };
+      // /user/bulk returns { users: [...] } (sometimes wrapped in { result: { users: [...] } })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const users = data.result?.users || (data as any).users || [];
+      results.push(...users.map(mapNeynarUser));
+    } catch (error) {
+      console.warn('[Neynar] Error fetching bulk users', error);
+    }
+  }
+
+  return results;
 }
 
 export async function fetchNeynarUserByVerification(

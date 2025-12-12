@@ -437,13 +437,18 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-12 (docs/ directory scaffolding)
+**Last Updated**: 2025-12-12 (docs/ directory + Farcaster contacts hardening)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-12)
 
 ### Docs Folder
 - Added `docs/` with a documentation index and starter guides (`docs/README.md`, `docs/development.md`, `docs/architecture.md`, `docs/troubleshooting.md`).
+
+### Farcaster / Contacts
+- Implemented `.fcast.id` and `.base.eth` enrichment in `src/lib/utils/ens.ts` (Neynar verification + reverse-ENS filter) with unit tests.
+- Added rate limiting/backoff helpers for Neynar + ENS RPC calls (Vitest-safe no-delay).
+- Updated Farcaster contact sync to bulk-fetch Neynar profiles (`fetchNeynarUsersBulk`) and persist enriched stats; added store unit tests.
 
 ## Latest Changes (2025-12-10)
 

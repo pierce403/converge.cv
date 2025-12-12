@@ -82,12 +82,13 @@ High-level themes pulled from `git log` since commit `e6de012` (2025-11-22).
 
 ## Farcaster / Contacts
 
-- [ ] Replace placeholder bot addresses in `src/lib/default-contacts.ts` with real XMTP-enabled identities (when verified).
-- [ ] ENS enrichment:
-  - [ ] Implement `.fcast.id` and `.base.eth` lookups (currently stubbed in `src/lib/utils/ens.ts`).
-- [ ] Farcaster sync hardening:
-  - [ ] Rate limiting/backoff for Neynar + RPC calls.
-  - [ ] Better progress/error UX for large following lists.
+- [ ] Add verified default bot contacts (keep `src/lib/default-contacts.ts` empty until we have real XMTP-enabled addresses).
+- [x] ENS enrichment:
+  - [x] `.fcast.id` lookups via Neynar verification + caching (`resolveFcastId`)
+  - [x] `.base.eth` lookups as a filtered reverse-ENS (`resolveBaseEthName`)
+- [x] Farcaster sync hardening:
+  - [x] Rate limiting/backoff for Neynar + RPC calls (Vitest-safe delays)
+  - [x] Bulk Neynar profile enrichment for large following lists (`fetchNeynarUsersBulk`)
 
 ## Push Notifications
 

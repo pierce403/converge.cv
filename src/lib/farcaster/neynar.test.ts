@@ -3,6 +3,7 @@ import {
   fetchFarcasterFollowingWithNeynar,
   fetchNeynarUserByVerification,
   fetchNeynarUserProfile,
+  fetchNeynarUsersBulk,
   mapNeynarUser,
 } from './neynar';
 
@@ -72,6 +73,116 @@ describe('neynar helpers', () => {
     expect(user?.fid).toBe(5);
     expect(user?.score).toBe(7);
     expect(user?.power_badge).toBe(true);
+  });
+
+  it('fetches users in bulk and maps score/power badge', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          result: {
+            users: [
+              {
+                fid: 1,
+                custody_address: '',
+                username: 'a',
+                display_name: 'a',
+                pfp_url: '',
+                profile: { bio: { text: '' } },
+                verifications: [],
+                score: { value: 10 },
+                power_badge: true,
+              },
+              {
+                fid: 2,
+                custody_address: '',
+                username: 'b',
+                display_name: 'b',
+                pfp_url: '',
+                profile: { bio: { text: '' } },
+                verifications: [],
+                score: 3,
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const users = await fetchNeynarUsersBulk([1, 1, 2], 'key');
+    expect(users).toHaveLength(2);
+    expect(users[0].fid).toBe(1);
+    expect(users[0].score).toBe(10);
+    expect(users[0].power_badge).toBe(true);
+    expect(users[1].fid).toBe(2);
+    expect(users[1].score).toBe(3);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain('/user/bulk?fids=1,2');
+  });
+
+  it('retries on rate limit and returns the successful response', async () => {
+    mockFetch
+      .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '0' } }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            result: {
+              users: [
+                {
+                  fid: 9,
+                  custody_address: '',
+                  username: 'retry',
+                  display_name: 'retry',
+                  pfp_url: '',
+                  profile: { bio: { text: '' } },
+                  verifications: ['0x1'],
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+    const user = await fetchNeynarUserByVerification('0x1', 'key');
+    expect(user?.fid).toBe(9);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries on server errors for following list', async () => {
+    mockFetch
+      .mockResolvedValueOnce(new Response('', { status: 503, headers: { 'Retry-After': '0' } }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            result: {
+              users: [
+                {
+                  object: 'follow',
+                  user: {
+                    fid: 1,
+                    custody_address: '',
+                    username: 'a',
+                    display_name: 'a',
+                    pfp_url: '',
+                    profile: { bio: { text: '' } },
+                    verifications: [],
+                    score: 5,
+                  },
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+
+    const users = await fetchFarcasterFollowingWithNeynar(123, 'key');
+    expect(users).toHaveLength(1);
+    expect(users[0].fid).toBe(1);
+    expect(users[0].score).toBe(5);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('paginates following list until cursor ends or guard trips', async () => {

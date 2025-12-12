@@ -1,8 +1,8 @@
 /**
  * Default contacts and agents for the Converge app
- * 
- * These are suggested helpful agents that can be added as default contacts.
- * Replace with actual XMTP-enabled addresses when available.
+ *
+ * These are suggested helpful agents/bots that can be added as default contacts.
+ * Keep this list empty until we have verified XMTP-enabled addresses (no placeholders).
  */
 
 export interface DefaultContact {
@@ -16,9 +16,8 @@ export interface DefaultContact {
 
 /**
  * Suggested default contacts for Converge
- * 
- * NOTE: Some addresses are placeholders. Replace with actual XMTP-enabled addresses as they become available.
- * Check https://docs.xmtp.org for official bot addresses and https://base.org for Base ecosystem agents.
+ *
+ * Add only verified XMTP-enabled addresses when available.
  */
 // Intentionally empty for now. We previously included the GM Bot here,
 // but it has been removed from the default seeded conversations.
