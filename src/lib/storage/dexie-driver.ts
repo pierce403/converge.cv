@@ -1,5 +1,19 @@
 /**
  * Dexie (IndexedDB) implementation of StorageDriver
+ *
+ * Canonical schema source:
+ * - `ConvergeDB` below defines the IndexedDB schema via Dexie `version(...).stores(...)`.
+ *
+ * Important: this schema is used for TWO databases:
+ * - Global DB: `ConvergeDB` (identity + vault secrets)
+ * - Namespaced DB: `ConvergeDB:${namespace}` (conversations/messages/contacts/attachments + tombstones)
+ *
+ * Dexie index syntax quick reference:
+ * - `id` = primary key
+ * - `&id` = unique index (and primary key when first)
+ * - `++id` = auto-incrementing primary key
+ * - `*values` = multiEntry index for an array field
+ * - `[a+b]` = compound index (ex: pagination by `[conversationId+sentAt]`)
  */
 
 import Dexie, { Table } from 'dexie';
@@ -36,12 +50,19 @@ class ConvergeDB extends Dexie {
     super(name);
 
     this.version(1).stores({
+      // Conversation list metadata (DMs + groups). Primary key: `id`.
       conversations: 'id, lastMessageAt, pinned, archived, peerId',
+      // Message rows. Primary key: `id`. Compound index supports paging by time per conversation.
       messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+      // Attachment metadata linked to a message. Binary bytes live in `attachmentData`.
       attachments: 'id, messageId',
+      // Raw attachment bytes (ArrayBuffer), keyed by attachment `id`.
       attachmentData: 'id',
+      // Local identity records (currently 1 per device). Primary key: `address`.
       identity: 'address',
+      // Vault encryption config/secrets. Primary key: `method`.
       vaultSecrets: 'method',
+      // Legacy contacts table keyed by address (v1/v2). Replaced by `contacts_v3`.
       contacts: 'address',
     });
 
@@ -51,6 +72,7 @@ class ConvergeDB extends Dexie {
         messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
         attachments: 'id, messageId',
         attachmentData: 'id',
+        // Add secondary index on inboxId for lookups/migrations.
         identity: 'address, inboxId',
         vaultSecrets: 'method',
         contacts: 'address',
@@ -74,7 +96,9 @@ class ConvergeDB extends Dexie {
         attachmentData: 'id',
         identity: 'address, inboxId',
         vaultSecrets: 'method',
+        // Legacy contacts keyed by address.
         contacts: 'address',
+        // Current contacts keyed by inboxId, plus indexes for lookup by any known address.
         contacts_v3: '&inboxId, primaryAddress, *addresses',
       })
       .upgrade(async (transaction) => {
@@ -209,6 +233,7 @@ class ConvergeDB extends Dexie {
       vaultSecrets: 'method',
       contacts: 'address',
       contacts_v3: '&inboxId, primaryAddress, *addresses',
+      // Tombstones to keep "deleted/hidden" conversations from reappearing on resync.
       deletedConversations: '&conversationId, peerId',
     });
 
@@ -222,20 +247,31 @@ class ConvergeDB extends Dexie {
       contacts: 'address',
       contacts_v3: '&inboxId, primaryAddress, *addresses',
       deletedConversations: '&conversationId, peerId',
+      // Temporary table used by older ignore semantics (removed in v7).
       ignoredConversations: '&conversationId',
     });
 
     this.version(7)
       .stores({
+        // Conversation list metadata (DMs + groups). Primary key: `id`.
         conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+        // Message rows. Primary key: `id`. Compound index supports paging by time per conversation.
         messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+        // Attachment metadata linked to a message. Binary bytes live in `attachmentData`.
         attachments: 'id, messageId',
+        // Raw attachment bytes (ArrayBuffer), keyed by attachment `id`.
         attachmentData: 'id',
+        // Local identity records (currently 1 per device). Primary key: `address`.
         identity: 'address, inboxId',
+        // Vault encryption config/secrets. Primary key: `method`.
         vaultSecrets: 'method',
+        // Legacy contacts keyed by address (retained for migrations/compat).
         contacts: 'address',
+        // Current contacts keyed by inboxId, plus indexes for lookup by any known address.
         contacts_v3: '&inboxId, primaryAddress, *addresses',
+        // Tombstones to keep "deleted/hidden" conversations from reappearing on resync.
         deletedConversations: '&conversationId, peerId',
+        // Remove `ignoredConversations` store (table deletion).
         ignoredConversations: null,
       })
       .upgrade(async (transaction) => {

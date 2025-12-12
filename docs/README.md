@@ -14,6 +14,7 @@ This folder contains Converge.cv developer documentation and pointers to the can
 ## Guides
 
 - **Local development**: [`development.md`](development.md)
+- **Storage schema (Dexie/IndexedDB)**: [`storage-schema.md`](storage-schema.md)
 - **Contact management**: [`contacts.md`](contacts.md)
 - **Conversation management**: [`conversations.md`](conversations.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)

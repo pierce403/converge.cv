@@ -89,8 +89,9 @@ The StorageDriver interface defines the primitives used everywhere:
 
 Dexie implementation:
 
-- DB + schema versions: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L22)
-- Current store definitions (v7): [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L228)
+- Full Dexie schema reference: [`docs/storage-schema.md`](storage-schema.md)
+- DB + schema versions: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L49)
+- Current store definitions (v7): [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L254)
 
 The current stores relevant to conversations are:
 
@@ -112,7 +113,7 @@ Converge splits local data by “namespace” (roughly “which inbox is active�
 - Namespace key in localStorage: `converge.storageNamespace.v1` ([`src/lib/storage/index.ts`](../src/lib/storage/index.ts#L15))
 - Dexie DB names:
   - global DB: `ConvergeDB` (identity/vault)
-  - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L255))
+  - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L293))
 
 ### localStorage — what’s used by conversation flows
 
@@ -144,7 +145,7 @@ The following table is meant to be exhaustive for “create/update/delete persis
 | Send message | `lastMessageAt`, `lastMessagePreview`, `lastMessageId`, `lastMessageSender` | [`src/features/messages/useMessages.ts`](../src/features/messages/useMessages.ts#L117) |
 | Receive message | `lastMessageAt`, `lastMessagePreview`, unread increments | [`src/features/messages/useMessages.ts`](../src/features/messages/useMessages.ts#L413) |
 | Receive system message | preview + timestamp | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L486) |
-| “Mark read” / open conversation | `unreadCount`, `lastReadAt`, `lastReadMessageId` | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L730) and [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L353) |
+| “Mark read” / open conversation | `unreadCount`, `lastReadAt`, `lastReadMessageId` | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L730) and [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L389) |
 | Pin / Archive | `pinned`, `archived` | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L602) / [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L623) |
 | Mute / unmute | `mutedUntil` (+ also writes deleted marker; see “Gotchas”) | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L644) |
 | Group membership changes | `members`, `memberInboxes`, `admins`, `groupMembers` | `addMembersToGroup/removeMembersFromGroup`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L792) |
@@ -192,14 +193,14 @@ Net effect: muting may prevent message ingestion entirely, not just notification
 2) **System message previews in storage can be wrong**
 
 - `DexieDriver.putMessage()` updates `lastMessagePreview` to `'📎 Attachment'` for any non-text message type (including `system`):
-  [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L374)
+  [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L410)
 - Chat list logic expects system previews to show the body: [`src/features/conversations/ChatList.tsx`](../src/features/conversations/ChatList.tsx#L200)
 - Layout patches the preview in-memory after storing the system message, but the persisted preview still uses the generic string:
   [`src/app/Layout.tsx`](../src/app/Layout.tsx#L486)
 
 3) **Deleting a conversation does not delete attachment blobs**
 
-- `deleteConversation()` deletes from `conversations` + `messages` only: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L305)
+- `deleteConversation()` deletes from `conversations` + `messages` only: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L341)
 
 This can orphan `attachments/attachmentData` rows.
 
@@ -221,5 +222,4 @@ Without an “Archived” view, archived conversations effectively disappear unt
 ## Debugging & inspection
 
 - View “ignored/deleted” conversation markers: [`src/features/debug/IgnoredConversationsModal.tsx`](../src/features/debug/IgnoredConversationsModal.tsx#L1)
-- Storage entry points (Dexie driver): [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L251)
-
+- Storage entry points (Dexie driver): [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L287)

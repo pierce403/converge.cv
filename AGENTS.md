@@ -444,6 +444,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Docs Folder
 - Added `docs/` with a documentation index and starter guides (`docs/README.md`, `docs/development.md`, `docs/architecture.md`, `docs/troubleshooting.md`).
+- Added a full Dexie/IndexedDB schema reference (`docs/storage-schema.md`) and inline schema comments in `src/lib/storage/dexie-driver.ts`.
 
 ### Farcaster / Contacts
 - Implemented `.fcast.id` and `.base.eth` enrichment in `src/lib/utils/ens.ts` (Neynar verification + reverse-ENS filter) with unit tests.

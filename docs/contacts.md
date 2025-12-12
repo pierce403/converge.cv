@@ -72,7 +72,8 @@ Notes:
 Contacts are stored in IndexedDB via Dexie.
 
 - DB implementation: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
-- `contacts_v3` store definition: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L67)
+- Full Dexie schema reference: [`docs/storage-schema.md`](storage-schema.md)
+- `contacts_v3` store definition: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L271)
 
 The current contacts store is:
 
@@ -93,7 +94,7 @@ Storage is namespaced per inbox.
 - Namespace key in localStorage: `converge.storageNamespace.v1` ([`src/lib/storage/index.ts`](../src/lib/storage/index.ts#L15))
 - Dexie DB names:
   - global DB: `ConvergeDB`
-  - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L255))
+  - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L293))
 
 This means:
 
@@ -110,7 +111,7 @@ There are two primitives:
 Both ultimately persist through the storage driver:
 
 - `StorageDriver.putContact(...)`: [`src/lib/storage/interface.ts`](../src/lib/storage/interface.ts#L76)
-- Dexie implementation uses `contacts_v3`: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L501)
+- Dexie implementation uses `contacts_v3`: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L538)
 
 ### Create / upsert triggers
 
@@ -144,7 +145,7 @@ Both ultimately persist through the storage driver:
 Contacts are persisted in IndexedDB (Dexie) via `putContact/getContact/listContacts`.
 
 - `useContactStore.loadContacts()` reads: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L317)
-- `DexieDriver.putContact()` writes: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L501)
+- `DexieDriver.putContact()` writes: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L538)
 
 ### localStorage — keys used by contact flows
 
