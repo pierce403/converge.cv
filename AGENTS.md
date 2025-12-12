@@ -136,6 +136,8 @@ src/
     └── index.ts           # TypeScript interfaces
 ```
 
+- `docs/`                  # Developer documentation (index: `docs/README.md`)
+
 ---
 
 ## Development Commands
@@ -396,6 +398,7 @@ if (!isRegistered) {
 ## Documentation Expectations
 
 - Whenever a feature is added, removed, or meaningfully modified, **update `FEATURES.md`** with the current behavior and specification details so future agents stay in sync with the shipped experience.
+- Developer docs live under `docs/` (start at `docs/README.md`).
 
 ### Communication Style
 - Ask clarifying questions if passphrase/security features are needed
@@ -434,8 +437,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-10 (Neynar lookup + coverage)
+**Last Updated**: 2025-12-12 (docs/ directory scaffolding)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-12)
+
+### Docs Folder
+- Added `docs/` with a documentation index and starter guides (`docs/README.md`, `docs/development.md`, `docs/architecture.md`, `docs/troubleshooting.md`).
 
 ## Latest Changes (2025-12-10)
 

@@ -132,6 +132,8 @@ See [TODO.md](./TODO.md) for development roadmap and tasks.
 
 **For AI Agents**: Read [AGENTS.md](./AGENTS.md) first! It contains critical context about user preferences, architectural decisions, and project conventions. Update it whenever you learn something new.
 
+**Docs index**: See [`docs/README.md`](./docs/README.md).
+
 ## 🏗️ Architecture
 
 ```
