@@ -120,16 +120,42 @@ export async function fetchNeynarUserByVerification(
       return null;
     }
 
-    // Response structure is { [address]: [user1, user2] }
-    // type is actually map of address -> user[]
-    const data = (await response.json()) as Record<string, FarcasterUser[]>;
-    // Check if data is array or object, based on Neynar API behavior
-    // Sometimes wrapped in { result: ... }? It seems bulk-by-address returns Key-Value object
-    // API Docs say: { "0x...": [ { ...user... } ] }
+    // Neynar's response shape for "bulk-by-address" has varied across versions:
+    // - v2: { "0x...": [ { ...user... } ] }
+    // - some wrappers: { result: { users: [...] } }
+    const data = (await response.json()) as unknown;
 
-    const users = Object.values(data)[0];
-    const user = Array.isArray(users) ? users[0] : null;
+    const pickFirstUser = (input: unknown): FarcasterUser | undefined => {
+      if (!input) return undefined;
 
+      // Wrapper shape: { result: { users: [...] } } or { users: [...] }
+      if (typeof input === 'object') {
+        const wrapped = input as NeynarUsersByVerificationResponse;
+        const users = wrapped.result?.users ?? wrapped.users;
+        if (Array.isArray(users) && users.length > 0) {
+          return users[0];
+        }
+      }
+
+      // Map shape: { "0x...": [ { ...user... } ] }
+      if (typeof input === 'object') {
+        const values = Object.values(input as Record<string, unknown>);
+        const first = values[0];
+        if (Array.isArray(first) && first.length > 0) {
+          return first[0] as FarcasterUser;
+        }
+
+        // Rare nesting: { "0x...": { result: { users: [...] } } }
+        if (first && typeof first === 'object') {
+          const nested = pickFirstUser(first);
+          if (nested) return nested;
+        }
+      }
+
+      return undefined;
+    };
+
+    const user = pickFirstUser(data);
     return user ? mapNeynarUser(user) : null;
   } catch (error) {
     console.warn('[Neynar] Error fetching user by verification', error);
