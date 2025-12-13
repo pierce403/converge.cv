@@ -10,6 +10,12 @@ import { getXmtpClient } from '@/lib/xmtp';
 import type { InboxRegistryEntry } from '@/types';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
+const isAutoLabel = (val?: string | null): boolean => {
+  if (!val) return true;
+  const v = val.trim();
+  if (!v) return true;
+  return v.startsWith('Identity ') || v.startsWith('Wallet ') || v.toLowerCase().startsWith('0x');
+};
 
 const dispatchOperationStep = (detail: {
   message: string;
@@ -52,9 +58,15 @@ export function InboxSwitcher() {
   const currentInboxId = identity?.inboxId ?? null;
   const currentEntry = currentInboxId ? sortedEntries.find((entry) => entry.inboxId === currentInboxId) : undefined;
 
-  const currentLabel = currentEntry
-    ? getInboxDisplayLabel(currentEntry)
-    : identity?.displayName || (identity?.address ? shortAddress(identity.address) : 'No identity connected');
+  const identityDisplayName = identity?.displayName?.trim();
+  const preferredIdentityLabel =
+    identityDisplayName && !isAutoLabel(identityDisplayName) ? identityDisplayName : undefined;
+
+  const currentLabel =
+    preferredIdentityLabel ??
+    (currentEntry
+      ? getInboxDisplayLabel(currentEntry)
+      : identityDisplayName || (identity?.address ? shortAddress(identity.address) : 'No identity connected'));
 
   const currentBadge = identity?.displayName ? identity.displayName.charAt(0).toUpperCase() : currentLabel.charAt(0).toUpperCase();
   const currentAvatar = useMemo(() => identity?.avatar, [identity?.avatar]);

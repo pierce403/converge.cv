@@ -456,6 +456,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### XMTP Recovery
 - Recovered from “client: identity error: Uninitialized identity” by forcing `client.register()` when `Client.create()` yields no `inboxId` and retrying after the same error during sync.
 - Persisted `identity.lastSyncedAt` (IndexedDB) and used it to throttle redundant `syncConversations()` calls across reloads (manual “Check now” forces a sync).
+- Hydrated the local identity’s `displayName`/`avatar` for Settings + InboxSwitcher by preferring XMTP profile history (self-DM/preferences) and falling back to Farcaster when missing; also keep the inbox registry `displayLabel` in sync so the switcher doesn’t show stale labels.
 
 ## Latest Changes (2025-12-12)
 

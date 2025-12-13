@@ -3,6 +3,40 @@ import type { Contact, ContactProfileInput } from '@/lib/stores/contact-store';
 import { resolveFidFromAddress } from './service';
 import { fetchNeynarUserProfile } from './neynar';
 
+const isAutoLabel = (val?: string | null): boolean => {
+  if (!val) return true;
+  const v = val.trim();
+  if (!v) return true;
+  return v.startsWith('Identity ') || v.startsWith('Wallet ');
+};
+
+const isAddressLikeLabel = (val?: string | null): boolean => {
+  if (!val) return false;
+  const v = val.trim().toLowerCase();
+  return v.startsWith('0x');
+};
+
+const shouldFillDisplayName = (displayName?: string | null): boolean => {
+  const raw = displayName?.trim();
+  if (!raw) return true;
+  if (isAutoLabel(raw)) return true;
+  if (isAddressLikeLabel(raw)) return true;
+  return false;
+};
+
+const shouldFillAvatar = (avatar?: string | null): boolean => {
+  const raw = avatar?.trim();
+  return !raw;
+};
+
+const pickFarcasterDisplayName = (profile: { display_name?: string; username?: string }): string | null => {
+  const display = profile.display_name?.trim();
+  if (display) return display;
+  const username = profile.username?.trim();
+  if (username) return username;
+  return null;
+};
+
 export async function syncSelfFarcasterProfile(args: {
   identity: Identity;
   apiKey: string;
@@ -15,7 +49,7 @@ export async function syncSelfFarcasterProfile(args: {
   const { identity, apiKey, existingContact, putIdentity, setIdentity, upsertContactProfile } = args;
   const now = args.now ?? (() => Date.now());
 
-  if (!identity?.address || !identity.inboxId) {
+  if (!identity?.address) {
     return;
   }
 
@@ -24,17 +58,54 @@ export async function syncSelfFarcasterProfile(args: {
     return;
   }
 
-  if (identity.farcasterFid !== fid) {
-    const updatedIdentity = { ...identity, farcasterFid: fid };
-    await putIdentity(updatedIdentity);
-    setIdentity(updatedIdentity);
+  const needsName = shouldFillDisplayName(identity.displayName);
+  const needsAvatar = shouldFillAvatar(identity.avatar);
+  const shouldFetchProfile = Boolean(existingContact && identity.inboxId) || needsName || needsAvatar;
+
+  let profile: Awaited<ReturnType<typeof fetchNeynarUserProfile>> | null = null;
+  if (shouldFetchProfile) {
+    profile = await fetchNeynarUserProfile(fid, apiKey);
   }
 
-  if (!existingContact) {
+  // Update identity: always persist the FID, and opportunistically fill displayName/avatar
+  // when missing (preferring XMTP/locally chosen names if already set).
+  let nextIdentity = identity;
+  let identityChanged = false;
+
+  if (nextIdentity.farcasterFid !== fid) {
+    nextIdentity = { ...nextIdentity, farcasterFid: fid };
+    identityChanged = true;
+  }
+
+  if (profile) {
+    if (needsName) {
+      const candidateName = pickFarcasterDisplayName(profile);
+      if (candidateName) {
+        nextIdentity = { ...nextIdentity, displayName: candidateName };
+        identityChanged = true;
+      }
+    }
+
+    if (needsAvatar) {
+      const avatarUrl = profile.pfp_url?.trim();
+      if (avatarUrl) {
+        nextIdentity = { ...nextIdentity, avatar: avatarUrl };
+        identityChanged = true;
+      }
+    }
+  }
+
+  if (identityChanged) {
+    await putIdentity(nextIdentity);
+    setIdentity(nextIdentity);
+  }
+
+  // Update the self contact record only when we have a confirmed inboxId. This avoids
+  // accidentally mutating a non-self contact during early identity bootstrapping.
+  if (!existingContact || !identity.inboxId) {
     return;
   }
 
-  const profile = await fetchNeynarUserProfile(fid, apiKey);
   if (!profile) {
     return;
   }
@@ -55,4 +126,3 @@ export async function syncSelfFarcasterProfile(args: {
     },
   });
 }
-

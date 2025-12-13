@@ -48,7 +48,7 @@ export function SettingsPage() {
   const isAutoLabel = (val?: string | null) => {
     if (!val) return true;
     const v = val.trim();
-    return v.startsWith('Identity ') || v.startsWith('Wallet ');
+    return v.startsWith('Identity ') || v.startsWith('Wallet ') || v.toLowerCase().startsWith('0x');
   };
 
   const computeInitialDisplayName = () => {

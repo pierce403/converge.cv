@@ -34,7 +34,23 @@ describe('syncSelfFarcasterProfile', () => {
     vi.clearAllMocks();
   });
 
-  it('no-ops when inboxId is missing', async () => {
+  it('still updates identity when inboxId is missing (but skips contact upsert)', async () => {
+    (resolveFidFromAddress as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(777);
+    (fetchNeynarUserProfile as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      fid: 777,
+      username: 'alice',
+      display_name: 'Alice',
+      pfp_url: 'https://example.com/alice.png',
+      follower_count: 10,
+      following_count: 5,
+      active_status: 'active',
+      power_badge: true,
+      score: 12.34,
+      custody_address: baseIdentity.address,
+      verifications: [baseIdentity.address],
+      profile: { bio: { text: '' } },
+    });
+
     const putIdentity = vi.fn(async (_next: Identity) => undefined);
     const setIdentity = vi.fn();
     const upsertContactProfile = vi.fn(async (_input: unknown) => baseContact);
@@ -48,9 +64,10 @@ describe('syncSelfFarcasterProfile', () => {
       upsertContactProfile,
     });
 
-    expect(resolveFidFromAddress).not.toHaveBeenCalled();
-    expect(fetchNeynarUserProfile).not.toHaveBeenCalled();
-    expect(putIdentity).not.toHaveBeenCalled();
+    expect(resolveFidFromAddress).toHaveBeenCalledWith(baseIdentity.address, 'key');
+    expect(fetchNeynarUserProfile).toHaveBeenCalledWith(777, 'key');
+    expect(putIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 777, displayName: 'Alice', avatar: 'https://example.com/alice.png' }));
+    expect(setIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 777, displayName: 'Alice', avatar: 'https://example.com/alice.png' }));
     expect(upsertContactProfile).not.toHaveBeenCalled();
   });
 
@@ -59,11 +76,16 @@ describe('syncSelfFarcasterProfile', () => {
     (fetchNeynarUserProfile as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       fid: 777,
       username: 'alice',
+      display_name: 'Alice',
+      pfp_url: 'https://example.com/alice.png',
       follower_count: 10,
       following_count: 5,
       active_status: 'active',
       power_badge: true,
       score: 12.34,
+      custody_address: baseIdentity.address,
+      verifications: [baseIdentity.address],
+      profile: { bio: { text: '' } },
     });
 
     const putIdentity = vi.fn(async (_next: Identity) => undefined);
@@ -81,8 +103,8 @@ describe('syncSelfFarcasterProfile', () => {
     });
 
     expect(resolveFidFromAddress).toHaveBeenCalledWith(baseIdentity.address, 'key');
-    expect(putIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 777 }));
-    expect(setIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 777 }));
+    expect(putIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 777, displayName: 'Alice', avatar: 'https://example.com/alice.png' }));
+    expect(setIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 777, displayName: 'Alice', avatar: 'https://example.com/alice.png' }));
 
     expect(fetchNeynarUserProfile).toHaveBeenCalledWith(777, 'key');
     expect(upsertContactProfile).toHaveBeenCalledWith(
@@ -102,15 +124,20 @@ describe('syncSelfFarcasterProfile', () => {
     );
   });
 
-  it('uses existing identity FID without resolving again', async () => {
+  it('uses existing identity FID without resolving again (and fills missing profile fields)', async () => {
     (fetchNeynarUserProfile as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       fid: 555,
       username: 'bob',
+      display_name: 'Bob',
+      pfp_url: 'https://example.com/bob.png',
       follower_count: 1,
       following_count: 2,
       active_status: 'inactive',
       power_badge: false,
       score: 1.2,
+      custody_address: baseIdentity.address,
+      verifications: [baseIdentity.address],
+      profile: { bio: { text: '' } },
     });
 
     const putIdentity = vi.fn(async (_next: Identity) => undefined);
@@ -127,9 +154,51 @@ describe('syncSelfFarcasterProfile', () => {
     });
 
     expect(resolveFidFromAddress).not.toHaveBeenCalled();
+    expect(fetchNeynarUserProfile).toHaveBeenCalledWith(555, 'key');
+    expect(putIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 555, displayName: 'Bob', avatar: 'https://example.com/bob.png' }));
+    expect(setIdentity).toHaveBeenCalledWith(expect.objectContaining({ farcasterFid: 555, displayName: 'Bob', avatar: 'https://example.com/bob.png' }));
+    expect(upsertContactProfile).toHaveBeenCalled();
+  });
+
+  it('does not overwrite an existing non-auto display name or avatar', async () => {
+    (fetchNeynarUserProfile as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      fid: 555,
+      username: 'bob',
+      display_name: 'Bob',
+      pfp_url: 'https://example.com/bob.png',
+      follower_count: 1,
+      following_count: 2,
+      active_status: 'inactive',
+      power_badge: false,
+      score: 1.2,
+      custody_address: baseIdentity.address,
+      verifications: [baseIdentity.address],
+      profile: { bio: { text: '' } },
+    });
+
+    const putIdentity = vi.fn(async (_next: Identity) => undefined);
+    const setIdentity = vi.fn();
+    const upsertContactProfile = vi.fn(async (_input: unknown) => baseContact);
+
+    await syncSelfFarcasterProfile({
+      identity: {
+        ...baseIdentity,
+        farcasterFid: 555,
+        displayName: 'Custom Name',
+        avatar: 'data:image/png;base64,abc',
+      },
+      apiKey: 'key',
+      existingContact: baseContact,
+      putIdentity,
+      setIdentity,
+      upsertContactProfile,
+    });
+
+    expect(resolveFidFromAddress).not.toHaveBeenCalled();
+    expect(fetchNeynarUserProfile).toHaveBeenCalledWith(555, 'key');
+    // No identity changes needed: name/avatar already set and fid already present.
     expect(putIdentity).not.toHaveBeenCalled();
     expect(setIdentity).not.toHaveBeenCalled();
-    expect(fetchNeynarUserProfile).toHaveBeenCalledWith(555, 'key');
     expect(upsertContactProfile).toHaveBeenCalled();
   });
 });

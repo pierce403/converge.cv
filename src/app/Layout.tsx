@@ -5,7 +5,7 @@ import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
 import { OperationProgressBar } from '@/components/OperationProgressBar';
-import { useAuthStore, useConversationStore, useContactStore, useFarcasterStore, useMessageStore } from '@/lib/stores';
+import { useAuthStore, useConversationStore, useContactStore, useFarcasterStore, useInboxRegistryStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
@@ -18,7 +18,7 @@ import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
 import { syncSelfFarcasterProfile } from '@/lib/farcaster/self';
-// Do not enrich from ENS/Farcaster for avatars or names. Use XMTP network data only.
+// Prefer XMTP profile history for names/avatars; fall back to Farcaster for missing fields.
 
 
 export function Layout() {
@@ -31,6 +31,7 @@ export function Layout() {
   const loadContacts = useContactStore((state) => state.loadContacts);
   const [showPersonalizationReminder, setShowPersonalizationReminder] = useState(false);
   const lastSyncedAt = useXmtpStore((state) => state.lastSyncedAt);
+  const connectionStatus = useXmtpStore((state) => state.connectionStatus);
   const [isChecking, setIsChecking] = useState(false);
 
   const handleCheckInbox = async () => {
@@ -48,7 +49,7 @@ export function Layout() {
   const isAutoLabel = (val?: string | null) => {
     if (!val) return true;
     const v = val.trim();
-    return v.startsWith('Identity ') || v.startsWith('Wallet ');
+    return v.startsWith('Identity ') || v.startsWith('Wallet ') || v.toLowerCase().startsWith('0x');
   };
   
   const missingDisplayName = Boolean(identity && isAutoLabel(identity.displayName));
@@ -160,12 +161,105 @@ export function Layout() {
     loadContacts();
   }, [loadContacts]);
 
-  // Best-effort: keep the current user's Farcaster identity refreshed so their own contact card
-  // stays populated after reloads. This only writes Farcaster fields; it does not override
-  // XMTP/locally chosen display names or avatars.
+  // Keep the inbox registry label in sync with the current identity's displayName.
+  // The InboxSwitcher button prefers the registry label, so stale entries can make it
+  // look like the profile didn't load after refresh.
+  useEffect(() => {
+    if (!identity?.inboxId || !identity.address) {
+      return;
+    }
+
+    const displayName = identity.displayName?.trim();
+    if (!displayName || displayName.toLowerCase().startsWith('0x')) {
+      return;
+    }
+
+    const registry = useInboxRegistryStore.getState();
+    registry.hydrate();
+
+    const existing = registry.entries.find((entry) => entry.inboxId === identity.inboxId);
+    const nextPrimary = displayName || identity.address;
+
+    if (existing) {
+      if (existing.displayLabel !== displayName || existing.primaryDisplayIdentity !== nextPrimary) {
+        registry.updateEntry(identity.inboxId, {
+          displayLabel: displayName,
+          primaryDisplayIdentity: nextPrimary,
+        });
+      }
+    } else {
+      registry.upsertEntry({
+        inboxId: identity.inboxId,
+        displayLabel: displayName,
+        primaryDisplayIdentity: nextPrimary,
+        lastOpenedAt: Date.now(),
+        hasLocalDB: true,
+      });
+    }
+  }, [identity?.inboxId, identity?.address, identity?.displayName]);
+
+  // Best-effort: hydrate the local identity's display name/avatar from XMTP profile history.
+  // Only fills missing fields; does not override a locally chosen name/avatar.
   useEffect(() => {
     const run = async () => {
-      if (!identity?.address || !identity.inboxId) {
+      if (!identity?.address) {
+        return;
+      }
+
+      const needsName = isAutoLabel(identity.displayName);
+      const needsAvatar = !identity.avatar?.trim();
+      if (!needsName && !needsAvatar) {
+        return;
+      }
+
+      if (connectionStatus !== 'connected') {
+        return;
+      }
+
+      try {
+        const xmtp = getXmtpClient();
+        if (!xmtp.isConnected()) {
+          return;
+        }
+
+        const profile = await xmtp.loadOwnProfile();
+        if (!profile) {
+          return;
+        }
+
+        const updates: Partial<typeof identity> = {};
+        const nextName = profile.displayName?.trim();
+        const nextAvatar = profile.avatarUrl?.trim();
+        if (needsName && nextName && !nextName.toLowerCase().startsWith('0x')) {
+          updates.displayName = nextName;
+        }
+        if (needsAvatar && nextAvatar) {
+          (updates as typeof updates & { avatar?: string }).avatar = nextAvatar;
+        }
+
+        if (Object.keys(updates).length === 0) {
+          return;
+        }
+
+        const storage = await getStorage();
+        const stored = await storage.getIdentityByAddress(identity.address);
+        const nextIdentity = stored ? ({ ...stored, ...updates } as typeof identity) : ({ ...identity, ...updates } as typeof identity);
+        await storage.putIdentity(nextIdentity);
+        useAuthStore.getState().setIdentity(nextIdentity);
+      } catch (error) {
+        console.warn('[Layout] Failed to hydrate identity profile from XMTP (non-fatal):', error);
+      }
+    };
+
+    void run();
+  }, [identity, connectionStatus]);
+
+  // Best-effort: keep the current user's Farcaster identity refreshed so their own contact card
+  // stays populated after reloads. This only writes Farcaster fields; it does not override
+  // XMTP/locally chosen display names or avatars (unless those fields are missing).
+  useEffect(() => {
+    const run = async () => {
+      if (!identity?.address) {
         return;
       }
 
@@ -175,13 +269,17 @@ export function Layout() {
         return;
       }
 
+      const needsName = isAutoLabel(identity.displayName);
+      const needsAvatar = !identity.avatar?.trim();
+      const bypassCooldown = needsName || needsAvatar || !identity.farcasterFid;
+
       const cooldownKey = `self-farcaster:last-check:${identity.address.toLowerCase()}`;
       try {
         const lastRaw = typeof window !== 'undefined' ? window.localStorage?.getItem(cooldownKey) : null;
         const last = lastRaw ? Number(lastRaw) : 0;
         if (Number.isFinite(last) && last > 0) {
           const oneHour = 60 * 60 * 1000;
-          if (Date.now() - last < oneHour) {
+          if (!bypassCooldown && Date.now() - last < oneHour) {
             return;
           }
         }
@@ -199,7 +297,7 @@ export function Layout() {
 
       const contactStore = useContactStore.getState();
       const existing =
-        contactStore.getContactByInboxId(identity.inboxId) ??
+        (identity.inboxId ? contactStore.getContactByInboxId(identity.inboxId) : undefined) ??
         contactStore.getContactByAddress(identity.address);
 
       const storage = await getStorage();
@@ -747,9 +845,8 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Proactively enrich all loaded contacts from XMTP (no ENS/Farcaster),
+  // Proactively enrich all loaded contacts from XMTP,
   // but only after XMTP is connected to avoid Utils network calls during connect.
-  const connectionStatus = useXmtpStore((s) => s.connectionStatus);
   useEffect(() => {
     if (connectionStatus !== 'connected') return;
     const run = async () => {
