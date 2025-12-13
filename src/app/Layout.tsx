@@ -5,7 +5,7 @@ import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
 import { OperationProgressBar } from '@/components/OperationProgressBar';
-import { useAuthStore, useConversationStore, useContactStore, useMessageStore } from '@/lib/stores';
+import { useAuthStore, useConversationStore, useContactStore, useFarcasterStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
@@ -17,6 +17,7 @@ import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
+import { syncSelfFarcasterProfile } from '@/lib/farcaster/self';
 // Do not enrich from ENS/Farcaster for avatars or names. Use XMTP network data only.
 
 
@@ -158,6 +159,62 @@ export function Layout() {
   useEffect(() => {
     loadContacts();
   }, [loadContacts]);
+
+  // Best-effort: keep the current user's Farcaster identity refreshed so their own contact card
+  // stays populated after reloads. This only writes Farcaster fields; it does not override
+  // XMTP/locally chosen display names or avatars.
+  useEffect(() => {
+    const run = async () => {
+      if (!identity?.address || !identity.inboxId) {
+        return;
+      }
+
+      const farcasterState = useFarcasterStore.getState?.();
+      const apiKey = farcasterState?.getEffectiveNeynarApiKey?.();
+      if (!apiKey) {
+        return;
+      }
+
+      const cooldownKey = `self-farcaster:last-check:${identity.address.toLowerCase()}`;
+      try {
+        const lastRaw = typeof window !== 'undefined' ? window.localStorage?.getItem(cooldownKey) : null;
+        const last = lastRaw ? Number(lastRaw) : 0;
+        if (Number.isFinite(last) && last > 0) {
+          const oneHour = 60 * 60 * 1000;
+          if (Date.now() - last < oneHour) {
+            return;
+          }
+        }
+      } catch {
+        // ignore localStorage failures
+      }
+
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage?.setItem(cooldownKey, String(Date.now()));
+        }
+      } catch {
+        // ignore
+      }
+
+      const contactStore = useContactStore.getState();
+      const existing =
+        contactStore.getContactByInboxId(identity.inboxId) ??
+        contactStore.getContactByAddress(identity.address);
+
+      const storage = await getStorage();
+      await syncSelfFarcasterProfile({
+        identity,
+        apiKey,
+        existingContact: existing,
+        putIdentity: (next) => storage.putIdentity(next),
+        setIdentity: (next) => useAuthStore.getState().setIdentity(next),
+        upsertContactProfile: (input) => contactStore.upsertContactProfile(input),
+      });
+    };
+
+    void run();
+  }, [identity]);
 
   // Global message listener - handles ALL incoming XMTP messages
   // Intentionally register once; store/state is accessed via getState() where needed.

@@ -20,7 +20,7 @@ import xmtpPackage from '@xmtp/browser-sdk/package.json';
 import { logNetworkEvent, useContactStore } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
-import { createEOASigner, createEphemeralSigner } from '@/lib/wagmi/signers';
+import { createEOASigner, createEphemeralSigner, createSCWSigner } from '@/lib/wagmi/signers';
 import type {
   Conversation,
   GroupPermissionPolicyCode,
@@ -43,6 +43,7 @@ export interface XmtpIdentity {
   inboxId?: string;
   installationId?: string;
   chainId?: number; // For smart contract wallets
+  walletType?: 'EOA' | 'SCW'; // Optional hint for wallet-based identities
   signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
   displayName?: string;
 }
@@ -1526,6 +1527,15 @@ export class XmtpClient {
     }
 
     if (identity.signMessage) {
+      if (identity.walletType === 'SCW') {
+        console.log('[XMTP] Creating SCW signer for wallet connection');
+        return createSCWSigner(
+          identity.address as `0x${string}`,
+          identity.signMessage,
+          identity.chainId ?? 1
+        );
+      }
+
       console.log('[XMTP] Creating EOA signer for wallet connection');
       return createEOASigner(identity.address as `0x${string}`, identity.signMessage);
     }
@@ -1785,6 +1795,39 @@ export class XmtpClient {
 
       throw error; // Re-throw the original error
     }
+  }
+
+  /**
+   * Associate a new account (address) with the currently connected inbox.
+   *
+   * This is primarily used for linking smart contract wallets (e.g. Base App smart wallet)
+   * so that other clients can resolve the same XMTP inbox from multiple identifiers.
+   */
+  async addAccount(identity: XmtpIdentity): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    const newSigner = await this.createSigner(identity);
+
+    if (typeof this.client.unsafe_addAccount !== 'function') {
+      throw new Error('XMTP SDK does not support account association');
+    }
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'identity:add_account',
+      details: `Associating ${identity.address} with inbox ${this.client.inboxId}`,
+    });
+
+    // XMTP SDK requires allowInboxReassign=true as an explicit acknowledgement.
+    await this.client.unsafe_addAccount(newSigner, true);
+
+    logNetworkEvent({
+      direction: 'status',
+      event: 'identity:add_account:success',
+      details: `Associated ${identity.address} with inbox ${this.client.inboxId}`,
+    });
   }
 
   async probeIdentity(identity: XmtpIdentity): Promise<IdentityProbeResult> {

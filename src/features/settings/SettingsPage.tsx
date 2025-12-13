@@ -11,11 +11,13 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
 import type { WalletConnectorType } from '@/lib/wagmi';
-import { useSignMessage } from 'wagmi';
+import { usePublicClient, useSignMessage } from 'wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 import { FarcasterSettings } from './FarcasterSettings';
+
+const BASE_CHAIN_ID = 8453;
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -69,6 +71,7 @@ export function SettingsPage() {
     address: walletAddress,
   } = useWalletConnection();
   const { signMessageAsync } = useSignMessage();
+  const basePublicClient = usePublicClient({ chainId: BASE_CHAIN_ID });
   const [showQR, setShowQR] = useState(false);
   // Track push status
   const [pushStatus, setPushStatus] = useState<'unknown' | 'enabled' | 'disabled' | 'unsupported'>('unknown');
@@ -76,6 +79,9 @@ export function SettingsPage() {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [showConnectorList, setShowConnectorList] = useState(false);
+  const [showAddIdentityModal, setShowAddIdentityModal] = useState(false);
+  const [isAddingIdentity, setIsAddingIdentity] = useState(false);
+  const [addIdentityError, setAddIdentityError] = useState<string | null>(null);
   const canDownloadKeyfile = Boolean(identity?.privateKey || identity?.mnemonic);
 
   // Helper to reconnect to XMTP
@@ -290,9 +296,66 @@ export function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity?.inboxId, identity?.address, identity?.displayName]);
 
+  const pickBaseSmartWalletAddress = async (accounts: string[]): Promise<string | null> => {
+    const normalized = Array.from(new Set(accounts.filter(Boolean)));
+    if (normalized.length === 0) return null;
+
+    // Prefer an address that appears to be a contract on Base (common for smart wallets).
+    if (basePublicClient) {
+      for (const account of normalized) {
+        try {
+          const bytecode = await basePublicClient.getBytecode({ address: account as `0x${string}` });
+          if (bytecode && bytecode !== '0x') {
+            return account;
+          }
+        } catch {
+          // ignore and continue
+        }
+      }
+    }
+
+    // Otherwise prefer a non-primary-identity address if multiple are returned.
+    const my = identity?.address?.toLowerCase();
+    const notMine = my ? normalized.find((acct) => acct.toLowerCase() !== my) : undefined;
+    return notMine ?? normalized[0];
+  };
+
+  const addBaseSmartWalletIdentity = async (accounts: readonly string[] | undefined) => {
+    if (!identity) {
+      throw new Error('No identity is currently loaded.');
+    }
+
+    const xmtp = getXmtpClient();
+    if (!xmtp.isConnected()) {
+      throw new Error('Connect to the XMTP network first, then try again.');
+    }
+
+    const addressList = Array.from(new Set((accounts ?? []).filter(Boolean)));
+    const smartWalletAddress = await pickBaseSmartWalletAddress(addressList);
+
+    if (!smartWalletAddress) {
+      throw new Error('No wallet address was returned. Try connecting your Base app wallet again.');
+    }
+
+    if (smartWalletAddress.toLowerCase() === identity.address.toLowerCase()) {
+      throw new Error('That wallet address is already your current identity.');
+    }
+
+    await xmtp.addAccount({
+      address: smartWalletAddress,
+      chainId: BASE_CHAIN_ID,
+      walletType: 'SCW',
+      signMessage: async (message: string) => await signMessageAsync({ message, account: smartWalletAddress as `0x${string}` }),
+    });
+
+    alert(
+      `✅ Linked Base smart wallet ${smartWalletAddress} to this inbox.\n\nOther XMTP apps may take a moment to pick up the new association.`
+    );
+  };
+
   const handleAddIdentity = () => {
-    // TODO: Implement add identity flow
-    alert('Add Identity feature coming soon!\n\nThis will allow you to associate multiple identities (Ethereum addresses, passkeys, etc.) with your XMTP inbox.');
+    setAddIdentityError(null);
+    setShowAddIdentityModal(true);
   };
 
   const handleDownloadKeyfile = () => {
@@ -1176,6 +1239,110 @@ export function SettingsPage() {
       {/* QR Code Overlay */}
       {showQR && identity && (
         <QRCodeOverlay address={identity.address} onClose={() => setShowQR(false)} />
+      )}
+
+      {/* Add Identity Modal */}
+      {showAddIdentityModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-primary-800/60 bg-primary-950 shadow-2xl">
+            <div className="p-4 border-b border-primary-800/60 flex items-center justify-between">
+              <div>
+                <div className="text-lg font-semibold text-primary-50">Add Identity (Base)</div>
+                <div className="text-sm text-primary-200">Link your Base App smart wallet to this inbox.</div>
+              </div>
+              <button
+                onClick={() => {
+                  if (isAddingIdentity) return;
+                  setShowAddIdentityModal(false);
+                }}
+                className="text-primary-300 hover:text-primary-100 transition-colors"
+                aria-label="Close"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-sm text-primary-200">
+                You&apos;ll be asked to sign a message in your wallet. This associates your Base smart wallet address with your existing XMTP inbox so other clients can resolve the same inbox from either address.
+              </p>
+
+              {addIdentityError && (
+                <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
+                  {addIdentityError}
+                </div>
+              )}
+
+              {isWalletConnected && walletAddress && (
+                <div className="rounded-lg border border-primary-800/60 bg-primary-900/50 p-3">
+                  <div className="text-xs text-primary-300 mb-1">Connected wallet</div>
+                  <div className="font-mono text-xs text-primary-100 break-all">{walletAddress}</div>
+                  <div className="mt-2">
+                    <button
+                      onClick={async () => {
+                        if (isAddingIdentity) return;
+                        setIsAddingIdentity(true);
+                        setAddIdentityError(null);
+                        try {
+                          await addBaseSmartWalletIdentity([walletAddress]);
+                          setShowAddIdentityModal(false);
+                        } catch (err) {
+                          setAddIdentityError(err instanceof Error ? err.message : 'Failed to add identity');
+                        } finally {
+                          setIsAddingIdentity(false);
+                        }
+                      }}
+                      disabled={isAddingIdentity}
+                      className="btn-primary text-sm px-3 py-2 disabled:opacity-50"
+                    >
+                      {isAddingIdentity ? 'Linking…' : 'Link Connected Wallet'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="text-sm text-primary-200">Or connect a wallet:</div>
+              <div className="flex flex-wrap gap-2">
+                {connectors.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={async () => {
+                      if (isAddingIdentity) return;
+                      setIsAddingIdentity(true);
+                      setAddIdentityError(null);
+                      try {
+                        const result = await connectWallet(c.name as WalletConnectorType);
+                        const accounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
+                        await addBaseSmartWalletIdentity(accounts);
+                        setShowAddIdentityModal(false);
+                      } catch (err) {
+                        setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect wallet');
+                      } finally {
+                        setIsAddingIdentity(false);
+                      }
+                    }}
+                    disabled={isAddingIdentity}
+                    className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+                  >
+                    {isAddingIdentity ? 'Working…' : c.name}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowAddIdentityModal(false)}
+                  disabled={isAddingIdentity}
+                  className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
