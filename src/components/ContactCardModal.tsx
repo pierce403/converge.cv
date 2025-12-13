@@ -733,11 +733,11 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                   </a>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
-                  {liveContact.farcasterScore !== undefined && liveContact.farcasterScore !== null && (
-                    <span className="px-2 py-1 rounded bg-accent-900/40 text-accent-200 border border-accent-800/60">
-                      Neynar score: {liveContact.farcasterScore.toFixed(1)}
-                    </span>
-                  )}
+	                  {liveContact.farcasterScore !== undefined && liveContact.farcasterScore !== null && (
+	                    <span className="px-2 py-1 rounded bg-accent-900/40 text-accent-200 border border-accent-800/60">
+	                      Neynar score: {liveContact.farcasterScore.toFixed(2)}
+	                    </span>
+	                  )}
                   {liveContact.farcasterFollowerCount !== undefined && (
                     <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
                       Followers: {liveContact.farcasterFollowerCount}
