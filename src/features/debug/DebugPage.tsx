@@ -280,12 +280,21 @@ export function DebugPage() {
               <button
                 type="button"
                 onClick={async () => {
+                  console.info('[Push] Test Push: sending a notification via vapid.party to this browser subscription.');
                   if (!VAPID_PARTY_API_KEY) {
+                    console.warn('[Push] Test Push: missing VAPID_PARTY_API_KEY');
                     logNetworkEvent({ direction: 'status', event: 'push:test', details: 'API key not configured' });
                     return;
                   }
+
+                  if (!identity) {
+                    console.warn('[Push] Test Push: no identity loaded; cannot determine userId. Sign in and enable push first.');
+                    logNetworkEvent({ direction: 'status', event: 'push:test', details: 'No identity loaded (missing userId)' });
+                    return;
+                  }
+
                   try {
-                    const userId = identity?.inboxId || identity?.address || 'anon';
+                    const userId = identity.inboxId || identity.address;
                     const absoluteUrl = (() => {
                       try {
                         return new URL('/', window.location.origin).toString();
@@ -293,6 +302,24 @@ export function DebugPage() {
                         return 'https://converge.cv/';
                       }
                     })();
+
+                    // Log local prereqs (SW + subscription) so we can debug “no-op” reports.
+                    try {
+                      const reg = await navigator.serviceWorker.getRegistration();
+                      if (!reg) {
+                        console.warn('[Push] Test Push: no service worker registration found. Click “Register SW” or “Enable Push” first.');
+                        logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: 'No service worker registration' });
+                      } else {
+                        const sub = await reg.pushManager.getSubscription();
+                        const endpoint = sub?.endpoint ? `${sub.endpoint.slice(0, 48)}…` : '(none)';
+                        console.info('[Push] Test Push: SW ready', { scope: reg.scope, subscription: endpoint });
+                        logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: `SW scope=${reg.scope} subscription=${endpoint}` });
+                      }
+                    } catch (e) {
+                      console.warn('[Push] Test Push: failed to inspect SW/subscription', e);
+                      logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: 'Failed to inspect SW/subscription' });
+                    }
+
                     const body = {
                       payload: {
                         title: 'Converge Test',
@@ -303,6 +330,22 @@ export function DebugPage() {
                       userId,
                       channelId: 'default',
                     };
+
+                    console.info('[Push] Test Push: POST /send', {
+                      base: VAPID_PARTY_API_BASE,
+                      userId,
+                      channelId: 'default',
+                      url: absoluteUrl,
+                      apiKey: `${VAPID_PARTY_API_KEY.slice(0, 6)}…`,
+                    });
+                    logNetworkEvent({
+                      direction: 'outbound',
+                      event: 'push:test:request',
+                      details: 'POST vapid.party/send',
+                      payload: JSON.stringify({ ...body, apiKey: '[redacted]' }),
+                    });
+
+                    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
                     const res = await fetch(`${VAPID_PARTY_API_BASE}/send`, {
                       method: 'POST',
                       headers: { 
@@ -312,18 +355,53 @@ export function DebugPage() {
                       body: JSON.stringify(body),
                     });
                     const responseText = await res.text();
+                    const elapsedMs = Math.max(
+                      0,
+                      Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
+                    );
+
+                    if (!res.ok) {
+                      console.error('[Push] Test Push: non-OK response', { status: res.status, body: responseText });
+                    } else {
+                      console.info('[Push] Test Push: request accepted', { status: res.status, elapsedMs });
+                    }
+
                     logNetworkEvent({ 
-                      direction: 'outbound', 
-                      event: 'push:test', 
-                      details: `POST vapid.party/send → ${res.status}`,
-                      payload: responseText
+                      direction: 'inbound',
+                      event: 'push:test:response',
+                      details: `POST vapid.party/send → ${res.status} (${elapsedMs}ms)`,
+                      payload: responseText,
                     });
+
+                    // Best-effort parse for a friendlier log line.
+                    try {
+                      const json = JSON.parse(responseText) as {
+                        success?: boolean;
+                        data?: { sent?: number; failed?: number; total?: number };
+                        error?: string;
+                        code?: string;
+                      };
+                      if (json?.success) {
+                        console.info('[Push] Test Push: send result', json.data ?? {});
+                      } else if (json?.error) {
+                        console.warn('[Push] Test Push: send rejected', { code: json.code, error: json.error });
+                      }
+                    } catch {
+                      // ignore
+                    }
                   } catch (e) {
-                    logNetworkEvent({ direction: 'outbound', event: 'push:test', details: 'POST vapid.party/send failed' });
+                    console.error('[Push] Test Push: POST vapid.party/send failed', e);
+                    logNetworkEvent({
+                      direction: 'outbound',
+                      event: 'push:test:error',
+                      details: e instanceof Error ? e.message : 'POST vapid.party/send failed',
+                    });
+                  } finally {
+                    await refreshPushStatus();
                   }
                 }}
                 className="btn-secondary"
-                disabled={!VAPID_PARTY_API_KEY}
+                disabled={!VAPID_PARTY_API_KEY || !identity}
               >
                 Send Test Push
               </button>
