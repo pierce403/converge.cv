@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useContactStore } from '@/lib/stores';
+import { useAuthStore, useContactStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { Contact, ContactIdentity } from '@/lib/stores/contact-store';
 import type { Conversation } from '@/types';
@@ -36,6 +36,7 @@ const formatIdentifier = (value?: string | null): string => {
 };
 
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
+  const identity = useAuthStore((state) => state.identity);
   const updateContact = useContactStore((state) => state.updateContact);
   const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
   const addContact = useContactStore((s) => s.addContact);
@@ -59,9 +60,23 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
   // Use live contact from store to ensure reactivity (e.g. after refresh)
   const contacts = useContactStore((s) => s.contacts);
-  const liveContact = contacts.find((c) =>
-    c.inboxId?.toLowerCase() === contact.inboxId?.toLowerCase()
-  ) ?? contact;
+  const liveContact = (() => {
+    const normalizedInboxId = contact.inboxId?.toLowerCase();
+    if (normalizedInboxId) {
+      const byInbox = contacts.find((c) => c.inboxId?.toLowerCase() === normalizedInboxId);
+      if (byInbox) return byInbox;
+    }
+    const candidateAddresses = [contact.primaryAddress, ...(contact.addresses ?? [])]
+      .filter(Boolean)
+      .map((addr) => addr!.toLowerCase());
+    for (const addr of candidateAddresses) {
+      const byAddress = contacts.find((c) =>
+        c.addresses?.some((known) => known.toLowerCase() === addr)
+      );
+      if (byAddress) return byAddress;
+    }
+    return contact;
+  })();
 
   useEffect(() => {
     setPreferredName(contact.preferredName || '');
@@ -136,8 +151,22 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // Proceed even if not connected, to allow Farcaster/ENS updates
       const isXmtpConnected = xmtp.isConnected();
 
+      const subject = liveContact;
       const normalize = (value: string) => value.trim().toLowerCase();
       const looksLikeRawHex = (value: string) => /^[0-9a-f]{40}$/i.test(value);
+
+      const myInboxId = identity?.inboxId ? normalize(identity.inboxId) : undefined;
+      const myAddress = identity?.address ? normalize(identity.address) : undefined;
+      const subjectInboxId = subject.inboxId ? normalize(subject.inboxId) : undefined;
+      const subjectPrimaryAddress = subject.primaryAddress ? normalize(subject.primaryAddress) : undefined;
+      const subjectAddresses = (subject.addresses ?? []).map((addr) => normalize(addr));
+      const isSelfContact = Boolean(
+        (myInboxId && subjectInboxId && myInboxId === subjectInboxId) ||
+          (myAddress &&
+            (subjectPrimaryAddress === myAddress ||
+              subjectInboxId === myAddress ||
+              subjectAddresses.includes(myAddress)))
+      );
 
       const ethereumAddresses = new Set<string>();
       const nonEthereumAddresses = new Set<string>();
@@ -155,7 +184,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       };
 
       const otherIdentities = new Map<string, ContactIdentity>();
-      let ensIdentity: ContactIdentity | undefined = contact.identities?.find(
+      let ensIdentity: ContactIdentity | undefined = subject.identities?.find(
         (identity) => identity.kind?.toLowerCase() === 'ens'
       );
       const ingestIdentity = (identity: ContactIdentity | undefined) => {
@@ -174,26 +203,31 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         otherIdentities.set(key, existing ? { ...existing, ...identity } : { ...identity });
       };
 
-      addAddress(contact.primaryAddress);
-      addAddress(contact.inboxId);
-      contact.addresses?.forEach(addAddress);
+      addAddress(subject.primaryAddress);
+      addAddress(subject.inboxId);
+      subject.addresses?.forEach(addAddress);
       inboxState?.accountAddresses?.forEach(addAddress);
-      contact.identities?.forEach((identity) => ingestIdentity(identity));
+      subject.identities?.forEach((identity) => ingestIdentity(identity));
+      if (isSelfContact) {
+        // Users can set their Farcaster FID in settings without verifying the generated wallet address.
+        // For "self" refresh, always include the local identity address as a verification candidate.
+        addAddress(identity?.address);
+      }
 
       const conversationMatch = conversations.find(
-        (c) => !c.isGroup && c.peerId?.toLowerCase?.() === contact.inboxId?.toLowerCase?.()
+        (c) => !c.isGroup && c.peerId?.toLowerCase?.() === subject.inboxId?.toLowerCase?.()
       );
 
       const initialPriority: 'farcaster' | 'xmtp' | 'message' =
-        contact.source === 'farcaster' || contact.farcasterFid || contact.farcasterUsername
+        subject.source === 'farcaster' || subject.farcasterFid || subject.farcasterUsername
           ? 'farcaster'
           : 'xmtp';
 
       let latestProfileDisplayName =
-        contact.preferredName ??
-        contact.name ??
+        subject.preferredName ??
+        subject.name ??
         conversationMatch?.displayName;
-      let latestProfileAvatar = contact.preferredAvatar ?? contact.avatar ?? conversationMatch?.displayAvatar;
+      let latestProfileAvatar = subject.preferredAvatar ?? subject.avatar ?? conversationMatch?.displayAvatar;
       let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = initialPriority;
       let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = initialPriority;
 
@@ -252,8 +286,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
       // Farcaster first (if available)
       const neynarKey = farcasterStore.getEffectiveNeynarApiKey?.();
-      const farcasterFid = contact.farcasterFid;
-      const farcasterUsername = contact.farcasterUsername;
+      const farcasterFid = subject.farcasterFid ?? (isSelfContact ? identity?.farcasterFid : undefined);
+      const farcasterUsername = subject.farcasterUsername;
       const candidateEthAddresses = Array.from(ethereumAddresses);
 
       let fcResolvedProfile: (Awaited<ReturnType<typeof fetchNeynarUserProfile>> & { power_badge?: boolean }) | null = null;
@@ -265,7 +299,10 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             (farcasterUsername ? await fetchNeynarUserProfile(farcasterUsername, neynarKey) : null);
 
           if (!fcResolvedProfile && candidateEthAddresses.length > 0) {
-            fcResolvedProfile = await fetchNeynarUserByVerification(candidateEthAddresses[0], neynarKey);
+            for (const address of candidateEthAddresses) {
+              fcResolvedProfile = await fetchNeynarUserByVerification(address, neynarKey);
+              if (fcResolvedProfile) break;
+            }
           }
 
           if (fcResolvedProfile) {
@@ -314,9 +351,10 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         primaryEthereumAddress = normalize(ensResolvedAddress);
       } else {
         const preferredSources = [
-          contact.primaryAddress,
-          contact.addresses?.find((addr) => isEthereumAddress(addr ?? '')),
+          subject.primaryAddress,
+          subject.addresses?.find((addr) => isEthereumAddress(addr ?? '')),
           Array.from(ethereumAddresses)[0],
+          isSelfContact ? identity?.address : undefined,
         ];
         for (const source of preferredSources) {
           if (source && isEthereumAddress(source)) {
@@ -348,7 +386,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // XMTP profile last (message history)
       if (isXmtpConnected) {
         try {
-          const targetInbox = contact.inboxId || contact.primaryAddress || contact.addresses?.[0];
+          const targetInbox = subject.inboxId || subject.primaryAddress || subject.addresses?.[0];
           if (targetInbox) {
             console.log('[ContactCardModal] Refreshing profile for', targetInbox);
             const profile = await xmtp.fetchInboxProfile(String(targetInbox));
@@ -363,7 +401,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       }
 
       // Fetch canonical profile if inbox ID changed
-      if (latestInboxId && latestInboxId !== contact.inboxId?.toLowerCase()) {
+      if (latestInboxId && latestInboxId !== subject.inboxId?.toLowerCase()) {
         try {
           const canonicalProfile = await xmtp.fetchInboxProfile(latestInboxId);
           ingestProfile(canonicalProfile);
@@ -400,14 +438,14 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
 
       let updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier;
-      if (isHexAddress(updatedDisplayName) && contact.name && !isHexAddress(contact.name)) {
-        updatedDisplayName = contact.preferredName ?? contact.name;
+      if (isHexAddress(updatedDisplayName) && subject.name && !isHexAddress(subject.name)) {
+        updatedDisplayName = subject.preferredName ?? subject.name;
       }
       const updatedAvatar = latestProfileAvatar;
 
       const contactStore = useContactStore.getState();
       let normalizedInboxId = latestInboxId;
-      const normalizedCurrentInbox = contact.inboxId?.toLowerCase();
+      const normalizedCurrentInbox = subject.inboxId?.toLowerCase();
       if (normalizedInboxId) {
         const conflicting = contactStore.contacts.find(
           (entry) =>
@@ -428,26 +466,26 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         // However, we can probably fallback to primaryAddress for display updates if it's existing contact?
         // The upsert function usually requires inboxId.
         // If we have an existing contact, use its ID.
-        if (contact.inboxId) {
-          normalizedInboxId = normalize(contact.inboxId);
+        if (subject.inboxId) {
+          normalizedInboxId = normalize(subject.inboxId);
         } else {
           throw new Error('No inbox ID available and unable to resolve one from network (possible timeout). check XMTP connection.');
         }
       }
 
       const latestMetadata: Partial<Contact> = {
-        ...contact,
+        ...subject,
         inboxId: normalizedInboxId,
-        preferredName: contact.preferredName,
-        preferredAvatar: contact.preferredAvatar,
-        notes: contact.notes,
-        farcasterUsername: fcResolvedProfile?.username ?? contact.farcasterUsername,
-        farcasterFid: fcResolvedProfile?.fid ?? contact.farcasterFid,
-        farcasterScore: fcResolvedProfile?.score ?? contact.farcasterScore,
-        farcasterFollowerCount: fcResolvedProfile?.follower_count ?? contact.farcasterFollowerCount,
-        farcasterFollowingCount: fcResolvedProfile?.following_count ?? contact.farcasterFollowingCount,
-        farcasterActiveStatus: fcResolvedProfile?.active_status ?? contact.farcasterActiveStatus,
-        farcasterPowerBadge: fcResolvedProfile?.power_badge ?? contact.farcasterPowerBadge,
+        preferredName: subject.preferredName,
+        preferredAvatar: subject.preferredAvatar,
+        notes: subject.notes,
+        farcasterUsername: fcResolvedProfile?.username ?? subject.farcasterUsername,
+        farcasterFid: fcResolvedProfile?.fid ?? (isSelfContact ? identity?.farcasterFid : undefined) ?? subject.farcasterFid,
+        farcasterScore: fcResolvedProfile?.score ?? subject.farcasterScore,
+        farcasterFollowerCount: fcResolvedProfile?.follower_count ?? subject.farcasterFollowerCount,
+        farcasterFollowingCount: fcResolvedProfile?.following_count ?? subject.farcasterFollowingCount,
+        farcasterActiveStatus: fcResolvedProfile?.active_status ?? subject.farcasterActiveStatus,
+        farcasterPowerBadge: fcResolvedProfile?.power_badge ?? subject.farcasterPowerBadge,
       };
 
       const refreshedContact = await upsertContactProfile({
@@ -457,7 +495,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         primaryAddress: primaryEthereumAddress,
         addresses: mergedAddressList,
         identities: finalIdentities,
-        source: contact.source ?? 'inbox',
+        source: subject.source ?? 'inbox',
         metadata: latestMetadata,
       });
 
@@ -467,15 +505,15 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const displayAvatar =
         refreshedContact.preferredAvatar ?? refreshedContact.avatar ?? updatedAvatar ?? avatarUrlState;
       const displayName =
-        refreshedContact.preferredName ?? refreshedContact.name ?? updatedDisplayName ?? contact.name;
+        refreshedContact.preferredName ?? refreshedContact.name ?? updatedDisplayName ?? subject.name;
 
       const candidateKeys = new Set(
         [
           normalizedCurrentInbox,
           normalizedInboxId,
           primaryEthereumAddress,
-          contact.primaryAddress?.toLowerCase(),
-          ...((contact.addresses?.map((addr) => addr?.toLowerCase()).filter(Boolean)) as string[] ?? []),
+          subject.primaryAddress?.toLowerCase(),
+          ...((subject.addresses?.map((addr) => addr?.toLowerCase()).filter(Boolean)) as string[] ?? []),
         ].filter(Boolean)
       );
 
@@ -572,7 +610,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                   ? [...normalizedAccountAddresses, ...Array.from(nonEthereumAddresses)]
                   : mergedAddressList,
               identities: refreshedIdentities,
-              source: contact.source ?? 'inbox',
+              source: subject.source ?? 'inbox',
               metadata: latestMetadata,
             });
           }
