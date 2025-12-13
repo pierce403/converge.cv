@@ -455,6 +455,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### XMTP Recovery
 - Recovered from “client: identity error: Uninitialized identity” by forcing `client.register()` when `Client.create()` yields no `inboxId` and retrying after the same error during sync.
+- Persisted `identity.lastSyncedAt` (IndexedDB) and used it to throttle redundant `syncConversations()` calls across reloads (manual “Check now” forces a sync).
 
 ## Latest Changes (2025-12-12)
 
