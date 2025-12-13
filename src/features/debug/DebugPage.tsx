@@ -286,13 +286,22 @@ export function DebugPage() {
                   }
                   try {
                     const userId = identity?.inboxId || identity?.address || 'anon';
+                    const absoluteUrl = (() => {
+                      try {
+                        return new URL('/', window.location.origin).toString();
+                      } catch {
+                        return 'https://converge.cv/';
+                      }
+                    })();
                     const body = {
                       payload: {
                         title: 'Converge Test',
                         body: 'This is a test notification from Debug console',
-                        url: '/',
+                        // vapid.party validates this as a URL, so it must be absolute.
+                        url: absoluteUrl,
                       },
                       userId,
+                      channelId: 'default',
                     };
                     const res = await fetch(`${VAPID_PARTY_API_BASE}/send`, {
                       method: 'POST',

@@ -437,7 +437,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-13 (contacts schema cleanup + no-address display names)
+**Last Updated**: 2025-12-13 (contacts schema cleanup + push + XMTP recovery)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-13)
@@ -447,6 +447,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Fixed the “address becomes display name” issue by preventing Ethereum addresses from being treated as profile/contact names (XMTP `fetchInboxProfile` no longer falls back to `primaryAddress` for `displayName`, and contact upserts sanitize name fields).
 - Updated docs (`docs/contacts.md`, `docs/storage-schema.md`) and added unit tests (`src/lib/stores/contact-store.test.ts`) to lock the behavior in.
 - Contact card refresh now uses the signed-in identity’s Farcaster FID (when available) and checks all linked Ethereum addresses for Neynar verification, so “self” profiles populate Farcaster metadata even when the generated wallet isn’t verified.
+
+### Push Notifications
+- Improved subscription reliability by ensuring a service worker registration exists before awaiting `navigator.serviceWorker.ready`, and by reusing an existing `PushSubscription` when possible (covered by unit tests).
+- Updated `public/sw.js` to handle payloads wrapped as `{ payload: ... }` and to focus/navigate an existing tab on notification click.
+- Debug “Send Test Push” uses an absolute `payload.url` (vapid.party rejects relative URLs like `/` with a 400).
+
+### XMTP Recovery
+- Recovered from “client: identity error: Uninitialized identity” by forcing `client.register()` when `Client.create()` yields no `inboxId` and retrying after the same error during sync.
 
 ## Latest Changes (2025-12-12)
 
