@@ -6,6 +6,7 @@ import { useCallback } from 'react';
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { closeStorage, getStorage, getStorageNamespace, setStorageNamespace } from '@/lib/storage';
 import { ensureInboxStorageNamespace } from '@/lib/storage/namespacing';
+import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import {
   generateVaultKey,
   deriveKeyFromPassphrase,
@@ -78,9 +79,22 @@ export function useAuth() {
       }
 
       const xmtp = getXmtpClient();
-    const shouldRegister = options?.register === true;
-    const shouldSyncHistory =
-      options?.enableHistorySync !== undefined ? options.enableHistorySync : true;
+      const shouldRegister = options?.register === true;
+      const shouldSyncHistory =
+        options?.enableHistorySync !== undefined ? options.enableHistorySync : true;
+
+      // Pull the persisted identity so the XMTP client can throttle redundant syncs across reloads.
+      let lastSyncedAt: number | undefined;
+      try {
+        const storage = await getStorage();
+        const storedIdentity = await storage.getIdentityByAddress(address);
+        if (storedIdentity && typeof storedIdentity.lastSyncedAt === 'number') {
+          lastSyncedAt = storedIdentity.lastSyncedAt;
+        }
+      } catch {
+        // ignore
+      }
+
       await xmtp.connect(
         {
           address,
@@ -88,6 +102,7 @@ export function useAuth() {
           chainId,
           signMessage,
           displayName: options?.labelOverride,
+          lastSyncedAt,
         },
         {
           register: shouldRegister,
@@ -658,6 +673,10 @@ export function useAuth() {
       setVaultSecrets(secrets ?? null);
       setAuthenticated(true);
       setVaultUnlocked(true);
+
+      if (typeof identity.lastSyncedAt === 'number') {
+        useXmtpStore.getState().setLastSyncedAt(identity.lastSyncedAt);
+      }
 
       const registryEntry = identity.inboxId
         ? registry.entries.find((entry) => inboxIdsMatch(entry.inboxId, identity!.inboxId))

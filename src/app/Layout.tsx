@@ -36,7 +36,7 @@ export function Layout() {
   const handleCheckInbox = async () => {
     setIsChecking(true);
     try {
-      await getXmtpClient().syncConversations();
+      await getXmtpClient().syncConversations({ force: true, reason: 'manual' });
     } catch (e) {
       console.error('Failed to check inbox', e);
     } finally {

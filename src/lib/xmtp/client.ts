@@ -17,7 +17,7 @@ import {
   PermissionUpdateType,
 } from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
-import { logNetworkEvent, useContactStore } from '@/lib/stores';
+import { logNetworkEvent, useAuthStore, useContactStore } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner, createSCWSigner } from '@/lib/wagmi/signers';
@@ -46,6 +46,7 @@ export interface XmtpIdentity {
   walletType?: 'EOA' | 'SCW'; // Optional hint for wallet-based identities
   signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
   displayName?: string;
+  lastSyncedAt?: number;
 }
 
 export interface IdentityProbeResult {
@@ -2100,9 +2101,44 @@ export class XmtpClient {
   /**
    * Sync all conversations from the network
    */
-  async syncConversations(): Promise<void> {
+  async syncConversations(opts?: { force?: boolean; minIntervalMs?: number; reason?: string }): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
+    }
+
+    const minIntervalMs = opts?.minIntervalMs ?? 2 * 60 * 1000;
+    const now = Date.now();
+
+    let lastSyncedAt: number | undefined;
+    if (this.identity && typeof this.identity.lastSyncedAt === 'number') {
+      lastSyncedAt = this.identity.lastSyncedAt;
+    } else if (this.identity?.address) {
+      try {
+        const storage = await getStorage();
+        const storedIdentity = await storage.getIdentityByAddress(this.identity.address);
+        if (storedIdentity && typeof storedIdentity.lastSyncedAt === 'number') {
+          lastSyncedAt = storedIdentity.lastSyncedAt;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (
+      !opts?.force &&
+      typeof lastSyncedAt === 'number' &&
+      lastSyncedAt > 0 &&
+      now - lastSyncedAt < minIntervalMs
+    ) {
+      const ageSeconds = Math.max(0, Math.round((now - lastSyncedAt) / 1000));
+      console.log(`[XMTP] Skipping conversation sync (last synced ${ageSeconds}s ago)`);
+      useXmtpStore.getState().setLastSyncedAt(lastSyncedAt);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:sync:skipped',
+        details: `Skipped (age=${ageSeconds}s < ${Math.round(minIntervalMs / 1000)}s)${opts?.reason ? ` reason=${opts.reason}` : ''}`,
+      });
+      return;
     }
 
     try {
@@ -2250,7 +2286,28 @@ export class XmtpClient {
         console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
       }
 
-      useXmtpStore.getState().setLastSyncedAt(Date.now());
+      const syncedAt = Date.now();
+      useXmtpStore.getState().setLastSyncedAt(syncedAt);
+      if (this.identity) {
+        this.identity.lastSyncedAt = syncedAt;
+      }
+
+      // Persist the sync timestamp on the stored identity so we can throttle redundant syncs across reloads.
+      try {
+        const address = this.identity?.address;
+        if (address) {
+          const storedIdentity = await storage.getIdentityByAddress(address);
+          if (storedIdentity) {
+            await storage.putIdentity({ ...storedIdentity, lastSyncedAt: syncedAt });
+            const authIdentity = useAuthStore.getState().identity;
+            if (authIdentity && authIdentity.address.toLowerCase() === storedIdentity.address.toLowerCase()) {
+              useAuthStore.getState().setIdentity({ ...authIdentity, lastSyncedAt: syncedAt });
+            }
+          }
+        }
+      } catch (persistErr) {
+        console.warn('[XMTP] Failed to persist lastSyncedAt on identity (non-fatal)', persistErr);
+      }
 
       logNetworkEvent({
         direction: 'inbound',

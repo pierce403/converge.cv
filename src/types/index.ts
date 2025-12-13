@@ -116,6 +116,11 @@ export interface Identity {
   publicKey: string;
   privateKey?: string; // Should be encrypted in storage
   createdAt: number;
+  /**
+   * Timestamp (ms since epoch) of the last successful XMTP "check inbox" / conversation sync.
+   * Used to throttle redundant network syncs across reloads.
+   */
+  lastSyncedAt?: number;
   avatar?: string; // Avatar URL or data URI
   displayName?: string; // Optional display name
   inboxId?: string; // XMTP inbox ID
