@@ -16,7 +16,7 @@ export const wagmiConfig = createConfig({
     metaMask(),
     coinbaseWallet({
       appName: 'Converge',
-      preference: 'all', // Support both EOA and smart wallets
+      preference: { options: 'all', telemetry: false }, // Support both EOA and smart wallets; disable Coinbase telemetry
     }),
     walletConnect({
       projectId,
@@ -32,4 +32,3 @@ export const wagmiConfig = createConfig({
     [baseSepolia.id]: http(),
   },
 });
-
