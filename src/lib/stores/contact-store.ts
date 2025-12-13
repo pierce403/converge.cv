@@ -15,6 +15,23 @@ const normalizeInboxId = (inboxId: string): string => inboxId.toLowerCase();
 const normalizeAddress = (address: string): string =>
   address.startsWith('0x') ? address.toLowerCase() : address.toLowerCase();
 
+const isAddressLikeInboxId = (value: string): boolean => {
+  const trimmed = value.trim();
+  return Boolean(trimmed && trimmed.toLowerCase().startsWith('0x'));
+};
+
+const isEthereumAddress = (value?: string | null): boolean => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return Boolean(trimmed && /^0x[a-f0-9]{40}$/i.test(trimmed));
+};
+
+const sanitizeDisplayLabel = (value?: string | null): string | undefined => {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return undefined;
+  if (isEthereumAddress(trimmed)) return undefined;
+  return trimmed;
+};
+
 const dedupe = (values: (string | undefined | null)[]): string[] => {
   const set = new Set<string>();
   for (const value of values) {
@@ -192,13 +209,24 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
     .filter(Boolean)
     .map((value) => normalizeAddress(value as string));
 
+  const safePreferredName = sanitizeDisplayLabel(contact.preferredName);
+  const safeName = sanitizeDisplayLabel(contact.name);
+  const safeFarcasterUsername = sanitizeDisplayLabel(contact.farcasterUsername);
+
+  const fallbackName = (() => {
+    if (safePreferredName) return safePreferredName;
+    if (safeFarcasterUsername) return safeFarcasterUsername;
+    if (safeName) return safeName;
+    // Never persist an Ethereum address as a "name" fallback.
+    if (!isAddressLikeInboxId(normalizedInboxId)) return normalizedInboxId;
+    return '';
+  })();
+
   return {
     ...contact,
     inboxId: normalizedInboxId,
-    name:
-      contact.name && (!contact.name.startsWith('0x') || contact.name.length < 30)
-        ? contact.name
-        : contact.preferredName || contact.farcasterUsername || contact.name || normalizedInboxId,
+    name: fallbackName,
+    preferredName: safePreferredName,
     addresses,
     primaryAddress: contact.primaryAddress ?? addresses[0],
     identities:
@@ -226,7 +254,25 @@ export const useContactStore = create<ContactState>()(
       isLoading: false,
 
       addContact: async (rawContact) => {
-        const contact = normaliseContactInput(rawContact);
+        let contact = normaliseContactInput(rawContact);
+
+        // Contacts should be keyed by XMTP inboxId, not an Ethereum address.
+        if (isAddressLikeInboxId(contact.inboxId)) {
+          const addressCandidate = contact.primaryAddress ?? contact.addresses?.[0] ?? contact.inboxId;
+          try {
+            const derived = await getXmtpClient().deriveInboxIdFromAddress(addressCandidate);
+            if (derived && !isAddressLikeInboxId(derived)) {
+              contact = { ...contact, inboxId: normalizeInboxId(derived) };
+            } else {
+              console.warn('[Contacts] Refusing to add contact without a resolved inboxId:', contact.inboxId);
+              return;
+            }
+          } catch (error) {
+            console.warn('[Contacts] Failed to resolve inboxId for address contact. Skipping add.', error);
+            return;
+          }
+        }
+
         const storage = await getStorage();
         const contacts = get().contacts;
         const existingContact = contacts.find(
@@ -270,7 +316,22 @@ export const useContactStore = create<ContactState>()(
       },
 
       blockContact: async (inboxId) => {
-        const normalized = normalizeInboxId(inboxId);
+        let normalized = normalizeInboxId(inboxId);
+
+        if (isAddressLikeInboxId(normalized)) {
+          try {
+            const derived = await getXmtpClient().deriveInboxIdFromAddress(normalized);
+            if (derived && !isAddressLikeInboxId(derived)) {
+              normalized = normalizeInboxId(derived);
+            } else {
+              console.warn('[Contacts] Unable to resolve inboxId for address during block. Skipping persist.', normalized);
+              return;
+            }
+          } catch (error) {
+            console.warn('[Contacts] Failed to resolve inboxId during block. Skipping persist.', error);
+            return;
+          }
+        }
         const state = get();
         const existingByInbox = state.contacts.find(
           (contact) => normalizeInboxId(contact.inboxId) === normalized
@@ -284,7 +345,7 @@ export const useContactStore = create<ContactState>()(
         // Ensure we persist a minimal contact record so the block survives reloads
         const placeholder: Contact = normaliseContactInput({
           inboxId: normalized,
-          name: normalized,
+          name: '',
           createdAt: Date.now(),
           isBlocked: true,
           isInboxOnly: true,
@@ -348,7 +409,7 @@ export const useContactStore = create<ContactState>()(
 
       upsertContactProfile: async (profile) => {
         const storage = await getStorage();
-        const normalizedInboxId = normalizeInboxId(profile.inboxId);
+        let normalizedInboxId = normalizeInboxId(profile.inboxId);
 
         const computedAddresses = dedupe([
           ...(profile.addresses ?? []),
@@ -374,6 +435,72 @@ export const useContactStore = create<ContactState>()(
             return contactAddresses.some((address) => addressSet.has(address));
           });
 
+        // If the caller supplied an Ethereum address as "inboxId", prefer an existing contact's
+        // real inboxId, or attempt to resolve via XMTP. Never persist contacts keyed by 0x… values.
+        if (existing?.inboxId && !isAddressLikeInboxId(existing.inboxId)) {
+          normalizedInboxId = normalizeInboxId(existing.inboxId);
+        } else if (isAddressLikeInboxId(normalizedInboxId)) {
+          try {
+            const addressCandidate = computedAddresses[0] ?? profile.primaryAddress ?? normalizedInboxId;
+            const derived = await getXmtpClient().deriveInboxIdFromAddress(addressCandidate);
+            if (derived && !isAddressLikeInboxId(derived)) {
+              normalizedInboxId = normalizeInboxId(derived);
+            } else {
+              console.warn('[Contacts] Refusing to persist contact with address-like inboxId:', profile.inboxId);
+              return normaliseContactInput({
+                inboxId: profile.inboxId,
+                name: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName) ?? '',
+                avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+                preferredName: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName),
+                preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+                description: profile.metadata?.description,
+                notes: profile.metadata?.notes,
+                source: profile.source ?? profile.metadata?.source ?? 'inbox',
+                createdAt: profile.metadata?.createdAt ?? Date.now(),
+                isBlocked: profile.metadata?.isBlocked ?? false,
+                isInboxOnly: true,
+                primaryAddress: profile.primaryAddress ?? computedAddresses[0],
+                addresses: computedAddresses,
+                identities:
+                  profile.identities && profile.identities.length > 0
+                    ? profile.identities
+                    : computedAddresses.map((address, index) => ({
+                      identifier: address,
+                      kind: 'Ethereum',
+                      isPrimary: index === 0,
+                    })),
+                lastSyncedAt: Date.now(),
+              } as Contact);
+            }
+          } catch (error) {
+            console.warn('[Contacts] Failed to resolve inboxId for address-like profile. Skipping persist.', error);
+            return normaliseContactInput({
+              inboxId: profile.inboxId,
+              name: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName) ?? '',
+              avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+              preferredName: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName),
+              preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+              description: profile.metadata?.description,
+              notes: profile.metadata?.notes,
+              source: profile.source ?? profile.metadata?.source ?? 'inbox',
+              createdAt: profile.metadata?.createdAt ?? Date.now(),
+              isBlocked: profile.metadata?.isBlocked ?? false,
+              isInboxOnly: true,
+              primaryAddress: profile.primaryAddress ?? computedAddresses[0],
+              addresses: computedAddresses,
+              identities:
+                profile.identities && profile.identities.length > 0
+                  ? profile.identities
+                  : computedAddresses.map((address, index) => ({
+                    identifier: address,
+                    kind: 'Ethereum',
+                    isPrimary: index === 0,
+                  })),
+              lastSyncedAt: Date.now(),
+            } as Contact);
+          }
+        }
+
         const identities: ContactIdentity[] =
           profile.identities && profile.identities.length > 0
             ? profile.identities
@@ -383,10 +510,13 @@ export const useContactStore = create<ContactState>()(
               isPrimary: index === 0,
             }));
 
+        const safeDisplayName = sanitizeDisplayLabel(profile.displayName);
+        const safeMetadataPreferredName = sanitizeDisplayLabel(profile.metadata?.preferredName);
+
         const baseContact: Contact = existing
           ? mergeContactData(existing, {
-            name: profile.displayName ?? existing.name,
-            preferredName: profile.displayName ?? existing.preferredName,
+            name: safeDisplayName ?? safeMetadataPreferredName ?? existing.name,
+            preferredName: safeDisplayName ?? safeMetadataPreferredName ?? existing.preferredName,
             avatar: profile.avatarUrl ?? existing.avatar,
             preferredAvatar: profile.avatarUrl ?? existing.preferredAvatar,
             primaryAddress: profile.primaryAddress ?? existing.primaryAddress,
@@ -408,12 +538,11 @@ export const useContactStore = create<ContactState>()(
           : normaliseContactInput({
             inboxId: normalizedInboxId,
             name:
-              profile.displayName ??
-              profile.metadata?.preferredName ??
-              computedAddresses[0] ??
-              normalizedInboxId,
+              safeDisplayName ??
+              safeMetadataPreferredName ??
+              (isAddressLikeInboxId(normalizedInboxId) ? '' : normalizedInboxId),
             avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
-            preferredName: profile.displayName ?? profile.metadata?.preferredName,
+            preferredName: safeDisplayName ?? safeMetadataPreferredName,
             preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
             description: profile.metadata?.description,
             notes: profile.metadata?.notes,
@@ -614,10 +743,21 @@ export const useContactStore = create<ContactState>()(
 
             const inboxId =
               existingContact?.inboxId ??
-              (await getXmtpClient().deriveInboxIdFromAddress?.(xmtpAddress)) ??
-              xmtpAddress;
+              (await getXmtpClient().deriveInboxIdFromAddress?.(xmtpAddress));
 
-            const canReceive = xmtp?.canMessage ? await xmtp.canMessage(inboxId) : true;
+            if (!inboxId || isAddressLikeInboxId(inboxId)) {
+              skippedContacts.push(user.fid);
+              report(current, total, `Skipping ${userName} - could not resolve XMTP inbox id`, {
+                action: 'skip',
+                fid: user.fid,
+                userName,
+                address: xmtpAddress,
+              });
+              continue;
+            }
+
+            const canReceive =
+              xmtp?.isConnected?.() && xmtp?.canMessage ? await xmtp.canMessage(xmtpAddress) : true;
             if (!canReceive) {
               skippedContacts.push(user.fid);
               report(current, total, `Skipping ${userName} - no XMTP inbox for ${shorten(inboxId)}`, {

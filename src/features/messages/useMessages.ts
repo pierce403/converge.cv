@@ -210,24 +210,28 @@ export function useMessages() {
             }
           }
           
-          await upsertContactProfile({
-            inboxId: actualInboxId,
-            displayName: profile?.displayName, // Use XMTP profile display name
-            avatarUrl: profile?.avatarUrl, // Use XMTP profile avatar
-            primaryAddress: profile?.primaryAddress || normalizedAddress?.toLowerCase(),
-            addresses: profile?.addresses || addressList,
-            identities: profile?.identities || (normalizedAddress
-              ? [
-                  {
-                    identifier: normalizedAddress.toLowerCase(),
-                    kind: 'Ethereum',
-                    isPrimary: true,
-                  },
-                ]
-              : []),
-            source: 'inbox',
-          });
-          console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
+          if (actualInboxId.toLowerCase().startsWith('0x')) {
+            console.warn('[useMessages] Skipping contact upsert because inboxId is still address-like:', actualInboxId);
+          } else {
+            await upsertContactProfile({
+              inboxId: actualInboxId,
+              displayName: profile?.displayName, // Use XMTP profile display name
+              avatarUrl: profile?.avatarUrl, // Use XMTP profile avatar
+              primaryAddress: profile?.primaryAddress || normalizedAddress?.toLowerCase(),
+              addresses: profile?.addresses || addressList,
+              identities: profile?.identities || (normalizedAddress
+                ? [
+                    {
+                      identifier: normalizedAddress.toLowerCase(),
+                      kind: 'Ethereum',
+                      isPrimary: true,
+                    },
+                  ]
+                : []),
+              source: 'inbox',
+            });
+            console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
+          }
         }
 
         // Create message object

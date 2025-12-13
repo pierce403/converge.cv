@@ -14,6 +14,8 @@ export function ContactLinkPage() {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<Contact | null>(null);
 
+  const isAddressLike = (value: string) => value.trim().toLowerCase().startsWith('0x');
+
   useEffect(() => {
     const run = async () => {
       if (!userId) {
@@ -35,9 +37,27 @@ export function ContactLinkPage() {
         try {
           const xmtp = getXmtpClient();
           const profile = await xmtp.fetchInboxProfile(userId);
+          const candidateInboxId = (profile.inboxId || userId).toLowerCase();
+
+          if (isAddressLike(candidateInboxId)) {
+            // We couldn't resolve an inboxId; show a minimal (non-persisted) profile instead.
+            const minimal: Contact = {
+              inboxId: candidateInboxId,
+              name: '',
+              createdAt: Date.now(),
+              source: 'inbox',
+              isInboxOnly: true,
+              addresses: [],
+              identities: [],
+            } as Contact;
+            setTarget(minimal);
+            setOpen(true);
+            return;
+          }
+
           const contact = await upsertContactProfile({
-            inboxId: profile.inboxId || userId,
-            displayName: profile.displayName || userId,
+            inboxId: candidateInboxId,
+            displayName: profile.displayName || (isAddressLike(userId) ? undefined : userId),
             avatarUrl: profile.avatarUrl,
             primaryAddress: profile.primaryAddress,
             addresses: profile.addresses,
@@ -48,10 +68,10 @@ export function ContactLinkPage() {
           setTarget(contact);
           setOpen(true);
         } catch {
-          // Fallback minimal contact
+        // Fallback minimal contact
           const minimal: Contact = {
             inboxId: userId.toLowerCase(),
-            name: userId,
+            name: isAddressLike(userId) ? '' : userId,
             createdAt: Date.now(),
             source: 'inbox',
             isInboxOnly: true,

@@ -437,8 +437,15 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-12 (docs/ directory + Farcaster contacts hardening)
+**Last Updated**: 2025-12-13 (contacts schema cleanup + no-address display names)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-13)
+
+### Contacts Schema Cleanup
+- Removed runtime usage of `contacts_v3`; Dexie schema v9 now uses a single canonical `contacts` table keyed by XMTP `inboxId` (and resets contacts on detected legacy/mismatched rows).
+- Fixed the “address becomes display name” issue by preventing Ethereum addresses from being treated as profile/contact names (XMTP `fetchInboxProfile` no longer falls back to `primaryAddress` for `displayName`, and contact upserts sanitize name fields).
+- Updated docs (`docs/contacts.md`, `docs/storage-schema.md`) and added unit tests (`src/lib/stores/contact-store.test.ts`) to lock the behavior in.
 
 ## Latest Changes (2025-12-12)
 

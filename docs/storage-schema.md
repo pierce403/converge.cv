@@ -5,7 +5,7 @@ This document describes Converge.cv’s **Dexie (IndexedDB)** schema: every tabl
 If you only want the source-of-truth schema definition in code, start here:
 
 - Dexie schema + migrations: `src/lib/storage/dexie-driver.ts#L36`
-- Current store definitions (v7): `src/lib/storage/dexie-driver.ts#L254`
+- Current store definitions (v9): `src/lib/storage/dexie-driver.ts`
 
 ## Databases & namespacing
 
@@ -36,11 +36,11 @@ Dexie’s `stores({ ... })` strings are compact “index declarations”:
 - `[a+b]` → compound index
 - `storeName: null` → delete that store (table) in this schema version
 
-## Current schema (v7)
+## Current schema (v9)
 
 Defined here:
 
-- `ConvergeDB.version(7).stores(...)`: `src/lib/storage/dexie-driver.ts#L254`
+- `ConvergeDB.version(9).stores(...)`: `src/lib/storage/dexie-driver.ts`
 
 ```ts
 conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt'
@@ -49,8 +49,7 @@ attachments: 'id, messageId'
 attachmentData: 'id'
 identity: 'address, inboxId'
 vaultSecrets: 'method'
-contacts: 'address'
-contacts_v3: '&inboxId, primaryAddress, *addresses'
+contacts: '&inboxId, primaryAddress, *addresses'
 deletedConversations: '&conversationId, peerId'
 ignoredConversations: null
 ```
@@ -109,7 +108,7 @@ Driver entry points:
 
 - `putAttachment/getAttachment/deleteAttachment`: `src/lib/storage/dexie-driver.ts#L478`
 
-### `contacts_v3` (current contacts table)
+### `contacts` (contacts table)
 
 - Dexie store: `src/lib/storage/dexie-driver.ts#L270`
 - TypeScript type: `src/lib/stores/contact-store.ts#L35`
@@ -126,19 +125,11 @@ Index notes:
 Driver entry points:
 
 - `putContact/getContact/listContacts`: `src/lib/storage/dexie-driver.ts#L538`
+ 
+Notes:
 
-### `contacts` (legacy contacts table)
-
-- Dexie store: `src/lib/storage/dexie-driver.ts#L268`
-- TypeScript type: `src/lib/stores/contact-store.ts#L35` (with an optional legacy `address` field in storage)
-- Stored in: **namespaced data DB**
-
-Purpose: compatibility/migration only. This used to be keyed by Ethereum `address` (pre-inboxId contacts).
-
-Migration note:
-
-- `contacts_v3` is introduced + migrated in schema v3:
-  `src/lib/storage/dexie-driver.ts#L89`
+- Older schema versions stored contacts in a legacy address-keyed table (`contacts`) and later a v3 inbox-keyed table (`contacts_v3`).
+- As of schema v9, Converge deletes those legacy stores and keeps a single canonical `contacts` table keyed by inboxId.
 
 ### `deletedConversations`
 
@@ -206,6 +197,8 @@ Notable changes:
 - v5: add `deletedConversations` (`src/lib/storage/dexie-driver.ts#L227`)
 - v6: add `ignoredConversations` (`src/lib/storage/dexie-driver.ts#L240`)
 - v7: remove `ignoredConversations` (`src/lib/storage/dexie-driver.ts#L254`)
+- v8: delete legacy address-keyed `contacts` store (free the name for reuse)
+- v9: rename `contacts_v3` → `contacts` and reset on mismatch
 
 ## What this schema does *not* cover (XMTP OPFS)
 

@@ -671,7 +671,9 @@ export class XmtpClient {
       archived: overrides?.archived ?? false,
       mutedUntil: overrides?.mutedUntil,
       createdAt: overrides?.createdAt ?? now,
-      displayName: overrides?.displayName ?? (isGroup ? overrides?.groupName ?? 'Local Group' : peerId),
+      displayName: isGroup
+        ? overrides?.displayName ?? overrides?.groupName ?? 'Local Group'
+        : overrides?.displayName,
       displayAvatar: overrides?.displayAvatar,
       isGroup,
       groupName: overrides?.groupName,
@@ -805,9 +807,10 @@ export class XmtpClient {
     // If the value still doesn't look like an inbox id, return a minimal profile
     // and avoid identity/preferences calls.
     if (!looksLikeInboxId(normalizedInboxId)) {
+      const isAddressLikeInput = inboxId.trim().toLowerCase().startsWith('0x');
       return {
         inboxId: normalizedInboxId,
-        displayName: inboxId,
+        displayName: isAddressLikeInput ? undefined : inboxId,
         avatarUrl: undefined,
         primaryAddress: undefined,
         addresses: [],
@@ -841,7 +844,7 @@ export class XmtpClient {
       const addresses = addressesFromIdentifiers(identifiers);
       return {
         inboxId: normalizedInboxId,
-        displayName: overrides?.displayName || addresses[0],
+        displayName: overrides?.displayName,
         avatarUrl: overrides?.avatarUrl,
         primaryAddress: addresses[0],
         addresses,
@@ -3560,9 +3563,7 @@ export class XmtpClient {
   async createConversation(peerAddressOrInboxId: string): Promise<Conversation> {
     if (!this.client) {
       console.warn('[XMTP] Client not connected; creating local conversation fallback for', peerAddressOrInboxId);
-      const conversation = this.createLocalConversation(peerAddressOrInboxId, {
-        displayName: peerAddressOrInboxId,
-      });
+      const conversation = this.createLocalConversation(peerAddressOrInboxId);
 
       logNetworkEvent({
         direction: 'status',
@@ -3808,9 +3809,7 @@ export class XmtpClient {
           stack: error.stack,
         });
       }
-      const fallbackConversation = this.createLocalConversation(peerAddressOrInboxId, {
-        displayName: peerAddressOrInboxId,
-      });
+      const fallbackConversation = this.createLocalConversation(peerAddressOrInboxId);
 
       logNetworkEvent({
         direction: 'status',

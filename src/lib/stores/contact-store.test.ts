@@ -21,6 +21,7 @@ vi.mock('@/lib/xmtp', () => ({
   getXmtpClient: () => ({
     deriveInboxIdFromAddress: (address: string) => mockDeriveInboxIdFromAddress(address),
     canMessage: (inboxId: string) => mockCanMessage(inboxId),
+    isConnected: () => true,
   }),
 }));
 
@@ -84,7 +85,7 @@ describe('contact store', () => {
     const store = useContactStore.getState();
 
     const enriched = await store.upsertContactProfile({
-      inboxId: '0xABCDEF',
+      inboxId: 'inbox-abcdef',
       displayName: 'Inline Name',
       avatarUrl: 'https://example.com/avatar.png',
       primaryAddress: '0xABCDEF0000000000000000000000000000000000',
@@ -112,6 +113,51 @@ describe('contact store', () => {
     expect(enriched.farcasterPowerBadge).toBe(true);
     expect(enriched.identities?.length).toBeGreaterThanOrEqual(2);
     expect(mockStorage.putContact).toHaveBeenCalledWith(expect.objectContaining({ inboxId: enriched.inboxId }));
+  });
+
+  it('does not overwrite a human name with an Ethereum address', async () => {
+    const store = useContactStore.getState();
+
+    await store.addContact({
+      inboxId: 'inbox-alice',
+      name: 'Alice',
+      createdAt: Date.now(),
+      primaryAddress: '0x1111111111111111111111111111111111111111',
+      addresses: ['0x1111111111111111111111111111111111111111'],
+      identities: [
+        { identifier: '0x1111111111111111111111111111111111111111', kind: 'Ethereum', isPrimary: true },
+      ],
+      source: 'manual',
+    } as unknown as never);
+
+    const updated = await store.upsertContactProfile({
+      inboxId: 'inbox-alice',
+      displayName: '0x2222222222222222222222222222222222222222',
+      primaryAddress: '0x1111111111111111111111111111111111111111',
+      addresses: ['0x1111111111111111111111111111111111111111'],
+      source: 'inbox',
+    });
+
+    expect(updated.name).toBe('Alice');
+    expect(updated.preferredName).not.toBe('0x2222222222222222222222222222222222222222');
+    expect(mockStorage.putContact).toHaveBeenCalledWith(expect.objectContaining({ inboxId: 'inbox-alice', name: 'Alice' }));
+  });
+
+  it('does not persist address-looking names when normalizing inputs', async () => {
+    const store = useContactStore.getState();
+    await store.addContact({
+      inboxId: 'inbox-bob',
+      name: '0x3333333333333333333333333333333333333333',
+      farcasterUsername: 'bob',
+      createdAt: Date.now(),
+      primaryAddress: '0x3333333333333333333333333333333333333333',
+      addresses: ['0x3333333333333333333333333333333333333333'],
+      identities: [{ identifier: '0x3333333333333333333333333333333333333333', kind: 'Ethereum', isPrimary: true }],
+      source: 'manual',
+    } as unknown as never);
+
+    const bob = store.getContactByInboxId('inbox-bob');
+    expect(bob?.name).toBe('bob');
   });
 
   it('syncFarcasterContacts enriches contacts with bulk Neynar profiles', async () => {

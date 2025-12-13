@@ -310,7 +310,6 @@ export function Layout() {
           contact?.preferredName ??
           contact?.name ??
           profile?.displayName ??
-          profile?.primaryAddress ??
           senderInboxId ??
           'Unknown Sender';
         const resolvedAvatar = contact?.preferredAvatar ?? contact?.avatar ?? profile?.avatarUrl;

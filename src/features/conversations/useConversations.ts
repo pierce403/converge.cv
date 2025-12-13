@@ -165,7 +165,7 @@ export function useConversations() {
             updatedContact?.name ||
             existingContact?.preferredName ||
             existingContact?.name;
-          const profileDisplayName = profile.displayName || profile.primaryAddress || canonicalInboxId;
+          const profileDisplayName = profile.displayName || canonicalInboxId;
           let displayName = contactDisplayName || profileDisplayName;
 
           // Avoid downgrading a human-friendly name to a hex address if we already have one
@@ -485,7 +485,10 @@ export function useConversations() {
         }
 
         // Get profile info from the XMTP conversation (already fetched in createConversation)
-        const profileDisplayName = xmtpConv.displayName;
+        const profileDisplayName =
+          xmtpConv.displayName && xmtpConv.displayName.trim().toLowerCase().startsWith('0x')
+            ? undefined
+            : xmtpConv.displayName;
         const profileAvatar = xmtpConv.displayAvatar;
         
         // Create conversation object

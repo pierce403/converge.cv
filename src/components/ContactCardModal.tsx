@@ -22,6 +22,19 @@ interface InboxState {
   accountAddresses: string[]; // Extracted from identifiers
 }
 
+const formatIdentifier = (value?: string | null): string => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return 'Unknown';
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('0x') && lower.length > 10) {
+    return `${raw.slice(0, 6)}…${raw.slice(-4)}`;
+  }
+  if (raw.length > 18) {
+    return `${raw.slice(0, 10)}…${raw.slice(-4)}`;
+  }
+  return raw;
+};
+
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const updateContact = useContactStore((state) => state.updateContact);
   const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
@@ -386,7 +399,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const isHexAddress = (value?: string | null) =>
         Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
 
-      let updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier || primaryEthereumAddress;
+      let updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier;
       if (isHexAddress(updatedDisplayName) && contact.name && !isHexAddress(contact.name)) {
         updatedDisplayName = contact.preferredName ?? contact.name;
       }
@@ -613,7 +626,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const isMuted = Boolean(dmConversation?.mutedUntil && dmConversation.mutedUntil > Date.now());
 
   // Determine display name with priority
-  const displayName = preferredName || liveContact.name;
+  const displayName = preferredName || liveContact.name || formatIdentifier(liveContact.inboxId);
 
   // Determine avatar (custom > Farcaster)
   const avatarUrl = avatarUrlState;

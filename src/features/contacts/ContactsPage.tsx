@@ -7,6 +7,19 @@ import { isDisplayableImageSrc } from '@/lib/utils/image';
 import { FarcasterSyncModal, FarcasterSyncCheck } from '@/components/FarcasterSyncModal';
 import { resolveFidFromAddress, resolveFidFromIdentifier } from '@/lib/farcaster/service';
 
+const formatIdentifier = (value?: string | null): string => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('0x') && lower.length > 10) {
+    return `${raw.slice(0, 6)}…${raw.slice(-4)}`;
+  }
+  if (raw.length > 18) {
+    return `${raw.slice(0, 10)}…${raw.slice(-4)}`;
+  }
+  return raw;
+};
+
 export function ContactsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const contacts = useContactStore((state) => state.contacts);
@@ -283,8 +296,7 @@ export function ContactsPage() {
               const label =
                 contact.preferredName ||
                 contact.name ||
-                contact.primaryAddress ||
-                contact.inboxId;
+                formatIdentifier(contact.inboxId);
               const secondary =
                 contact.primaryAddress ??
                 contact.addresses?.[0] ??

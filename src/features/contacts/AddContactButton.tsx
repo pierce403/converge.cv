@@ -1,5 +1,6 @@
 import { useContactStore, type Contact, type ContactIdentity } from '@/lib/stores';
 import { getContactInfo } from '@/lib/default-contacts';
+import { getXmtpClient } from '@/lib/xmtp';
 
 interface AddContactButtonProps {
   inboxId: string;
@@ -16,12 +17,39 @@ export function AddContactButton({
 }: AddContactButtonProps) {
   const addContact = useContactStore((state) => state.addContact);
   const isContact = useContactStore((state) => state.isContact);
+  const getContactByAddress = useContactStore((state) => state.getContactByAddress);
 
   const normalizedInboxId = inboxId.toLowerCase();
-  const contactExists = isContact(normalizedInboxId);
+  const contactExists =
+    isContact(normalizedInboxId) ||
+    Boolean(primaryAddress && getContactByAddress(primaryAddress.toLowerCase()));
+
+  const isAddressLike = (value: string) => value.trim().toLowerCase().startsWith('0x');
 
   const handleAddContact = async () => {
     if (contactExists || disabled) {
+      return;
+    }
+
+    let resolvedInboxId = normalizedInboxId;
+    if (isAddressLike(resolvedInboxId)) {
+      try {
+        const addressCandidate = (primaryAddress ?? inboxId).toLowerCase();
+        const derived = await getXmtpClient().deriveInboxIdFromAddress(addressCandidate);
+        if (derived && !isAddressLike(derived)) {
+          resolvedInboxId = derived.toLowerCase();
+        } else {
+          alert('Unable to resolve an XMTP inbox ID for that address yet. Try again after connecting to XMTP.');
+          return;
+        }
+      } catch (error) {
+        console.warn('[AddContactButton] Failed to resolve inboxId for address contact', error);
+        alert('Unable to resolve an XMTP inbox ID for that address yet. Try again after connecting to XMTP.');
+        return;
+      }
+    }
+
+    if (isContact(resolvedInboxId)) {
       return;
     }
 
@@ -37,8 +65,8 @@ export function AddContactButton({
     }
 
     const newContact: Contact = {
-      inboxId: normalizedInboxId,
-      name: fallbackName || defaultInfo?.name || normalizedInboxId,
+      inboxId: resolvedInboxId,
+      name: fallbackName || defaultInfo?.name || resolvedInboxId,
       avatar: defaultInfo?.avatar,
       description: defaultInfo?.description,
       createdAt: Date.now(),

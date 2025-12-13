@@ -40,10 +40,7 @@ class ConvergeDB extends Dexie {
   attachmentData!: Table<AttachmentData, string>;
   identity!: Table<Identity, string>;
   vaultSecrets!: Table<VaultSecrets, string>;
-  // Legacy contacts table keyed by address (v1/v2)
-  contacts!: Table<Contact & { address?: string }, string>;
-  // New contacts table keyed by inboxId (v3)
-  contacts_v3!: Table<Contact, string>;
+  contacts!: Table<Contact, string>;
   deletedConversations!: Table<DeletedConversationRecord, string>;
 
   constructor(name: string) {
@@ -62,7 +59,7 @@ class ConvergeDB extends Dexie {
       identity: 'address',
       // Vault encryption config/secrets. Primary key: `method`.
       vaultSecrets: 'method',
-      // Legacy contacts table keyed by address (v1/v2). Replaced by `contacts_v3`.
+      // Legacy contacts table keyed by address (v1/v2). Replaced by `contacts_v3` in v3.
       contacts: 'address',
     });
 
@@ -153,7 +150,8 @@ class ConvergeDB extends Dexie {
 
           const migrated = new Map<string, Contact>();
 
-          for (const legacy of legacyContacts as Array<Contact & { address?: string }>) {
+          type LegacyContactRow = Contact & { address?: string };
+          for (const legacy of legacyContacts as LegacyContactRow[]) {
             const inboxId = deriveInboxId(legacy);
             if (!inboxId) {
               console.warn('[Storage] Skipping contact without identifiable inbox during migration:', legacy);
@@ -279,6 +277,77 @@ class ConvergeDB extends Dexie {
           await transaction.table('ignoredConversations').clear();
         } catch (error) {
           console.warn('[Storage] Failed to clear ignored conversations during migration:', error);
+        }
+      });
+
+    // v8: remove the legacy address-keyed `contacts` table so we can reuse the name.
+    this.version(8).stores({
+      conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+      messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+      attachments: 'id, messageId',
+      attachmentData: 'id',
+      identity: 'address, inboxId',
+      vaultSecrets: 'method',
+      contacts: null,
+      contacts_v3: '&inboxId, primaryAddress, *addresses',
+      deletedConversations: '&conversationId, peerId',
+      ignoredConversations: null,
+    });
+
+    // v9: rename `contacts_v3` -> `contacts` (keyed by inboxId). If anything looks off, start fresh.
+    this.version(9)
+      .stores({
+        conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+        messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+        attachments: 'id, messageId',
+        attachmentData: 'id',
+        identity: 'address, inboxId',
+        vaultSecrets: 'method',
+        contacts: '&inboxId, primaryAddress, *addresses',
+        contacts_v3: null,
+        deletedConversations: '&conversationId, peerId',
+        ignoredConversations: null,
+      })
+      .upgrade(async (transaction) => {
+        try {
+          const from = transaction.table('contacts_v3');
+          const to = transaction.table('contacts');
+          const rows = (await from.toArray()) as unknown as Contact[];
+
+          let shouldReset = false;
+          for (const row of rows) {
+            if (!row || typeof row !== 'object') {
+              shouldReset = true;
+              break;
+            }
+            const inboxId = (row as { inboxId?: unknown }).inboxId;
+            if (typeof inboxId !== 'string' || inboxId.trim().length === 0) {
+              shouldReset = true;
+              break;
+            }
+            // Contacts must be keyed by XMTP inboxId, not an Ethereum address.
+            if (inboxId.trim().toLowerCase().startsWith('0x')) {
+              shouldReset = true;
+              break;
+            }
+          }
+
+          if (shouldReset) {
+            console.warn('[Storage] Contacts schema/data mismatch detected. Resetting contacts.');
+            await to.clear();
+            return;
+          }
+
+          if (rows.length > 0) {
+            await to.bulkPut(rows);
+          }
+        } catch (error) {
+          console.warn('[Storage] Failed to migrate contacts_v3 to contacts. Resetting contacts.', error);
+          try {
+            await transaction.table('contacts').clear();
+          } catch {
+            // ignore
+          }
         }
       });
   }
@@ -536,23 +605,23 @@ export class DexieDriver implements StorageDriver {
 
   // Contacts
   async putContact(contact: Contact): Promise<void> {
-    await this.dataDb.contacts_v3.put(contact);
+    await this.dataDb.contacts.put(contact);
   }
 
   async getContact(inboxId: string): Promise<Contact | undefined> {
-    return await this.dataDb.contacts_v3.get(inboxId);
+    return await this.dataDb.contacts.get(inboxId);
   }
 
   async listContacts(): Promise<Contact[]> {
-    return await this.dataDb.contacts_v3.toArray();
+    return await this.dataDb.contacts.toArray();
   }
 
   async deleteContact(inboxId: string): Promise<void> {
-    await this.dataDb.contacts_v3.delete(inboxId);
+    await this.dataDb.contacts.delete(inboxId);
   }
 
   async updateContact(inboxId: string, updates: Partial<Contact>): Promise<void> {
-    await this.dataDb.contacts_v3.update(inboxId, updates);
+    await this.dataDb.contacts.update(inboxId, updates);
   }
 
   // Vault secrets
@@ -577,7 +646,6 @@ export class DexieDriver implements StorageDriver {
       this.dataDb.attachments,
       this.dataDb.attachmentData,
       this.dataDb.contacts,
-      this.dataDb.contacts_v3,
       this.dataDb.deletedConversations,
     ], async () => {
       await this.dataDb.conversations.clear();
@@ -585,7 +653,6 @@ export class DexieDriver implements StorageDriver {
       await this.dataDb.attachments.clear();
       await this.dataDb.attachmentData.clear();
       await this.dataDb.contacts.clear();
-      await this.dataDb.contacts_v3.clear();
       await this.dataDb.deletedConversations.clear();
       console.log('[Storage] ✅ All IndexedDB data cleared');
     });

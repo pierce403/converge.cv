@@ -4,7 +4,7 @@ This document explains how Converge.cv creates, stores, merges, and refreshes co
 
 ## TL;DR
 
-- **Contact records are persisted in IndexedDB** (Dexie) in the `contacts_v3` table.
+- **Contact records are persisted in IndexedDB** (Dexie) in the `contacts` table.
 - **Zustand holds the in-memory contact list** (`useContactStore`), and `loadContacts()` hydrates it from IndexedDB.
 - **`localStorage` is *not* the primary contact DB**. It only stores:
   - the active inbox namespace (`converge.storageNamespace.v1`)
@@ -73,12 +73,12 @@ Contacts are stored in IndexedDB via Dexie.
 
 - DB implementation: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
 - Full Dexie schema reference: [`docs/storage-schema.md`](storage-schema.md)
-- `contacts_v3` store definition: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L271)
+- `contacts` store definition: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
 
 The current contacts store is:
 
 ```ts
-contacts_v3: '&inboxId, primaryAddress, *addresses'
+contacts: '&inboxId, primaryAddress, *addresses'
 ```
 
 Meaning (Dexie syntax):
@@ -111,7 +111,7 @@ There are two primitives:
 Both ultimately persist through the storage driver:
 
 - `StorageDriver.putContact(...)`: [`src/lib/storage/interface.ts`](../src/lib/storage/interface.ts#L76)
-- Dexie implementation uses `contacts_v3`: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L538)
+- Dexie implementation uses `contacts`: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
 
 ### Create / upsert triggers
 

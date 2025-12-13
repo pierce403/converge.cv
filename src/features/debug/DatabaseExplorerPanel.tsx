@@ -12,7 +12,7 @@ const TABLE_OPTIONS: Array<{ value: TableKey; label: string; hint: string }> = [
   {
     value: 'contacts',
     label: 'Contacts',
-    hint: 'Contacts from Dexie (contacts_v3).',
+    hint: 'Contacts from Dexie (contacts).',
   },
   {
     value: 'conversations',
