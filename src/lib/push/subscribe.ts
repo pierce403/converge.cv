@@ -18,6 +18,18 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
   return output;
 }
 
+async function ensureServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
+  // Prefer an existing registration if present.
+  const existing = await navigator.serviceWorker.getRegistration();
+  if (existing) {
+    return existing;
+  }
+
+  // Otherwise register our minimal push service worker.
+  await navigator.serviceWorker.register('/sw.js');
+  return await navigator.serviceWorker.ready;
+}
+
 async function getVapidPublicKey(): Promise<string> {
   // Option A: use the static key from config if set
   if (VAPID_PUBLIC_KEY && VAPID_PUBLIC_KEY.length > 10) {
@@ -80,17 +92,20 @@ export async function enablePushForCurrentUser(opts?: {
       return { success: false, error: `Notification permission ${permission}` };
     }
 
-    // Ensure service worker is ready
-    const registration = await navigator.serviceWorker.ready;
+    // Ensure service worker is registered and ready
+    const registration = await ensureServiceWorkerRegistration();
 
     // Get VAPID public key
     const publicKey = await getVapidPublicKey();
 
-    // Subscribe with PushManager
-    const subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource
-    });
+    // Subscribe with PushManager (reuse existing subscription when possible)
+    const existingSubscription = await registration.pushManager.getSubscription();
+    const subscription =
+      existingSubscription ??
+      (await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+      }));
 
     // Extract keys for vapid.party
     const p256dhKey = subscription.getKey('p256dh');
@@ -183,4 +198,3 @@ export function getPushPermissionStatus(): NotificationPermission | 'unsupported
   }
   return Notification.permission;
 }
-

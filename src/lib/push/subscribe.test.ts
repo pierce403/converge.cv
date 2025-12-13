@@ -27,14 +27,20 @@ describe('push helpers', () => {
     };
     const pushManager = {
       subscribe: vi.fn(async () => subscription),
-      getSubscription: vi.fn(async () => subscription),
+      getSubscription: vi
+        .fn<() => Promise<unknown>>()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(subscription),
     };
     const registration = { pushManager };
     const navigatorMock = {
       serviceWorker: {
         ready: Promise.resolve(registration as unknown as ServiceWorkerRegistration),
         register: vi.fn(async () => registration),
-        getRegistration: vi.fn(async () => registration),
+        getRegistration: vi
+          .fn<() => Promise<ServiceWorkerRegistration | null>>()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue(registration as unknown as ServiceWorkerRegistration),
       },
     } as unknown as Navigator;
 
@@ -55,6 +61,7 @@ describe('push helpers', () => {
     const result = await enablePushForCurrentUser({ userId: 'inbox-1', channelId: 'main' });
 
     expect(result.success).toBe(true);
+    expect(navigatorMock.serviceWorker.register).toHaveBeenCalledWith('/sw.js');
     expect(pushManager.subscribe).toHaveBeenCalled();
     const fetchMock = fetch as unknown as Mock;
     const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
@@ -62,6 +69,47 @@ describe('push helpers', () => {
 
     await disablePush();
     expect(subscription.unsubscribe).toHaveBeenCalled();
+  });
+
+  it('reuses an existing subscription when present', async () => {
+    const subscription = {
+      endpoint: 'https://push.example/subscription',
+      getKey: (name: string) =>
+        name === 'p256dh'
+          ? new Uint8Array([1, 2, 3]).buffer
+          : new Uint8Array([4, 5, 6]).buffer,
+      unsubscribe: vi.fn(async () => true),
+    };
+    const pushManager = {
+      subscribe: vi.fn(async () => subscription),
+      getSubscription: vi.fn(async () => subscription),
+    };
+    const registration = { pushManager };
+    const navigatorMock = {
+      serviceWorker: {
+        ready: Promise.resolve(registration as unknown as ServiceWorkerRegistration),
+        register: vi.fn(async () => registration),
+        getRegistration: vi.fn(async () => registration),
+      },
+    } as unknown as Navigator;
+
+    const notificationMock = function Notification() {} as unknown as typeof Notification;
+    (notificationMock as any).requestPermission = vi.fn(async () => 'granted');
+    (notificationMock as any).permission = 'granted';
+
+    const pushManagerCtor = function PushManager() {} as unknown as typeof PushManager;
+    vi.stubGlobal('PushManager', pushManagerCtor);
+    (window as any).PushManager = pushManagerCtor;
+    vi.stubGlobal('navigator', navigatorMock);
+    vi.stubGlobal('Notification', notificationMock);
+    global.fetch = vi.fn(
+      async (_url, _init) => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    ) as unknown as Mock;
+
+    const result = await enablePushForCurrentUser({ userId: 'inbox-2', channelId: 'main' });
+    expect(result.success).toBe(true);
+    expect(pushManager.subscribe).not.toHaveBeenCalled();
+    expect(pushManager.getSubscription).toHaveBeenCalled();
   });
 
   it('reports unsupported permission state when Notification is missing', () => {

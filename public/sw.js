@@ -1,7 +1,7 @@
 /* Minimal Service Worker for Web Push */
 self.addEventListener('install', (event) => {
   // Activate immediately
-  self.skipWaiting();
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
@@ -18,10 +18,19 @@ self.addEventListener('push', (event) => {
     try { data = { body: event.data.text() }; } catch {}
   }
 
-  const title = data.title || 'Converge';
-  const body = data.body || 'New activity';
-  const url = data.url || '/';
-  const tag = data.tag || 'converge-notification';
+  const payload = (() => {
+    try {
+      if (data && typeof data === 'object' && data.payload && typeof data.payload === 'object') {
+        return data.payload;
+      }
+    } catch {}
+    return data;
+  })();
+
+  const title = payload.title || 'Converge';
+  const body = payload.body || 'New activity';
+  const url = payload.url || '/';
+  const tag = payload.tag || 'converge-notification';
 
   event.waitUntil(
     self.registration.showNotification(title, {
@@ -42,8 +51,12 @@ self.addEventListener('notificationclick', (event) => {
       const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of allClients) {
         if ('focus' in client) {
-          client.focus();
-          client.postMessage({ type: 'navigate', url });
+          await client.focus();
+          if ('navigate' in client && typeof client.navigate === 'function') {
+            try {
+              await client.navigate(url);
+            } catch {}
+          }
           return;
         }
       }
