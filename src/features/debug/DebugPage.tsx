@@ -294,7 +294,9 @@ export function DebugPage() {
                   }
 
                   try {
-                    const userId = identity.inboxId || identity.address;
+                    const userIdCandidates = Array.from(
+                      new Set([identity.inboxId, identity.address].filter((value): value is string => Boolean(value))),
+                    );
                     const absoluteUrl = (() => {
                       try {
                         return new URL('/', window.location.origin).toString();
@@ -320,74 +322,90 @@ export function DebugPage() {
                       logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: 'Failed to inspect SW/subscription' });
                     }
 
-                    const body = {
-                      payload: {
-                        title: 'Converge Test',
-                        body: 'This is a test notification from Debug console',
-                        // vapid.party validates this as a URL, so it must be absolute.
-                        url: absoluteUrl,
-                      },
-                      userId,
-                      channelId: 'default',
-                    };
-
-                    console.info('[Push] Test Push: POST /send', {
-                      base: VAPID_PARTY_API_BASE,
-                      userId,
-                      channelId: 'default',
-                      url: absoluteUrl,
-                      apiKey: `${VAPID_PARTY_API_KEY.slice(0, 6)}…`,
-                    });
-                    logNetworkEvent({
-                      direction: 'outbound',
-                      event: 'push:test:request',
-                      details: 'POST vapid.party/send',
-                      payload: JSON.stringify({ ...body, apiKey: '[redacted]' }),
-                    });
-
-                    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-                    const res = await fetch(`${VAPID_PARTY_API_BASE}/send`, {
-                      method: 'POST',
-                      headers: { 
-                        'Content-Type': 'application/json',
-                        'X-API-Key': VAPID_PARTY_API_KEY 
-                      },
-                      body: JSON.stringify(body),
-                    });
-                    const responseText = await res.text();
-                    const elapsedMs = Math.max(
-                      0,
-                      Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
-                    );
-
-                    if (!res.ok) {
-                      console.error('[Push] Test Push: non-OK response', { status: res.status, body: responseText });
-                    } else {
-                      console.info('[Push] Test Push: request accepted', { status: res.status, elapsedMs });
-                    }
-
-                    logNetworkEvent({ 
-                      direction: 'inbound',
-                      event: 'push:test:response',
-                      details: `POST vapid.party/send → ${res.status} (${elapsedMs}ms)`,
-                      payload: responseText,
-                    });
-
-                    // Best-effort parse for a friendlier log line.
-                    try {
-                      const json = JSON.parse(responseText) as {
-                        success?: boolean;
-                        data?: { sent?: number; failed?: number; total?: number };
-                        error?: string;
-                        code?: string;
+                    let attempt = 0;
+                    for (const userId of userIdCandidates) {
+                      attempt += 1;
+                      const body = {
+                        payload: {
+                          title: 'Converge Test',
+                          body: 'This is a test notification from Debug console',
+                          // vapid.party validates this as a URL, so it must be absolute.
+                          url: absoluteUrl,
+                        },
+                        userId,
+                        channelId: 'default',
                       };
-                      if (json?.success) {
-                        console.info('[Push] Test Push: send result', json.data ?? {});
-                      } else if (json?.error) {
-                        console.warn('[Push] Test Push: send rejected', { code: json.code, error: json.error });
+
+                      console.info('[Push] Test Push: POST /send', {
+                        base: VAPID_PARTY_API_BASE,
+                        userId,
+                        channelId: 'default',
+                        url: absoluteUrl,
+                        apiKey: `${VAPID_PARTY_API_KEY.slice(0, 6)}…`,
+                        attempt,
+                        attemptsTotal: userIdCandidates.length,
+                      });
+                      logNetworkEvent({
+                        direction: 'outbound',
+                        event: 'push:test:request',
+                        details: `POST vapid.party/send (attempt ${attempt}/${userIdCandidates.length})`,
+                        payload: JSON.stringify({ ...body, apiKey: '[redacted]' }),
+                      });
+
+                      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                      const res = await fetch(`${VAPID_PARTY_API_BASE}/send`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'X-API-Key': VAPID_PARTY_API_KEY,
+                        },
+                        body: JSON.stringify(body),
+                      });
+                      const responseText = await res.text();
+                      const elapsedMs = Math.max(
+                        0,
+                        Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
+                      );
+
+                      if (!res.ok) {
+                        console.error('[Push] Test Push: non-OK response', { status: res.status, body: responseText, attempt });
+                      } else {
+                        console.info('[Push] Test Push: request accepted', { status: res.status, elapsedMs, attempt });
                       }
-                    } catch {
-                      // ignore
+
+                      logNetworkEvent({
+                        direction: 'inbound',
+                        event: 'push:test:response',
+                        details: `POST vapid.party/send → ${res.status} (${elapsedMs}ms) (attempt ${attempt}/${userIdCandidates.length})`,
+                        payload: responseText,
+                      });
+
+                      // Best-effort parse for a friendlier log line and retry logic.
+                      let total = 0;
+                      try {
+                        const json = JSON.parse(responseText) as {
+                          success?: boolean;
+                          data?: { sent?: number; failed?: number; total?: number };
+                          error?: string;
+                          code?: string;
+                        };
+                        if (json?.success) {
+                          total = typeof json.data?.total === 'number' ? json.data.total : 0;
+                          console.info('[Push] Test Push: send result', { ...(json.data ?? {}), attempt, userId });
+                        } else if (json?.error) {
+                          console.warn('[Push] Test Push: send rejected', { code: json.code, error: json.error, attempt, userId });
+                        }
+                      } catch {
+                        // ignore
+                      }
+
+                      // If no subscriptions matched, try the next identifier (e.g., address vs inboxId).
+                      if (res.ok && total === 0 && attempt < userIdCandidates.length) {
+                        console.warn('[Push] Test Push: no subscriptions matched; retrying with alternate userId', { attempt, userId });
+                        continue;
+                      }
+
+                      break;
                     }
                   } catch (e) {
                     console.error('[Push] Test Push: POST vapid.party/send failed', e);
