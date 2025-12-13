@@ -1656,8 +1656,13 @@ export class XmtpClient {
         }
       }
 
-      // Decide whether we must register a new installation
+      // Decide whether we must register a new installation / initialize identity
       let mustRegister = shouldRegister;
+      if (!client.inboxId) {
+        // If init could not resolve an inboxId, the identity is not usable until we register.
+        mustRegister = true;
+        console.warn('[XMTP] Client.init did not return an inboxId; forcing register()');
+      }
       try {
         const preState: SafeInboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => client!.preferences.inboxState(true));
         const existing = preState.installations || [];
@@ -1679,7 +1684,14 @@ export class XmtpClient {
           logNetworkEvent({ direction: 'status', event: 'connect:installation_warning', details: `Installation count ${count}/10` });
         }
       } catch (preCheckErr) {
-        console.warn('[XMTP] Installation pre-check failed (continuing):', preCheckErr);
+        const msg = preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr ?? '');
+        // If identity isn't initialized yet, we must register before doing anything else.
+        if (/uninitialized identity/i.test(msg)) {
+          mustRegister = true;
+          console.warn('[XMTP] Installation pre-check failed due to uninitialized identity; forcing register()');
+        } else {
+          console.warn('[XMTP] Installation pre-check failed (continuing):', preCheckErr);
+        }
       }
 
       if (mustRegister) {
@@ -1731,7 +1743,19 @@ export class XmtpClient {
 
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
-      await this.syncConversations();
+      try {
+        await this.syncConversations();
+      } catch (syncError) {
+        const msg = syncError instanceof Error ? syncError.message : String(syncError ?? '');
+        // Recovery: if the SDK reports an uninitialized identity, attempt a register() and retry.
+        if (/uninitialized identity/i.test(msg) && this.client) {
+          console.warn('[XMTP] syncConversations failed due to uninitialized identity; attempting register() and retry');
+          await this.client.register();
+          await this.syncConversations();
+        } else {
+          throw syncError;
+        }
+      }
 
       if (shouldSyncHistory) {
         console.log('[XMTP] History sync enabled – fetching past messages. This may take time if another device needs to provide history.');
