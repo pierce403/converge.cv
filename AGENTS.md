@@ -445,6 +445,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Push + Wallet Disconnect Fix
 - Fixed an intermittent “Wallet not connected” / “Provider not found” state after enabling push notifications: registering `public/sw.js` triggers a service worker `controllerchange`, and we previously forced a full page reload on that event. That reload drops the wagmi wallet connection for wallet-backed identities. The app no longer reloads on `controllerchange` (see `src/main.tsx`).
 
+### Deep Links: Message Someone
+- `/u/:userId` now acts like a “start DM” deep link (supports ENS names by resolving to an address). If the app needs onboarding, it routes through onboarding and then returns to the deep link to open the chat.
+- While `checkExistingIdentity()` is running on boot, the router shows a loading screen instead of prematurely redirecting deep links to onboarding (prevents losing `/u/...` URLs for already-signed-in users).
+
 ## Latest Changes (2025-12-13)
 
 ### Contacts Schema Cleanup

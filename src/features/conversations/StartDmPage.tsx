@@ -16,12 +16,12 @@ export function StartDmPage() {
         return;
       }
       if (!isAuthenticated || !isVaultUnlocked) {
-        navigate(`/onboarding?connect=1&u=${encodeURIComponent(inboxId)}`);
+        navigate(`/onboarding?i=${encodeURIComponent(inboxId)}`);
         return;
       }
       try {
         const conv = await createConversation(inboxId);
-        if (conv) navigate(`/chat/${conv.id}`);
+        if (conv) navigate(`/chat/${conv.id}`, { replace: true });
         else navigate('/');
       } catch (e) {
         console.warn('[StartDm] Failed to start DM', e);
@@ -38,4 +38,3 @@ export function StartDmPage() {
     </div>
   );
 }
-

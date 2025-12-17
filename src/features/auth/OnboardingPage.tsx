@@ -193,7 +193,7 @@ export function OnboardingPage() {
     hydrateRegistry();
   }, [hydrateRegistry]);
 
-  // If navigated with ?connect=1 (from InboxSwitcher or deep links), jump straight into wallet selection
+  // If navigated with ?connect=1 (from InboxSwitcher), jump straight into wallet selection
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);

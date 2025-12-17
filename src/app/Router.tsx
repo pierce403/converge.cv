@@ -32,28 +32,34 @@ export function AppRouter() {
     }
   }, [isAuthenticated, checkExistingIdentity]);
 
+  const loadingScreen = (
+    <div className="flex items-center justify-center h-screen">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500 mx-auto mb-4"></div>
+        <p className="text-primary-300">Loading...</p>
+      </div>
+    </div>
+  );
+
   // Not authenticated - checking or onboarding
   if (!isAuthenticated) {
+    // Important: while we are restoring identity from storage, preserve the current URL
+    // (including deep links like /u/:userId) and avoid redirecting to onboarding prematurely.
+    if (isCheckingAuth) {
+      return (
+        <Routes>
+          <Route path="*" element={loadingScreen} />
+        </Routes>
+      );
+    }
+
     return (
       <Routes>
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/i/:inboxId" element={<InboxConnectRedirect />} />
         <Route path="/u/:userId" element={<UserConnectRedirect />} />
         <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
-        {isCheckingAuth ? (
-          // While checking auth, render all app routes but show loading screen
-          // This preserves the URL so it doesn't redirect
-          <Route path="*" element={
-            <div className="flex items-center justify-center h-screen">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500 mx-auto mb-4"></div>
-                <p className="text-primary-300">Loading...</p>
-              </div>
-            </div>
-          } />
-        ) : (
-          <Route path="*" element={<Navigate to="/onboarding" replace />} />
-        )}
+        <Route path="*" element={<Navigate to="/onboarding" replace />} />
       </Routes>
     );
   }

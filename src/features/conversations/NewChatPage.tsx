@@ -2,8 +2,8 @@
  * New chat page for starting conversations
  */
 
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useConversations } from './useConversations';
 // import { getXmtpClient } from '@/lib/xmtp';
 import { resolveAddressOrENS, isENSName, isEthereumAddress } from '@/lib/utils/ens';
@@ -11,6 +11,7 @@ import { QRScanner } from '@/components/QRScanner';
 
 export function NewChatPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { createConversation } = useConversations();
 
   const [inputValue, setInputValue] = useState('');
@@ -21,6 +22,20 @@ export function NewChatPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const prefill = params.get('to');
+      if (prefill && !inputValue.trim()) {
+        setInputValue(prefill);
+      }
+    } catch {
+      // ignore
+    }
+    // Only run when the location changes; ignore inputValue changes to avoid overwriting user edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
 
   const handleQRScan = (data: string) => {
     console.log('[NewChat] QR code scanned:', data);

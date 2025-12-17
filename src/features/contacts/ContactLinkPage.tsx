@@ -1,20 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useAuthStore, useContactStore } from '@/lib/stores';
-import { getXmtpClient } from '@/lib/xmtp';
-import { ContactCardModal } from '@/components/ContactCardModal';
-import type { Contact } from '@/lib/stores/contact-store';
+import { useAuthStore } from '@/lib/stores';
+import { isENSName, resolveAddressOrENS } from '@/lib/utils/ens';
 
 export function ContactLinkPage() {
   const { userId } = useParams<{ userId: string }>();
   const navigate = useNavigate();
   const { isAuthenticated, isVaultUnlocked } = useAuthStore();
-  const contacts = useContactStore((s) => s.contacts);
-  const upsertContactProfile = useContactStore((s) => s.upsertContactProfile);
-  const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState<Contact | null>(null);
-
-  const isAddressLike = (value: string) => value.trim().toLowerCase().startsWith('0x');
+  const [status, setStatus] = useState('Opening chat…');
 
   useEffect(() => {
     const run = async () => {
@@ -23,83 +16,36 @@ export function ContactLinkPage() {
         return;
       }
       if (!isAuthenticated || !isVaultUnlocked) {
-        navigate(`/onboarding?connect=1&u=${encodeURIComponent(userId)}`);
+        navigate(`/onboarding?u=${encodeURIComponent(userId)}`);
         return;
       }
-      try {
-        const existing = contacts.find((c) => c.inboxId.toLowerCase() === userId.toLowerCase());
-        if (existing) {
-          setTarget(existing);
-          setOpen(true);
+
+      const raw = userId.trim();
+      let target = raw;
+
+      // If this looks like an ENS name (e.g. deanpierce.eth), resolve to an address first.
+      if (isENSName(raw)) {
+        setStatus('Resolving identity…');
+        const resolved = await resolveAddressOrENS(raw);
+        if (resolved) {
+          target = resolved;
+        } else {
+          // If resolution fails, send the user to the manual New Chat flow prefilled.
+          navigate(`/new-chat?to=${encodeURIComponent(raw)}`, { replace: true });
           return;
         }
-        // Try to fetch profile by treating userId as inbox identifier (ENS or inbox id)
-        try {
-          const xmtp = getXmtpClient();
-          const profile = await xmtp.fetchInboxProfile(userId);
-          const candidateInboxId = (profile.inboxId || userId).toLowerCase();
-
-          if (isAddressLike(candidateInboxId)) {
-            // We couldn't resolve an inboxId; show a minimal (non-persisted) profile instead.
-            const minimal: Contact = {
-              inboxId: candidateInboxId,
-              name: '',
-              createdAt: Date.now(),
-              source: 'inbox',
-              isInboxOnly: true,
-              addresses: [],
-              identities: [],
-            } as Contact;
-            setTarget(minimal);
-            setOpen(true);
-            return;
-          }
-
-          const contact = await upsertContactProfile({
-            inboxId: candidateInboxId,
-            displayName: profile.displayName || (isAddressLike(userId) ? undefined : userId),
-            avatarUrl: profile.avatarUrl,
-            primaryAddress: profile.primaryAddress,
-            addresses: profile.addresses,
-            identities: profile.identities,
-            source: 'inbox',
-            metadata: { createdAt: Date.now(), isInboxOnly: true },
-          });
-          setTarget(contact);
-          setOpen(true);
-        } catch {
-        // Fallback minimal contact
-          const minimal: Contact = {
-            inboxId: userId.toLowerCase(),
-            name: isAddressLike(userId) ? '' : userId,
-            createdAt: Date.now(),
-            source: 'inbox',
-            isInboxOnly: true,
-            addresses: [],
-            identities: [],
-          } as Contact;
-          setTarget(minimal);
-          setOpen(true);
-        }
-      } catch (e) {
-        navigate('/');
       }
+
+      setStatus('Opening chat…');
+      navigate(`/i/${encodeURIComponent(target)}`, { replace: true });
     };
     run();
-  }, [userId, isAuthenticated, isVaultUnlocked, contacts, upsertContactProfile, navigate]);
-
-  const handleClose = () => {
-    setOpen(false);
-    navigate('/contacts');
-  };
+  }, [userId, isAuthenticated, isVaultUnlocked, navigate]);
 
   return (
     <div className="flex flex-col items-center justify-center h-full text-primary-50">
-      <p>Opening profile…</p>
+      <p>{status}</p>
       <p className="text-sm text-primary-300 mt-2">Please wait, you are being redirected.</p>
-      {open && target && (
-        <ContactCardModal contact={target} onClose={handleClose} />
-      )}
     </div>
   );
 }
