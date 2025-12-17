@@ -33,6 +33,7 @@
 
 ## Web Push Notifications
 - Push enablement checks browser capabilities, requests Notification permission, registers the service worker, subscribes with PushManager using the VAPID public key, and sends the subscription to vapid.party with optional user/channel identifiers.
+- Enabling push no longer forces a page reload (service worker takeover should not disconnect wallet-backed identities).
 - Helpers report errors for unsupported environments, allow permission status checks, and expose unsubscribe helpers to cleanly remove push subscriptions.
 
 ## Local-First Operation

@@ -437,8 +437,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-13 (contacts schema cleanup + push + XMTP recovery + coinbase telemetry)
+**Last Updated**: 2025-12-17 (fix push enable SW reload disconnecting wallets)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-17)
+
+### Push + Wallet Disconnect Fix
+- Fixed an intermittent “Wallet not connected” / “Provider not found” state after enabling push notifications: registering `public/sw.js` triggers a service worker `controllerchange`, and we previously forced a full page reload on that event. That reload drops the wagmi wallet connection for wallet-backed identities. The app no longer reloads on `controllerchange` (see `src/main.tsx`).
 
 ## Latest Changes (2025-12-13)
 
