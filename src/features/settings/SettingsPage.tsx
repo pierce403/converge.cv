@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/features/auth';
-import { getStorage, closeStorage } from '@/lib/storage';
+import { getStorage } from '@/lib/storage';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
@@ -578,49 +578,6 @@ export function SettingsPage() {
       }
     }
   };
-
-  // One-time effect to handle the "clear all data" flag on reload
-  useEffect(() => {
-    const performClear = async () => {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('clear_all_data') === 'true') {
-        console.log('[Settings] Detected clear_all_data flag - wiping databases...');
-        try {
-          // Ensure no storage is open
-          await closeStorage();
-
-          // Delete all databases
-          const idbWithDatabases = indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> };
-          const dbs = await idbWithDatabases?.databases?.();
-          if (Array.isArray(dbs)) {
-            for (const db of dbs) {
-              if (db.name) {
-                console.log('Deleting DB:', db.name);
-                await new Promise<void>((resolve) => {
-                  const req = indexedDB.deleteDatabase(db.name!);
-                  req.onsuccess = () => resolve();
-                  req.onerror = () => resolve(); // Proceed even on error
-                  req.onblocked = () => {
-                    console.warn('DB delete blocked:', db.name);
-                    resolve(); // Proceed anyway
-                  };
-                });
-              }
-            }
-          }
-
-          console.log('[Settings] Wipe complete. Cleaning URL and resetting.');
-          // Remove the flag and reload to home
-          window.location.href = '/';
-        } catch (e) {
-          console.error('Critical failure during wipe:', e);
-          // Force home anyway
-          window.location.href = '/';
-        }
-      }
-    };
-    performClear();
-  }, []);
 
   const loadStorageSize = async () => {
     setIsLoadingSize(true);

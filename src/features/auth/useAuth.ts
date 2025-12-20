@@ -474,6 +474,14 @@ export function useAuth() {
       // Clear ALL local storage (IndexedDB + XMTP OPFS)
       const storage = await getStorage();
       await storage.clearAllData();
+      await storage.deleteIdentity();
+      await storage.deleteVaultSecrets();
+
+      try {
+        await setStorageNamespace('default');
+      } catch {
+        // ignore namespace reset failure
+      }
 
       // Lock vault
       lockVault();

@@ -437,8 +437,17 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-17 (fix push enable SW reload disconnecting wallets)
+**Last Updated**: 2025-12-20 (clear-all-data + reconnect fixes)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-20)
+
+### Clear All Data Hard Reset
+- `clear_all_data` is now handled at the router level to wipe IndexedDB/OPFS/web storage/caches and reset stores before reloading, preventing “ghost” inboxes on onboarding.
+- Logout now also clears identity + vault secrets and resets the storage namespace to fully remove local identity state.
+
+### XMTP Reconnect Resilience
+- XMTP connect no longer skips when a stale client exists; failed connects now null out the client so the Settings reconnect button actually retries.
 
 ## Latest Changes (2025-12-17)
 

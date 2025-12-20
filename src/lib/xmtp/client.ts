@@ -1548,12 +1548,17 @@ export class XmtpClient {
    * Connect to XMTP network with an identity
    */
   async connect(identity: XmtpIdentity, options?: ConnectOptions): Promise<void> {
-    const { setConnectionStatus, setLastConnected, setError } = useXmtpStore.getState();
+    const { setConnectionStatus, setLastConnected, setError, connectionStatus } = useXmtpStore.getState();
 
     // If already connected with the same identity, don't reconnect
     if (this.client && this.identity?.address === identity.address) {
-      console.log('[XMTP] Already connected with this identity, skipping reconnect');
-      return;
+      const isReady = Boolean(this.client.isReady);
+      if (connectionStatus === 'connected' && isReady) {
+        console.log('[XMTP] Already connected with this identity, skipping reconnect');
+        return;
+      }
+      console.warn('[XMTP] Existing client found but connection status is', connectionStatus, '- resetting before reconnect');
+      await this.disconnect();
     }
 
     // If connected with a different identity, disconnect first
@@ -1817,6 +1822,7 @@ export class XmtpClient {
           console.warn('[XMTP] Failed to close client after connect error:', closeError);
         }
       }
+      this.client = null;
 
       throw error; // Re-throw the original error
     }
