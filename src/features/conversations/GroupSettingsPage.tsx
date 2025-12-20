@@ -5,7 +5,7 @@ import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
 import { getAddress } from 'viem';
 import type { GroupMember } from '@/types';
-import { isDisplayableImageSrc } from '@/lib/utils/image';
+import { sanitizeImageSrc } from '@/lib/utils/image';
 import type { Contact } from '@/lib/stores/contact-store';
 import {
   PermissionPolicy,
@@ -700,13 +700,21 @@ export function GroupSettingsPage() {
     setError('');
 
     try {
+      const safeGroupImage = groupImage ? sanitizeImageSrc(groupImage) : null;
+      if (groupImage && !safeGroupImage) {
+        setError('Group avatar must be a https URL or a PNG/JPEG/GIF/WebP image.');
+        setIsSaving(false);
+        return;
+      }
+
+      const groupImageValue = safeGroupImage ?? '';
       // Enforce protocol constraints for image field length when using data URLs.
       // The XMTP group metadata field has a hard limit (~2048 chars). If the user pasted
       // a too-large base64 data URL directly, stop early with a helpful error instead
       // of attempting the network call that would fail.
       if (
-        (groupImage || '').startsWith('data:') &&
-        (groupImage || '').length > MAX_GROUP_IMAGE_CHARS
+        (groupImageValue || '').startsWith('data:') &&
+        (groupImageValue || '').length > MAX_GROUP_IMAGE_CHARS
       ) {
         setError('Avatar too large for group metadata field. Please upload a smaller image or paste a hosted URL (<2048 chars).');
         setIsSaving(false);
@@ -715,12 +723,12 @@ export function GroupSettingsPage() {
 
       const metadataPayload = {
         groupName: groupName || undefined,
-        groupImage: groupImage || undefined,
+        groupImage: groupImageValue || undefined,
         groupDescription: groupDescription || undefined,
       };
       const metadataChanged =
         (groupName || '') !== (conversation.groupName || '') ||
-        (groupImage || '') !== (conversation.groupImage || '') ||
+        (groupImageValue || '') !== (conversation.groupImage || '') ||
         (groupDescription || '') !== (conversation.groupDescription || '');
 
       const operations: Array<Promise<unknown>> = [];
@@ -903,14 +911,17 @@ export function GroupSettingsPage() {
   const getContactDisplayName = (contact: Contact) => contact.preferredName || contact.name;
 
   const renderContactAvatar = (avatar: string | undefined, fallback: string) => {
-    if (isDisplayableImageSrc(avatar)) {
-      return <img src={avatar} alt="Contact avatar" className="w-full h-full rounded-full object-cover" />;
+    const safeAvatar = sanitizeImageSrc(avatar);
+    if (safeAvatar) {
+      return <img src={safeAvatar} alt="Contact avatar" className="w-full h-full rounded-full object-cover" />;
     }
     if (avatar) {
       return <span className="text-lg" aria-hidden>{avatar}</span>;
     }
     return <span className="text-white font-semibold" aria-hidden>{fallback.slice(0, 2).toUpperCase()}</span>;
   };
+
+  const safeGroupImage = sanitizeImageSrc(groupImage);
 
   return (
     <div className="flex flex-col h-full text-primary-50">
@@ -1055,8 +1066,8 @@ export function GroupSettingsPage() {
             </label>
             <div className="flex items-center gap-3">
               <div className="w-16 h-16 rounded-full bg-primary-700/70 flex items-center justify-center overflow-hidden">
-                {isDisplayableImageSrc(groupImage) ? (
-                  <img src={groupImage} alt="Group Avatar" className="w-full h-full object-cover" />
+                {safeGroupImage ? (
+                  <img src={safeGroupImage} alt="Group Avatar" className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-primary-200 text-sm">No avatar</span>
                 )}
@@ -1069,9 +1080,9 @@ export function GroupSettingsPage() {
                   onChange={(e) => {
                     const value = e.target.value;
                     // Allow only blank or https image URLs for maximal safety to prevent XSS; block data:, javascript:, etc.
+                    const safeCandidate = sanitizeImageSrc(value);
                     const isSafeImageUrl =
-                      value === '' ||
-                      (/^https:\/\/[^\s]+$/i.test(value) && isDisplayableImageSrc(value));
+                      value === '' || (safeCandidate !== null && safeCandidate.startsWith('https://'));
                     if (isSafeImageUrl) {
                       setGroupImage(value);
                       setError('');
@@ -1224,11 +1235,12 @@ export function GroupSettingsPage() {
                   (identity?.inboxId && member.inboxId.toLowerCase() === identity.inboxId.toLowerCase());
                 const avatar = getMemberAvatar(member);
                 const fallbackLabel = member.address ?? member.inboxId;
-                const avatarContent = avatar
-                  ? isDisplayableImageSrc(avatar)
-                    ? <img src={avatar} alt="Member avatar" className="w-full h-full rounded-full object-cover" />
-                    : <span className="text-lg" aria-hidden>{avatar}</span>
-                  : <span className="text-white font-semibold" aria-hidden>{fallbackLabel.slice(0, 2).toUpperCase()}</span>;
+                const safeMemberAvatar = sanitizeImageSrc(avatar);
+                const avatarContent = safeMemberAvatar
+                  ? <img src={safeMemberAvatar} alt="Member avatar" className="w-full h-full rounded-full object-cover" />
+                  : avatar
+                    ? <span className="text-lg" aria-hidden>{avatar}</span>
+                    : <span className="text-white font-semibold" aria-hidden>{fallbackLabel.slice(0, 2).toUpperCase()}</span>;
                 const secondaryLine = member.address ?? member.inboxId;
 
                 return (

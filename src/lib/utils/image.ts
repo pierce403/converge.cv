@@ -1,11 +1,15 @@
-export function isDisplayableImageSrc(src?: string): boolean {
-  if (!src) return false;
+const SAFE_DATA_IMAGE_REGEX = /^data:image\/(png|jpe?g|gif|webp);base64,/i;
+
+export function sanitizeImageSrc(src?: string): string | null {
+  if (!src) return null;
   const s = src.trim();
-  return (
-    s.startsWith('http://') ||
-    s.startsWith('https://') ||
-    s.startsWith('data:image/') ||
-    s.startsWith('blob:')
-  );
+  if (!s) return null;
+  if (s.startsWith('blob:')) return s;
+  if (s.startsWith('https://') || s.startsWith('http://')) return s;
+  if (SAFE_DATA_IMAGE_REGEX.test(s)) return s;
+  return null;
 }
 
+export function isDisplayableImageSrc(src?: string): boolean {
+  return sanitizeImageSrc(src) !== null;
+}

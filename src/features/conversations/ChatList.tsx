@@ -15,7 +15,7 @@ import { useContactStore, useAuthStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { ConversationDetailsModal } from '@/features/conversations/ConversationDetailsModal';
-import { isDisplayableImageSrc } from '@/lib/utils/image';
+import { sanitizeImageSrc } from '@/lib/utils/image';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
@@ -90,10 +90,11 @@ export function ChatList() {
   };
 
   const renderAvatar = (avatar: string | undefined, fallback: string) => {
-    if (isDisplayableImageSrc(avatar)) {
+    const safeAvatar = sanitizeImageSrc(avatar);
+    if (safeAvatar) {
       return (
         <img
-          src={avatar}
+          src={safeAvatar}
           alt="Conversation avatar"
           className="w-full h-full rounded-full object-cover"
         />

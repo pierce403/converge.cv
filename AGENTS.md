@@ -446,6 +446,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Resolved GitHub/Dependabot advisories by bumping wagmi connector stack and viem, plus pnpm overrides for esbuild/glob.
 - `pnpm audit` now reports zero vulnerabilities.
 
+### CodeQL Alert Mitigation
+- Added image source sanitization and use it before rendering avatars/group images to avoid unsafe data URLs (addresses CodeQL js/xss-through-dom alert in `GroupSettingsPage`).
+
 ## Latest Changes (2025-12-20)
 
 ### Clear All Data Hard Reset

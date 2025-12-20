@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useContactStore, useAuthStore, useFarcasterStore } from '@/lib/stores';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import type { Contact } from '@/lib/stores/contact-store';
-import { isDisplayableImageSrc } from '@/lib/utils/image';
+import { sanitizeImageSrc } from '@/lib/utils/image';
 import { FarcasterSyncModal, FarcasterSyncCheck } from '@/components/FarcasterSyncModal';
 import { resolveFidFromAddress, resolveFidFromIdentifier } from '@/lib/farcaster/service';
 
@@ -304,7 +304,8 @@ export function ContactsPage() {
 
               // Avatar precedence: preferredAvatar > avatar; show initials if none/invalid
               const avatarSrc = contact.preferredAvatar || contact.avatar;
-              const wantInitials = !isDisplayableImageSrc(avatarSrc || '');
+              const safeAvatar = sanitizeImageSrc(avatarSrc || '');
+              const wantInitials = !safeAvatar;
               const initialsBasis = label || secondary || contact.inboxId;
               const initials = (initialsBasis || '??')
                 .replace(/^0x/i, '')
@@ -328,7 +329,7 @@ export function ContactsPage() {
                         </span>
                       ) : (
                         <img
-                          src={avatarSrc}
+                          src={safeAvatar ?? ''}
                           alt="Contact avatar"
                           className="w-full h-full object-cover"
                         />

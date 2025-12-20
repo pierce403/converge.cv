@@ -8,7 +8,7 @@ import { formatMessageTime } from '@/lib/utils/date';
 import { useAuthStore, useMessageStore } from '@/lib/stores';
 import { MessageActionsModal } from './MessageActionsModal';
 import { useMessages } from './useMessages';
-import { isDisplayableImageSrc } from '@/lib/utils/image';
+import { sanitizeImageSrc } from '@/lib/utils/image';
 
 interface SenderInfo {
   displayName?: string;
@@ -103,8 +103,9 @@ export function MessageBubble({
 
   const renderAvatar = () => {
     const avatarUrl = senderInfo?.avatarUrl;
-    if (isDisplayableImageSrc(avatarUrl)) {
-      return <img src={avatarUrl} alt="Sender avatar" className="w-full h-full rounded-full object-cover" />;
+    const safeAvatar = sanitizeImageSrc(avatarUrl);
+    if (safeAvatar) {
+      return <img src={safeAvatar} alt="Sender avatar" className="w-full h-full rounded-full object-cover" />;
     }
     if (avatarUrl) {
       return <span className="text-lg" aria-hidden>{avatarUrl}</span>;
