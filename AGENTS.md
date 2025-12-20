@@ -437,8 +437,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-20 (clear-all-data + reconnect fixes)
+**Last Updated**: 2025-12-20 (dependency security updates)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-20)
+
+### Dependency Security Fixes
+- Resolved GitHub/Dependabot advisories by bumping wagmi connector stack and viem, plus pnpm overrides for esbuild/glob.
+- `pnpm audit` now reports zero vulnerabilities.
 
 ## Latest Changes (2025-12-20)
 

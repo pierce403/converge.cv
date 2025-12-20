@@ -19,8 +19,8 @@
   "dependencies": {
     "@headlessui/react": "^2.1.8",
     "@tanstack/react-query": "^5.90.5",
-    "@wagmi/connectors": "^5.9.9",
-    "@wagmi/core": "^2.20.3",
+    "@wagmi/connectors": "^5.11.2",
+    "@wagmi/core": "^2.22.1",
     "@xmtp/browser-sdk": "^5.0.1",
     "@xmtp/content-type-group-updated": "^2.0.2",
     "@xmtp/content-type-primitives": "^2.0.2",
@@ -38,7 +38,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
-    "viem": "^2.37.6",
+    "viem": "^2.43.2",
     "wagmi": "^2.16.9",
     "zustand": "^4.5.5"
   },
@@ -78,6 +78,10 @@
   "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b",
   "pnpm": {
     "overrides": {
+      "@wagmi/connectors": "5.11.2",
+      "@wagmi/core": "2.22.1",
+      "esbuild": "0.25.0",
+      "glob@10.4.5": "10.5.0",
       "rollup": "4.52.5"
     }
   }
