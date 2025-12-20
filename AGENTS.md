@@ -437,7 +437,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-20 (dependency security updates)
+**Last Updated**: 2025-12-20 (ping-pong extended + reconnect hardening)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-20)
@@ -457,6 +457,16 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### XMTP Reconnect Resilience
 - XMTP connect no longer skips when a stale client exists; failed connects now null out the client so the Settings reconnect button actually retries.
+
+### Logout Hardening + Disconnect Reset
+- Logout now best-effort per step so a disconnect/storage failure doesn’t block clearing registry/auth state.
+- XMTP `disconnect()` clears the connection error even when there is no client to avoid “disconnected but error set” UI limbo.
+
+### Settings Reconnect UX
+- Settings connection panel now shows reconnect controls (including wallet connector choices) in both error and disconnected states.
+
+### Playwright: Ping-Pong Extended
+- Added `tests/e2e/ping-pong-extended.spec.ts` to cover reply, reactions, and `/u/:userId` deep-link routing.
 
 ## Latest Changes (2025-12-17)
 

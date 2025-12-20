@@ -464,41 +464,55 @@ export function useAuth() {
    * Logout completely
    */
   const logout = useCallback(async () => {
+    console.log('[Auth] Logging out - clearing all data...');
+
     try {
-      console.log('[Auth] Logging out - clearing all data...');
-      
-      // Disconnect XMTP first
       const xmtp = getXmtpClient();
       await xmtp.disconnect();
+    } catch (error) {
+      console.warn('[Auth] Failed to disconnect XMTP (non-fatal):', error);
+    }
 
-      // Clear ALL local storage (IndexedDB + XMTP OPFS)
+    try {
       const storage = await getStorage();
       await storage.clearAllData();
       await storage.deleteIdentity();
       await storage.deleteVaultSecrets();
-
-      try {
-        await setStorageNamespace('default');
-      } catch {
-        // ignore namespace reset failure
-      }
-
-      // Lock vault
-      lockVault();
-
-      // Clear route persistence
-      clearLastRoute();
-
-      // Clear Zustand state
-      authStore.logout();
-
-      // Reset inbox registry
-      useInboxRegistryStore.getState().reset();
-
-      console.log('[Auth] ✅ Logout complete - all data cleared');
     } catch (error) {
-      console.error('[Auth] Logout error:', error);
+      console.warn('[Auth] Failed to clear local storage (non-fatal):', error);
     }
+
+    try {
+      await setStorageNamespace('default');
+    } catch (error) {
+      console.warn('[Auth] Failed to reset storage namespace (non-fatal):', error);
+    }
+
+    try {
+      lockVault();
+    } catch (error) {
+      console.warn('[Auth] Failed to lock vault (non-fatal):', error);
+    }
+
+    try {
+      clearLastRoute();
+    } catch (error) {
+      console.warn('[Auth] Failed to clear last route (non-fatal):', error);
+    }
+
+    try {
+      authStore.logout();
+    } catch (error) {
+      console.warn('[Auth] Failed to clear auth store (non-fatal):', error);
+    }
+
+    try {
+      useInboxRegistryStore.getState().reset();
+    } catch (error) {
+      console.warn('[Auth] Failed to reset inbox registry (non-fatal):', error);
+    }
+
+    console.log('[Auth] ✅ Logout complete - all data cleared');
   }, [authStore]);
 
   const burnIdentity = useCallback(

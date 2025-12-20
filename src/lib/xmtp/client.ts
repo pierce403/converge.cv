@@ -2058,7 +2058,7 @@ export class XmtpClient {
    * Disconnect from XMTP network
    */
   async disconnect(): Promise<void> {
-    const { setConnectionStatus } = useXmtpStore.getState();
+    const { setConnectionStatus, setError } = useXmtpStore.getState();
 
     // Stop message streaming
     if (this.messageStreamCloser) {
@@ -2069,6 +2069,12 @@ export class XmtpClient {
         console.error('[XMTP] Error closing message stream:', error);
       }
       this.messageStreamCloser = null;
+    }
+
+    if (!this.client) {
+      setConnectionStatus('disconnected');
+      setError(null);
+      return;
     }
 
     if (this.client) {
@@ -2094,6 +2100,7 @@ export class XmtpClient {
       this.client = null;
       this.identity = null;
       setConnectionStatus('disconnected');
+      setError(null);
 
       logNetworkEvent({
         direction: 'status',

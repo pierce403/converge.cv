@@ -21,10 +21,8 @@ This is the live backlog. Keep it short and current. Completed work should move 
 - Notification deep-link routing to the correct conversation.
 - Add unit/integration tests for inbox-id resolution + `canMessage` regressions.
 - Playwright E2E coverage for:
-  - Onboarding flow.
-  - Create DM.
-  - Send message in E2E mode (stub).
   - Inbox switching.
+  - Send message in E2E mode (stubbed XMTP).
 
 ## Messaging
 
@@ -40,10 +38,6 @@ This is the live backlog. Keep it short and current. Completed work should move 
 - Group chat UX polish (members/admins list, promote/demote, add/remove).
 - Permission policy editor (policyType/policySet).
 - Leave group and “disband” flows.
-
-## Farcaster / Contacts
-
-- Verified bot contacts list + update docs once addresses are confirmed.
 
 ## Documentation
 

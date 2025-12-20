@@ -626,6 +626,9 @@ export function SettingsPage() {
     }
   };
 
+  const shouldShowReconnect = connectionStatus === 'error' || connectionStatus === 'disconnected';
+  const walletNeedsReconnect = Boolean(identity && !identity.privateKey && !isWalletConnected);
+
   return (
     <div className="flex flex-col h-full text-primary-50">
       {/* Header */}
@@ -774,32 +777,25 @@ export function SettingsPage() {
                     Connected since {new Date(lastConnected).toLocaleTimeString()}
                   </div>
                 )}
-                {xmtpError && connectionStatus === 'error' && (
-                  <div className="mt-2">
-                    <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 mb-2">
-                      {xmtpError}
-                    </div>
-                    <button
-                      onClick={handleReconnect}
-                      disabled={isReconnecting}
-                      className="text-xs text-accent-300 hover:text-accent-200 underline disabled:opacity-50"
-                    >
-                      {isReconnecting ? 'Reconnecting...' : 'Retry Connection'}
-                    </button>
-                  </div>
-                )}
-                {connectionStatus === 'disconnected' && !xmtpError && (
-                  <div className="mt-2">
-                    <div className="text-xs text-primary-300 mb-2">
-                      Not connected to the XMTP network. Messages won't sync until reconnected.
-                      {!identity?.privateKey && !isWalletConnected && (
-                        <span className="block mt-1 text-yellow-400">
-                          Wallet not connected. Please reconnect your wallet to sign in.
-                        </span>
-                      )}
-                    </div>
+                {shouldShowReconnect && (
+                  <div className="mt-2 space-y-2">
+                    {connectionStatus === 'error' && xmtpError && (
+                      <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
+                        {xmtpError}
+                      </div>
+                    )}
+                    {connectionStatus === 'disconnected' && (
+                      <div className="text-xs text-primary-300">
+                        Not connected to the XMTP network. Messages won't sync until reconnected.
+                      </div>
+                    )}
+                    {walletNeedsReconnect && (
+                      <div className="text-xs text-yellow-400">
+                        Wallet not connected. Please reconnect your wallet to sign in.
+                      </div>
+                    )}
                     {connectError && (
-                      <div className="text-xs text-red-400 bg-red-500/10 rounded p-2 mb-2">
+                      <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
                         {connectError}
                       </div>
                     )}
@@ -808,10 +804,10 @@ export function SettingsPage() {
                       disabled={isReconnecting || !identity}
                       className="btn-primary text-xs disabled:opacity-50"
                     >
-                      {isReconnecting ? 'Connecting...' : 'Connect'}
+                      {isReconnecting ? 'Connecting...' : connectionStatus === 'error' ? 'Retry Connection' : 'Connect'}
                     </button>
                     {showConnectorList && connectors.length > 0 && (
-                      <div className="mt-3 space-y-2">
+                      <div className="space-y-2">
                         <div className="text-xs text-primary-300">Choose a wallet to reconnect:</div>
                         <div className="flex flex-wrap gap-2">
                           {connectors.map((c) => (
