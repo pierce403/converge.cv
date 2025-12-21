@@ -1338,6 +1338,8 @@ export class XmtpClient {
     try {
       const inboxIds: string[] = [];
       const identifierPayloads: Identifier[] = [];
+      const invalidMembers: string[] = [];
+      const isLikelyInboxId = (value: string) => /^[0-9a-fA-F]{64}$/.test(value.trim());
 
       for (const value of members) {
         if (!value || typeof value !== 'string') {
@@ -1349,22 +1351,77 @@ export class XmtpClient {
         }
         if (isEthereumAddress(trimmed)) {
           try {
-            // For Identifier payloads passed to the XMTP API, the identity service
-            // expects raw hex without the 0x prefix. Normalize and strip prefix.
-            const with0x = this.normalizeEthereumAddress(trimmed).toLowerCase();
-            const rawHex = toIdentifierHex(with0x).toLowerCase();
-            const identifier: Identifier = {
-              identifier: rawHex,
-              identifierKind: 'Ethereum',
-            };
-            identifierPayloads.push(identifier);
+            const normalized = this.normalizeEthereumAddress(trimmed).toLowerCase();
+            let resolvedInbox: string | null = null;
+            let lookupErrored = false;
+            try {
+              resolvedInbox = await this.getInboxIdFromAddress(normalized);
+            } catch (err) {
+              lookupErrored = true;
+              console.warn('[XMTP] Failed to resolve inbox ID before addMembers:', err);
+            }
+
+            if (resolvedInbox) {
+              inboxIds.push(resolvedInbox);
+            } else if (lookupErrored) {
+              // Fall back to identifiers only when lookup failed (network/cors/etc).
+              const rawHex = toIdentifierHex(normalized).toLowerCase();
+              const identifier: Identifier = {
+                identifier: rawHex,
+                identifierKind: 'Ethereum',
+              };
+              identifierPayloads.push(identifier);
+            } else {
+              invalidMembers.push(trimmed);
+            }
           } catch (error) {
             console.warn('[XMTP] Skipping invalid Ethereum address during addMembers:', trimmed, error);
           }
         } else {
-          // Assume value is an inboxId; do not force case changes
-          inboxIds.push(trimmed);
+          if (isLikelyInboxId(trimmed)) {
+            let isValidInbox = true;
+            try {
+              const profile = await this.fetchInboxProfile(trimmed);
+              const hasIdentity = Boolean(profile.addresses.length || profile.identities.length);
+              if (!hasIdentity) {
+                isValidInbox = false;
+              }
+            } catch (err) {
+              console.warn('[XMTP] Failed to validate inbox ID before addMembers:', err);
+              isValidInbox = false;
+            }
+
+            if (isValidInbox) {
+              // Assume value is an inboxId; do not force case changes
+              inboxIds.push(trimmed);
+            } else {
+              invalidMembers.push(trimmed);
+            }
+          } else {
+            invalidMembers.push(trimmed);
+          }
         }
+      }
+
+      if (invalidMembers.length > 0 && typeof window !== 'undefined') {
+        try {
+          const sample = invalidMembers.slice(0, 2).join(', ');
+          const suffix = invalidMembers.length > 2 ? ` (+${invalidMembers.length - 2} more)` : '';
+          window.dispatchEvent(
+            new CustomEvent('ui:toast', {
+              detail: `Skipped unregistered members: ${sample}${suffix}`,
+            })
+          );
+        } catch (e) {
+          // ignore toast errors
+        }
+      }
+
+      if (!identifierPayloads.length && !inboxIds.length) {
+        if (invalidMembers.length) {
+          throw new Error(`No valid XMTP inboxes found for: ${invalidMembers.join(', ')}`);
+        }
+        return this.fetchGroupDetails(conversationId);
       }
 
       if (identifierPayloads.length) {
