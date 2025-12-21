@@ -20,6 +20,19 @@ import { PersonalizationReminderModal } from '@/components/PersonalizationRemind
 import { syncSelfFarcasterProfile } from '@/lib/farcaster/self';
 // Prefer XMTP profile history for names/avatars; fall back to Farcaster for missing fields.
 
+const looksLikeInboxId = (value?: string | null) => {
+  if (!value) {
+    return false;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed || trimmed.startsWith('0x')) {
+    return false;
+  }
+  if (trimmed.length < 24) {
+    return false;
+  }
+  return /^[0-9a-f]+$/.test(trimmed);
+};
 
 export function Layout() {
   // Sync CSS --vh and keyboard-open class with VisualViewport
@@ -461,10 +474,16 @@ export function Layout() {
           void enrichContactProfile(contact);
         }
 
+        const fallbackAddress =
+          contact?.primaryAddress ??
+          contact?.addresses?.[0] ??
+          profile?.primaryAddress ??
+          profile?.addresses?.[0];
         const resolvedDisplayName =
           contact?.preferredName ??
           contact?.name ??
           profile?.displayName ??
+          fallbackAddress ??
           senderInboxId ??
           'Unknown Sender';
         const resolvedAvatar = contact?.preferredAvatar ?? contact?.avatar ?? profile?.avatarUrl;
@@ -553,6 +572,12 @@ export function Layout() {
               const peerProfile = await xmtp.fetchInboxProfile(peerKey);
               if (peerProfile.displayName && !displayName && conversation.displayName !== peerProfile.displayName) {
                 updates.displayName = peerProfile.displayName;
+              } else if (
+                !displayName &&
+                (looksLikeInboxId(conversation.displayName) || !conversation.displayName) &&
+                (peerProfile.primaryAddress || peerProfile.addresses?.[0])
+              ) {
+                updates.displayName = peerProfile.primaryAddress || peerProfile.addresses?.[0];
               }
               if (peerProfile.avatarUrl && !avatar && conversation.displayAvatar !== peerProfile.avatarUrl) {
                 updates.displayAvatar = peerProfile.avatarUrl;

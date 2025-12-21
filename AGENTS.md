@@ -437,8 +437,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-20 (ping-pong extended + reconnect hardening)
+**Last Updated**: 2025-12-21 (address-first sender labels)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-21)
+
+### Sender Display: Address First
+- Incoming message handling now prefers primary Ethereum addresses over raw inbox IDs when labeling new conversations.
+- Conversation profile refresh treats inbox IDs as “address-like,” allowing address fallbacks to replace raw inbox IDs when no display name exists.
 
 ## Latest Changes (2025-12-20)
 

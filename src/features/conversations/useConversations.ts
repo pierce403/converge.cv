@@ -13,6 +13,13 @@ import { getAddress } from 'viem';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const isEthereumAddress = (value: string) => ETH_ADDRESS_REGEX.test(value.trim());
+const looksLikeInboxId = (value?: string | null) => {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  if (!v || v.startsWith('0x')) return false;
+  if (v.length < 24) return false;
+  return /^[0-9a-f]+$/.test(v);
+};
 
 const normalizeIdentifier = (value: string): string => {
   const trimmed = value.trim();
@@ -159,20 +166,26 @@ export function useConversations() {
 
           const isHexAddress = (value?: string) =>
             Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
+          const isAddressLike = (value?: string | null) =>
+            Boolean(value && (isHexAddress(value) || looksLikeInboxId(value)));
 
           const contactDisplayName =
             updatedContact?.preferredName ||
             updatedContact?.name ||
             existingContact?.preferredName ||
             existingContact?.name;
-          const profileDisplayName = profile.displayName || canonicalInboxId;
+          const profileDisplayName =
+            profile.displayName ||
+            profile.primaryAddress ||
+            profile.addresses?.[0] ||
+            canonicalInboxId;
           let displayName = contactDisplayName || profileDisplayName;
 
           // Avoid downgrading a human-friendly name to a hex address if we already have one
           if (
             displayName &&
-            isHexAddress(displayName) &&
-            (contactDisplayName || (!isHexAddress(conversation.displayName) && conversation.displayName))
+            isAddressLike(displayName) &&
+            (contactDisplayName || (!isAddressLike(conversation.displayName) && conversation.displayName))
           ) {
             displayName = contactDisplayName || conversation.displayName || displayName;
           }
