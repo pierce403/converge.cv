@@ -437,7 +437,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-21 (gentle sync + recent backfill)
+**Last Updated**: 2025-12-21 (adaptive sync cooldowns)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-21)
@@ -456,6 +456,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Gentle Sync Mode
 - Default conversation sync interval increased to reduce rate limits; connect now runs a light “recent” backfill when local data exists.
 - Recent backfill limits to latest conversations + message window, avoiding full inbox refreshes on every connect.
+
+### Adaptive Sync Backoff
+- Added global + per-conversation cooldowns that expand on 429s and throttle sync calls to be gentler.
+- Per-conversation sync timestamps persist to storage and are used to skip redundant refreshes while keeping live streaming intact.
 
 ## Latest Changes (2025-12-20)
 

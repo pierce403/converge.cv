@@ -17,7 +17,7 @@ import {
   PermissionUpdateType,
 } from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
-import { logNetworkEvent, useAuthStore, useContactStore } from '@/lib/stores';
+import { logNetworkEvent, useAuthStore, useContactStore, useConversationStore } from '@/lib/stores';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import buildInfo from '@/build-info.json';
 import { createEOASigner, createEphemeralSigner, createSCWSigner } from '@/lib/wagmi/signers';
@@ -176,6 +176,11 @@ export class XmtpClient {
   private inboxErrorCooldown: Map<string, number> = new Map();
   // Track which inboxIds have already logged an error this session (to reduce noise)
   private inboxErrorLogged: Set<string> = new Set();
+  // Global sync cooldown (adaptive backoff on rate limits)
+  private globalSyncCooldownUntil = 0;
+  private globalSyncBackoffMs = 0;
+  // Per-conversation sync cooldown (adaptive backoff)
+  private conversationSyncCooldown: Map<string, { until: number; backoffMs: number }> = new Map();
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -235,6 +240,74 @@ export class XmtpClient {
 
   private isTransientSyncError(err: unknown): boolean {
     return this.isRateLimitError(err) || this.isMlsSyncError(err) || this.isTransientNetworkError(err);
+  }
+
+  private noteGlobalRateLimit(reason: string): void {
+    const now = Date.now();
+    const next = this.globalSyncBackoffMs > 0
+      ? Math.min(this.globalSyncBackoffMs * 2, 10 * 60 * 1000)
+      : 30 * 1000;
+    this.globalSyncBackoffMs = next;
+    this.globalSyncCooldownUntil = Math.max(this.globalSyncCooldownUntil, now + next);
+    console.warn(`[XMTP] Global sync cooldown ${Math.round(next / 1000)}s (reason=${reason})`);
+  }
+
+  private noteConversationRateLimit(conversationId: string, reason?: string): void {
+    const key = conversationId.toString();
+    const existing = this.conversationSyncCooldown.get(key);
+    const next = existing
+      ? Math.min(existing.backoffMs * 2, 3 * 60 * 1000)
+      : 15 * 1000;
+    this.conversationSyncCooldown.set(key, { until: Date.now() + next, backoffMs: next });
+    this.noteGlobalRateLimit(`conversation:${key}${reason ? `:${reason}` : ''}`);
+  }
+
+  private reduceGlobalCooldown(): void {
+    if (this.globalSyncBackoffMs <= 0) {
+      return;
+    }
+    this.globalSyncBackoffMs = Math.max(0, Math.floor(this.globalSyncBackoffMs / 2));
+    if (this.globalSyncBackoffMs === 0) {
+      this.globalSyncCooldownUntil = 0;
+    }
+  }
+
+  private reduceConversationCooldown(conversationId: string): void {
+    const key = conversationId.toString();
+    const existing = this.conversationSyncCooldown.get(key);
+    if (!existing) {
+      return;
+    }
+    const next = Math.max(0, Math.floor(existing.backoffMs / 2));
+    if (next <= 5000) {
+      this.conversationSyncCooldown.delete(key);
+    } else {
+      this.conversationSyncCooldown.set(key, { until: Date.now() + next, backoffMs: next });
+    }
+  }
+
+  public getGlobalSyncCooldownMs(): number {
+    return Math.max(0, this.globalSyncCooldownUntil - Date.now());
+  }
+
+  public getConversationSyncCooldownMs(conversationId: string): number {
+    const now = Date.now();
+    const globalMs = Math.max(0, this.globalSyncCooldownUntil - now);
+    const entry = this.conversationSyncCooldown.get(conversationId.toString());
+    const convoMs = entry ? Math.max(0, entry.until - now) : 0;
+    return Math.max(globalMs, convoMs);
+  }
+
+  public recordRateLimitForConversation(conversationId: string, error: unknown, reason?: string): void {
+    if (this.isRateLimitError(error)) {
+      this.noteConversationRateLimit(conversationId, reason);
+    }
+  }
+
+  public recordRateLimitGlobal(error: unknown, reason: string): void {
+    if (this.isRateLimitError(error)) {
+      this.noteGlobalRateLimit(reason);
+    }
   }
 
   // Check if an error is an expected identity/association error (not worth logging repeatedly)
@@ -374,6 +447,7 @@ export class XmtpClient {
     factor?: number;
     jitter?: boolean;
     shouldRetry?: (err: unknown, attempt: number) => boolean;
+    onRateLimit?: (err: unknown) => void;
   }): Promise<T> {
     const attempts = opts?.attempts ?? 3;
     const factor = opts?.factor ?? 2;
@@ -385,6 +459,13 @@ export class XmtpClient {
         return await fn();
       } catch (err) {
         lastErr = err;
+        if (this.isRateLimitError(err)) {
+          try {
+            opts?.onRateLimit?.(err);
+          } catch {
+            // ignore
+          }
+        }
         const shouldRetry = opts?.shouldRetry ? opts.shouldRetry(err, i) : true;
         if (!shouldRetry || i === attempts - 1) {
           throw err;
@@ -2302,6 +2383,17 @@ export class XmtpClient {
       return;
     }
 
+    const globalCooldownMs = this.getGlobalSyncCooldownMs();
+    if (globalCooldownMs > 0 && !opts?.force) {
+      console.warn(`[XMTP] Skipping conversation sync due to global cooldown (${Math.round(globalCooldownMs / 1000)}s)`);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:sync:cooldown',
+        details: `Cooldown ${Math.round(globalCooldownMs / 1000)}s`,
+      });
+      return;
+    }
+
     let syncFailed = false;
     console.log('[XMTP] Syncing conversations...');
     try {
@@ -2309,7 +2401,9 @@ export class XmtpClient {
         attempts: 3,
         initialDelayMs: 800,
         shouldRetry: (err) => this.isTransientSyncError(err),
+        onRateLimit: () => this.noteGlobalRateLimit('conversations.sync'),
       });
+      this.reduceGlobalCooldown();
     } catch (error) {
       if (this.isUninitializedIdentityError(error)) {
         console.error('[XMTP] conversations.sync failed due to uninitialized identity:', error);
@@ -2332,7 +2426,9 @@ export class XmtpClient {
         attempts: 2,
         initialDelayMs: 500,
         shouldRetry: (err) => this.isTransientSyncError(err),
+        onRateLimit: () => this.noteGlobalRateLimit('conversations.list'),
       });
+      this.reduceGlobalCooldown();
     } catch (error) {
       console.error('[XMTP] Failed to list conversations:', error);
       if (soft) {
@@ -2350,7 +2446,13 @@ export class XmtpClient {
     // Build a set of DM ids to avoid misclassifying them as groups
     let dmIdSet = new Set<string>();
     try {
-      const dms = await this.client.conversations.listDms();
+      const dms = await this.retryWithDelay('conversations.listDms', () => this.client!.conversations.listDms(), {
+        attempts: 2,
+        initialDelayMs: 500,
+        shouldRetry: (err) => this.isTransientSyncError(err),
+        onRateLimit: () => this.noteGlobalRateLimit('conversations.listDms'),
+      });
+      this.reduceGlobalCooldown();
 
       dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
 
@@ -2550,6 +2652,16 @@ export class XmtpClient {
         : undefined;
     const messageLimit = recentMode ? BigInt(opts?.messageLimit ?? 200) : undefined;
     const messageOptions = sentAfterNs || messageLimit ? { sentAfterNs, limit: messageLimit } : undefined;
+    const globalCooldownMs = this.getGlobalSyncCooldownMs();
+    if (recentMode && globalCooldownMs > 0) {
+      console.warn(`[XMTP] Skipping recent history sync due to global cooldown (${Math.round(globalCooldownMs / 1000)}s)`);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'history:sync:cooldown',
+        details: `Cooldown ${Math.round(globalCooldownMs / 1000)}s`,
+      });
+      return;
+    }
 
     try {
       console.log(`[XMTP] Syncing ${recentMode ? 'recent' : 'full'} history (conversations + messages)...`);
@@ -2559,7 +2671,9 @@ export class XmtpClient {
           attempts: 3,
           initialDelayMs: 800,
           shouldRetry: (err) => this.isTransientSyncError(err),
+          onRateLimit: () => this.noteGlobalRateLimit('history:conversations.sync'),
         });
+        this.reduceGlobalCooldown();
       } catch (error) {
         if (this.isUninitializedIdentityError(error)) {
           throw error;
@@ -2593,7 +2707,9 @@ export class XmtpClient {
           attempts: 2,
           initialDelayMs: 500,
           shouldRetry: (err) => this.isTransientSyncError(err),
+          onRateLimit: () => this.noteGlobalRateLimit('history:conversations.listDms'),
         });
+        this.reduceGlobalCooldown();
       } catch (error) {
         console.warn('[XMTP] listDms failed during history sync; continuing with empty DM list', error);
       }
@@ -2621,7 +2737,9 @@ export class XmtpClient {
                 attempts: 3,
                 initialDelayMs: 750,
                 shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
+                onRateLimit: () => this.noteConversationRateLimit(dmId, 'dm.sync'),
               });
+              this.reduceConversationCooldown(dmId);
             } catch (syncErr) {
               // Check if the error message indicates a partial success
               if (this.isPartialSyncSuccess(syncErr)) {
@@ -2853,6 +2971,16 @@ export class XmtpClient {
               })
             );
           }
+          try {
+            const now = Date.now();
+            const existing = await storage.getConversation(dmId);
+            if (existing) {
+              await storage.putConversation({ ...existing, lastSyncedAt: now });
+              useConversationStore.getState().updateConversation(dmId, { lastSyncedAt: now });
+            }
+          } catch (syncStampErr) {
+            console.warn('[XMTP] Failed to persist DM sync timestamp', syncStampErr);
+          }
         } catch (dmErr) {
           if (this.isMissingConversationKeyError(dmErr)) {
             console.info('[XMTP] Skipping DM history backfill due to missing key:', dm.id);
@@ -2868,7 +2996,9 @@ export class XmtpClient {
           attempts: 2,
           initialDelayMs: 500,
           shouldRetry: (err) => this.isTransientSyncError(err),
+          onRateLimit: () => this.noteGlobalRateLimit('history:conversations.list'),
         });
+        this.reduceGlobalCooldown();
         const dmIds = new Set(dms.map((d) => d.id));
         const maybeGroups = allConvs.filter((c) => !dmIds.has(c.id));
         console.log(`[XMTP] Backfilling messages for ${maybeGroups.length} group conversations`);
@@ -2892,7 +3022,9 @@ export class XmtpClient {
                   attempts: 3,
                   initialDelayMs: 750,
                   shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
+                  onRateLimit: () => this.noteConversationRateLimit(conv.id!, 'group.sync'),
                 });
+                this.reduceConversationCooldown(conv.id!);
               } catch (syncErr) {
                 if (this.isPartialSyncSuccess(syncErr)) {
                   const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
@@ -3038,6 +3170,16 @@ export class XmtpClient {
                   detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
                 })
               );
+            }
+            try {
+              const now = Date.now();
+              const existing = await storage.getConversation(conv.id);
+              if (existing) {
+                await storage.putConversation({ ...existing, lastSyncedAt: now });
+                useConversationStore.getState().updateConversation(conv.id, { lastSyncedAt: now });
+              }
+            } catch (syncStampErr) {
+              console.warn('[XMTP] Failed to persist group sync timestamp', syncStampErr);
             }
           } catch (gErr) {
             if (this.isMissingConversationKeyError(gErr)) {

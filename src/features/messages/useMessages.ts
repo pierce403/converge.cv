@@ -31,7 +31,7 @@ export function useMessages() {
    * Sync a conversation from XMTP network
    */
   const syncConversation = useCallback(
-    async (conversationId: string) => {
+    async (conversationId: string, opts?: { force?: boolean }) => {
       try {
         const xmtp = getXmtpClient();
         if (!xmtp.isConnected()) {
@@ -42,6 +42,19 @@ export function useMessages() {
         const conversation = conversations.find((c) => c.id === conversationId);
         if (!conversation) {
           console.warn('[useMessages] Cannot sync conversation: conversation not found');
+          return;
+        }
+
+        const globalCooldownMs = xmtp.getConversationSyncCooldownMs(conversationId);
+        if (globalCooldownMs > 0 && !opts?.force) {
+          console.warn(
+            `[useMessages] Skipping conversation sync due to cooldown (${Math.round(globalCooldownMs / 1000)}s)`
+          );
+          return;
+        }
+
+        const minIntervalMs = 60 * 1000;
+        if (!opts?.force && conversation.lastSyncedAt && Date.now() - conversation.lastSyncedAt < minIntervalMs) {
           return;
         }
 
@@ -70,14 +83,27 @@ export function useMessages() {
           } else {
             console.warn('[useMessages] Conversation does not support sync() method');
           }
+
+          const syncedAt = Date.now();
+          updateConversation(conversationId, { lastSyncedAt: syncedAt });
+          try {
+            const storage = await getStorage();
+            const existing = await storage.getConversation(conversationId);
+            if (existing) {
+              await storage.putConversation({ ...existing, lastSyncedAt: syncedAt });
+            }
+          } catch (syncErr) {
+            console.warn('[useMessages] Failed to persist conversation sync timestamp', syncErr);
+          }
         } catch (syncError) {
+          xmtp.recordRateLimitForConversation(conversationId, syncError, 'conversation.sync');
           console.warn('[useMessages] Failed to sync conversation from XMTP:', syncError);
         }
       } catch (error) {
         console.error('[useMessages] Error syncing conversation:', error);
       }
     },
-    [conversations]
+    [conversations, updateConversation]
   );
 
   /**
@@ -90,7 +116,7 @@ export function useMessages() {
 
         // If syncing from network, sync the conversation first
         if (syncFromNetwork) {
-          await syncConversation(conversationId);
+          await syncConversation(conversationId, { force: true });
         }
 
         const storage = await getStorage();

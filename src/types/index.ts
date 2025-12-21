@@ -53,6 +53,11 @@ export interface Conversation {
   groupMembers?: GroupMember[];
   groupPermissions?: GroupPermissionsState;
   isLocalOnly?: boolean;
+  /**
+   * Timestamp (ms since epoch) of the last successful network sync for this conversation.
+   * Used to throttle per-conversation sync calls.
+   */
+  lastSyncedAt?: number;
 }
 
 export interface DeletedConversationRecord {
