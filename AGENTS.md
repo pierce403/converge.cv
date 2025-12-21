@@ -437,7 +437,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-21 (history sync retries)
+**Last Updated**: 2025-12-21 (gentle sync + recent backfill)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-21)
@@ -452,6 +452,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### History Sync Resilience
 - Conversation and message sync now retries on transient MLS/network errors and treats partial sync failures as non-fatal, reducing missed messages after refreshes.
 - Connect flow uses a soft conversation sync to avoid disconnecting when MLS sync throws.
+
+### Gentle Sync Mode
+- Default conversation sync interval increased to reduce rate limits; connect now runs a light “recent” backfill when local data exists.
+- Recent backfill limits to latest conversations + message window, avoiding full inbox refreshes on every connect.
 
 ## Latest Changes (2025-12-20)
 
