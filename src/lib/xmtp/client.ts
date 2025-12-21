@@ -187,6 +187,56 @@ export class XmtpClient {
     }
   }
 
+  private isUninitializedIdentityError(err: unknown): boolean {
+    try {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      return /uninitialized identity/i.test(msg);
+    } catch {
+      return false;
+    }
+  }
+
+  private isMlsSyncError(err: unknown): boolean {
+    try {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      return /mls_sync/i.test(msg) || /InboxValidationFailed/i.test(msg) || /Error validating commit/i.test(msg);
+    } catch {
+      return false;
+    }
+  }
+
+  private isTransientNetworkError(err: unknown): boolean {
+    try {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      return (
+        /network/i.test(msg) ||
+        /timeout/i.test(msg) ||
+        /timed out/i.test(msg) ||
+        /fetch/i.test(msg) ||
+        /connection/i.test(msg) ||
+        /socket/i.test(msg) ||
+        /ECONNRESET/i.test(msg) ||
+        /ENOTFOUND/i.test(msg) ||
+        /\b50[234]\b/.test(msg)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private isPartialSyncSuccess(err: unknown): boolean {
+    try {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      return msg.includes('synced') && msg.includes('succeeded');
+    } catch {
+      return false;
+    }
+  }
+
+  private isTransientSyncError(err: unknown): boolean {
+    return this.isRateLimitError(err) || this.isMlsSyncError(err) || this.isTransientNetworkError(err);
+  }
+
   // Check if an error is an expected identity/association error (not worth logging repeatedly)
   private isExpectedIdentityError(error: unknown): boolean {
     try {
@@ -315,6 +365,36 @@ export class XmtpClient {
       }
     }
     // Fallback throw (should not reach here due to early return/throw)
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  private async retryWithDelay<T>(label: string, fn: () => Promise<T>, opts?: {
+    attempts?: number;
+    initialDelayMs?: number;
+    factor?: number;
+    jitter?: boolean;
+    shouldRetry?: (err: unknown, attempt: number) => boolean;
+  }): Promise<T> {
+    const attempts = opts?.attempts ?? 3;
+    const factor = opts?.factor ?? 2;
+    const jitter = opts?.jitter ?? true;
+    let delay = opts?.initialDelayMs ?? 750;
+    let lastErr: unknown = undefined;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        const shouldRetry = opts?.shouldRetry ? opts.shouldRetry(err, i) : true;
+        if (!shouldRetry || i === attempts - 1) {
+          throw err;
+        }
+        const wait = jitter ? Math.floor(delay * (0.75 + Math.random() * 0.5)) : delay;
+        console.warn(`[XMTP] ${label}: retrying in ${wait}ms (attempt ${i + 2}/${attempts})`);
+        await new Promise((res) => setTimeout(res, wait));
+        delay *= factor;
+      }
+    }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
@@ -1807,14 +1887,14 @@ export class XmtpClient {
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
       try {
-        await this.syncConversations();
+        await this.syncConversations({ soft: true, reason: 'connect' });
       } catch (syncError) {
         const msg = syncError instanceof Error ? syncError.message : String(syncError ?? '');
         // Recovery: if the SDK reports an uninitialized identity, attempt a register() and retry.
         if (/uninitialized identity/i.test(msg) && this.client) {
           console.warn('[XMTP] syncConversations failed due to uninitialized identity; attempting register() and retry');
           await this.client.register();
-          await this.syncConversations();
+          await this.syncConversations({ soft: true, reason: 'connect' });
         } else {
           throw syncError;
         }
@@ -2171,12 +2251,13 @@ export class XmtpClient {
   /**
    * Sync all conversations from the network
    */
-  async syncConversations(opts?: { force?: boolean; minIntervalMs?: number; reason?: string }): Promise<void> {
+  async syncConversations(opts?: { force?: boolean; minIntervalMs?: number; reason?: string; soft?: boolean }): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
     const minIntervalMs = opts?.minIntervalMs ?? 2 * 60 * 1000;
+    const soft = opts?.soft ?? false;
     const now = Date.now();
 
     let lastSyncedAt: number | undefined;
@@ -2211,151 +2292,192 @@ export class XmtpClient {
       return;
     }
 
+    let syncFailed = false;
+    console.log('[XMTP] Syncing conversations...');
     try {
-      console.log('[XMTP] Syncing conversations...');
-      await this.client.conversations.sync();
-      const convos = await this.client.conversations.list();
-      const storage = await getStorage();
-      // Build a set of DM ids to avoid misclassifying them as groups
-      let dmIdSet = new Set<string>();
-      try {
-        const dms = await this.client.conversations.listDms();
-
-        dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
-
-        // Persist DMs to storage to ensure they appear after a resync
-        for (const dm of dms) {
-          try {
-            const id = dm.id?.toString();
-            if (!id) continue;
-
-            const exists = await storage.getConversation(id);
-            if (exists) continue;
-
-            // Get the peer's inbox ID using the async method
-            // This is the actual identity of the person we're chatting with
-            let peerInboxId: string | undefined;
-            try {
-              // peerInboxId() is an async method on the DM type
-              peerInboxId = await dm.peerInboxId();
-            } catch (peerIdErr) {
-              console.warn('[XMTP] Failed to get peerInboxId for DM:', id, peerIdErr);
-            }
-
-            // CRITICAL: Never use the conversation ID as the peer ID!
-            // If we can't get the peer inbox ID, skip this conversation - it will
-            // be populated properly when messages are backfilled
-            if (!peerInboxId) {
-              console.warn('[XMTP] Skipping DM without peerInboxId:', id);
-              continue;
-            }
-
-            const createdAt = dm.createdAtNs
-              ? Number(dm.createdAtNs / BigInt(1_000_000))
-              : Date.now();
-
-            const conversation: Conversation = {
-              id,
-              topic: id, // Use conversation ID as topic for DMs
-              peerId: peerInboxId.toLowerCase(), // The peer's inbox ID - this is the identity
-              createdAt,
-              lastMessageAt: createdAt,
-              unreadCount: 0,
-              pinned: false,
-              archived: false,
-              isGroup: false,
-              lastMessagePreview: '',
-            };
-
-            await storage.putConversation(conversation);
-            console.log('[XMTP] ✅ Persisted DM with peerId:', peerInboxId.slice(0, 10) + '...');
-          } catch (dmErr) {
-            console.warn('[XMTP] Failed to persist DM during sync:', dmErr);
-          }
-        }
-      } catch (e) {
-        // If listDms fails, proceed without the set; group detection below is still conservative
-        console.warn('[XMTP] listDms failed during syncConversations; continuing without DM filter', e);
+      await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
+        attempts: 3,
+        initialDelayMs: 800,
+        shouldRetry: (err) => this.isTransientSyncError(err),
+      });
+    } catch (error) {
+      if (this.isUninitializedIdentityError(error)) {
+        console.error('[XMTP] conversations.sync failed due to uninitialized identity:', error);
+        throw error;
       }
-      console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
+      syncFailed = true;
+      console.warn('[XMTP] conversations.sync failed; continuing with cached list', error);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:sync:error',
+        details: this.isMlsSyncError(error)
+          ? 'MLS sync error (continuing with cached list)'
+          : `Sync failed (${error instanceof Error ? error.message : String(error)})`,
+      });
+    }
 
-      // Ensure group conversations are present in local storage even if no messages were backfilled yet
-      try {
-        const myInboxLower = this.client?.inboxId?.toLowerCase?.() ?? this.identity?.inboxId?.toLowerCase?.();
-        for (const c of convos as Array<{ id?: string; createdAtNs?: bigint }>) {
-          const id = c?.id as string | undefined;
+    let convos: Array<{ id?: string; createdAtNs?: bigint }> = [];
+    try {
+      convos = await this.retryWithDelay('conversations.list', () => this.client!.conversations.list(), {
+        attempts: 2,
+        initialDelayMs: 500,
+        shouldRetry: (err) => this.isTransientSyncError(err),
+      });
+    } catch (error) {
+      console.error('[XMTP] Failed to list conversations:', error);
+      if (soft) {
+        logNetworkEvent({
+          direction: 'status',
+          event: 'conversations:list:error',
+          details: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      throw error;
+    }
+
+    const storage = await getStorage();
+    // Build a set of DM ids to avoid misclassifying them as groups
+    let dmIdSet = new Set<string>();
+    try {
+      const dms = await this.client.conversations.listDms();
+
+      dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
+
+      // Persist DMs to storage to ensure they appear after a resync
+      for (const dm of dms) {
+        try {
+          const id = dm.id?.toString();
           if (!id) continue;
+
           const exists = await storage.getConversation(id);
           if (exists) continue;
-          // Never classify known DM ids as groups
-          if (dmIdSet.has(id)) {
+
+          // Get the peer's inbox ID using the async method
+          // This is the actual identity of the person we're chatting with
+          let peerInboxId: string | undefined;
+          try {
+            // peerInboxId() is an async method on the DM type
+            peerInboxId = await dm.peerInboxId();
+          } catch (peerIdErr) {
+            console.warn('[XMTP] Failed to get peerInboxId for DM:', id, peerIdErr);
+          }
+
+          // CRITICAL: Never use the conversation ID as the peer ID!
+          // If we can't get the peer inbox ID, skip this conversation - it will
+          // be populated properly when messages are backfilled
+          if (!peerInboxId) {
+            console.warn('[XMTP] Skipping DM without peerInboxId:', id);
             continue;
           }
-          // Probe if this is a group by checking for group APIs on the conversation
-          let group = null as Awaited<ReturnType<typeof this.getGroupConversation>> | null;
-          try {
-            group = await this.getGroupConversation(id);
-          } catch {
-            group = null;
-          }
-          if (!group) continue; // Not a group (DMs will be created via message backfill)
 
-          try {
-            const details = await this.buildGroupDetails(id, group);
-            const isMember = (() => {
-              if (!myInboxLower) {
-                return true;
-              }
-              return details.members.some(
-                (member) => member.inboxId && member.inboxId.toLowerCase() === myInboxLower
-              );
-            })();
-            if (!isMember) {
-              console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
-              continue;
-            }
-            const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
-            const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId)).filter(Boolean);
-            const uniqueMembers = Array.from(new Set(memberIdentifiers));
-            const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
-            const adminInboxes = Array.from(new Set(details.adminInboxes));
-            const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
-            const groupMembers = details.members.map((m) => ({
-              inboxId: m.inboxId,
-              address: m.address,
-              permissionLevel: m.permissionLevel,
-              isAdmin: m.isAdmin,
-              isSuperAdmin: m.isSuperAdmin,
-            }));
-            const conversation: Conversation = {
-              id,
-              topic: id,
-              peerId: id,
-              createdAt,
-              lastMessageAt: createdAt,
-              unreadCount: 0,
-              pinned: false,
-              archived: false,
-              isGroup: true,
-              groupName: details.name?.trim() || undefined,
-              groupImage: details.imageUrl?.trim() || undefined,
-              groupDescription: details.description?.trim() || undefined,
-              members: uniqueMembers,
-              memberInboxes,
-              adminInboxes,
-              superAdminInboxes,
-              groupMembers,
-            };
-            await storage.putConversation(conversation);
-            logNetworkEvent({ direction: 'status', event: 'conversations:sync:group_added', details: `Inserted group ${id}` });
-          } catch (persistErr) {
-            console.warn('[XMTP] Failed to persist group conversation after sync', persistErr);
-          }
+          const createdAt = dm.createdAtNs
+            ? Number(dm.createdAtNs / BigInt(1_000_000))
+            : Date.now();
+
+          const conversation: Conversation = {
+            id,
+            topic: id, // Use conversation ID as topic for DMs
+            peerId: peerInboxId.toLowerCase(), // The peer's inbox ID - this is the identity
+            createdAt,
+            lastMessageAt: createdAt,
+            unreadCount: 0,
+            pinned: false,
+            archived: false,
+            isGroup: false,
+            lastMessagePreview: '',
+          };
+
+          await storage.putConversation(conversation);
+          console.log('[XMTP] ✅ Persisted DM with peerId:', peerInboxId.slice(0, 10) + '...');
+        } catch (dmErr) {
+          console.warn('[XMTP] Failed to persist DM during sync:', dmErr);
         }
-      } catch (ensureErr) {
-        console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
       }
+    } catch (e) {
+      // If listDms fails, proceed without the set; group detection below is still conservative
+      console.warn('[XMTP] listDms failed during syncConversations; continuing without DM filter', e);
+    }
+    console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
 
+    // Ensure group conversations are present in local storage even if no messages were backfilled yet
+    try {
+      const myInboxLower = this.client?.inboxId?.toLowerCase?.() ?? this.identity?.inboxId?.toLowerCase?.();
+      for (const c of convos as Array<{ id?: string; createdAtNs?: bigint }>) {
+        const id = c?.id as string | undefined;
+        if (!id) continue;
+        const exists = await storage.getConversation(id);
+        if (exists) continue;
+        // Never classify known DM ids as groups
+        if (dmIdSet.has(id)) {
+          continue;
+        }
+        // Probe if this is a group by checking for group APIs on the conversation
+        let group = null as Awaited<ReturnType<typeof this.getGroupConversation>> | null;
+        try {
+          group = await this.getGroupConversation(id);
+        } catch {
+          group = null;
+        }
+        if (!group) continue; // Not a group (DMs will be created via message backfill)
+
+        try {
+          const details = await this.buildGroupDetails(id, group);
+          const isMember = (() => {
+            if (!myInboxLower) {
+              return true;
+            }
+            return details.members.some(
+              (member) => member.inboxId && member.inboxId.toLowerCase() === myInboxLower
+            );
+          })();
+          if (!isMember) {
+            console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
+            continue;
+          }
+          const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
+          const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId)).filter(Boolean);
+          const uniqueMembers = Array.from(new Set(memberIdentifiers));
+          const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
+          const adminInboxes = Array.from(new Set(details.adminInboxes));
+          const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
+          const groupMembers = details.members.map((m) => ({
+            inboxId: m.inboxId,
+            address: m.address,
+            permissionLevel: m.permissionLevel,
+            isAdmin: m.isAdmin,
+            isSuperAdmin: m.isSuperAdmin,
+          }));
+          const conversation: Conversation = {
+            id,
+            topic: id,
+            peerId: id,
+            createdAt,
+            lastMessageAt: createdAt,
+            unreadCount: 0,
+            pinned: false,
+            archived: false,
+            isGroup: true,
+            groupName: details.name?.trim() || undefined,
+            groupImage: details.imageUrl?.trim() || undefined,
+            groupDescription: details.description?.trim() || undefined,
+            members: uniqueMembers,
+            memberInboxes,
+            adminInboxes,
+            superAdminInboxes,
+            groupMembers,
+          };
+          await storage.putConversation(conversation);
+          logNetworkEvent({ direction: 'status', event: 'conversations:sync:group_added', details: `Inserted group ${id}` });
+        } catch (persistErr) {
+          console.warn('[XMTP] Failed to persist group conversation after sync', persistErr);
+        }
+      }
+    } catch (ensureErr) {
+      console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
+    }
+
+    if (!syncFailed) {
       const syncedAt = Date.now();
       useXmtpStore.getState().setLastSyncedAt(syncedAt);
       if (this.identity) {
@@ -2384,12 +2506,14 @@ export class XmtpClient {
         event: 'conversations:sync',
         details: `Synced ${convos.length} conversations`,
       });
-    } catch (error) {
-      console.error('[XMTP] Failed to sync conversations:', error);
-      throw error;
+    } else {
+      logNetworkEvent({
+        direction: 'status',
+        event: 'conversations:sync:partial',
+        details: `Loaded ${convos.length} conversations with sync errors`,
+      });
     }
   }
-
   /**
    * Sync historical messages into the local DB and surface them to the app
    * so they appear in the UI like live messages.
@@ -2402,12 +2526,32 @@ export class XmtpClient {
     try {
       console.log('[XMTP] Syncing full history (conversations + messages)...');
       // First sync the list of conversations from the network
-      await this.client.conversations.sync();
+      try {
+        await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
+          attempts: 3,
+          initialDelayMs: 800,
+          shouldRetry: (err) => this.isTransientSyncError(err),
+        });
+      } catch (error) {
+        if (this.isUninitializedIdentityError(error)) {
+          throw error;
+        }
+        console.warn('[XMTP] conversations.sync failed during history sync; continuing with cached data', error);
+      }
 
       // Backfill DMs into our app store by dispatching the same custom events
       // we use for live streaming messages.
       const storage = await getStorage();
-      const dms = await this.client.conversations.listDms();
+      let dms: Awaited<ReturnType<typeof this.client.conversations.listDms>> = [];
+      try {
+        dms = await this.retryWithDelay('conversations.listDms', () => this.client!.conversations.listDms(), {
+          attempts: 2,
+          initialDelayMs: 500,
+          shouldRetry: (err) => this.isTransientSyncError(err),
+        });
+      } catch (error) {
+        console.warn('[XMTP] listDms failed during history sync; continuing with empty DM list', error);
+      }
       console.log(`[XMTP] Backfilling messages for ${dms.length} DM conversations`);
 
       for (const dm of dms) {
@@ -2420,12 +2564,16 @@ export class XmtpClient {
           if (typeof (dm as any).sync === 'function') {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              await (dm as any).sync();
+              await this.retryWithDelay(`dm.sync:${dm.id ?? 'unknown'}`, () => (dm as any).sync(), {
+                attempts: 3,
+                initialDelayMs: 750,
+                shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
+              });
             } catch (syncErr) {
               // Check if the error message indicates a partial success
-              const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
-              if (errMsg.includes('synced') && errMsg.includes('succeeded')) {
+              if (this.isPartialSyncSuccess(syncErr)) {
                 // Partial success - some messages synced, continue with what we have
+                const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
                 console.debug('[XMTP] DM sync had errors but messages were synced, continuing:', dm.id, errMsg);
               } else {
                 // Real sync failure - log but continue to next DM
@@ -2667,7 +2815,11 @@ export class XmtpClient {
 
       // Backfill Groups as well (group conversations may not have recent DMs)
       try {
-        const allConvs = await this.client.conversations.list();
+        const allConvs = await this.retryWithDelay('conversations.list', () => this.client!.conversations.list(), {
+          attempts: 2,
+          initialDelayMs: 500,
+          shouldRetry: (err) => this.isTransientSyncError(err),
+        });
         const dmIds = new Set(dms.map((d) => d.id));
         const maybeGroups = allConvs.filter((c) => !dmIds.has(c.id));
         console.log(`[XMTP] Backfilling messages for ${maybeGroups.length} group conversations`);
@@ -2680,10 +2832,14 @@ export class XmtpClient {
             if (typeof (conv as any).sync === 'function') {
               try {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                await (conv as any).sync();
+                await this.retryWithDelay(`group.sync:${conv.id ?? 'unknown'}`, () => (conv as any).sync(), {
+                  attempts: 3,
+                  initialDelayMs: 750,
+                  shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
+                });
               } catch (syncErr) {
-                const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
-                if (errMsg.includes('synced') && errMsg.includes('succeeded')) {
+                if (this.isPartialSyncSuccess(syncErr)) {
+                  const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
                   console.debug('[XMTP] Group sync had errors but messages were synced, continuing:', conv.id, errMsg);
                 } else {
                   console.warn('[XMTP] Group sync failed:', conv.id, syncErr);

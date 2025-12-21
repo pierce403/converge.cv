@@ -437,7 +437,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-21 (group member validation)
+**Last Updated**: 2025-12-21 (history sync retries)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-21)
@@ -448,6 +448,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Group Membership Validation
 - Group member add flow now validates inbox IDs/addresses before sending updates, skipping unregistered members and toasting a warning to avoid MLS commit validation errors (`InboxValidationFailed`).
+
+### History Sync Resilience
+- Conversation and message sync now retries on transient MLS/network errors and treats partial sync failures as non-fatal, reducing missed messages after refreshes.
+- Connect flow uses a soft conversation sync to avoid disconnecting when MLS sync throws.
 
 ## Latest Changes (2025-12-20)
 
