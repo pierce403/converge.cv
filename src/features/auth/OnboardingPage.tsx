@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { generateMnemonic, mnemonicToAccount, english } from 'viem/accounts';
 import { bytesToHex } from 'viem';
-import { useSignMessage } from 'wagmi';
 import type { Identifier } from '@xmtp/browser-sdk';
 import { WalletSelector } from './WalletSelector';
 import { useAuth } from './useAuth';
@@ -172,8 +171,7 @@ const renderRegistryEntry = (
 export function OnboardingPage() {
   const navigate = useNavigate();
   const auth = useAuth();
-  const { signMessageAsync } = useSignMessage();
-  const { disconnectWallet } = useWalletConnection();
+  const { disconnectWallet, signMessage } = useWalletConnection();
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
@@ -415,7 +413,12 @@ export function OnboardingPage() {
     const candidate: WalletIdentityCandidate = {
       address,
       chainId,
-      signMessage: async (message: string) => await signMessageAsync({ message }),
+      signMessage: async (message: string) => {
+        if (!signMessage) {
+          throw new Error('Wallet signing is not available. Please reconnect your wallet.');
+        }
+        return await signMessage(message);
+      },
     };
 
     setWalletCandidate(candidate);

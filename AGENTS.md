@@ -438,15 +438,15 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-31 (wallet provider switching)
+**Last Updated**: 2025-12-31 (thirdweb modal + privy id)
 **Updated By**: AI Agent
 
 ## Latest Changes (2025-12-31)
 
 ### Wallet Providers: Native / Thirdweb / Privy
 - Added a wallet provider selector (Native, Thirdweb, Privy) used in onboarding and Settings; selection persists locally and defaults to Thirdweb.
-- Thirdweb in-app wallet support added via `@thirdweb-dev/wagmi-adapter` with the provided client ID baked in (env override: `VITE_THIRDWEB_CLIENT_ID`).
-- Privy support added behind `VITE_PRIVY_APP_ID`; the option is disabled without an app ID to avoid misconfiguration.
+- Thirdweb now uses the standard Connect modal UI (via `thirdweb/react` ConnectButton) with the provided client ID baked in (env override: `VITE_THIRDWEB_CLIENT_ID`).
+- Privy app ID is now baked in as a fallback (`VITE_PRIVY_APP_ID` overrides), so the provider is always available.
 - Added Solana peer deps (`@solana/kit`, `@solana/sysvars`, `@solana-program/system`) to keep Privy’s build pipeline happy.
 
 ## Latest Changes (2025-12-21)

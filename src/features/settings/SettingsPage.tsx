@@ -10,12 +10,13 @@ import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
-import { usePublicClient, useSignMessage } from 'wagmi';
+import { usePublicClient } from 'wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 import { FarcasterSettings } from './FarcasterSettings';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
+import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 
 const BASE_CHAIN_ID = 8453;
 
@@ -69,8 +70,9 @@ export function SettingsPage() {
     walletOptions,
     isConnected: isWalletConnected,
     address: walletAddress,
+    signMessage,
+    provider: walletProvider,
   } = useWalletConnection();
-  const { signMessageAsync } = useSignMessage();
   const basePublicClient = usePublicClient({ chainId: BASE_CHAIN_ID });
   const [showQR, setShowQR] = useState(false);
   // Track push status
@@ -122,9 +124,13 @@ export function SettingsPage() {
         throw new Error('Please connect the wallet that owns this identity to continue.');
       }
 
+      if (!signMessage) {
+        throw new Error('Wallet signing is not available. Try reconnecting your wallet.');
+      }
+
       await xmtp.connect({
         address: identity.address,
-        signMessage: async (message: string) => await signMessageAsync({ message }),
+        signMessage: async (message: string) => await signMessage(message),
       });
     } catch (error) {
       console.error('Reconnect failed:', error);
@@ -345,7 +351,12 @@ export function SettingsPage() {
       address: smartWalletAddress,
       chainId: BASE_CHAIN_ID,
       walletType: 'SCW',
-      signMessage: async (message: string) => await signMessageAsync({ message, account: smartWalletAddress as `0x${string}` }),
+      signMessage: async (message: string) => {
+        if (!signMessage) {
+          throw new Error('Wallet signing is not available. Connect your wallet and try again.');
+        }
+        return await signMessage(message, smartWalletAddress);
+      },
     });
 
     alert(
@@ -806,31 +817,43 @@ export function SettingsPage() {
                     >
                       {isReconnecting ? 'Connecting...' : connectionStatus === 'error' ? 'Retry Connection' : 'Connect'}
                     </button>
-                    {showConnectorList && walletOptions.length > 0 && (
+                    {showConnectorList && (
                       <div className="space-y-2">
                         <div className="text-xs text-primary-300">Choose a wallet to reconnect:</div>
-                        <div className="flex flex-wrap gap-2">
-                          {walletOptions.map((option) => (
-                            <button
-                              key={option.id}
-                              onClick={async () => {
-                                try {
-                                  setConnectError(null);
-                                  await connectWallet(option);
-                                  await handleReconnect();
-                                } catch (err) {
-                                  setConnectError(
-                                    err instanceof Error ? err.message : 'Failed to connect wallet'
-                                  );
-                                }
-                              }}
-                              className="btn-secondary text-xs px-3 py-1"
-                              disabled={isReconnecting || option.disabled}
-                            >
-                              {option.name}
-                            </button>
-                          ))}
-                        </div>
+                        {walletProvider === 'thirdweb' ? (
+                          <ThirdwebConnectButton
+                            label="Connect with Thirdweb"
+                            className="w-full"
+                            onConnected={() => {
+                              if (!isReconnecting) {
+                                void handleReconnect();
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {walletOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                onClick={async () => {
+                                  try {
+                                    setConnectError(null);
+                                    await connectWallet(option);
+                                    await handleReconnect();
+                                  } catch (err) {
+                                    setConnectError(
+                                      err instanceof Error ? err.message : 'Failed to connect wallet'
+                                    );
+                                  }
+                                }}
+                                className="btn-secondary text-xs px-3 py-1"
+                                disabled={isReconnecting || option.disabled}
+                              >
+                                {option.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1265,32 +1288,52 @@ export function SettingsPage() {
               )}
 
               <div className="text-sm text-primary-200">Or connect a wallet:</div>
-              <div className="flex flex-wrap gap-2">
-                {walletOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    onClick={async () => {
-                      if (isAddingIdentity) return;
-                      setIsAddingIdentity(true);
-                      setAddIdentityError(null);
-                      try {
-                        const result = await connectWallet(option);
-                        const accounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
-                        await addBaseSmartWalletIdentity(accounts);
-                        setShowAddIdentityModal(false);
-                      } catch (err) {
-                        setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect wallet');
-                      } finally {
-                        setIsAddingIdentity(false);
-                      }
-                    }}
-                    disabled={isAddingIdentity || option.disabled}
-                    className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
-                  >
-                    {isAddingIdentity ? 'Working…' : option.name}
-                  </button>
-                ))}
-              </div>
+              {walletProvider === 'thirdweb' ? (
+                <ThirdwebConnectButton
+                  label={isAddingIdentity ? 'Working…' : 'Connect with Thirdweb'}
+                  className="w-full"
+                  onConnected={async (addr) => {
+                    if (isAddingIdentity) return;
+                    setIsAddingIdentity(true);
+                    setAddIdentityError(null);
+                    try {
+                      await addBaseSmartWalletIdentity([addr]);
+                      setShowAddIdentityModal(false);
+                    } catch (err) {
+                      setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect wallet');
+                    } finally {
+                      setIsAddingIdentity(false);
+                    }
+                  }}
+                />
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {walletOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      onClick={async () => {
+                        if (isAddingIdentity) return;
+                        setIsAddingIdentity(true);
+                        setAddIdentityError(null);
+                        try {
+                          const result = await connectWallet(option);
+                          const accounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
+                          await addBaseSmartWalletIdentity(accounts);
+                          setShowAddIdentityModal(false);
+                        } catch (err) {
+                          setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect wallet');
+                        } finally {
+                          setIsAddingIdentity(false);
+                        }
+                      }}
+                      disabled={isAddingIdentity || option.disabled}
+                      className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+                    >
+                      {isAddingIdentity ? 'Working…' : option.name}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button

@@ -36,9 +36,6 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.90.5
         version: 5.90.5(react@18.3.1)
-      '@thirdweb-dev/wagmi-adapter':
-        specifier: ^0.2.200
-        version: 0.2.200(@wagmi/core@2.22.1(@tanstack/query-core@5.90.5)(@types/react@18.3.26)(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75)))(thirdweb@5.116.1(@hey-api/openapi-ts@0.89.2(magicast@0.3.5)(typescript@5.9.3))(@solana/sysvars@5.1.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@tanstack/query-core@5.90.5)(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(typescript@5.9.3)
       '@wagmi/connectors':
         specifier: 5.11.2
         version: 5.11.2(@tanstack/react-query@5.90.5(react@18.3.1))(@types/react@18.3.26)(@wagmi/core@2.22.1(@tanstack/query-core@5.90.5)(@types/react@18.3.26)(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75)))(bufferutil@4.0.9)(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(utf-8-validate@5.0.10)(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75))(wagmi@2.16.9(@tanstack/query-core@5.90.5)(@tanstack/react-query@5.90.5(react@18.3.1))(@types/react@18.3.26)(bufferutil@4.0.9)(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75))(zod@3.25.75))(zod@3.25.75)
@@ -2574,17 +2571,6 @@ packages:
     resolution: {integrity: sha512-24oRscLTW9Mod+XpyLlusLxZIZjqQv0XFNSV4lR5u9eoRPaA/BG2HtlVPr0DUtguzTbEyBz98++s5UWleqchVg==}
     engines: {node: '>=18'}
     peerDependencies:
-      typescript: '>=5.0.4'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
-
-  '@thirdweb-dev/wagmi-adapter@0.2.200':
-    resolution: {integrity: sha512-jTQPcmZhJoO5BD/fy8O5JqvM1vE6Jxmdrz2yzlnv85m67U+dVLmtRy4+Bul2ZkccelmQ8EA/dURWPSGjdLzeqg==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@wagmi/core': 2.22.1
-      thirdweb: ^5.85.0
       typescript: '>=5.0.4'
     peerDependenciesMeta:
       typescript:
@@ -10099,13 +10085,6 @@ snapshots:
       - '@hey-api/openapi-ts'
 
   '@thirdweb-dev/insight@1.1.1(typescript@5.9.3)':
-    optionalDependencies:
-      typescript: 5.9.3
-
-  '@thirdweb-dev/wagmi-adapter@0.2.200(@wagmi/core@2.22.1(@tanstack/query-core@5.90.5)(@types/react@18.3.26)(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75)))(thirdweb@5.116.1(@hey-api/openapi-ts@0.89.2(magicast@0.3.5)(typescript@5.9.3))(@solana/sysvars@5.1.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@tanstack/query-core@5.90.5)(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(typescript@5.9.3)':
-    dependencies:
-      '@wagmi/core': 2.22.1(@tanstack/query-core@5.90.5)(@types/react@18.3.26)(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75))
-      thirdweb: 5.116.1(@hey-api/openapi-ts@0.89.2(magicast@0.3.5)(typescript@5.9.3))(@solana/sysvars@5.1.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@tanstack/query-core@5.90.5)(@types/react-dom@18.3.7(@types/react@18.3.26))(@types/react@18.3.26)(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))
     optionalDependencies:
       typescript: 5.9.3
 

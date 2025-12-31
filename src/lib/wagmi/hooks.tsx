@@ -4,11 +4,20 @@
 /* eslint-disable react-refresh/only-export-components */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useAccount, useConnect, useDisconnect, useConnectors } from 'wagmi';
+import { useAccount, useConnect, useDisconnect, useConnectors, useSignMessage } from 'wagmi';
 import { usePrivy, useWallets, type ConnectedWallet } from '@privy-io/react-auth';
 import { useSetActiveWallet } from '@privy-io/wagmi';
+import {
+  useActiveAccount,
+  useActiveWallet,
+  useActiveWalletChain,
+  useActiveWalletConnectionStatus,
+  useConnectModal,
+  useDisconnect as useThirdwebDisconnect,
+} from 'thirdweb/react';
 import { useWalletProviderStore } from '@/lib/stores';
 import type { WalletProvider } from '@/lib/wallets/providers';
+import { getThirdwebClient } from '@/lib/wallets/providers';
 
 export interface WalletOption {
   id: string;
@@ -39,6 +48,7 @@ export interface WalletConnectionValue {
   connectWallet: (option: WalletOption) => Promise<WalletConnectResult | undefined>;
   connectDefaultWallet: () => Promise<WalletConnectResult | undefined>;
   disconnectWallet: () => Promise<void>;
+  signMessage?: (message: string, accountAddress?: string) => Promise<string>;
 }
 
 const WalletConnectionContext = createContext<WalletConnectionValue | null>(null);
@@ -150,6 +160,7 @@ function WagmiWalletConnectionProvider({
   const { connectAsync, isPending: isConnecting } = useConnect();
   const { disconnectAsync, isPending: isDisconnecting } = useDisconnect();
   const connectors = useConnectors();
+  const { signMessageAsync } = useSignMessage();
   const { setProvider } = useWalletProviderStore();
   const isMobile = isMobileDevice();
   const hasThirdwebConnector = useMemo(
@@ -210,6 +221,11 @@ function WagmiWalletConnectionProvider({
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
+      signMessage: async (message: string, accountAddress?: string) =>
+        await signMessageAsync({
+          message,
+          account: accountAddress as `0x${string}` | undefined,
+        }),
     }),
     [
       provider,
@@ -222,6 +238,7 @@ function WagmiWalletConnectionProvider({
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
+      signMessageAsync,
     ]
   );
 
@@ -235,6 +252,7 @@ function WagmiWalletConnectionProvider({
 function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
   const account = useAccount();
   const { disconnectAsync } = useDisconnect();
+  const { signMessageAsync } = useSignMessage();
   const { ready, authenticated, login, logout, connectWallet: connectPrivyWallet } = usePrivy();
   const { wallets } = useWallets();
   const { setActiveWallet } = useSetActiveWallet();
@@ -332,6 +350,11 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
+      signMessage: async (message: string, accountAddress?: string) =>
+        await signMessageAsync({
+          message,
+          account: accountAddress as `0x${string}` | undefined,
+        }),
     }),
     [
       setProvider,
@@ -343,6 +366,88 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
+      signMessageAsync,
+    ]
+  );
+
+  return (
+    <WalletConnectionContext.Provider value={value}>
+      {children}
+    </WalletConnectionContext.Provider>
+  );
+}
+
+function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode }) {
+  const activeAccount = useActiveAccount();
+  const activeWallet = useActiveWallet();
+  const activeChain = useActiveWalletChain();
+  const connectionStatus = useActiveWalletConnectionStatus();
+  const { disconnect } = useThirdwebDisconnect();
+  const { connect, isConnecting } = useConnectModal();
+  const { setProvider } = useWalletProviderStore();
+
+  const connectViaModal = useCallback(async () => {
+    const client = getThirdwebClient();
+    if (!client) {
+      throw new Error('Thirdweb client ID is not configured.');
+    }
+    const wallet = await connect({
+      client,
+      theme: 'dark',
+      size: 'compact',
+      title: 'Connect with Thirdweb',
+    });
+    const account = wallet.getAccount();
+    return {
+      accounts: account?.address ? [account.address] : undefined,
+      chainId: wallet.getChain()?.id,
+    } satisfies WalletConnectResult;
+  }, [connect]);
+
+  const connectWallet = useCallback(async (_option: WalletOption) => await connectViaModal(), [connectViaModal]);
+  const connectDefaultWallet = useCallback(async () => await connectViaModal(), [connectViaModal]);
+
+  const disconnectWallet = useCallback(async () => {
+    if (activeWallet) {
+      await disconnect(activeWallet);
+    }
+  }, [activeWallet, disconnect]);
+
+  const signMessage = useCallback(
+    async (message: string) => {
+      if (!activeAccount) {
+        throw new Error('No Thirdweb account is connected.');
+      }
+      return await activeAccount.signMessage({ message });
+    },
+    [activeAccount]
+  );
+
+  const value = useMemo<WalletConnectionValue>(
+    () => ({
+      provider: 'thirdweb',
+      setProvider,
+      address: activeAccount?.address,
+      chainId: activeChain?.id,
+      isConnected: Boolean(activeAccount?.address),
+      isConnecting: connectionStatus === 'connecting' || isConnecting,
+      isDisconnecting: false,
+      walletOptions: [],
+      connectWallet,
+      connectDefaultWallet,
+      disconnectWallet,
+      signMessage,
+    }),
+    [
+      setProvider,
+      activeAccount?.address,
+      activeChain?.id,
+      connectionStatus,
+      isConnecting,
+      connectWallet,
+      connectDefaultWallet,
+      disconnectWallet,
+      signMessage,
     ]
   );
 
@@ -365,6 +470,10 @@ export function WalletConnectionProvider({
 
   if (provider === 'privy') {
     return <PrivyWalletConnectionProvider>{children}</PrivyWalletConnectionProvider>;
+  }
+
+  if (provider === 'thirdweb') {
+    return <ThirdwebWalletConnectionProvider>{children}</ThirdwebWalletConnectionProvider>;
   }
 
   return (

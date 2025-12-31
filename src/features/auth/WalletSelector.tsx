@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useWalletConnection, type WalletOption } from '@/lib/wagmi';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
+import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 
 interface WalletSelectorProps {
   onWalletConnected: (address: string, chainId?: number) => void;
@@ -14,7 +15,7 @@ interface WalletSelectorProps {
 }
 
 export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportKeyfile }: WalletSelectorProps) {
-  const { connectWallet, address, chainId, isConnecting, walletOptions } = useWalletConnection();
+  const { connectWallet, address, chainId, isConnecting, walletOptions, provider } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
   const hasTriggeredCallback = useRef(false);
 
@@ -83,29 +84,40 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
       )}
 
       <div className="space-y-3">
-        {walletOptions.map((wallet) => (
-          <button
-            key={wallet.id}
-            onClick={() => handleConnect(wallet)}
-            disabled={isConnecting || wallet.disabled}
-            className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
-          >
-            <div className="flex items-center justify-between w-full">
-              <div className="flex items-center gap-3">
-                <span className="text-3xl">{wallet.icon}</span>
-                <div className="text-left">
-                  <div className="font-medium text-primary-50">{wallet.name}</div>
-                  {wallet.description && (
-                    <div className="text-xs text-primary-200">{wallet.description}</div>
-                  )}
+        {provider === 'thirdweb' ? (
+          <ThirdwebConnectButton
+            label="Continue with Thirdweb"
+            className="w-full"
+            onConnected={(addr, nextChain) => {
+              hasTriggeredCallback.current = true;
+              onWalletConnected(addr, nextChain);
+            }}
+          />
+        ) : (
+          walletOptions.map((wallet) => (
+            <button
+              key={wallet.id}
+              onClick={() => handleConnect(wallet)}
+              disabled={isConnecting || wallet.disabled}
+              className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">{wallet.icon}</span>
+                  <div className="text-left">
+                    <div className="font-medium text-primary-50">{wallet.name}</div>
+                    {wallet.description && (
+                      <div className="text-xs text-primary-200">{wallet.description}</div>
+                    )}
+                  </div>
                 </div>
+                {isConnecting && (
+                  <div className="animate-spin w-5 h-5 border-2 border-accent-400 border-t-transparent rounded-full" />
+                )}
               </div>
-              {isConnecting && (
-                <div className="animate-spin w-5 h-5 border-2 border-accent-400 border-t-transparent rounded-full" />
-              )}
-            </div>
-          </button>
-        ))}
+            </button>
+          ))
+        )}
 
         {/* Import Keyfile option styled identically for consistent spacing */}
         <button

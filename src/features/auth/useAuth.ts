@@ -19,7 +19,7 @@ import {
 import { getXmtpClient } from '@/lib/xmtp';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { VaultSecrets, Identity } from '@/types';
-import { useAccount, useSignMessage } from 'wagmi';
+import { useWalletConnection } from '@/lib/wagmi';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
 import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
 
@@ -27,10 +27,7 @@ export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
   const isE2E = import.meta?.env?.VITE_E2E_TEST === 'true';
-  
-  // Get wagmi account info for wallet-based identities
-  const { address: walletAddress, chainId: walletChainId } = useAccount();
-  const { signMessageAsync } = useSignMessage();
+  const { address: walletAddress, chainId: walletChainId, signMessage: walletSignMessage } = useWalletConnection();
 
   const connectXmtpSafely = useCallback(
     async (
@@ -712,9 +709,12 @@ export function useAuth() {
           labelOverride: identity.displayName,
         });
       } else if (walletAddress && walletAddress.toLowerCase() === identity.address.toLowerCase()) {
-        console.log('[Auth] Reconnecting wallet-based identity with wagmi signer');
+        console.log('[Auth] Reconnecting wallet-based identity with wallet signer');
         const signMessage = async (message: string) => {
-          return await signMessageAsync({ message });
+          if (!walletSignMessage) {
+            throw new Error('Wallet signing is not available. Please reconnect your wallet.');
+          }
+          return await walletSignMessage(message);
         };
         await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
           register: false,
@@ -734,7 +734,7 @@ export function useAuth() {
       console.error('Failed to check existing identity:', error);
       return false;
     }
-  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress, walletChainId, signMessageAsync]);
+  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress, walletChainId, walletSignMessage]);
 
   const probeIdentity = useCallback(
     async (
