@@ -177,6 +177,7 @@ pnpm typecheck        # TypeScript type checking
 
 ### ✅ Completed
 - Simplified onboarding (no passphrases, auto wallet generation with proper secp256k1 key derivation)
+- Wallet provider switching (Native / Thirdweb / Privy) with Thirdweb as default; provider selector is available in onboarding + Settings
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
 - Vault unlocked by default
@@ -437,8 +438,16 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-21 (adaptive sync cooldowns)
+**Last Updated**: 2025-12-31 (wallet provider switching)
 **Updated By**: AI Agent
+
+## Latest Changes (2025-12-31)
+
+### Wallet Providers: Native / Thirdweb / Privy
+- Added a wallet provider selector (Native, Thirdweb, Privy) used in onboarding and Settings; selection persists locally and defaults to Thirdweb.
+- Thirdweb in-app wallet support added via `@thirdweb-dev/wagmi-adapter` with the provided client ID baked in (env override: `VITE_THIRDWEB_CLIENT_ID`).
+- Privy support added behind `VITE_PRIVY_APP_ID`; the option is disabled without an app ID to avoid misconfiguration.
+- Added Solana peer deps (`@solana/kit`, `@solana/sysvars`, `@solana-program/system`) to keep Privy’s build pipeline happy.
 
 ## Latest Changes (2025-12-21)
 

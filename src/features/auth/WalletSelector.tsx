@@ -3,7 +3,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { useWalletConnection, type WalletConnectorType } from '@/lib/wagmi';
+import { useWalletConnection, type WalletOption } from '@/lib/wagmi';
+import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 
 interface WalletSelectorProps {
   onWalletConnected: (address: string, chainId?: number) => void;
@@ -13,25 +14,18 @@ interface WalletSelectorProps {
 }
 
 export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportKeyfile }: WalletSelectorProps) {
-  const { connectWallet, address, chainId, isConnecting } = useWalletConnection();
+  const { connectWallet, address, chainId, isConnecting, walletOptions } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
   const hasTriggeredCallback = useRef(false);
 
   // Detect if we're on mobile
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  
-  const wallets: Array<{ type: WalletConnectorType; name: string; icon: string; description?: string }> = [
-    { type: 'Coinbase Wallet', name: isMobile ? 'Base Wallet' : 'Coinbase Wallet', icon: '🔵', description: isMobile ? 'Opens Base app' : undefined },
-    { type: 'MetaMask', name: 'MetaMask', icon: '🦊' },
-    { type: 'WalletConnect', name: 'WalletConnect', icon: '🔗' },
-    { type: 'Injected', name: 'Browser Wallet', icon: '🌐' },
-  ];
 
-  const handleConnect = async (walletType: WalletConnectorType) => {
+  const handleConnect = async (wallet: WalletOption) => {
     setError(null);
     try {
       // On mobile, if connecting to Coinbase Wallet, try to deep link to Base app
-      if (isMobile && walletType === 'Coinbase Wallet') {
+      if (isMobile && wallet.id === 'coinbase' && wallet.provider === 'native') {
         console.log('[WalletSelector] Mobile detected, opening Base app...');
         
         // Try to open the Coinbase Wallet app
@@ -42,7 +36,7 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
-      const result = await connectWallet(walletType);
+      const result = await connectWallet(wallet);
       if (result && result.accounts && result.accounts[0]) {
         hasTriggeredCallback.current = true;
         onWalletConnected(result.accounts[0], result.chainId);
@@ -80,6 +74,8 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
         </p>
       </div>
 
+      <WalletProviderSelector dense />
+
       {error && (
         <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
           {error}
@@ -87,11 +83,11 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
       )}
 
       <div className="space-y-3">
-        {wallets.map((wallet) => (
+        {walletOptions.map((wallet) => (
           <button
-            key={wallet.type}
-            onClick={() => handleConnect(wallet.type)}
-            disabled={isConnecting}
+            key={wallet.id}
+            onClick={() => handleConnect(wallet)}
+            disabled={isConnecting || wallet.disabled}
             className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
           >
             <div className="flex items-center justify-between w-full">

@@ -10,12 +10,12 @@ import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
 import { useWalletConnection } from '@/lib/wagmi';
-import type { WalletConnectorType } from '@/lib/wagmi';
 import { usePublicClient, useSignMessage } from 'wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 import { FarcasterSettings } from './FarcasterSettings';
+import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 
 const BASE_CHAIN_ID = 8453;
 
@@ -66,7 +66,7 @@ export function SettingsPage() {
     disconnectWallet,
     connectDefaultWallet,
     connectWallet,
-    connectors,
+    walletOptions,
     isConnected: isWalletConnected,
     address: walletAddress,
   } = useWalletConnection();
@@ -806,17 +806,17 @@ export function SettingsPage() {
                     >
                       {isReconnecting ? 'Connecting...' : connectionStatus === 'error' ? 'Retry Connection' : 'Connect'}
                     </button>
-                    {showConnectorList && connectors.length > 0 && (
+                    {showConnectorList && walletOptions.length > 0 && (
                       <div className="space-y-2">
                         <div className="text-xs text-primary-300">Choose a wallet to reconnect:</div>
                         <div className="flex flex-wrap gap-2">
-                          {connectors.map((c) => (
+                          {walletOptions.map((option) => (
                             <button
-                              key={c.id}
+                              key={option.id}
                               onClick={async () => {
                                 try {
                                   setConnectError(null);
-                                  await connectWallet(c.name as WalletConnectorType);
+                                  await connectWallet(option);
                                   await handleReconnect();
                                 } catch (err) {
                                   setConnectError(
@@ -825,9 +825,9 @@ export function SettingsPage() {
                                 }
                               }}
                               className="btn-secondary text-xs px-3 py-1"
-                              disabled={isReconnecting}
+                              disabled={isReconnecting || option.disabled}
                             >
-                              {c.name}
+                              {option.name}
                             </button>
                           ))}
                         </div>
@@ -849,6 +849,14 @@ export function SettingsPage() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Wallet Provider */}
+              <div className="p-4">
+                <WalletProviderSelector dense />
+                <div className="mt-2 text-xs text-primary-400">
+                  Controls which wallet system is used for onboarding and linking identities.
+                </div>
               </div>
 
               {/* Current Identity */}
@@ -1258,15 +1266,15 @@ export function SettingsPage() {
 
               <div className="text-sm text-primary-200">Or connect a wallet:</div>
               <div className="flex flex-wrap gap-2">
-                {connectors.map((c) => (
+                {walletOptions.map((option) => (
                   <button
-                    key={c.id}
+                    key={option.id}
                     onClick={async () => {
                       if (isAddingIdentity) return;
                       setIsAddingIdentity(true);
                       setAddIdentityError(null);
                       try {
-                        const result = await connectWallet(c.name as WalletConnectorType);
+                        const result = await connectWallet(option);
                         const accounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
                         await addBaseSmartWalletIdentity(accounts);
                         setShowAddIdentityModal(false);
@@ -1276,10 +1284,10 @@ export function SettingsPage() {
                         setIsAddingIdentity(false);
                       }
                     }}
-                    disabled={isAddingIdentity}
+                    disabled={isAddingIdentity || option.disabled}
                     className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
                   >
-                    {isAddingIdentity ? 'Working…' : c.name}
+                    {isAddingIdentity ? 'Working…' : option.name}
                   </button>
                 ))}
               </div>
