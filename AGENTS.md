@@ -438,8 +438,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2025-12-31 (thirdweb modal + privy id)
+**Last Updated**: 2026-01-05 (react-query provider order for Privy reconnect)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-01-05)
+
+### Privy Reconnect Crash Fix
+- Wrapped wallet provider stacks with `QueryClientProvider` so Privy’s internal `useReconnect` hooks can access a React Query client during reconnect.
 
 ## Latest Changes (2025-12-31)
 
