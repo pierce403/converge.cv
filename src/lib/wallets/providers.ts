@@ -5,7 +5,8 @@ export type WalletProvider = 'native' | 'thirdweb' | 'privy';
 export const DEFAULT_WALLET_PROVIDER: WalletProvider = 'thirdweb';
 
 const THIRDWEB_CLIENT_ID_FALLBACK = 'eb8bec9287101b98c08a3150aed11218';
-const PRIVY_APP_ID_FALLBACK = 'client-WY6UHR4M9wqSPsngMQMRLjAyFLPk3ynJGsHB5efZziYzr';
+const PRIVY_APP_ID_FALLBACK = 'cmju83tjq02rfjr0cgf60ewbd';
+const PRIVY_CLIENT_ID_FALLBACK = 'client-WY6UHR4M9wqSPsngMQMRLjAyFLPk3ynJGsHB5efZziYzr';
 
 export const resolveThirdwebClientId = (): string | undefined => {
   const metaKey = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_THIRDWEB_CLIENT_ID : undefined;
@@ -25,6 +26,16 @@ export const resolvePrivyAppId = (): string | undefined => {
     if (envKey) return envKey;
   }
   return PRIVY_APP_ID_FALLBACK;
+};
+
+export const resolvePrivyClientId = (): string | undefined => {
+  const metaKey = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_PRIVY_CLIENT_ID : undefined;
+  if (metaKey) return metaKey;
+  if (typeof process !== 'undefined') {
+    const envKey = (process.env as Record<string, string | undefined>)?.VITE_PRIVY_CLIENT_ID;
+    if (envKey) return envKey;
+  }
+  return PRIVY_CLIENT_ID_FALLBACK;
 };
 
 let cachedThirdwebClient: ThirdwebClient | null | undefined;

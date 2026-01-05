@@ -48,7 +48,7 @@ export function WalletProviderSelector({ className, dense }: WalletProviderSelec
                 <div className="text-[11px] text-primary-300">{option.description}</div>
                 {!isAvailable && option.id === 'privy' && (
                   <div className="mt-1 text-[10px] text-amber-300">
-                    Set VITE_PRIVY_APP_ID to enable
+                    Set VITE_PRIVY_APP_ID to enable (client ID optional)
                   </div>
                 )}
               </button>

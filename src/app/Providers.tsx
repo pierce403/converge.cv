@@ -6,7 +6,7 @@ import { ThirdwebProvider } from 'thirdweb/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WalletConnectionProvider, wagmiConfigNative, wagmiConfigPrivy } from '@/lib/wagmi';
 import { useWalletProviderStore } from '@/lib/stores';
-import { resolvePrivyAppId } from '@/lib/wallets/providers';
+import { resolvePrivyAppId, resolvePrivyClientId } from '@/lib/wallets/providers';
 // Initialize the worker tracker early so we capture workers created during app bootstrap
 import '@/lib/debug/worker-tracker';
 
@@ -24,6 +24,7 @@ export function AppProviders({ children }: AppProvidersProps) {
   const provider = useWalletProviderStore((state) => state.provider);
   const setProvider = useWalletProviderStore((state) => state.setProvider);
   const privyAppId = resolvePrivyAppId();
+  const privyClientId = resolvePrivyClientId();
   const privyAvailable = Boolean(privyAppId);
   const effectiveProvider = provider === 'privy' && privyAvailable ? 'privy' : provider === 'privy' ? 'thirdweb' : provider;
 
@@ -37,7 +38,7 @@ export function AppProviders({ children }: AppProvidersProps) {
   if (effectiveProvider === 'privy' && privyAppId) {
     return (
       <QueryClientProvider client={queryClient}>
-        <PrivyProvider appId={privyAppId}>
+        <PrivyProvider appId={privyAppId} clientId={privyClientId}>
           <PrivyWagmiProvider config={wagmiConfigPrivy}>
             <WalletConnectionProvider providerOverride="privy">
               {children}
