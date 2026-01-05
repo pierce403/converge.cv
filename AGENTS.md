@@ -438,10 +438,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-05 (walletconnect version alignment)
+**Last Updated**: 2026-01-05 (native reconnect selection)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-05)
+
+### Settings Native Reconnect
+- Settings reconnect no longer auto-connects Coinbase for native wallets; it now shows the full native wallet list (styled like onboarding) and requires an explicit selection.
 
 ### Privy + WalletConnect Fix
 - Forced WalletConnect stack to 2.22.4 via pnpm overrides to eliminate `publishCustom` missing errors during Privy/Rainbow connects.

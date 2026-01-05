@@ -109,6 +109,15 @@ export function SettingsPage() {
       let effectiveWallet = walletAddress?.toLowerCase();
       try {
         if (!isWalletConnected || effectiveWallet !== identity.address.toLowerCase()) {
+          if (walletProvider === 'native') {
+            setShowConnectorList(true);
+            setConnectError(
+              effectiveWallet && effectiveWallet !== identity.address.toLowerCase()
+                ? 'Please connect the wallet that owns this identity to continue.'
+                : 'Choose a wallet to reconnect.'
+            );
+            return;
+          }
           const result = await connectDefaultWallet();
           const connectedAccounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
           const connected = connectedAccounts?.[0];
@@ -831,7 +840,7 @@ export function SettingsPage() {
                             }}
                           />
                         ) : (
-                          <div className="flex flex-wrap gap-2">
+                          <div className="space-y-2">
                             {walletOptions.map((option) => (
                               <button
                                 key={option.id}
@@ -846,10 +855,18 @@ export function SettingsPage() {
                                     );
                                   }
                                 }}
-                                className="btn-secondary text-xs px-3 py-1"
+                                className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
                                 disabled={isReconnecting || option.disabled}
                               >
-                                {option.name}
+                                <div className="flex items-center gap-3">
+                                  <span className="text-3xl">{option.icon}</span>
+                                  <div>
+                                    <div className="text-sm font-medium text-primary-50">{option.name}</div>
+                                    {option.description && (
+                                      <div className="text-xs text-primary-300">{option.description}</div>
+                                    )}
+                                  </div>
+                                </div>
                               </button>
                             ))}
                           </div>

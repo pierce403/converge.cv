@@ -9,6 +9,7 @@
 - Deep links like `/u/:userId` (ENS/address) and `/i/:inboxId` open a DM composer when already signed in, or route through onboarding and then return to the target.
 - Wallet connections are provider-aware: users can switch between Native (MetaMask/Coinbase/WalletConnect), Thirdweb (standard Thirdweb Connect modal), and Privy (embedded/external wallets) from onboarding or Settings, with the choice persisted locally.
 - Privy and Thirdweb fall back to baked-in app/client IDs when env vars are missing (`VITE_PRIVY_APP_ID`, `VITE_THIRDWEB_CLIENT_ID`).
+- Settings reconnect for native wallets mirrors onboarding by showing explicit wallet choices instead of auto-connecting a default.
 
 ### Inbox Switcher Isolation
 - Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, drafts, and keys never leak across inboxes.
