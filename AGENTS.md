@@ -438,10 +438,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-05 (privy app vs client id)
+**Last Updated**: 2026-01-05 (walletconnect version alignment)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-05)
+
+### Privy + WalletConnect Fix
+- Forced WalletConnect stack to 2.22.4 via pnpm overrides to eliminate `publishCustom` missing errors during Privy/Rainbow connects.
 
 ### Privy App + Client ID
 - Restored Privy app ID fallback and added a separate client ID fallback (`VITE_PRIVY_CLIENT_ID` support) so PrivyProvider gets the correct `appId` and optional `clientId`.

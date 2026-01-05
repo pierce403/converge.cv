@@ -84,6 +84,13 @@
   "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b",
   "pnpm": {
     "overrides": {
+      "@walletconnect/core": "2.22.4",
+      "@walletconnect/ethereum-provider": "2.22.4",
+      "@walletconnect/sign-client": "2.22.4",
+      "@walletconnect/universal-provider": "2.22.4",
+      "@walletconnect/types": "2.22.4",
+      "@walletconnect/utils": "2.22.4",
+      "@walletconnect/logger": "3.0.0",
       "@wagmi/connectors": "5.11.2",
       "@wagmi/core": "2.22.1",
       "esbuild": "0.25.0",
