@@ -36,39 +36,39 @@ export function AppProviders({ children }: AppProvidersProps) {
 
   if (effectiveProvider === 'privy' && privyAppId) {
     return (
-      <PrivyProvider appId={privyAppId}>
-        <PrivyWagmiProvider config={wagmiConfigPrivy}>
-          <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={queryClient}>
+        <PrivyProvider appId={privyAppId}>
+          <PrivyWagmiProvider config={wagmiConfigPrivy}>
             <WalletConnectionProvider providerOverride="privy">
               {children}
             </WalletConnectionProvider>
-          </QueryClientProvider>
-        </PrivyWagmiProvider>
-      </PrivyProvider>
+          </PrivyWagmiProvider>
+        </PrivyProvider>
+      </QueryClientProvider>
     );
   }
   
   if (effectiveProvider === 'thirdweb') {
     return (
-      <ThirdwebProvider>
-        <WagmiProvider config={wagmiConfigNative}>
-          <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={queryClient}>
+        <ThirdwebProvider>
+          <WagmiProvider config={wagmiConfigNative}>
             <WalletConnectionProvider providerOverride="thirdweb">
               {children}
             </WalletConnectionProvider>
-          </QueryClientProvider>
-        </WagmiProvider>
-      </ThirdwebProvider>
+          </WagmiProvider>
+        </ThirdwebProvider>
+      </QueryClientProvider>
     );
   }
 
   return (
-    <WagmiProvider config={wagmiConfigNative}>
-      <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={queryClient}>
+      <WagmiProvider config={wagmiConfigNative}>
         <WalletConnectionProvider providerOverride={effectiveProvider}>
           {children}
         </WalletConnectionProvider>
-      </QueryClientProvider>
-    </WagmiProvider>
+      </WagmiProvider>
+    </QueryClientProvider>
   );
 }
