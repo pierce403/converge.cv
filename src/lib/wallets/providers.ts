@@ -5,7 +5,7 @@ export type WalletProvider = 'native' | 'thirdweb' | 'privy';
 export const DEFAULT_WALLET_PROVIDER: WalletProvider = 'thirdweb';
 
 const THIRDWEB_CLIENT_ID_FALLBACK = 'eb8bec9287101b98c08a3150aed11218';
-const PRIVY_APP_ID_FALLBACK = 'cmju83tjq02rfjr0cgf60ewbd';
+const PRIVY_APP_ID_FALLBACK = 'client-WY6UHR4M9wqSPsngMQMRLjAyFLPk3ynJGsHB5efZziYzr';
 
 export const resolveThirdwebClientId = (): string | undefined => {
   const metaKey = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_THIRDWEB_CLIENT_ID : undefined;
