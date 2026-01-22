@@ -185,6 +185,7 @@ pnpm typecheck        # TypeScript type checking
 - Clean UI with proper feature messaging
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
+- Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
   - **XMTP SDK v5.0.1 on protocol v3**: ✅ Fully working!
@@ -438,8 +439,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-05 (native reconnect selection)
+**Last Updated**: 2026-01-22 (debug invite claim tool)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-01-22)
+
+### Debug: Convos Invite Claim
+- Added a Debug menu tool to parse Convos invite links/codes and send the raw invite slug to the creator inbox.
+- Invite parsing now tolerates non-base64url characters by stripping them, extracts creator inbox ID, tag, name, and image URL from the protobuf payload, and then sends the slug via XMTP DM.
 
 ## Latest Changes (2026-01-05)
 

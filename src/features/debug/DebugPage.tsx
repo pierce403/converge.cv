@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   useAuthStore,
   useConversationStore,
@@ -14,8 +15,12 @@ import buildInfo from '../../build-info.json'; // Import build info
 import { registerServiceWorkerForPush, enablePushForCurrentUser, disablePush, VAPID_PARTY_API_KEY, VAPID_PUBLIC_KEY } from '@/lib/push';
 import { VAPID_PARTY_API_BASE } from '@/lib/push/config';
 import { logNetworkEvent } from '@/lib/stores/debug-store';
+import { parseConvosInvite, type ParsedConvosInvite } from '@/lib/utils/convos-invite';
+import { useConversations } from '@/features/conversations/useConversations';
+import { useMessages } from '@/features/messages/useMessages';
 
 export function DebugPage() {
+  const navigate = useNavigate();
   const consoleEntries = useDebugStore((state) => state.consoleEntries);
   const networkEntries = useDebugStore((state) => state.networkEntries);
   const errorEntries = useDebugStore((state) => state.errorEntries);
@@ -27,6 +32,9 @@ export function DebugPage() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isVaultUnlocked = useAuthStore((state) => state.isVaultUnlocked);
   const identity = useAuthStore((state) => state.identity);
+
+  const { createConversation } = useConversations();
+  const { sendMessage } = useMessages();
 
   const conversationSummary = useConversationStore((state) => ({
     total: state.conversations.length,
@@ -51,6 +59,11 @@ export function DebugPage() {
   const [backendReachable, setBackendReachable] = useState<string>('unknown');
   const [isKeyExplorerOpen, setIsKeyExplorerOpen] = useState(false);
   const [isIgnoredModalOpen, setIsIgnoredModalOpen] = useState(false);
+  const [inviteInput, setInviteInput] = useState('');
+  const [inviteDetails, setInviteDetails] = useState<ParsedConvosInvite | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
+  const [inviteSending, setInviteSending] = useState(false);
 
   async function refreshPushStatus() {
     try {
@@ -85,6 +98,64 @@ export function DebugPage() {
       }
     } catch (e) {
       // swallow – this is debug UI
+    }
+  }
+
+  async function handleClaimInvite() {
+    setInviteError(null);
+    setInviteSuccess(null);
+
+    if (!inviteInput.trim()) {
+      setInviteError('Enter an invite link or code.');
+      return;
+    }
+
+    if (!isAuthenticated || !isVaultUnlocked) {
+      setInviteError('Sign in and unlock your inbox before claiming an invite.');
+      return;
+    }
+
+    let parsed: ParsedConvosInvite;
+    try {
+      parsed = parseConvosInvite(inviteInput);
+      setInviteDetails(parsed);
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : 'Invalid invite code.');
+      return;
+    }
+
+    if (!parsed.payload.creatorInboxId) {
+      setInviteError('Invite is missing the creator inbox ID.');
+      return;
+    }
+
+    setInviteSending(true);
+    try {
+      const conversation = await createConversation(parsed.payload.creatorInboxId);
+      if (!conversation) {
+        throw new Error('Failed to create DM with the invite creator.');
+      }
+
+      await sendMessage(conversation.id, parsed.inviteCode);
+
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'invite:claim',
+        details: `Sent invite code to ${parsed.payload.creatorInboxId}`,
+      });
+
+      setInviteSuccess('Invite sent. Waiting for the inviter to accept.');
+      navigate(`/chat/${conversation.id}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send invite.';
+      setInviteError(message);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'invite:claim',
+        details: message,
+      });
+    } finally {
+      setInviteSending(false);
     }
   }
 
@@ -186,6 +257,87 @@ export function DebugPage() {
               </div>
             </dl>
           </article>
+        </section>
+
+        {/* Invite Tools */}
+        <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
+          <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-primary-100">Invite Tools</h2>
+            <div className="text-xs text-primary-300">Convos invite claim</div>
+          </header>
+          <div className="px-4 py-4 space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wide text-primary-300">
+                Invite link or code
+              </label>
+              <textarea
+                value={inviteInput}
+                onChange={(event) => setInviteInput(event.target.value)}
+                className="min-h-[120px] w-full rounded-lg border border-primary-800/60 bg-primary-900/40 px-3 py-2 text-sm text-primary-100 placeholder:text-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+                placeholder="Paste https://popup.convos.org/v2?i=... or the raw invite code"
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleClaimInvite}
+                  className="btn-primary"
+                  disabled={inviteSending}
+                >
+                  {inviteSending ? 'Claiming…' : 'Claim Invite Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInviteInput('');
+                    setInviteDetails(null);
+                    setInviteError(null);
+                    setInviteSuccess(null);
+                  }}
+                  className="btn-secondary"
+                >
+                  Clear
+                </button>
+              </div>
+              {inviteError && (
+                <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {inviteError}
+                </div>
+              )}
+              {inviteSuccess && (
+                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+                  {inviteSuccess}
+                </div>
+              )}
+            </div>
+            {inviteDetails && (
+              <div className="rounded-lg border border-primary-800/60 bg-primary-900/40 p-3 text-xs text-primary-100">
+                <div className="grid gap-2 md:grid-cols-2">
+                  <div>
+                    <div className="text-primary-300">Creator inbox</div>
+                    <div className="break-all font-mono">{inviteDetails.payload.creatorInboxId}</div>
+                  </div>
+                  <div>
+                    <div className="text-primary-300">Invite tag</div>
+                    <div className="break-all font-mono">
+                      {inviteDetails.payload.tag || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-primary-300">Group name</div>
+                    <div className="break-all">{inviteDetails.payload.name || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-primary-300">Invite code</div>
+                    <div className="break-all font-mono">{inviteDetails.inviteCode}</div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="text-primary-300">Image URL</div>
+                    <div className="break-all">{inviteDetails.payload.imageUrl || '—'}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* Push Debug */}
