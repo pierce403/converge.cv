@@ -194,12 +194,23 @@ export class XmtpClient {
   private globalSyncBackoffMs = 0;
   // Per-conversation sync cooldown (adaptive backoff)
   private conversationSyncCooldown: Map<string, { until: number; backoffMs: number }> = new Map();
+  // Identity API cooldown (adaptive backoff on rate limits)
+  private identityCooldownUntil = 0;
+  private identityBackoffMs = 0;
+  private identityCooldownLogUntil = 0;
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
     try {
       const msg = err instanceof Error ? err.message : String(err ?? '');
-      return /\b429\b/.test(msg) || /rate\s*limit/i.test(msg) || /exceeds rate limit/i.test(msg);
+      return (
+        /\b429\b/.test(msg) ||
+        /rate\s*limit/i.test(msg) ||
+        /exceeds rate limit/i.test(msg) ||
+        /resource has been exhausted/i.test(msg) ||
+        /resource exhausted/i.test(msg) ||
+        /RESOURCE_EXHAUSTED/i.test(msg)
+      );
     } catch {
       return false;
     }
@@ -297,6 +308,46 @@ export class XmtpClient {
     } else {
       this.conversationSyncCooldown.set(key, { until: Date.now() + next, backoffMs: next });
     }
+  }
+
+  private noteIdentityRateLimit(reason: string): void {
+    const now = Date.now();
+    const next = this.identityBackoffMs > 0
+      ? Math.min(this.identityBackoffMs * 2, 30 * 60 * 1000)
+      : 60 * 1000;
+    this.identityBackoffMs = next;
+    this.identityCooldownUntil = Math.max(this.identityCooldownUntil, now + next);
+    this.identityCooldownLogUntil = 0;
+    console.warn(`[XMTP] Identity API cooldown ${Math.round(next / 1000)}s (reason=${reason})`);
+  }
+
+  private reduceIdentityCooldown(): void {
+    if (this.identityBackoffMs <= 0) {
+      return;
+    }
+    this.identityBackoffMs = Math.max(0, Math.floor(this.identityBackoffMs / 2));
+    if (this.identityBackoffMs === 0) {
+      this.identityCooldownUntil = 0;
+    }
+  }
+
+  private getIdentityCooldownMs(): number {
+    return Math.max(0, this.identityCooldownUntil - Date.now());
+  }
+
+  private shouldSkipIdentityCalls(context: string): boolean {
+    const cooldownMs = this.getIdentityCooldownMs();
+    if (cooldownMs <= 0) {
+      return false;
+    }
+    const now = Date.now();
+    if (now >= this.identityCooldownLogUntil) {
+      this.identityCooldownLogUntil = now + 15 * 1000;
+      console.warn(
+        `[XMTP] Skipping identity lookup (${context}) due to rate limit cooldown (${Math.round(cooldownMs / 1000)}s)`
+      );
+    }
+    return true;
   }
 
   public getGlobalSyncCooldownMs(): number {
@@ -430,24 +481,43 @@ export class XmtpClient {
     initialDelayMs?: number;
     factor?: number;
     jitter?: boolean;
+    retryOnRateLimit?: boolean;
+    onRateLimit?: (err: unknown) => void;
   }): Promise<T> {
     const attempts = opts?.attempts ?? 5;
     const factor = opts?.factor ?? 2;
     const jitter = opts?.jitter ?? true;
+    const retryOnRateLimit = opts?.retryOnRateLimit ?? false;
     let delay = opts?.initialDelayMs ?? 500;
     let lastErr: unknown = undefined;
     for (let i = 0; i < attempts; i++) {
       try {
-        return await fn();
+        if (this.shouldSkipIdentityCalls(label)) {
+          const cooldownMs = this.getIdentityCooldownMs();
+          throw new Error(`Identity API cooldown active (${Math.round(cooldownMs / 1000)}s)`);
+        }
+        const result = await fn();
+        this.reduceIdentityCooldown();
+        return result;
       } catch (err) {
         lastErr = err;
-        if (!this.isRateLimitError(err) || i === attempts - 1) {
-          throw err;
+        if (this.isRateLimitError(err)) {
+          try {
+            opts?.onRateLimit?.(err);
+          } catch {
+            // ignore
+          }
+          this.noteIdentityRateLimit(label);
+          if (!retryOnRateLimit || i === attempts - 1) {
+            throw err;
+          }
+          const wait = jitter ? Math.floor(delay * (0.75 + Math.random() * 0.5)) : delay;
+          console.warn(`[XMTP] ${label}: rate limited, retrying in ${wait}ms (attempt ${i + 2}/${attempts})`);
+          await new Promise((res) => setTimeout(res, wait));
+          delay *= factor;
+          continue;
         }
-        const wait = jitter ? Math.floor(delay * (0.75 + Math.random() * 0.5)) : delay;
-        console.warn(`[XMTP] ${label}: rate limited, retrying in ${wait}ms (attempt ${i + 2}/${attempts})`);
-        await new Promise((res) => setTimeout(res, wait));
-        delay *= factor;
+        throw err;
       }
     }
     // Fallback throw (should not reach here due to early return/throw)
@@ -930,6 +1000,10 @@ export class XmtpClient {
     try {
       const normalized = this.normalizeEthereumAddress(address);
 
+      if (this.shouldSkipIdentityCalls('deriveInboxIdFromAddress')) {
+        return null;
+      }
+
       // Optimization: Check if client is connected before calling getInboxIdFromAddress
       // This prevents "Client not connected" errors from filling the logs
       if (this.client) {
@@ -955,7 +1029,7 @@ export class XmtpClient {
       try {
         // Add timeout to prevent hanging if the worker/network is unresponsive
         const resolved = await Promise.race([
-          utils.getInboxIdForIdentifier(identifier, 'production'),
+          this.retryWithBackoff('utils.getInboxIdForIdentifier', () => utils.getInboxIdForIdentifier(identifier, 'production')),
           new Promise<string | undefined>((_, reject) =>
             setTimeout(() => reject(new Error('Timeout waiting for Utils')), 5000)
           )
@@ -1074,6 +1148,8 @@ export class XmtpClient {
       };
     };
 
+    const skipIdentityApi = this.shouldSkipIdentityCalls('fetchInboxProfile');
+
     const handleIdentityError = async (error: unknown): Promise<InboxProfile | null> => {
       this.applyInboxErrorCooldown(normalizedInboxId, error);
       if (!allowRecovery) {
@@ -1115,11 +1191,16 @@ export class XmtpClient {
                   avatarUrl?: string;
                 };
                 // Build with overrides from profile message + identifiers from preferences if possible
-                try {
-                  const latest = await this.client.preferences.getLatestInboxState(normalizedInboxId);
-                  if (latest) return buildProfile(latest.identifiers ?? [], obj);
-                } catch {
-                  // fallthrough
+                if (!skipIdentityApi) {
+                  try {
+                    const latest = await this.retryWithBackoff(
+                      'preferences.getLatestInboxState',
+                      () => this.client!.preferences.getLatestInboxState(normalizedInboxId)
+                    );
+                    if (latest) return buildProfile(latest.identifiers ?? [], obj);
+                  } catch {
+                    // fallthrough
+                  }
                 }
                 return buildProfile([], obj);
               } catch {
@@ -1130,6 +1211,10 @@ export class XmtpClient {
         } catch (err) {
           console.warn('[XMTP] fetchInboxProfile: DM profile scan failed', err);
         }
+      }
+
+      if (skipIdentityApi) {
+        return buildProfile([]);
       }
 
       if (this.client) {
@@ -4106,6 +4191,13 @@ export class XmtpClient {
       ]);
     };
 
+    if (this.shouldSkipIdentityCalls('getInboxState')) {
+      return createStubInboxState({
+        identifier: fallbackIdentifier,
+        inboxId: this.client?.inboxId ?? this.identity?.inboxId ?? null,
+      });
+    }
+
     if (this.client) {
       // Force refresh from network to avoid stale state
       const state = (await withTimeout(
@@ -4263,6 +4355,10 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
+    if (this.shouldSkipIdentityCalls('getInboxIdFromAddress')) {
+      return null;
+    }
+
     console.log('[XMTP] Looking up inbox ID for address:', address);
 
     try {
@@ -4350,6 +4446,7 @@ export class XmtpClient {
       let resolvedPeerInboxId: string | null = null;
       if (isEthereumAddress(peerAddressOrInboxId)) {
         console.log('[XMTP] Detected Ethereum address, resolving inbox ID first...');
+        const skipIdentityApi = this.shouldSkipIdentityCalls('createConversation');
 
         // IMPORTANT: Resolve the inbox ID BEFORE creating the DM
         // The SDK's newDmWithIdentifier checks local cache which may not have the peer
@@ -4365,7 +4462,7 @@ export class XmtpClient {
         }
 
         // Method 2: Use Utils.getInboxIdForIdentifier (network lookup)
-        if (!resolvedPeerInboxId) {
+        if (!resolvedPeerInboxId && !skipIdentityApi) {
           try {
             const { getXmtpUtils } = await import('./utils-singleton');
             const utils = await getXmtpUtils();
@@ -4373,7 +4470,10 @@ export class XmtpClient {
               identifier: toIdentifierHex(peerAddressOrInboxId).toLowerCase(),
               identifierKind: 'Ethereum' as const,
             };
-            const inboxId = await utils.getInboxIdForIdentifier(identifierForLookup, 'production');
+            const inboxId = await this.retryWithBackoff(
+              'utils.getInboxIdForIdentifier',
+              () => utils.getInboxIdForIdentifier(identifierForLookup, 'production')
+            );
             if (inboxId && !inboxId.startsWith('0x')) {
               resolvedPeerInboxId = inboxId;
               console.log('[XMTP] ✅ Resolved inbox ID via Utils.getInboxIdForIdentifier:', resolvedPeerInboxId);
@@ -4384,7 +4484,7 @@ export class XmtpClient {
         }
 
         // Method 3: Try with 0x prefix variant
-        if (!resolvedPeerInboxId) {
+        if (!resolvedPeerInboxId && !skipIdentityApi) {
           try {
             const { getXmtpUtils } = await import('./utils-singleton');
             const utils = await getXmtpUtils();
@@ -4392,7 +4492,10 @@ export class XmtpClient {
               identifier: peerAddressOrInboxId.toLowerCase(),
               identifierKind: 'Ethereum' as const,
             };
-            const inboxId = await utils.getInboxIdForIdentifier(identifierWith0x, 'production');
+            const inboxId = await this.retryWithBackoff(
+              'utils.getInboxIdForIdentifier',
+              () => utils.getInboxIdForIdentifier(identifierWith0x, 'production')
+            );
             if (inboxId && !inboxId.startsWith('0x')) {
               resolvedPeerInboxId = inboxId;
               console.log('[XMTP] ✅ Resolved inbox ID via Utils (with 0x):', resolvedPeerInboxId);

@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-22 (Fixed group creation + membership refresh handling)
+**Last Updated**: 2026-01-22 (Identity rate-limit backoff for XMTP profile lookups)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-22)
@@ -472,6 +472,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Farcaster Filters: Settings Only
 - Removed the per-conversation Farcaster filter toggle panel from the chat view.
 - Filters are now adjusted solely from Settings and still apply globally across conversations.
+
+### XMTP Identity Rate-Limit Backoff
+- Identity/profile lookups now detect resource-exhausted/rate-limit responses and apply an adaptive cooldown that pauses identity API calls to avoid hammering the network.
 
 ## Latest Changes (2026-01-05)
 

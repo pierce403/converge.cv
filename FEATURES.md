@@ -31,6 +31,7 @@
 ## Profile Sharing and Enrichment
 - Incoming `cv:profile` payloads embedded in messages are parsed to update contact display names and avatars, preferring the inline payload over fetched profiles while avoiding blocked or deleted peers.
 - Profile fetches are throttled to a five-minute window per contact to reduce redundant network calls while still refreshing stale records.
+- Identity/profile lookups honor rate-limit backoff signals (429/resource exhausted) by pausing XMTP identity API calls for an adaptive cooldown and falling back to minimal profiles until the cooldown clears.
 
 ## Group Management
 - Group settings expose metadata editing for name, image, and description alongside XMTP permission updates, member invites/removals, and admin promotions/demotions.
