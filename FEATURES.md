@@ -22,6 +22,7 @@
 - Message bubbles support long-press/right-click actions (reply, copy, delete, forward placeholder) via a modal, and maintain sent/read state indicators for pending/sent/delivered/failed statuses.
 - Inline replies render a quoted header that resolves the referenced message body when available, while normal text is linkified so URLs open in a new tab.
 - Reactions are grouped and pinned to the bottom of each bubble with counts, aligning left/right based on message ownership.
+- Image attachments can be picked from the paper-clip button, encrypted client-side, uploaded to IPFS via Thirdweb storage, and sent over XMTP RemoteAttachment with inline image rendering and local IndexedDB caching.
 
 ## Conversation Controls
 - Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp.

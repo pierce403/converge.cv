@@ -1,6 +1,6 @@
 # converge.cv — TODO
 
-**Last updated**: 2025-12-20
+**Last updated**: 2026-01-22
 
 This is the live backlog. Keep it short and current. Completed work should move to `AGENTS.md` or stay in git history.
 
@@ -26,7 +26,7 @@ This is the live backlog. Keep it short and current. Completed work should move 
 
 ## Messaging
 
-- Attachments (ContentTypeRemoteAttachment): upload backend, UI, storage.
+- Image attachments shipped (RemoteAttachment + Thirdweb IPFS); add multi-file + video support next.
 - Typing indicators.
 - Disappearing messages (timer + local cleanup).
 - Delivery/read state UX.

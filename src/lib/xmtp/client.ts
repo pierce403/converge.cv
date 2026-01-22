@@ -30,12 +30,22 @@ import { getAddress } from 'viem';
 import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
 import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
 import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-read-receipt';
-import { RemoteAttachmentCodec } from '@xmtp/content-type-remote-attachment';
+import {
+  AttachmentCodec,
+  ContentTypeRemoteAttachment,
+  RemoteAttachmentCodec,
+  type Attachment as XmtpAttachment,
+  type RemoteAttachment,
+} from '@xmtp/content-type-remote-attachment';
 import { ContentTypeText } from '@xmtp/content-type-text';
 import { GroupUpdatedCodec } from '@xmtp/content-type-group-updated';
 import { getStorage } from '@/lib/storage';
+import { getThirdwebClient } from '@/lib/wallets/providers';
+import { upload, resolveScheme } from 'thirdweb/storage';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap for remote attachment downloads/uploads
 
 export interface XmtpIdentity {
   address: string;
@@ -75,6 +85,9 @@ export interface XmtpMessage {
   conversationId: string;
   senderAddress: string;
   content: string | Uint8Array;
+  contentTypeId?: string;
+  attachment?: XmtpAttachment;
+  remoteAttachment?: RemoteAttachment;
   sentAt: number;
   isLocalFallback?: boolean;
   replyToId?: string;
@@ -787,6 +800,36 @@ export class XmtpClient {
     return 'System message';
   }
 
+  private isRemoteAttachmentType(typeId: string | undefined): boolean {
+    if (!typeId) return false;
+    const t = typeId.toLowerCase();
+    return t === ContentTypeRemoteAttachment.typeId.toLowerCase() || t.includes('remotestaticattachment');
+  }
+
+  async loadRemoteAttachment(remoteAttachment: RemoteAttachment): Promise<XmtpAttachment> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    return await RemoteAttachmentCodec.load(remoteAttachment, this.client);
+  }
+
+  private async uploadEncryptedAttachmentPayload(payload: Uint8Array, filename: string): Promise<{ uri: string; url: string }> {
+    const client = getThirdwebClient();
+    if (!client) {
+      throw new Error('Thirdweb client is not configured');
+    }
+    const payloadCopy = new Uint8Array(payload);
+    const file = new File([payloadCopy], filename || 'attachment', { type: 'application/octet-stream' });
+    const uri = await upload({
+      client,
+      files: [file],
+      uploadWithoutDirectory: true,
+    });
+    const resolvedUri = Array.isArray(uri) ? uri[0] : uri;
+    const url = resolveScheme({ client, uri: resolvedUri });
+    return { uri: resolvedUri, url };
+  }
+
   private formatPayload(payload: unknown): string {
     if (typeof payload === 'string') {
       return payload;
@@ -862,6 +905,22 @@ export class XmtpClient {
         this.identity?.address ??
         'local-sender',
       content,
+      sentAt: now,
+      isLocalFallback: true,
+    };
+  }
+
+  private createLocalAttachmentMessage(conversationId: string, attachment: XmtpAttachment): XmtpMessage {
+    const now = Date.now();
+    return {
+      id: this.generateLocalId('local-attachment'),
+      conversationId,
+      senderAddress:
+        this.identity?.inboxId ??
+        this.identity?.address ??
+        'local-sender',
+      content: attachment.filename,
+      attachment,
       sentAt: now,
       isLocalFallback: true,
     };
@@ -1844,6 +1903,7 @@ export class XmtpClient {
             new ReactionCodec(),
             new ReplyCodec(),
             new ReadReceiptCodec(),
+            new AttachmentCodec(),
             new RemoteAttachmentCodec(),
             new GroupUpdatedCodec(),
           ],
@@ -1867,6 +1927,7 @@ export class XmtpClient {
                 new ReactionCodec(),
                 new ReplyCodec(),
                 new ReadReceiptCodec(),
+                new AttachmentCodec(),
                 new RemoteAttachmentCodec(),
                 new GroupUpdatedCodec(),
               ],
@@ -2172,6 +2233,7 @@ export class XmtpClient {
           new ReactionCodec(),
           new ReplyCodec(),
           new ReadReceiptCodec(),
+          new AttachmentCodec(),
           new RemoteAttachmentCodec(),
           new GroupUpdatedCodec(),
         ],
@@ -2935,6 +2997,49 @@ export class XmtpClient {
                 }
                 continue;
               }
+              const isRemoteAttachment = this.isRemoteAttachmentType(typeId);
+              if (isRemoteAttachment) {
+                try {
+                  const remoteAttachment = (m as unknown as { content?: unknown }).content as RemoteAttachment;
+                  if (!remoteAttachment || typeof remoteAttachment.url !== 'string') {
+                    throw new Error('Remote attachment missing url');
+                  }
+                  const sentAt = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                  const attachmentLabel = remoteAttachment.filename || 'Attachment';
+                  const xmsg: XmtpMessage = {
+                    id: m.id,
+                    conversationId: m.conversationId,
+                    senderAddress: m.senderInboxId,
+                    content: attachmentLabel,
+                    contentTypeId: typeId,
+                    remoteAttachment,
+                    sentAt,
+                  };
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:message', {
+                      detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
+                    })
+                  );
+                } catch (attachmentErr) {
+                  console.warn('[XMTP] Failed to dispatch remote attachment (backfill)', attachmentErr);
+                  const label = this.labelForContentType(typeId);
+                  const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:system', {
+                      detail: {
+                        conversationId: m.conversationId,
+                        system: {
+                          id: `sys_${m.id}`,
+                          senderInboxId: m.senderInboxId,
+                          body: label,
+                          sentAt: ts,
+                        },
+                      },
+                    })
+                  );
+                }
+                continue;
+              }
               const isTextLike = typeof content === 'string' && (!typeId || this.labelForContentType(typeId) === 'Text');
               if (!isTextLike) {
                 const label = this.labelForContentType(typeId);
@@ -3140,6 +3245,49 @@ export class XmtpClient {
                     );
                   } catch (replyErr) {
                     console.warn('[XMTP] Failed to parse reply (group backfill)', replyErr);
+                  }
+                  continue;
+                }
+                const isRemoteAttachment = this.isRemoteAttachmentType(typeId);
+                if (isRemoteAttachment) {
+                  try {
+                    const remoteAttachment = (m as unknown as { content?: unknown }).content as RemoteAttachment;
+                    if (!remoteAttachment || typeof remoteAttachment.url !== 'string') {
+                      throw new Error('Remote attachment missing url');
+                    }
+                    const sentAt = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                    const attachmentLabel = remoteAttachment.filename || 'Attachment';
+                    const xmsg: XmtpMessage = {
+                      id: m.id,
+                      conversationId: m.conversationId,
+                      senderAddress: m.senderInboxId,
+                      content: attachmentLabel,
+                      contentTypeId: typeId,
+                      remoteAttachment,
+                      sentAt,
+                    };
+                    window.dispatchEvent(
+                      new CustomEvent('xmtp:message', {
+                        detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
+                      })
+                    );
+                  } catch (attachmentErr) {
+                    console.warn('[XMTP] Failed to dispatch remote attachment (group backfill)', attachmentErr);
+                    const label = this.labelForContentType(typeId);
+                    const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
+                    window.dispatchEvent(
+                      new CustomEvent('xmtp:system', {
+                        detail: {
+                          conversationId: m.conversationId,
+                          system: {
+                            id: `sys_${m.id}`,
+                            senderInboxId: m.senderInboxId,
+                            body: label,
+                            sentAt: ts,
+                          },
+                        },
+                      })
+                    );
                   }
                   continue;
                 }
@@ -3392,6 +3540,52 @@ export class XmtpClient {
                   );
                 } catch (replyErr) {
                   console.warn('[XMTP] Failed to parse reply (stream)', replyErr);
+                }
+                continue;
+              }
+              const isRemoteAttachment = this.isRemoteAttachmentType(typeId);
+              if (isRemoteAttachment) {
+                try {
+                  const remoteAttachment = (message as unknown as { content?: unknown }).content as RemoteAttachment;
+                  if (!remoteAttachment || typeof remoteAttachment.url !== 'string') {
+                    throw new Error('Remote attachment missing url');
+                  }
+                  const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                  const attachmentLabel = remoteAttachment.filename || 'Attachment';
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:message', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        message: {
+                          id: message.id,
+                          conversationId: message.conversationId,
+                          senderAddress: message.senderInboxId,
+                          content: attachmentLabel,
+                          contentTypeId: typeId,
+                          remoteAttachment,
+                          sentAt,
+                        },
+                        isHistory: false,
+                      },
+                    })
+                  );
+                } catch (attachmentErr) {
+                  console.warn('[XMTP] Failed to dispatch remote attachment (stream)', attachmentErr);
+                  const label = this.labelForContentType(typeId);
+                  const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:system', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        system: {
+                          id: `sys_${message.id}`,
+                          senderInboxId: message.senderInboxId,
+                          body: label,
+                          sentAt: ts,
+                        },
+                      },
+                    })
+                  );
                 }
                 continue;
               }
@@ -4461,6 +4655,91 @@ export class XmtpClient {
       });
 
       return fallbackConversation;
+    }
+  }
+
+  /**
+   * Send a message to a conversation
+   */
+  async sendAttachment(conversationId: string, attachment: XmtpAttachment): Promise<XmtpMessage> {
+    if (attachment.data.byteLength > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`Attachment too large (${Math.round(attachment.data.byteLength / (1024 * 1024))}MB). Max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`);
+    }
+
+    if (!this.client) {
+      console.warn('[XMTP] Client not connected; queuing attachment locally for conversation', conversationId);
+      const localMessage = this.createLocalAttachmentMessage(conversationId, attachment);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'attachments:send:offline',
+        details: `Stored local attachment for ${conversationId}`,
+        payload: this.formatPayload({ filename: attachment.filename, size: attachment.data.byteLength }),
+      });
+      return localMessage;
+    }
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'attachments:send',
+      details: `Sending attachment on ${conversationId}`,
+      payload: this.formatPayload({ filename: attachment.filename, size: attachment.data.byteLength }),
+    });
+
+    try {
+      let conversation = await this.client.conversations.getConversationById(conversationId);
+      if (!conversation) {
+        console.log('[XMTP] Conversation not found in cache, syncing before retry…');
+        await this.client.conversations.sync();
+        conversation = await this.client.conversations.getConversationById(conversationId);
+      }
+      if (!conversation) {
+        throw new Error(`Conversation ${conversationId} not found after sync`);
+      }
+
+      const encrypted = await RemoteAttachmentCodec.encodeEncrypted(attachment, new AttachmentCodec());
+      const { url } = await this.uploadEncryptedAttachmentPayload(encrypted.payload, attachment.filename);
+
+      const remoteAttachment: RemoteAttachment = {
+        url,
+        contentDigest: encrypted.digest,
+        salt: encrypted.salt,
+        nonce: encrypted.nonce,
+        secret: encrypted.secret,
+        scheme: 'https://',
+        contentLength: attachment.data.byteLength,
+        filename: attachment.filename,
+      };
+
+      const messageId = await conversation.send(remoteAttachment, ContentTypeRemoteAttachment);
+      const message: XmtpMessage = {
+        id: messageId,
+        conversationId,
+        senderAddress: this.client?.inboxId ?? this.identity?.address ?? 'unknown',
+        content: attachment.filename,
+        attachment,
+        remoteAttachment,
+        contentTypeId: ContentTypeRemoteAttachment.typeId,
+        sentAt: Date.now(),
+      };
+
+      logNetworkEvent({
+        direction: 'status',
+        event: 'attachments:send:success',
+        details: `Attachment sent on ${conversationId}`,
+        payload: this.formatPayload({ id: messageId }),
+      });
+
+      return message;
+    } catch (error) {
+      console.warn('[XMTP] Failed to send attachment via XMTP, storing locally:', error);
+      const fallbackMessage = this.createLocalAttachmentMessage(conversationId, attachment);
+      logNetworkEvent({
+        direction: 'status',
+        event: 'attachments:send:offline',
+        details: `Stored local attachment for ${conversationId} after send failure`,
+        payload: this.formatPayload({ filename: attachment.filename, size: attachment.data.byteLength }),
+      });
+      return fallbackMessage;
     }
   }
 

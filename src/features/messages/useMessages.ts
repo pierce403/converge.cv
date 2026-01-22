@@ -7,8 +7,16 @@ import { useMessageStore, useConversationStore, useAuthStore, useContactStore } 
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
-import type { Message } from '@/types';
+import type { Message, Attachment as StoredAttachment, Conversation } from '@/types';
 import { getAddress, isAddress } from 'viem';
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap
+
+const toArrayBuffer = (data: Uint8Array): ArrayBuffer => {
+  const copy = new Uint8Array(data.byteLength);
+  copy.set(data);
+  return copy.buffer;
+};
 
 export function useMessages() {
   const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
@@ -149,6 +157,104 @@ export function useMessages() {
     [setLoading, setMessages, syncConversation]
   );
 
+  const ensureContactForConversation = useCallback(
+    async (conversation: Conversation) => {
+      const recipientInboxId = conversation.peerId;
+      if (conversation.isGroup || isContact(recipientInboxId)) {
+        return;
+      }
+
+      const normalizedAddress = isAddress(recipientInboxId)
+        ? getAddress(recipientInboxId as `0x${string}`)
+        : undefined;
+      const addressList = normalizedAddress ? [normalizedAddress.toLowerCase()] : [];
+
+      // If recipientInboxId looks like an address, try to derive the actual inbox ID
+      let actualInboxId = recipientInboxId;
+      if (normalizedAddress) {
+        try {
+          const xmtp = getXmtpClient();
+          // Use getInboxIdFromAddress first (more reliable for registered users)
+          let derivedInboxId = await xmtp.getInboxIdFromAddress(normalizedAddress);
+          if (!derivedInboxId) {
+            // Fallback to deriveInboxIdFromAddress if getInboxIdFromAddress fails
+            derivedInboxId = await xmtp.deriveInboxIdFromAddress(normalizedAddress);
+          }
+          if (derivedInboxId && !derivedInboxId.startsWith('0x')) {
+            // Only use if it's actually an inbox ID (not an address)
+            actualInboxId = derivedInboxId.toLowerCase();
+            console.log('[useMessages] Derived inbox ID from address:', normalizedAddress, '->', actualInboxId);
+          } else {
+            console.warn('[useMessages] Derived value is still an address, not a valid inbox ID:', derivedInboxId);
+          }
+        } catch (e) {
+          console.warn('[useMessages] Failed to derive inbox ID from address:', e);
+        }
+      }
+
+      // Fetch profile from XMTP to get display name and avatar
+      // Use the derived inbox ID, or the address if derivation failed
+      let profile = undefined;
+      try {
+        const xmtp = getXmtpClient();
+        const profileLookupKey = actualInboxId.startsWith('0x') ? normalizedAddress || actualInboxId : actualInboxId;
+        profile = await xmtp.fetchInboxProfile(profileLookupKey);
+        console.log('[useMessages] Fetched profile for new contact:', profile);
+
+        // If profile has a valid inbox ID (not an address), use it
+        if (profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10) {
+          actualInboxId = profile.inboxId.toLowerCase();
+          console.log('[useMessages] Using inbox ID from profile:', actualInboxId);
+        }
+      } catch (e) {
+        console.warn('[useMessages] Failed to fetch profile for new contact, will use fallback:', e);
+      }
+
+      // Ensure we're not using an address as the inbox ID
+      if (actualInboxId.startsWith('0x')) {
+        console.error('[useMessages] ERROR: Contact inbox ID is still an address:', actualInboxId);
+        // Try one more time to get the inbox ID
+        if (normalizedAddress) {
+          try {
+            const xmtp = getXmtpClient();
+            const lastAttempt = await xmtp.getInboxIdFromAddress(normalizedAddress);
+            if (lastAttempt && !lastAttempt.startsWith('0x')) {
+              actualInboxId = lastAttempt.toLowerCase();
+              console.log('[useMessages] Successfully resolved inbox ID on last attempt:', actualInboxId);
+            }
+          } catch (e) {
+            console.error('[useMessages] Final attempt to resolve inbox ID failed:', e);
+          }
+        }
+      }
+
+      if (actualInboxId.toLowerCase().startsWith('0x')) {
+        console.warn('[useMessages] Skipping contact upsert because inboxId is still address-like:', actualInboxId);
+        return;
+      }
+
+      await upsertContactProfile({
+        inboxId: actualInboxId,
+        displayName: profile?.displayName, // Use XMTP profile display name
+        avatarUrl: profile?.avatarUrl, // Use XMTP profile avatar
+        primaryAddress: profile?.primaryAddress || normalizedAddress?.toLowerCase(),
+        addresses: profile?.addresses || addressList,
+        identities: profile?.identities || (normalizedAddress
+          ? [
+              {
+                identifier: normalizedAddress.toLowerCase(),
+                kind: 'Ethereum',
+                isPrimary: true,
+              },
+            ]
+          : []),
+        source: 'inbox',
+      });
+      console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
+    },
+    [isContact, upsertContactProfile]
+  );
+
   /**
    * Send a message (optionally as a reply)
    */
@@ -168,97 +274,7 @@ export function useMessages() {
           setSending(false);
           return;
         }
-        const recipientInboxId = conversation.peerId;
-
-        // Only auto-add contacts for DMs (group peerId is the group id, not an inbox)
-        if (!conversation.isGroup && !isContact(recipientInboxId)) {
-          const normalizedAddress = isAddress(recipientInboxId)
-            ? getAddress(recipientInboxId as `0x${string}`)
-            : undefined;
-          const addressList = normalizedAddress ? [normalizedAddress.toLowerCase()] : [];
-          
-          // If recipientInboxId looks like an address, try to derive the actual inbox ID
-          let actualInboxId = recipientInboxId;
-          if (normalizedAddress) {
-            try {
-              const xmtp = getXmtpClient();
-              // Use getInboxIdFromAddress first (more reliable for registered users)
-              let derivedInboxId = await xmtp.getInboxIdFromAddress(normalizedAddress);
-              if (!derivedInboxId) {
-                // Fallback to deriveInboxIdFromAddress if getInboxIdFromAddress fails
-                derivedInboxId = await xmtp.deriveInboxIdFromAddress(normalizedAddress);
-              }
-              if (derivedInboxId && !derivedInboxId.startsWith('0x')) {
-                // Only use if it's actually an inbox ID (not an address)
-                actualInboxId = derivedInboxId.toLowerCase();
-                console.log('[useMessages] Derived inbox ID from address:', normalizedAddress, '->', actualInboxId);
-              } else {
-                console.warn('[useMessages] Derived value is still an address, not a valid inbox ID:', derivedInboxId);
-              }
-            } catch (e) {
-              console.warn('[useMessages] Failed to derive inbox ID from address:', e);
-            }
-          }
-          
-          // Fetch profile from XMTP to get display name and avatar
-          // Use the derived inbox ID, or the address if derivation failed
-          let profile = undefined;
-          try {
-            const xmtp = getXmtpClient();
-            const profileLookupKey = actualInboxId.startsWith('0x') ? normalizedAddress || actualInboxId : actualInboxId;
-            profile = await xmtp.fetchInboxProfile(profileLookupKey);
-            console.log('[useMessages] Fetched profile for new contact:', profile);
-            
-            // If profile has a valid inbox ID (not an address), use it
-            if (profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10) {
-              actualInboxId = profile.inboxId.toLowerCase();
-              console.log('[useMessages] Using inbox ID from profile:', actualInboxId);
-            }
-          } catch (e) {
-            console.warn('[useMessages] Failed to fetch profile for new contact, will use fallback:', e);
-          }
-          
-          // Ensure we're not using an address as the inbox ID
-          if (actualInboxId.startsWith('0x')) {
-            console.error('[useMessages] ERROR: Contact inbox ID is still an address:', actualInboxId);
-            // Try one more time to get the inbox ID
-            if (normalizedAddress) {
-              try {
-                const xmtp = getXmtpClient();
-                const lastAttempt = await xmtp.getInboxIdFromAddress(normalizedAddress);
-                if (lastAttempt && !lastAttempt.startsWith('0x')) {
-                  actualInboxId = lastAttempt.toLowerCase();
-                  console.log('[useMessages] Successfully resolved inbox ID on last attempt:', actualInboxId);
-                }
-              } catch (e) {
-                console.error('[useMessages] Final attempt to resolve inbox ID failed:', e);
-              }
-            }
-          }
-          
-          if (actualInboxId.toLowerCase().startsWith('0x')) {
-            console.warn('[useMessages] Skipping contact upsert because inboxId is still address-like:', actualInboxId);
-          } else {
-            await upsertContactProfile({
-              inboxId: actualInboxId,
-              displayName: profile?.displayName, // Use XMTP profile display name
-              avatarUrl: profile?.avatarUrl, // Use XMTP profile avatar
-              primaryAddress: profile?.primaryAddress || normalizedAddress?.toLowerCase(),
-              addresses: profile?.addresses || addressList,
-              identities: profile?.identities || (normalizedAddress
-                ? [
-                    {
-                      identifier: normalizedAddress.toLowerCase(),
-                      kind: 'Ethereum',
-                      isPrimary: true,
-                    },
-                  ]
-                : []),
-              source: 'inbox',
-            });
-            console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
-          }
-        }
+        await ensureContactForConversation(conversation);
 
         // Create message object
         const message: Message = {
@@ -340,8 +356,173 @@ export function useMessages() {
       setSending,
       updateConversation,
       conversations,
-      upsertContactProfile,
-      isContact,
+      ensureContactForConversation,
+    ]
+  );
+
+  /**
+   * Send an image attachment
+   */
+  const sendAttachment = useCallback(
+    async (conversationId: string, file: File) => {
+      if (!identity) {
+        console.error('No identity available');
+        return;
+      }
+
+      if (!file.type.startsWith('image/')) {
+        try {
+          window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Please select an image file.' }));
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        try {
+          window.dispatchEvent(
+            new CustomEvent('ui:toast', {
+              detail: `Image too large (${Math.round(file.size / (1024 * 1024))}MB). Max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`,
+            })
+          );
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      try {
+        setSending(true);
+
+        const conversation = conversations.find((c) => c.id === conversationId);
+        if (!conversation) {
+          console.error('Conversation not found for ID:', conversationId);
+          setSending(false);
+          return;
+        }
+
+        await ensureContactForConversation(conversation);
+
+        const now = Date.now();
+        const localMessageId = `msg_${now}_${Math.random().toString(36).substr(2, 9)}`;
+        const attachmentId = `att_${localMessageId}`;
+        const filename = file.name || 'image';
+        const mimeType = file.type || 'application/octet-stream';
+
+        const message: Message = {
+          id: localMessageId,
+          conversationId,
+          sender: identity.inboxId ?? identity.address,
+          sentAt: now,
+          type: 'attachment',
+          body: filename,
+          attachmentId,
+          status: 'pending',
+          reactions: [],
+        };
+
+        addMessage(conversationId, message);
+
+        const storage = await getStorage();
+        await storage.putMessage(message);
+
+        const fileBuffer = await file.arrayBuffer();
+        const attachmentMeta: StoredAttachment = {
+          id: attachmentId,
+          messageId: localMessageId,
+          filename,
+          mimeType,
+          size: fileBuffer.byteLength,
+        };
+        await storage.putAttachment(attachmentMeta, fileBuffer);
+
+        let latestMessageId = message.id;
+        let latestMessageSentAt = message.sentAt;
+        let latestMessageSender = message.sender;
+
+        try {
+          const xmtp = getXmtpClient();
+          const sentMessage = await xmtp.sendAttachment(conversationId, {
+            filename,
+            mimeType,
+            data: new Uint8Array(fileBuffer),
+          });
+
+          const resolvedId = sentMessage.id || message.id;
+          const resolvedSentAt = sentMessage.sentAt ?? message.sentAt;
+          const finalStatus: Message['status'] = sentMessage.isLocalFallback ? 'pending' : 'sent';
+          const finalAttachmentId = `att_${resolvedId}`;
+          const finalMessage: Message = {
+            ...message,
+            id: resolvedId,
+            sentAt: resolvedSentAt,
+            status: finalStatus,
+            attachmentId: finalAttachmentId,
+          };
+          latestMessageId = finalMessage.id;
+          latestMessageSentAt = finalMessage.sentAt;
+          latestMessageSender = finalMessage.sender;
+
+          const remoteMeta = sentMessage.remoteAttachment;
+          if (resolvedId !== message.id) {
+            removeMessage(message.id);
+            await storage.deleteMessage(message.id);
+            addMessage(conversationId, finalMessage);
+            await storage.putMessage(finalMessage);
+
+            const storedAttachment = await storage.getAttachment(attachmentId);
+            if (storedAttachment) {
+              const updatedAttachment: StoredAttachment = {
+                ...storedAttachment.attachment,
+                id: finalAttachmentId,
+                messageId: resolvedId,
+                storageRef: remoteMeta?.url ?? storedAttachment.attachment.storageRef,
+                sha256: remoteMeta?.contentDigest ?? storedAttachment.attachment.sha256,
+              };
+              await storage.putAttachment(updatedAttachment, storedAttachment.data);
+              await storage.deleteAttachment(attachmentId);
+            }
+          } else {
+            updateMessage(resolvedId, { status: finalStatus, sentAt: resolvedSentAt, attachmentId: finalAttachmentId });
+            await storage.updateMessageStatus(resolvedId, finalStatus);
+            const storedAttachment = await storage.getAttachment(attachmentId);
+            if (storedAttachment && remoteMeta) {
+              const updatedAttachment: StoredAttachment = {
+                ...storedAttachment.attachment,
+                storageRef: remoteMeta.url,
+                sha256: remoteMeta.contentDigest,
+              };
+              await storage.putAttachment(updatedAttachment, storedAttachment.data);
+            }
+          }
+        } catch (xmtpError) {
+          console.error('Failed to send attachment via XMTP:', xmtpError);
+          updateMessage(message.id, { status: 'failed' });
+          await storage.updateMessageStatus(message.id, 'failed');
+        }
+
+        updateConversation(conversationId, {
+          lastMessageAt: latestMessageSentAt,
+          lastMessagePreview: '📎 Attachment',
+          lastMessageId: latestMessageId,
+          lastMessageSender: latestMessageSender,
+        });
+      } catch (error) {
+        console.error('Failed to send attachment:', error);
+      } finally {
+        setSending(false);
+      }
+    },
+    [
+      identity,
+      conversations,
+      addMessage,
+      updateMessage,
+      removeMessage,
+      setSending,
+      updateConversation,
+      ensureContactForConversation,
     ]
   );
 
@@ -448,6 +629,112 @@ export function useMessages() {
     ) => {
       try {
         const isHistory = options?.isHistory ?? false;
+        const remoteAttachment = xmtpMessage.remoteAttachment;
+        const inlineAttachment = xmtpMessage.attachment;
+        if (remoteAttachment || inlineAttachment) {
+          const attachmentId = `att_${xmtpMessage.id}`;
+          const storage = await getStorage();
+          let stored = await storage.getAttachment(attachmentId);
+
+          if (!stored) {
+            try {
+              if (inlineAttachment) {
+                const buffer = toArrayBuffer(inlineAttachment.data);
+                const meta: StoredAttachment = {
+                  id: attachmentId,
+                  messageId: xmtpMessage.id,
+                  filename: inlineAttachment.filename,
+                  mimeType: inlineAttachment.mimeType,
+                  size: inlineAttachment.data.byteLength,
+                };
+                await storage.putAttachment(meta, buffer);
+                stored = { attachment: meta, data: buffer };
+              } else if (remoteAttachment) {
+                if (remoteAttachment.contentLength > MAX_ATTACHMENT_BYTES) {
+                  try {
+                    window.dispatchEvent(
+                      new CustomEvent('ui:toast', {
+                        detail: `Attachment too large (${Math.round(remoteAttachment.contentLength / (1024 * 1024))}MB).`,
+                      })
+                    );
+                  } catch {
+                    // ignore toast errors
+                  }
+                } else {
+                  const decoded = await getXmtpClient().loadRemoteAttachment(remoteAttachment);
+                  const buffer = toArrayBuffer(decoded.data);
+                  const meta: StoredAttachment = {
+                    id: attachmentId,
+                    messageId: xmtpMessage.id,
+                    filename: decoded.filename,
+                    mimeType: decoded.mimeType,
+                    size: decoded.data.byteLength,
+                    storageRef: remoteAttachment.url,
+                    sha256: remoteAttachment.contentDigest,
+                  };
+                  await storage.putAttachment(meta, buffer);
+                  stored = { attachment: meta, data: buffer };
+                }
+              }
+            } catch (attachmentError) {
+              console.warn('[useMessages] Failed to load attachment:', attachmentError);
+            }
+          } else if (remoteAttachment && !stored.attachment.storageRef) {
+            try {
+              const updated: StoredAttachment = {
+                ...stored.attachment,
+                storageRef: remoteAttachment.url,
+                sha256: remoteAttachment.contentDigest,
+              };
+              await storage.putAttachment(updated, stored.data);
+              stored = { attachment: updated, data: stored.data };
+            } catch (err) {
+              // ignore metadata update errors
+            }
+          }
+
+          const attachmentName =
+            stored?.attachment.filename || inlineAttachment?.filename || remoteAttachment?.filename || 'Attachment';
+
+          const message: Message = {
+            id: xmtpMessage.id,
+            conversationId,
+            sender: xmtpMessage.senderAddress,
+            sentAt: xmtpMessage.sentAt,
+            receivedAt: Date.now(),
+            type: 'attachment',
+            body: attachmentName,
+            attachmentId,
+            status: 'delivered',
+            reactions: [],
+            replyTo: xmtpMessage.replyToId,
+          };
+
+          addMessage(conversationId, message);
+          await storage.putMessage(message);
+
+          updateConversation(conversationId, {
+            lastMessageAt: message.sentAt,
+            lastMessagePreview: '📎 Attachment',
+            lastMessageId: message.id,
+            lastMessageSender: message.sender,
+          });
+
+          const myInbox = identity?.inboxId?.toLowerCase();
+          const myAddr = identity?.address?.toLowerCase();
+          const senderLower = message.sender?.toLowerCase?.();
+          const fromSelf = senderLower && (senderLower === myInbox || senderLower === myAddr);
+          if (!fromSelf) {
+            const preserved = isHistory ? getResyncReadStateFor(conversationId) : undefined;
+            const comparisonBase = preserved?.lastReadAt ?? conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;
+            const shouldIncrement = !isHistory || message.sentAt > comparisonBase;
+            if (shouldIncrement) {
+              incrementUnread(conversationId);
+            }
+          }
+          return;
+        }
+
         // Convert content to string if it's a Uint8Array
         const content = typeof xmtpMessage.content === 'string'
           ? xmtpMessage.content
@@ -559,6 +846,7 @@ export function useMessages() {
     clearMessages,
     loadMessages,
     sendMessage,
+    sendAttachment,
     reactToMessage,
     sendReadReceiptFor,
     receiveMessage,

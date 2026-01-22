@@ -187,6 +187,7 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
+- Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
   - **XMTP SDK v5.0.1 on protocol v3**: ✅ Fully working!
   - **Upgraded from v3.0.5 → v5.0.1** (October 28, 2025)
@@ -202,7 +203,7 @@ pnpm typecheck        # TypeScript type checking
 - Message sending: ✅ First-message send path fixed (use `getConversationById` before `send`) and DM creation via identifier. Monitor for edge cases and delivery state UX.
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
 - Group chat support (SDK supports it, UI not implemented)
-- Attachments (text messages only for now)
+- Video + multi-file attachments (image attachments are now supported)
 - Re-enable PWA features (install prompt, update notifications, service worker)
 - **Default Contacts/Bots**: `src/lib/default-contacts.ts` has placeholder addresses for suggested bots (Welcome Bot, Base Agent, ENS Resolver, etc.). Replace with actual XMTP-enabled addresses when available. Check:
   - https://docs.xmtp.org for official XMTP bots
@@ -439,10 +440,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-22 (Added XMTP envelope stream dump script)
+**Last Updated**: 2026-01-22 (Added image attachments via XMTP RemoteAttachment)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-22)
+
+### Messaging: Image Attachments
+- Paperclip now opens an image picker, encrypts the file client-side, uploads to IPFS via Thirdweb storage, and sends a RemoteAttachment.
+- Incoming RemoteAttachment messages are downloaded/decrypted, cached in IndexedDB, and rendered inline with blob previews.
 
 ### Debug: XMTP Envelope Stream Dump
 - Added `dump-stream.py` in the repo root to stream the global XMTP envelope feed via `message/v1/subscribe-all`.

@@ -7,15 +7,24 @@ import type { Message } from '@/types';
 
 interface MessageComposerProps {
   onSend: (content: string) => void;
+  onSendAttachment?: (file: File) => void;
   disabled?: boolean;
   replyToMessage?: Message;
   onCancelReply?: () => void;
   onSent?: () => void;
 }
 
-export function MessageComposer({ onSend, disabled = false, replyToMessage, onCancelReply, onSent }: MessageComposerProps) {
+export function MessageComposer({
+  onSend,
+  onSendAttachment,
+  disabled = false,
+  replyToMessage,
+  onCancelReply,
+  onSent,
+}: MessageComposerProps) {
   const [message, setMessage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSend = () => {
     const trimmed = message.trim();
@@ -46,6 +55,20 @@ export function MessageComposer({ onSend, disabled = false, replyToMessage, onCa
     e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
   };
 
+  const handleAttachmentClick = () => {
+    if (disabled) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleAttachmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    onSendAttachment?.(file);
+    onSent?.();
+    // Reset input so selecting the same file again triggers change
+    e.target.value = '';
+  };
+
   return (
     <div className="border-t border-primary-900/40 bg-primary-950/40 p-4 backdrop-blur-md">
       <div className="flex flex-col gap-2">
@@ -63,6 +86,8 @@ export function MessageComposer({ onSend, disabled = false, replyToMessage, onCa
             type="button"
             className="h-[42px] w-[42px] flex items-center justify-center text-primary-300 hover:text-primary-100 hover:bg-primary-900/50 rounded-lg transition-colors flex-shrink-0 border border-transparent"
             disabled={disabled}
+            onClick={handleAttachmentClick}
+            aria-label="Attach image"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
@@ -73,6 +98,13 @@ export function MessageComposer({ onSend, disabled = false, replyToMessage, onCa
               />
             </svg>
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleAttachmentChange}
+          />
 
           {/* Message input */}
           <div className="flex-1 relative">

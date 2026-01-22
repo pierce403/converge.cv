@@ -75,6 +75,7 @@ export interface Message {
   receivedAt?: number;
   type: 'text' | 'attachment' | 'system';
   body: string;
+  attachmentId?: string;
   status: 'pending' | 'sent' | 'delivered' | 'failed';
   reactions: Reaction[];
   expiresAt?: number;
@@ -93,7 +94,7 @@ export interface Attachment {
   mimeType: string;
   size: number;
   filename: string;
-  storageRef: string;
+  storageRef?: string;
   sha256?: string;
   thumbnailRef?: string;
 }

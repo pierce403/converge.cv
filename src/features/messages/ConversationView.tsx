@@ -56,7 +56,7 @@ export function ConversationView() {
   const hasLoadedConversation = useMessageStore(
     (state) => state.loadedConversations[conversationId] ?? false,
   );
-  const { sendMessage, loadMessages, sendReadReceiptFor } = useMessages();
+  const { sendMessage, sendAttachment, loadMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
   const isContact = useContactStore((state) => state.isContact);
@@ -633,6 +633,11 @@ export function ConversationView() {
     await sendMessage(id, content, replyTo ? { replyToId: replyTo.id } : undefined);
   };
 
+  const handleSendAttachment = async (file: File) => {
+    if (!id) return;
+    await sendAttachment(id, file);
+  };
+
   return (
     <div className="flex flex-col h-full text-primary-50">
       {/* Header */}
@@ -1011,6 +1016,7 @@ export function ConversationView() {
         ) : (
           <MessageComposer
             onSend={handleSend}
+            onSendAttachment={handleSendAttachment}
             replyToMessage={replyTo ?? undefined}
             onCancelReply={() => setReplyTo(null)}
             onSent={() => setReplyTo(null)}

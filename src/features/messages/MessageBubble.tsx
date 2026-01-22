@@ -2,13 +2,14 @@
  * Message bubble component
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Message } from '@/types';
 import { formatMessageTime } from '@/lib/utils/date';
 import { useAuthStore, useMessageStore } from '@/lib/stores';
 import { MessageActionsModal } from './MessageActionsModal';
 import { useMessages } from './useMessages';
 import { sanitizeImageSrc } from '@/lib/utils/image';
+import { getStorage } from '@/lib/storage';
 
 interface SenderInfo {
   displayName?: string;
@@ -44,7 +45,54 @@ export function MessageBubble({
 
   const { deleteMessage } = useMessages();
   const [showActions, setShowActions] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState<{
+    url: string;
+    filename: string;
+    mimeType: string;
+  } | null>(null);
   const pressTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    const loadAttachment = async () => {
+      if (message.type !== 'attachment' || !message.attachmentId) {
+        setAttachmentPreview(null);
+        return;
+      }
+      try {
+        const storage = await getStorage();
+        const stored = await storage.getAttachment(message.attachmentId);
+        if (!stored) {
+          setAttachmentPreview(null);
+          return;
+        }
+        const blob = new Blob([stored.data], { type: stored.attachment.mimeType });
+        objectUrl = URL.createObjectURL(blob);
+        if (!active) return;
+        setAttachmentPreview({
+          url: objectUrl,
+          filename: stored.attachment.filename,
+          mimeType: stored.attachment.mimeType,
+        });
+      } catch (e) {
+        console.warn('[MessageBubble] Failed to load attachment:', e);
+        if (active) {
+          setAttachmentPreview(null);
+        }
+      }
+    };
+
+    void loadAttachment();
+
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [message.type, message.attachmentId]);
 
   const openActions = useCallback(() => setShowActions(true), []);
   const closeActions = useCallback(() => setShowActions(false), []);
@@ -164,6 +212,8 @@ export function MessageBubble({
     );
   };
 
+  const attachmentImageSrc = attachmentPreview ? sanitizeImageSrc(attachmentPreview.url) : null;
+
   return (
     <div
       className={`flex items-end gap-2 mb-4 ${isSent ? 'justify-end' : 'justify-start'}`}
@@ -228,16 +278,31 @@ export function MessageBubble({
             </div>
           )}
           {message.type === 'attachment' && (
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fillRule="evenodd"
-                  d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <span className="text-sm">Attachment</span>
-            </div>
+            attachmentImageSrc && attachmentPreview?.mimeType.startsWith('image/') ? (
+              <div className="flex flex-col gap-2">
+                <a href={attachmentImageSrc} target="_blank" rel="noopener noreferrer">
+                  <img
+                    src={attachmentImageSrc}
+                    alt={attachmentPreview.filename || 'Attachment'}
+                    className="max-h-64 w-full rounded-lg object-contain bg-primary-950/40"
+                  />
+                </a>
+                <span className="text-xs text-primary-200 truncate">
+                  {attachmentPreview.filename || message.body || 'Image'}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path
+                    fillRule="evenodd"
+                    d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <span className="text-sm">{message.body || 'Attachment'}</span>
+              </div>
+            )
           )}
 
           {message.reactions.length > 0 && (() => {
