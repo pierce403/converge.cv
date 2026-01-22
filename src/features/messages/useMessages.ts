@@ -170,8 +170,8 @@ export function useMessages() {
         }
         const recipientInboxId = conversation.peerId;
 
-        // Check if recipient is a contact, if not, add them automatically
-        if (!isContact(recipientInboxId)) {
+        // Only auto-add contacts for DMs (group peerId is the group id, not an inbox)
+        if (!conversation.isGroup && !isContact(recipientInboxId)) {
           const normalizedAddress = isAddress(recipientInboxId)
             ? getAddress(recipientInboxId as `0x${string}`)
             : undefined;

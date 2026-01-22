@@ -454,6 +454,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Invite claim now logs parsing and send steps to the console for easier debugging.
 - Creator inbox IDs embedded as raw 32-byte values are now normalized to 64-char hex before DM creation to avoid XMTP API errors.
 
+### Messaging: Group Send Contact Guard
+- Skip auto-adding contacts when sending in group chats so group IDs aren’t treated as inbox IDs (prevents “Missing identity update” errors from profile lookups).
+
 ### Farcaster Filters: Settings Only
 - Removed the per-conversation Farcaster filter toggle panel from the chat view.
 - Filters are now adjusted solely from Settings and still apply globally across conversations.
