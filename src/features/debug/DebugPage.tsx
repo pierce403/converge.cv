@@ -15,7 +15,12 @@ import buildInfo from '../../build-info.json'; // Import build info
 import { registerServiceWorkerForPush, enablePushForCurrentUser, disablePush, VAPID_PARTY_API_KEY, VAPID_PUBLIC_KEY } from '@/lib/push';
 import { VAPID_PARTY_API_BASE } from '@/lib/push/config';
 import { logNetworkEvent } from '@/lib/stores/debug-store';
-import { parseConvosInvite, type ParsedConvosInvite } from '@/lib/utils/convos-invite';
+import {
+  extractConvosInviteCode,
+  parseConvosInvite,
+  sanitizeConvosInviteCode,
+  type ParsedConvosInvite,
+} from '@/lib/utils/convos-invite';
 import { useConversations } from '@/features/conversations/useConversations';
 import { useMessages } from '@/features/messages/useMessages';
 
@@ -110,6 +115,19 @@ export function DebugPage() {
       return;
     }
 
+    const extractedCode = extractConvosInviteCode(inviteInput);
+    const sanitizedCode = extractedCode ? sanitizeConvosInviteCode(extractedCode) : null;
+
+    console.log('[Invite Claim] Raw input:', inviteInput);
+    console.log('[Invite Claim] Extracted code:', extractedCode);
+    console.log('[Invite Claim] Sanitized code:', sanitizedCode);
+    if (extractedCode && sanitizedCode && extractedCode !== sanitizedCode) {
+      console.log('[Invite Claim] Sanitized diff:', {
+        originalLength: extractedCode.length,
+        sanitizedLength: sanitizedCode.length,
+      });
+    }
+
     if (!isAuthenticated || !isVaultUnlocked) {
       setInviteError('Sign in and unlock your inbox before claiming an invite.');
       return;
@@ -119,7 +137,9 @@ export function DebugPage() {
     try {
       parsed = parseConvosInvite(inviteInput);
       setInviteDetails(parsed);
+      console.log('[Invite Claim] Parsed payload:', parsed.payload);
     } catch (error) {
+      console.log('[Invite Claim] Parse error:', error);
       setInviteError(error instanceof Error ? error.message : 'Invalid invite code.');
       return;
     }
@@ -131,12 +151,19 @@ export function DebugPage() {
 
     setInviteSending(true);
     try {
+      console.log('[Invite Claim] Creating DM with creator:', parsed.payload.creatorInboxId);
       const conversation = await createConversation(parsed.payload.creatorInboxId);
       if (!conversation) {
         throw new Error('Failed to create DM with the invite creator.');
       }
 
+      console.log('[Invite Claim] DM ready:', {
+        conversationId: conversation.id,
+        peerId: conversation.peerId,
+      });
+      console.log('[Invite Claim] Sending invite slug…');
       await sendMessage(conversation.id, parsed.inviteCode);
+      console.log('[Invite Claim] Invite slug sent.');
 
       logNetworkEvent({
         direction: 'outbound',
@@ -145,9 +172,11 @@ export function DebugPage() {
       });
 
       setInviteSuccess('Invite sent. Waiting for the inviter to accept.');
+      console.log('[Invite Claim] Navigating to conversation:', conversation.id);
       navigate(`/chat/${conversation.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to send invite.';
+      console.log('[Invite Claim] Error sending invite:', error);
       setInviteError(message);
       logNetworkEvent({
         direction: 'status',

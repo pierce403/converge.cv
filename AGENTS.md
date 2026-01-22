@@ -447,6 +447,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Debug: Convos Invite Claim
 - Added a Debug menu tool to parse Convos invite links/codes and send the raw invite slug to the creator inbox.
 - Invite parsing now tolerates non-base64url characters by stripping them, extracts creator inbox ID, tag, name, and image URL from the protobuf payload, and then sends the slug via XMTP DM.
+- Invite claim now logs parsing and send steps to the console for easier debugging.
 
 ## Latest Changes (2026-01-05)
 
