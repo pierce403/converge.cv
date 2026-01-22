@@ -817,8 +817,25 @@ export function Layout() {
               const current = existing || (await storage.getConversation(conversationId));
               if (current) {
                 await storage.putConversation({ ...current, ...merged });
+                useConversationStore.getState().updateConversation(conversationId, merged);
+              } else {
+                const now = Date.now();
+                const conversation: Conversation = {
+                  id: conversationId,
+                  topic: conversationId,
+                  peerId: conversationId,
+                  createdAt: now,
+                  lastMessageAt: now,
+                  lastMessagePreview: '',
+                  unreadCount: 0,
+                  pinned: false,
+                  archived: false,
+                  isGroup: true,
+                  ...merged,
+                };
+                await storage.putConversation(conversation);
+                useConversationStore.getState().addConversation(conversation);
               }
-              useConversationStore.getState().updateConversation(conversationId, merged);
             }
           } catch (err) {
             console.warn('[Layout] Failed to refresh group details after update', err);

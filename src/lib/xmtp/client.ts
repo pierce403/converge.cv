@@ -3450,6 +3450,15 @@ export class XmtpClient {
                       },
                     })
                   );
+                  // Also trigger a group refresh so newly added members see the group appear
+                  window.dispatchEvent(
+                    new CustomEvent('xmtp:group-updated', {
+                      detail: {
+                        conversationId: message.conversationId,
+                        content: {},
+                      },
+                    })
+                  );
                 } catch (err) {
                   console.warn('[XMTP] Failed to dispatch system message event', err);
                 }
@@ -4596,16 +4605,57 @@ export class XmtpClient {
       return conversation;
     }
 
-    console.log('[XMTP] Creating group conversation with participants:', participantAddresses);
+    const participants = participantAddresses
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    const identifiers: Identifier[] = [];
+    const inboxIds: string[] = [];
+    const invalidParticipants: string[] = [];
+    const isLikelyInboxId = (value: string) => /^[0-9a-fA-F]{64}$/.test(value);
+
+    for (const participant of participants) {
+      if (isEthereumAddress(participant)) {
+        try {
+          identifiers.push(this.identifierFromAddress(participant));
+        } catch (error) {
+          console.warn('[XMTP] Skipping invalid Ethereum address during group creation:', participant, error);
+          invalidParticipants.push(participant);
+        }
+        continue;
+      }
+      if (isLikelyInboxId(participant)) {
+        inboxIds.push(participant);
+        continue;
+      }
+      invalidParticipants.push(participant);
+    }
+
+    if (invalidParticipants.length) {
+      console.warn('[XMTP] Ignoring invalid group participants:', invalidParticipants);
+    }
+
+    if (!identifiers.length && !inboxIds.length) {
+      throw new Error('No valid participants provided for group creation.');
+    }
+
+    console.log('[XMTP] Creating group conversation with participants:', participants);
 
     logNetworkEvent({
       direction: 'outbound',
       event: 'conversations:create_group',
-      details: `Creating group with ${participantAddresses.length} participants`,
+      details: `Creating group with ${participants.length} participants`,
     });
 
     try {
-      const groupConversation = await this.client.conversations.newGroup(participantAddresses);
+      let groupConversation: Awaited<ReturnType<typeof this.client.conversations.newGroup>>;
+      if (identifiers.length) {
+        groupConversation = await this.client.conversations.newGroupWithIdentifiers(identifiers);
+        if (inboxIds.length && typeof (groupConversation as unknown as { addMembers?: (ids: string[]) => Promise<void> }).addMembers === 'function') {
+          await (groupConversation as unknown as { addMembers: (ids: string[]) => Promise<void> }).addMembers(inboxIds);
+        }
+      } else {
+        groupConversation = await this.client.conversations.newGroup(inboxIds);
+      }
 
       console.log('[XMTP] ✅ Group conversation created:', {
         id: groupConversation.id,
@@ -4622,8 +4672,8 @@ export class XmtpClient {
         pinned: false,
         archived: false,
         isGroup: true, // Explicitly mark as group conversation
-        groupName: `Group with ${participantAddresses.length} members`, // Default name
-        members: participantAddresses, // Initial members
+        groupName: `Group with ${participants.length} members`, // Default name
+        members: participants, // Initial members
         admins: [this.identity?.address || ''].filter(Boolean), // Creator is admin
       };
 

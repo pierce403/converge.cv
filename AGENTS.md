@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-22 (Added image attachments via XMTP RemoteAttachment)
+**Last Updated**: 2026-01-22 (Fixed group creation + membership refresh handling)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-22)
@@ -448,6 +448,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Messaging: Image Attachments
 - Paperclip now opens an image picker, encrypts the file client-side, uploads to IPFS via Thirdweb storage, and sends a RemoteAttachment.
 - Incoming RemoteAttachment messages are downloaded/decrypted, cached in IndexedDB, and rendered inline with blob previews.
+
+### Groups: Creation + Membership Refresh
+- Group creation now uses XMTP identifier-based APIs so address-based group creation produces real network groups (no local-only fallback when passing addresses).
+- Membership-change messages now trigger group detail refreshes and create missing group conversation entries so newly added members see the group appear.
 
 ### Debug: XMTP Envelope Stream Dump
 - Added `dump-stream.py` in the repo root to stream the global XMTP envelope feed via `message/v1/subscribe-all`.

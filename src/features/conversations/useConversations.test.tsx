@@ -4,9 +4,14 @@ import { useEffect } from 'react';
 import { useConversations, groupDetailsToConversationUpdates } from './useConversations';
 import { useConversationStore, useAuthStore } from '@/lib/stores';
 import type { Conversation } from '@/types';
+import { getAddress } from 'viem';
 type GroupDetailsLike = Parameters<typeof groupDetailsToConversationUpdates>[0];
 
 let conversationRecord: Conversation;
+const xmtpMock = {
+  addMembersToGroup: vi.fn(),
+  removeMembersFromGroup: vi.fn(),
+};
 
 const mockStorage = {
   getConversation: vi.fn(async () => conversationRecord),
@@ -25,7 +30,7 @@ vi.mock('@/lib/storage', () => ({
 }));
 
 vi.mock('@/lib/xmtp', () => ({
-  getXmtpClient: () => ({}),
+  getXmtpClient: () => xmtpMock,
 }));
 
 function Harness({ onReady }: { onReady: (api: ReturnType<typeof useConversations>) => void }) {
@@ -63,6 +68,8 @@ describe('useConversations controls', () => {
       identity: null,
       vaultSecrets: null,
     });
+    xmtpMock.addMembersToGroup.mockReset();
+    xmtpMock.removeMembersFromGroup.mockReset();
   });
 
   it('toggles mute/unmute and records deletion markers', async () => {
@@ -104,6 +111,113 @@ describe('useConversations controls', () => {
     );
     expect(mockStorage.deleteConversation).toHaveBeenCalledWith('c1');
     expect(useConversationStore.getState().conversations).toHaveLength(0);
+  });
+});
+
+describe('group membership operations', () => {
+  beforeEach(() => {
+    conversationRecord = {
+      id: 'g1',
+      peerId: 'g1',
+      lastMessageAt: 0,
+      unreadCount: 0,
+      pinned: false,
+      archived: false,
+      createdAt: 0,
+      lastMessagePreview: '',
+      lastMessageSender: '',
+      isGroup: true,
+      members: ['0x1111111111111111111111111111111111111111'],
+      memberInboxes: ['inbox-a'],
+      admins: [],
+    };
+    useConversationStore.setState({
+      conversations: [conversationRecord],
+      activeConversationId: null,
+      isLoading: false,
+    });
+    xmtpMock.addMembersToGroup.mockReset();
+    xmtpMock.removeMembersFromGroup.mockReset();
+  });
+
+  it('adds group members and persists XMTP updates', async () => {
+    const memberA = getAddress('0x1111111111111111111111111111111111111111');
+    const memberB = getAddress('0x2222222222222222222222222222222222222222');
+    const details = {
+      id: 'g1',
+      members: [
+        {
+          inboxId: 'inbox-a',
+          address: memberA,
+          permissionLevel: 1,
+          isAdmin: true,
+          isSuperAdmin: false,
+        },
+        {
+          inboxId: 'inbox-b',
+          address: memberB,
+          permissionLevel: 1,
+          isAdmin: false,
+          isSuperAdmin: false,
+        },
+      ],
+      adminAddresses: [memberA],
+      adminInboxes: ['inbox-a'],
+      superAdminInboxes: [],
+      name: 'Test Group',
+      imageUrl: '',
+      description: '',
+    } as unknown as GroupDetailsLike;
+
+    xmtpMock.addMembersToGroup.mockResolvedValue(details);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.addMembersToGroup('g1', [memberA, memberB]);
+    });
+
+    expect(xmtpMock.addMembersToGroup).toHaveBeenCalledWith('g1', [memberB]);
+    expect(conversationRecord.memberInboxes).toEqual(['inbox-a', 'inbox-b']);
+  });
+
+  it('removes group members and persists XMTP updates', async () => {
+    const memberA = getAddress('0x1111111111111111111111111111111111111111');
+    const details = {
+      id: 'g1',
+      members: [
+        {
+          inboxId: 'inbox-a',
+          address: memberA,
+          permissionLevel: 1,
+          isAdmin: true,
+          isSuperAdmin: false,
+        },
+      ],
+      adminAddresses: [memberA],
+      adminInboxes: ['inbox-a'],
+      superAdminInboxes: [],
+      name: 'Test Group',
+      imageUrl: '',
+      description: '',
+    } as unknown as GroupDetailsLike;
+
+    xmtpMock.removeMembersFromGroup.mockResolvedValue(details);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.removeMembersFromGroup('g1', ['inbox-b']);
+    });
+
+    expect(xmtpMock.removeMembersFromGroup).toHaveBeenCalledWith('g1', ['inbox-b']);
+    expect(conversationRecord.memberInboxes).toEqual(['inbox-a']);
   });
 });
 
