@@ -439,7 +439,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-22 (debug invite claim tool)
+**Last Updated**: 2026-01-22 (Farcaster filters global-only UI)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-22)
@@ -449,6 +449,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Invite parsing now tolerates non-base64url characters by stripping them, extracts creator inbox ID, tag, name, and image URL from the protobuf payload, and then sends the slug via XMTP DM.
 - Invite claim now logs parsing and send steps to the console for easier debugging.
 - Creator inbox IDs embedded as raw 32-byte values are now normalized to 64-char hex before DM creation to avoid XMTP API errors.
+
+### Farcaster Filters: Settings Only
+- Removed the per-conversation Farcaster filter toggle panel from the chat view.
+- Filters are now adjusted solely from Settings and still apply globally across conversations.
 
 ## Latest Changes (2026-01-05)
 

@@ -62,8 +62,6 @@ export function ConversationView() {
   const isContact = useContactStore((state) => state.isContact);
   const loadContacts = useContactStore((state) => state.loadContacts);
   const farcasterFilters = useFarcasterStore((state) => state.filters);
-  const setFarcasterFilters = useFarcasterStore((state) => state.setFilters);
-  const hasNeynarKey = useFarcasterStore((state) => state.hasNeynarApiKey());
 
   const contactsByInboxId = useMemo(() => {
     const map = new Map<string, ContactType>();
@@ -567,13 +565,12 @@ export function ConversationView() {
     } as ContactType;
   }, [contactsByInboxId, contactsByAddress, groupMemberProfiles]);
 
-  const { visibleMessages, filteredCount } = useMemo(() => {
+  const visibleMessages = useMemo(() => {
     if (!farcasterFilters.enabled || !conversation) {
-      return { visibleMessages: messages, filteredCount: 0 };
+      return messages;
     }
 
-    let hidden = 0;
-    const filtered = messages.filter((message) => {
+    return messages.filter((message) => {
       const senderLower = message.sender?.toLowerCase?.();
       let senderContact: ContactType | null | undefined = null;
 
@@ -587,14 +584,8 @@ export function ConversationView() {
         senderContact = contactsByInboxId.get(senderLower) || contactsByAddress.get(senderLower);
       }
 
-      const result = evaluateContactAgainstFilters(senderContact, farcasterFilters);
-      if (!result.passes) {
-        hidden += 1;
-      }
-      return result.passes;
+      return evaluateContactAgainstFilters(senderContact, farcasterFilters).passes;
     });
-
-    return { visibleMessages: filtered, filteredCount: hidden };
   }, [
     messages,
     farcasterFilters,
@@ -604,26 +595,6 @@ export function ConversationView() {
     contactsByInboxId,
     contactsByAddress,
   ]);
-
-  const filterSummary = useMemo(() => {
-    const details: string[] = [];
-    if (farcasterFilters.minScore && farcasterFilters.minScore > 0) {
-      details.push(`Neynar score ≥ ${farcasterFilters.minScore}`);
-    }
-    if (farcasterFilters.minFollowerCount && farcasterFilters.minFollowerCount > 0) {
-      details.push(`Followers ≥ ${farcasterFilters.minFollowerCount}`);
-    }
-    if (farcasterFilters.requireActiveStatus) {
-      details.push('Active profiles only');
-    }
-    if (farcasterFilters.requirePowerBadge) {
-      details.push('Power badge required');
-    }
-    if (farcasterFilters.requireFarcasterIdentity) {
-      details.push('Farcaster-linked senders only');
-    }
-    return details.length > 0 ? details.join(' • ') : 'No Farcaster thresholds set';
-  }, [farcasterFilters]);
 
   const messagesToDisplay = farcasterFilters.enabled ? visibleMessages : messages;
   const showFilteredEmpty =
@@ -908,29 +879,6 @@ export function ConversationView() {
         )}
       </div>
 
-      {(hasNeynarKey || farcasterFilters.enabled) && (
-        <div className="px-4 pt-2">
-          <div className="bg-primary-900/50 border border-primary-800/60 rounded-lg px-3 py-2 flex items-start justify-between gap-3">
-            <div className="space-y-1">
-              <p className="text-sm text-primary-100 font-medium">Farcaster message filters</p>
-              <p className="text-xs text-primary-300">{filterSummary}</p>
-              {farcasterFilters.enabled && filteredCount > 0 && (
-                <p className="text-xs text-accent-300">{filteredCount} message(s) hidden by filter</p>
-              )}
-            </div>
-            <label className="flex items-center gap-2 text-sm text-primary-200">
-              <input
-                type="checkbox"
-                className="form-checkbox text-accent-500 rounded"
-                checked={farcasterFilters.enabled}
-                onChange={(e) => setFarcasterFilters({ enabled: e.target.checked })}
-              />
-              Enable
-            </label>
-          </div>
-        </div>
-      )}
-
       {/* Messages */}
       <div
         ref={messagesContainerRef}
@@ -957,7 +905,7 @@ export function ConversationView() {
               </svg>
             </div>
             <p className="text-primary-200">Messages filtered</p>
-            <p className="text-sm text-primary-300">Adjust the Farcaster filters above to see hidden messages.</p>
+            <p className="text-sm text-primary-300">Adjust Farcaster filters in Settings to see hidden messages.</p>
           </div>
         ) : showVisibleEmpty ? (
           <div className="flex flex-col items-center justify-center h-full text-center">

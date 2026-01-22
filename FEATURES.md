@@ -57,7 +57,7 @@
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.
 - Contacts now include a Farcaster sync action when a Neynar key is present, importing followed accounts with usernames, FIDs, scores, follower stats, and power badge metadata.
 - Contact cards surface Farcaster links alongside Neynar scores, follower/following counts, and power badge badges when available.
-- A Farcaster settings panel allows saving the user’s FID and configuring Neynar score/follower/power-badge thresholds that hide incoming messages failing those criteria, with per-conversation toggles to disable filtering quickly.
+- A Farcaster settings panel allows saving the user’s FID and configuring Neynar score/follower/power-badge thresholds that hide incoming messages failing those criteria; filters apply globally across conversations.
 - The contacts list highlights Farcaster-derived entries and shows their Neynar score so users can gauge trust at a glance.
 
 ## Unified Contact Card

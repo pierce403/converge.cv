@@ -187,7 +187,7 @@ export function FarcasterSettings() {
             </label>
           </div>
           <p className="text-xs text-primary-400">
-            Filters can also be toggled per conversation. Messages that do not meet the criteria will be hidden from the inbox.
+            Filters apply globally across conversations. Messages that do not meet the criteria will be hidden from the inbox.
           </p>
         </div>
         {message && <div className="p-4 text-xs text-primary-100 bg-primary-800/60">{message}</div>}
