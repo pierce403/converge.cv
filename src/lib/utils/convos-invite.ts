@@ -30,6 +30,14 @@ function decodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
+function bytesToHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) {
+    out += byte.toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
 function toBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes)
     .toString('base64')
@@ -152,6 +160,24 @@ export function sanitizeConvosInviteCode(input: string): string {
   return input.trim().replace(BASE64URL_CLEAN_RE, '');
 }
 
+function normalizeCreatorInboxId(bytes: Uint8Array, decodedString?: string | null): string {
+  if (decodedString) {
+    const trimmed = decodedString.trim();
+    if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+      return trimmed.toLowerCase();
+    }
+    if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length >= 40) {
+      return trimmed.toLowerCase();
+    }
+  }
+
+  if (bytes.length === 32) {
+    return bytesToHex(bytes);
+  }
+
+  return toBase64Url(bytes);
+}
+
 export function parseConvosInvite(input: string): ParsedConvosInvite {
   const extracted = extractConvosInviteCode(input);
   if (!extracted) {
@@ -194,8 +220,9 @@ export function parseConvosInvite(input: string): ParsedConvosInvite {
     throw new Error('Invite creator inbox ID is missing.');
   }
 
-  const creatorString = decodeUtf8(creatorField.value);
-  payload.creatorInboxId = creatorString ?? toBase64Url(creatorField.value);
+  const creatorBytes = creatorField.value;
+  const creatorString = decodeUtf8(creatorBytes);
+  payload.creatorInboxId = normalizeCreatorInboxId(creatorBytes, creatorString);
 
   payload.tag = getStringField(3);
   payload.name = getStringField(4);
