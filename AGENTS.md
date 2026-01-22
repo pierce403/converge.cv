@@ -439,10 +439,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-22 (Farcaster filters global-only UI)
+**Last Updated**: 2026-01-22 (Added XMTP envelope stream dump script)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-22)
+
+### Debug: XMTP Envelope Stream Dump
+- Added `dump-stream.py` in the repo root to stream the global XMTP envelope feed via `message/v1/subscribe-all`.
+- Supports env/base URL selection, topic filters, truncation, and optional message byte decoding for inspection.
 
 ### Debug: Convos Invite Claim
 - Added a Debug menu tool to parse Convos invite links/codes and send the raw invite slug to the creator inbox.
