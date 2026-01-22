@@ -1147,6 +1147,9 @@ export class XmtpClient {
           if (recovered) {
             return recovered;
           }
+          if (this.isExpectedIdentityError(error)) {
+            return buildProfile([]);
+          }
         }
 
         try {
@@ -1161,6 +1164,9 @@ export class XmtpClient {
           const recovered = await handleIdentityError(error);
           if (recovered) {
             return recovered;
+          }
+          if (this.isExpectedIdentityError(error)) {
+            return buildProfile([]);
           }
         }
       }

@@ -462,6 +462,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Messaging: Group Send Contact Guard
 - Skip auto-adding contacts when sending in group chats so group IDs aren’t treated as inbox IDs (prevents “Missing identity update” errors from profile lookups).
 
+### XMTP Profiles: Expected Identity Errors
+- When profile lookups return expected identity/association errors, stop further fallbacks to the Utils worker and return a minimal profile to avoid repeated “Missing identity update” console noise.
+
 ### Farcaster Filters: Settings Only
 - Removed the per-conversation Farcaster filter toggle panel from the chat view.
 - Filters are now adjusted solely from Settings and still apply globally across conversations.
