@@ -45,6 +45,7 @@ export interface Conversation {
   groupName?: string; // Human-readable name for group chats
   groupImage?: string; // URL or base64 data for group avatar
   groupDescription?: string; // Optional description for the group
+  inviteTag?: string; // Optional Convos invite tag for group linking
   members?: string[]; // List of member addresses
   admins?: string[]; // List of admin addresses
   memberInboxes?: string[]; // XMTP inbox IDs for members

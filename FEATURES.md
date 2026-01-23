@@ -56,6 +56,11 @@
 - The `/debug` console aggregates logs, XMTP network events, and runtime errors with tools for clearing caches, inspecting storage, and managing push notifications.
 - A "Claim Invite Code" tool accepts Convos invite links or raw codes, extracts the creator inbox ID from the signed invite payload, and sends the sanitized invite slug via XMTP DM to request access.
 
+## Group Invites (Convos-Compatible)
+- Group chat menus can generate Convos-compatible invite codes and provide one-click copy buttons for the Convos link, Converge link, or raw invite slug.
+- Generated invites embed an encrypted conversation token (ChaCha20-Poly1305 + HKDF) and a signed payload using the creator’s secp256k1 key, mirroring Convos’ signed invite format.
+- Incoming DM messages containing valid invite codes are intercepted: signatures are verified, the conversation token is decrypted, and the sender is added to the target group automatically.
+
 ## Farcaster + Neynar Integration
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.
 - Contacts now include a Farcaster sync action when a Neynar key is present, importing followed accounts with usernames, FIDs, scores, follower stats, and power badge metadata.

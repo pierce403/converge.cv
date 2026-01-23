@@ -220,6 +220,11 @@ export function OnboardingPage() {
   const navigateToPendingTarget = useCallback(() => {
     try {
       const params = new URLSearchParams(window.location.search);
+      const inviteTarget = params.get('invite');
+      if (inviteTarget) {
+        navigate(`/invite?i=${encodeURIComponent(inviteTarget)}`);
+        return true;
+      }
       const inboxTarget = params.get('i');
       if (inboxTarget) {
         navigate(`/i/${encodeURIComponent(inboxTarget)}`);

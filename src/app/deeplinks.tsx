@@ -1,4 +1,4 @@
-import { Navigate, useParams } from 'react-router-dom';
+import { Navigate, useParams, useSearchParams } from 'react-router-dom';
 
 export function UserConnectRedirect() {
   const { userId } = useParams<{ userId: string }>();
@@ -9,5 +9,13 @@ export function UserConnectRedirect() {
 export function InboxConnectRedirect() {
   const { inboxId } = useParams<{ inboxId: string }>();
   const target = inboxId ? `/onboarding?i=${encodeURIComponent(inboxId)}` : '/onboarding';
+  return <Navigate to={target} replace />;
+}
+
+export function InviteConnectRedirect() {
+  const { code } = useParams<{ code?: string }>();
+  const [searchParams] = useSearchParams();
+  const inviteCode = code ?? searchParams.get('i') ?? '';
+  const target = inviteCode ? `/onboarding?invite=${encodeURIComponent(inviteCode)}` : '/onboarding';
   return <Navigate to={target} replace />;
 }

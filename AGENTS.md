@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-22 (Identity rate-limit backoff for XMTP profile lookups)
+**Last Updated**: 2026-01-23 (Convos-compatible group invites)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-22)
@@ -468,6 +468,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### XMTP Profiles: Expected Identity Errors
 - When profile lookups return expected identity/association errors, stop further fallbacks to the Utils worker and return a minimal profile to avoid repeated “Missing identity update” console noise.
+
+### Convos-Compatible Group Invites
+- Group menus can generate Convos-style invite slugs, copy Convos/Converge links, and preserve invite tags in group metadata (base64 protobuf description).
+- Incoming DM invite slugs are verified (secp256k1 signature + encrypted conversation token) and automatically add the sender to the group when valid.
 
 ### Farcaster Filters: Settings Only
 - Removed the per-conversation Farcaster filter toggle panel from the chat view.

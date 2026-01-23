@@ -64,6 +64,9 @@ export const groupDetailsToConversationUpdates = (details: GroupDetails): Partia
   if (img) updates.groupImage = img;
   const desc = details.description?.trim();
   if (desc) updates.groupDescription = desc;
+  if (details.inviteTag) {
+    updates.inviteTag = details.inviteTag;
+  }
   if (details.permissions) {
     updates.groupPermissions = {
       policyType: details.permissions.policyType,

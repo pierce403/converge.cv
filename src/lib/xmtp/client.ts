@@ -26,7 +26,7 @@ import type {
   GroupPermissionPolicyCode,
   GroupPermissionsState,
 } from '@/types';
-import { getAddress } from 'viem';
+import { getAddress, hexToBytes } from 'viem';
 import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
 import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
 import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-read-receipt';
@@ -42,6 +42,17 @@ import { GroupUpdatedCodec } from '@xmtp/content-type-group-updated';
 import { getStorage } from '@/lib/storage';
 import { getThirdwebClient } from '@/lib/wallets/providers';
 import { upload, resolveScheme } from 'thirdweb/storage';
+import {
+  createConvosInvite,
+  decodeConversationToken,
+  derivePublicKey,
+  encodeConvosGroupMetadata,
+  generateConvosInviteTag,
+  parseConvosGroupMetadata,
+  tryParseConvosInvite,
+  verifyInviteSignature,
+  type ConvosInvitePayload,
+} from '@/lib/utils/convos-invite';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
 
@@ -123,12 +134,23 @@ export interface GroupDetails {
   name: string;
   imageUrl?: string;
   description?: string;
+  inviteTag?: string;
   members: GroupMemberSummary[];
   adminAddresses: string[];
   superAdminAddresses: string[];
   adminInboxes: string[];
   superAdminInboxes: string[];
   permissions?: GroupPermissionsState;
+}
+
+export interface ConvosInviteResult {
+  inviteCode: string;
+  payload: ConvosInvitePayload;
+}
+
+export interface ConvosInviteJoinResult {
+  conversationId: string;
+  conversationName?: string;
 }
 
 export interface InboxProfile {
@@ -198,6 +220,7 @@ export class XmtpClient {
   private identityCooldownUntil = 0;
   private identityBackoffMs = 0;
   private identityCooldownLogUntil = 0;
+  private handledInviteMessages: Set<string> = new Set();
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -1476,11 +1499,16 @@ export class XmtpClient {
       console.warn('[XMTP] Failed to load group permissions:', conversationId, error);
     }
 
+    const rawDescription = typeof safeGroup.description === 'string' ? safeGroup.description : '';
+    const parsedMetadata = parseConvosGroupMetadata(rawDescription);
+    const resolvedDescription = parsedMetadata.description ?? rawDescription ?? '';
+
     return {
       id: conversationId,
       name: safeGroup.name ?? '',
       imageUrl: safeGroup.imageUrl ?? '',
-      description: safeGroup.description ?? '',
+      description: resolvedDescription,
+      inviteTag: parsedMetadata.tag,
       members: memberSummaries,
       adminAddresses,
       superAdminAddresses,
@@ -1585,7 +1613,17 @@ export class XmtpClient {
         await group.updateImageUrl(updates.imageUrl);
       }
       if (updates.description !== undefined && typeof group.updateDescription === 'function') {
-        await group.updateDescription(updates.description);
+        let descriptionToSend = updates.description ?? '';
+        const rawDescription = typeof group.description === 'string' ? group.description : '';
+        const parsedMetadata = parseConvosGroupMetadata(rawDescription);
+        if (parsedMetadata.tag) {
+          descriptionToSend = encodeConvosGroupMetadata({
+            description: updates.description ?? parsedMetadata.description ?? '',
+            tag: parsedMetadata.tag,
+            expiresAt: parsedMetadata.expiresAt,
+          });
+        }
+        await group.updateDescription(descriptionToSend);
       }
 
       logNetworkEvent({
@@ -1600,6 +1638,166 @@ export class XmtpClient {
       console.error('[XMTP] Failed to update group metadata:', error);
       throw error;
     }
+  }
+
+  async createConvosInvite(conversationId: string): Promise<ConvosInviteResult> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    const creatorInboxId = this.client.inboxId ?? this.identity?.inboxId;
+    if (!creatorInboxId) {
+      throw new Error('Invite creation requires an inbox ID');
+    }
+
+    if (!this.identity?.privateKey) {
+      throw new Error('Invite creation requires a local private key');
+    }
+
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      throw new Error('Group not found');
+    }
+
+    const details = await this.buildGroupDetails(conversationId, group);
+    const rawDescription = typeof group.description === 'string' ? group.description : '';
+    const parsedMetadata = parseConvosGroupMetadata(rawDescription);
+    let inviteTag = details.inviteTag ?? parsedMetadata.tag;
+
+    if (!inviteTag) {
+      inviteTag = generateConvosInviteTag();
+      const descriptionForMetadata = parsedMetadata.description ?? details.description ?? '';
+      const encoded = encodeConvosGroupMetadata({
+        description: descriptionForMetadata,
+        tag: inviteTag,
+        expiresAt: parsedMetadata.expiresAt,
+      });
+      if (typeof group.updateDescription === 'function') {
+        await group.updateDescription(encoded);
+      } else {
+        console.warn('[XMTP] Group updateDescription unavailable; invite tag may not propagate to other clients');
+      }
+    }
+
+    const privateKeyHex = this.identity.privateKey.startsWith('0x')
+      ? this.identity.privateKey
+      : `0x${this.identity.privateKey}`;
+    const privateKeyBytes = hexToBytes(privateKeyHex as `0x${string}`);
+
+    const invite = createConvosInvite({
+      conversationId,
+      creatorInboxId,
+      privateKeyBytes,
+      tag: inviteTag,
+      name: details.name?.trim() || undefined,
+      description: (parsedMetadata.description ?? details.description)?.trim() || undefined,
+      imageUrl: details.imageUrl?.trim() || undefined,
+      conversationExpiresAt: parsedMetadata.expiresAt,
+    });
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'invite:create',
+      details: `Generated invite for group ${conversationId}`,
+    });
+
+    return { inviteCode: invite.inviteCode, payload: invite.payload };
+  }
+
+  async processConvosInviteJoinRequest(
+    inviteCode: string,
+    senderInboxId: string,
+    opts?: { messageId?: string }
+  ): Promise<ConvosInviteJoinResult | null> {
+    if (!this.client || !this.identity || !inviteCode || !senderInboxId) {
+      return null;
+    }
+
+    if (opts?.messageId && this.handledInviteMessages.has(opts.messageId)) {
+      return null;
+    }
+
+    const parsed = tryParseConvosInvite(inviteCode);
+    if (!parsed) {
+      return null;
+    }
+
+    if (opts?.messageId) {
+      this.handledInviteMessages.add(opts.messageId);
+    }
+
+    const creatorInboxId = parsed.payload.creatorInboxId;
+    const myInboxId = this.client.inboxId ?? this.identity.inboxId;
+    if (!creatorInboxId || !myInboxId) {
+      return null;
+    }
+
+    if (creatorInboxId.toLowerCase() !== myInboxId.toLowerCase()) {
+      return null;
+    }
+
+    const now = Date.now();
+    if (parsed.payload.expiresAt && parsed.payload.expiresAt.getTime() < now) {
+      console.warn('[XMTP] Invite expired, ignoring join request');
+      return null;
+    }
+    if (parsed.payload.conversationExpiresAt && parsed.payload.conversationExpiresAt.getTime() < now) {
+      console.warn('[XMTP] Conversation expired, ignoring invite request');
+      return null;
+    }
+
+    if (!this.identity.privateKey) {
+      console.warn('[XMTP] Missing private key; cannot verify invite signature');
+      return null;
+    }
+
+    const privateKeyHex = this.identity.privateKey.startsWith('0x')
+      ? this.identity.privateKey
+      : `0x${this.identity.privateKey}`;
+    const privateKeyBytes = hexToBytes(privateKeyHex as `0x${string}`);
+    const expectedPublicKey = derivePublicKey(privateKeyBytes);
+
+    const verified = verifyInviteSignature(parsed.payloadBytes, parsed.signatureBytes, expectedPublicKey);
+    if (!verified) {
+      console.warn('[XMTP] Invite signature verification failed');
+      return null;
+    }
+
+    let conversationId: string;
+    try {
+      conversationId = decodeConversationToken(parsed.payload.conversationToken, creatorInboxId, privateKeyBytes);
+    } catch (error) {
+      console.warn('[XMTP] Failed to decode conversation token from invite:', error);
+      return null;
+    }
+
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      console.warn('[XMTP] Invite join request refers to missing group:', conversationId);
+      return null;
+    }
+
+    try {
+      if (typeof group.addMembers === 'function') {
+        await group.addMembers([senderInboxId]);
+      } else {
+        throw new Error('SDK does not support addMembers for invites');
+      }
+    } catch (error) {
+      console.warn('[XMTP] Failed to add member from invite request:', error);
+      throw error;
+    }
+
+    logNetworkEvent({
+      direction: 'inbound',
+      event: 'invite:accepted',
+      details: `Added ${senderInboxId} to ${conversationId}`,
+    });
+
+    return {
+      conversationId,
+      conversationName: group.name ?? undefined,
+    };
   }
 
   async updateGroupPermission(
@@ -2726,6 +2924,7 @@ export class XmtpClient {
             groupName: details.name?.trim() || undefined,
             groupImage: details.imageUrl?.trim() || undefined,
             groupDescription: details.description?.trim() || undefined,
+            inviteTag: details.inviteTag,
             members: uniqueMembers,
             memberInboxes,
             adminInboxes,

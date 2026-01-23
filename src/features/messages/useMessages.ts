@@ -9,6 +9,7 @@ import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Message, Attachment as StoredAttachment, Conversation } from '@/types';
 import { getAddress, isAddress } from 'viem';
+import { isLikelyConvosInviteCode } from '@/lib/utils/convos-invite';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap
 
@@ -753,15 +754,43 @@ export function useMessages() {
           replyTo: xmtpMessage.replyToId,
         };
 
+        const myInbox = identity?.inboxId?.toLowerCase();
+        const myAddr = identity?.address?.toLowerCase();
+        const senderLower = message.sender?.toLowerCase?.();
+        const fromSelf = senderLower && (senderLower === myInbox || senderLower === myAddr);
+
+        if (!isHistory && !fromSelf && isLikelyConvosInviteCode(content)) {
+          const targetConversation = conversations.find((c) => c.id === conversationId);
+          if (!targetConversation?.isGroup) {
+            try {
+              const xmtp = getXmtpClient();
+              void xmtp
+                .processConvosInviteJoinRequest(content, message.sender, { messageId: message.id })
+                .then((result) => {
+                  if (result && typeof window !== 'undefined') {
+                    try {
+                      const label = result.conversationName ? `Added to ${result.conversationName}` : 'Invite accepted';
+                      window.dispatchEvent(new CustomEvent('ui:toast', { detail: label }));
+                    } catch {
+                      // ignore toast errors
+                    }
+                  }
+                })
+                .catch((inviteError) => {
+                  console.warn('[useMessages] Invite processing failed:', inviteError);
+                });
+            } catch (inviteError) {
+              console.warn('[useMessages] Failed to process invite join request:', inviteError);
+            }
+          }
+        }
+
         // Heuristic de-duplication: if this message is from us (inboxId),
         // remove a recent optimistic local message with same body.
         try {
-            const myInbox = identity?.inboxId?.toLowerCase();
-            const senderLower = xmtpMessage.senderAddress?.toLowerCase?.();
-            if (myInbox && senderLower && myInbox === senderLower) {
-              const likely = messagesByConversation[conversationId] || [];
-              const now = Date.now();
-            const myAddr = identity?.address?.toLowerCase();
+          if (myInbox && senderLower && myInbox === senderLower) {
+            const likely = messagesByConversation[conversationId] || [];
+            const now = Date.now();
             const candidates = likely.filter(
               (m) =>
                 m.type === 'text' &&
@@ -797,10 +826,6 @@ export function useMessages() {
 
         // Increment unread if not viewing this conversation
         // (This would be better handled in a global message listener)
-        const myInbox = identity?.inboxId?.toLowerCase();
-        const myAddr = identity?.address?.toLowerCase();
-        const senderLower = message.sender?.toLowerCase?.();
-        const fromSelf = senderLower && (senderLower === myInbox || senderLower === myAddr);
         if (!fromSelf) {
           const preserved = isHistory ? getResyncReadStateFor(conversationId) : undefined;
           const comparisonBase = preserved?.lastReadAt ?? conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;

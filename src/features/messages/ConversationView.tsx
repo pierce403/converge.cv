@@ -10,6 +10,7 @@ import { getContactInfo } from '@/lib/default-contacts';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import { getXmtpClient } from '@/lib/xmtp';
+import { GroupInviteModal } from '@/features/conversations/GroupInviteModal';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
@@ -36,6 +37,7 @@ export function ConversationView() {
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isInviteModalOpen, setInviteModalOpen] = useState(false);
   const lastScrollTopRef = useRef<number>(0);
 
   const {
@@ -736,6 +738,17 @@ export function ConversationView() {
                   <Menu.Item>
                     {({ active }) => (
                       <button
+                        onClick={() => setInviteModalOpen(true)}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                      >
+                        Create invite
+                      </button>
+                    )}
+                  </Menu.Item>
+                  <div className="my-1 h-px bg-primary-800/60" />
+                  <Menu.Item>
+                    {({ active }) => (
+                      <button
                         onClick={async () => {
                           if (!confirm('Delete this group? It will be removed locally and ignored during future resyncs.')) return;
                           try {
@@ -1027,6 +1040,13 @@ export function ConversationView() {
       {/* User info modal */}
       {contactForModal && (
         <ContactCardModal contact={contactForModal} onClose={() => setContactForModal(null)} />
+      )}
+      {isInviteModalOpen && conversation?.isGroup && (
+        <GroupInviteModal
+          conversationId={conversation.id}
+          conversationName={conversationDisplayName}
+          onClose={() => setInviteModalOpen(false)}
+        />
       )}
     </div>
   );

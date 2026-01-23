@@ -12,9 +12,10 @@ import { ContactsPage } from '@/features/contacts/ContactsPage';
 import { NewGroupPage } from '@/features/conversations/NewGroupPage';
 import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
-import { UserConnectRedirect, InboxConnectRedirect } from '@/app/deeplinks';
+import { UserConnectRedirect, InboxConnectRedirect, InviteConnectRedirect } from '@/app/deeplinks';
 import { StartDmPage } from '@/features/conversations/StartDmPage';
 import { ContactLinkPage } from '@/features/contacts/ContactLinkPage';
+import { InviteClaimPage } from '@/features/conversations/InviteClaimPage';
 import { closeStorage, getStorageNamespace } from '@/lib/storage';
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { resetXmtpClient } from '@/lib/xmtp/client';
@@ -196,6 +197,8 @@ export function AppRouter() {
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/i/:inboxId" element={<InboxConnectRedirect />} />
         <Route path="/u/:userId" element={<UserConnectRedirect />} />
+        <Route path="/invite" element={<InviteConnectRedirect />} />
+        <Route path="/invite/:code" element={<InviteConnectRedirect />} />
         <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
         <Route path="*" element={<Navigate to="/onboarding" replace />} />
       </Routes>
@@ -228,6 +231,8 @@ export function AppRouter() {
         {/* New simplified deep links */}
         <Route path="i/:inboxId" element={<StartDmPage />} />
         <Route path="u/:userId" element={<ContactLinkPage />} />
+        <Route path="invite" element={<InviteClaimPage />} />
+        <Route path="invite/:code" element={<InviteClaimPage />} />
         <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

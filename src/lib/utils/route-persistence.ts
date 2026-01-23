@@ -24,7 +24,7 @@ function shouldPersistRoute(path: string): boolean {
   }
   
   // Don't persist deep links (one-time use)
-  if (path.startsWith('/join-group/') || path.startsWith('/u/') || path.startsWith('/i/')) {
+  if (path.startsWith('/join-group/') || path.startsWith('/u/') || path.startsWith('/i/') || path.startsWith('/invite')) {
     return false;
   }
   
