@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite onboarding reload fix)
+**Last Updated**: 2026-01-24 (Group @-mentions)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -499,6 +499,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### ENS Resolution: RPC Fallbacks
 - ENS lookups now use a fallback transport with multiple public mainnet RPC endpoints (configurable via `VITE_MAINNET_RPC_URLS`) to avoid single-provider outages.
+
+### Messaging: Group @-Mentions
+- Group chat composer now offers @-mention suggestions based on current group members, inserts mentions into the message text, and renders mentions with inline styling.
+- Incoming messages that mention the current user are visually highlighted to make mentions stand out.
 
 ## Latest Changes (2026-01-22)
 

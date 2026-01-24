@@ -2,7 +2,7 @@
  * Message bubble component
  */
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Message } from '@/types';
 import { formatMessageTime } from '@/lib/utils/date';
 import { useAuthStore, useMessageStore } from '@/lib/stores';
@@ -10,6 +10,7 @@ import { MessageActionsModal } from './MessageActionsModal';
 import { useMessages } from './useMessages';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 import { getStorage } from '@/lib/storage';
+import { normalizeMentionLabel, tokenizeMessage } from '@/lib/utils/mentions';
 
 interface SenderInfo {
   displayName?: string;
@@ -223,40 +224,89 @@ export function MessageBubble({
       ? messagesByConversation[message.conversationId].find((m) => m.id === message.replyTo)
       : undefined;
 
-  const renderLinkifiedText = (text: string) => {
-    const urlRegex = /(https?:\/\/[^\s]+)/gi;
-    const segments: Array<{ type: 'text' | 'link'; value: string }> = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = urlRegex.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        segments.push({ type: 'text', value: text.slice(lastIndex, match.index) });
-      }
-      segments.push({ type: 'link', value: match[0] });
-      lastIndex = match.index + match[0].length;
+  const mentionTargets = useMemo(() => {
+    const targets = new Set<string>();
+    if (identity?.displayName) {
+      targets.add(normalizeMentionLabel(identity.displayName));
     }
-
-    if (lastIndex < text.length) {
-      segments.push({ type: 'text', value: text.slice(lastIndex) });
+    if (identity?.address) {
+      targets.add(identity.address.toLowerCase());
     }
+    if (identity?.inboxId) {
+      targets.add(identity.inboxId.toLowerCase());
+    }
+    return targets;
+  }, [identity?.address, identity?.displayName, identity?.inboxId]);
 
-    return segments.map((seg, idx) =>
-      seg.type === 'link' ? (
-        <a
-          key={`link-${idx}`}
-          href={seg.value}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline text-accent-300 hover:text-accent-200 break-all"
-        >
-          {seg.value}
-        </a>
-      ) : (
-        <span key={`text-${idx}`}>{seg.value}</span>
-      )
-    );
+  const messageTokens = useMemo(() => tokenizeMessage(message.body || ''), [message.body]);
+
+  const parseMentionLabel = (label: string) => {
+    const trimmed = label.trim();
+    if (!trimmed) {
+      return { display: '', key: '' };
+    }
+    const [displayPart, idPart] = trimmed.split('|');
+    const display = (displayPart ?? '').trim();
+    const key = (idPart ?? displayPart ?? '').trim();
+    return { display, key };
   };
+
+  const isMentioned = useMemo(() => {
+    if (isSent || message.type !== 'text') {
+      return false;
+    }
+    return messageTokens.some((token) => {
+      if (token.type !== 'mention') return false;
+      const { display, key } = parseMentionLabel(token.label);
+      const normalizedDisplay = normalizeMentionLabel(display);
+      const normalizedKey = key.toLowerCase();
+      return Boolean(
+        (normalizedDisplay && mentionTargets.has(normalizedDisplay)) ||
+        (normalizedKey && mentionTargets.has(normalizedKey))
+      );
+    });
+  }, [isSent, message.type, messageTokens, mentionTargets]);
+
+  const renderTokens = () => (
+    messageTokens.map((token, idx) => {
+      if (token.type === 'link') {
+        return (
+          <a
+            key={`link-${idx}`}
+            href={token.value}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-accent-300 hover:text-accent-200 break-all"
+          >
+            {token.value}
+          </a>
+        );
+      }
+      if (token.type === 'mention') {
+        const { display, key } = parseMentionLabel(token.label);
+        const normalizedDisplay = normalizeMentionLabel(display);
+        const normalizedKey = key.toLowerCase();
+        const isTarget =
+          (normalizedDisplay && mentionTargets.has(normalizedDisplay)) ||
+          (normalizedKey && mentionTargets.has(normalizedKey));
+        const mentionLabel = display || token.label;
+        return (
+          <span
+            key={`mention-${idx}`}
+            className={
+              `inline-flex items-center px-1 rounded-md font-semibold ` +
+              (isTarget
+                ? 'bg-accent-500/20 text-accent-100 ring-1 ring-accent-300/50'
+                : 'bg-accent-900/30 text-accent-200')
+            }
+          >
+            @{mentionLabel}
+          </span>
+        );
+      }
+      return <span key={`text-${idx}`}>{token.value}</span>;
+    })
+  );
 
   const attachmentImageSrc = attachmentPreview ? sanitizeImageSrc(attachmentPreview.url) : null;
 
@@ -296,7 +346,8 @@ export function MessageBubble({
           className={
             (isSent ? 'message-sent' : 'message-received') +
             ' w-full relative ' +
-            (message.reactions.length > 0 ? ' pb-7' : '')
+            (message.reactions.length > 0 ? ' pb-7' : '') +
+            (isMentioned ? ' ring-2 ring-accent-400/60 shadow-[0_0_12px_rgba(88,166,255,0.15)]' : '')
           }
         >
           {message.replyTo && (
@@ -311,14 +362,14 @@ export function MessageBubble({
           )}
           {message.type === 'text' && (
             <p className="whitespace-pre-wrap break-words">
-              {renderLinkifiedText(message.body)}
+              {renderTokens()}
             </p>
           )}
           {message.type === 'system' && (
             <div className="w-full flex justify-center">
               <div className="max-w-full text-center text-xs bg-primary-800/60 border border-primary-700 text-primary-200 px-2 py-1 rounded">
                 <span className="whitespace-pre-wrap break-words">
-                  {renderLinkifiedText(message.body)}
+                  {renderTokens()}
                 </span>
                 {isInviteRequest && !isSent && (
                   <div className="mt-2 flex flex-col items-center gap-2">

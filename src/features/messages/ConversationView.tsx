@@ -15,6 +15,7 @@ import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
 import { evaluateContactAgainstFilters } from '@/lib/farcaster/filters';
+import type { MentionCandidate } from '@/lib/utils/mentions';
 
 const formatIdentifier = (value: string) => {
   if (!value) {
@@ -487,6 +488,83 @@ export function ConversationView() {
 
     return map;
   }, [conversation, contactsByInboxId, contactsByAddress]);
+
+  const mentionCandidates = useMemo<MentionCandidate[]>(() => {
+    if (!conversation?.isGroup) {
+      return [];
+    }
+
+    const results: MentionCandidate[] = [];
+    const seen = new Set<string>();
+    const myInboxLower = identity?.inboxId?.toLowerCase();
+    const myAddressLower = identity?.address?.toLowerCase();
+
+    const addCandidate = (candidate: MentionCandidate) => {
+      const key = (candidate.inboxId || candidate.address || candidate.id || candidate.display).toLowerCase();
+      if (!key || seen.has(key)) {
+        return;
+      }
+      if (myInboxLower && candidate.inboxId?.toLowerCase() === myInboxLower) {
+        return;
+      }
+      if (myAddressLower && candidate.address?.toLowerCase() === myAddressLower) {
+        return;
+      }
+      seen.add(key);
+      results.push(candidate);
+    };
+
+    const buildCandidate = (inboxId?: string, address?: string, displayName?: string, avatar?: string) => {
+      const inboxLower = inboxId?.toLowerCase();
+      const addressLower = address?.toLowerCase();
+      const contact =
+        (inboxLower ? contactsByInboxId.get(inboxLower) : undefined) ||
+        (addressLower ? contactsByAddress.get(addressLower) : undefined);
+      const preferredName = contact?.preferredName || contact?.name || displayName;
+      const fallback = address || contact?.primaryAddress || inboxId;
+      const display = preferredName || fallback || inboxId || address || 'Unknown';
+      const secondary = preferredName ? (fallback || inboxId) : undefined;
+      addCandidate({
+        id: inboxLower || addressLower || display,
+        display,
+        secondary: secondary && secondary !== display ? secondary : undefined,
+        avatarUrl: contact?.preferredAvatar || contact?.avatar || avatar,
+        inboxId,
+        address,
+      });
+    };
+
+    conversation.groupMembers?.forEach((member) => {
+      buildCandidate(member.inboxId, member.address, member.displayName, member.avatar);
+    });
+
+    conversation.memberInboxes?.forEach((memberInbox) => {
+      if (!memberInbox) return;
+      if (conversation.groupMembers?.some((member) => member.inboxId?.toLowerCase() === memberInbox.toLowerCase())) {
+        return;
+      }
+      buildCandidate(memberInbox);
+    });
+
+    if ((!conversation.groupMembers || conversation.groupMembers.length === 0) && conversation.members) {
+      conversation.members.forEach((memberAddress) => {
+        if (!memberAddress) return;
+        buildCandidate(undefined, memberAddress);
+      });
+    }
+
+    results.sort((a, b) => a.display.localeCompare(b.display));
+    return results;
+  }, [
+    conversation?.isGroup,
+    conversation?.groupMembers,
+    conversation?.memberInboxes,
+    conversation?.members,
+    contactsByInboxId,
+    contactsByAddress,
+    identity?.inboxId,
+    identity?.address,
+  ]);
 
   const inboxIdForActions = contact?.inboxId ?? conversation?.peerId ?? '';
   const conversationContact = useMemo(() => {
@@ -1033,6 +1111,7 @@ export function ConversationView() {
             replyToMessage={replyTo ?? undefined}
             onCancelReply={() => setReplyTo(null)}
             onSent={() => setReplyTo(null)}
+            mentionCandidates={mentionCandidates}
           />
         )}
       </div>
