@@ -3,7 +3,7 @@
  */
 
 import { normalize } from 'viem/ens';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, fallback, http } from 'viem';
 import { mainnet } from 'viem/chains';
 
 type EnsPublicClient = Pick<ReturnType<typeof createPublicClient>, 'getEnsAddress' | 'getEnsName'>;
@@ -14,10 +14,24 @@ function getEnsClient(): EnsPublicClient {
   if (ensClient) {
     return ensClient;
   }
+  const envUrls = (import.meta.env?.VITE_MAINNET_RPC_URLS as string | undefined)
+    ?.split(',')
+    .map((url) => url.trim())
+    .filter(Boolean) ?? [];
+  const rpcUrls = envUrls.length
+    ? envUrls
+    : [
+        'https://eth.llamarpc.com',
+        'https://cloudflare-eth.com',
+        'https://rpc.ankr.com/eth',
+        'https://eth.drpc.org',
+      ];
+  const transports = rpcUrls.map((url) => http(url, { timeout: 10_000 }));
+  const transport = transports.length > 1 ? fallback(transports) : transports[0];
   // Create a public client for ENS resolution
   ensClient = createPublicClient({
     chain: mainnet,
-    transport: http('https://eth.llamarpc.com'), // Free public RPC
+    transport,
   });
   return ensClient;
 }
