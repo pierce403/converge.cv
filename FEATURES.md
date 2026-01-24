@@ -60,10 +60,11 @@
 ## Group Invites (Convos-Compatible)
 - Group chat menus can generate Convos-compatible invite codes and provide one-click copy buttons for the Convos link, Converge link, or raw invite slug.
 - Generated invites embed an encrypted conversation token (ChaCha20-Poly1305 + HKDF) and a signed payload using the creator’s secp256k1 key, mirroring Convos’ signed invite format.
-- Incoming DM messages containing valid invite codes are intercepted: signatures are verified, the conversation token is decrypted, and the sender is added to the target group automatically.
+- Incoming DM messages containing valid invite codes are intercepted and queued for creator approval; accepted requests verify the signature, decrypt the conversation token, and add the sender to the target group.
 - Wallet-based identities without a local key can still generate invites by approving a wallet signature that derives the invite signing/encryption key for the session.
 - Invite requests show as a readable system message stub (group name/tag/expiry) instead of raw base64, with follow-up system notices for acceptance or failure.
 - Invite requests are surfaced even when the DM consent state is unknown by scanning DMs on connect and periodically, then dispatching synthetic message events for valid invite slugs.
+- Invite approvals now present a modal with group details and requester reputation (Farcaster stats when available), letting the creator explicitly accept or decline before any wallet signature prompt appears.
 
 ## Farcaster + Neynar Integration
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.

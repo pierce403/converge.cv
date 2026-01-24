@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useVisualViewport } from '@/lib/utils/useVisualViewport';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
@@ -17,6 +17,7 @@ import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
+import { InviteRequestModal, type InviteRequest } from '@/components/InviteRequestModal';
 import { syncSelfFarcasterProfile } from '@/lib/farcaster/self';
 // Prefer XMTP profile history for names/avatars; fall back to Farcaster for missing fields.
 
@@ -46,6 +47,56 @@ export function Layout() {
   const lastSyncedAt = useXmtpStore((state) => state.lastSyncedAt);
   const connectionStatus = useXmtpStore((state) => state.connectionStatus);
   const [isChecking, setIsChecking] = useState(false);
+  const [inviteQueue, setInviteQueue] = useState<InviteRequest[]>([]);
+
+  const activeInvite = inviteQueue[0] ?? null;
+  const inviteApprovalState = useMemo(() => {
+    if (!activeInvite) {
+      return { canApprove: false, hint: undefined as string | undefined };
+    }
+    const myInbox = getXmtpClient().getInboxId()?.toLowerCase();
+    const creator = activeInvite.payload.creatorInboxId?.toLowerCase();
+    if (!myInbox || !creator) {
+      return { canApprove: false, hint: 'Missing inbox information for approval.' };
+    }
+    if (creator !== myInbox) {
+      return { canApprove: false, hint: 'Only the invite creator can approve this request.' };
+    }
+    const now = Date.now();
+    if (activeInvite.payload.expiresAt && activeInvite.payload.expiresAt.getTime() < now) {
+      return { canApprove: false, hint: 'This invite has expired.' };
+    }
+    if (activeInvite.payload.conversationExpiresAt && activeInvite.payload.conversationExpiresAt.getTime() < now) {
+      return { canApprove: false, hint: 'The invite window for this group has expired.' };
+    }
+    return { canApprove: true, hint: undefined };
+  }, [activeInvite]);
+
+  const requiresWalletSignature = Boolean(identity && !identity.privateKey);
+
+  const enqueueInvite = useCallback((invite: InviteRequest) => {
+    setInviteQueue((prev) => {
+      const matches = prev.some((item) => {
+        if (invite.messageId && item.messageId) {
+          return invite.messageId === item.messageId;
+        }
+        return item.senderInboxId === invite.senderInboxId && item.inviteCode === invite.inviteCode;
+      });
+      if (matches) return prev;
+      return [...prev, invite];
+    });
+  }, []);
+
+  const removeInvite = useCallback((invite: InviteRequest) => {
+    setInviteQueue((prev) =>
+      prev.filter((item) => {
+        if (invite.messageId && item.messageId) {
+          return invite.messageId !== item.messageId;
+        }
+        return !(item.senderInboxId === invite.senderInboxId && item.inviteCode === invite.inviteCode);
+      })
+    );
+  }, []);
 
   const handleCheckInbox = async () => {
     setIsChecking(true);
@@ -57,6 +108,21 @@ export function Layout() {
       setIsChecking(false);
     }
   };
+
+  useEffect(() => {
+    const handleInviteRequest = (event: Event) => {
+      const custom = event as CustomEvent<InviteRequest>;
+      const detail = custom.detail;
+      if (!detail || !detail.inviteCode || !detail.senderInboxId || !detail.conversationId) {
+        return;
+      }
+      enqueueInvite(detail);
+    };
+    window.addEventListener('ui:invite-request', handleInviteRequest as EventListener);
+    return () => {
+      window.removeEventListener('ui:invite-request', handleInviteRequest as EventListener);
+    };
+  }, [enqueueInvite]);
 
   // Treat auto-generated labels (e.g., "Identity 0x1234…") as "missing" a real display name
   const isAutoLabel = (val?: string | null) => {
@@ -157,6 +223,96 @@ export function Layout() {
     updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: false });
     setShowPersonalizationReminder(false);
   }, [updateReminderPrefs]);
+
+  const dispatchInviteNotice = useCallback(
+    (request: InviteRequest, suffix: string, body: string) => {
+      if (typeof window === 'undefined') return;
+      const noticeBase = request.messageId || `${request.senderInboxId}-${request.receivedAt}`;
+      const noticeId = `invite_${noticeBase}_${suffix}`;
+      const sender = identity?.inboxId || identity?.address || 'system';
+      window.dispatchEvent(
+        new CustomEvent('xmtp:system', {
+          detail: {
+            conversationId: request.conversationId,
+            system: {
+              id: noticeId,
+              senderInboxId: sender,
+              body,
+              sentAt: Date.now(),
+            },
+          },
+        })
+      );
+    },
+    [identity]
+  );
+
+  const handleApproveInvite = useCallback(
+    async (request: InviteRequest) => {
+      const xmtp = getXmtpClient();
+      const myInbox = xmtp.getInboxId()?.toLowerCase();
+      const creator = request.payload.creatorInboxId?.toLowerCase();
+      const now = Date.now();
+
+      if (!myInbox || !creator) {
+        dispatchInviteNotice(request, 'failed', 'Invite approval failed: missing inbox information.');
+        removeInvite(request);
+        return;
+      }
+      if (creator !== myInbox) {
+        dispatchInviteNotice(request, 'declined', 'Only the invite creator can approve this request.');
+        removeInvite(request);
+        return;
+      }
+      if (request.payload.expiresAt && request.payload.expiresAt.getTime() < now) {
+        dispatchInviteNotice(request, 'failed', 'Invite expired.');
+        removeInvite(request);
+        return;
+      }
+      if (request.payload.conversationExpiresAt && request.payload.conversationExpiresAt.getTime() < now) {
+        dispatchInviteNotice(request, 'failed', 'Invite window expired.');
+        removeInvite(request);
+        return;
+      }
+
+      try {
+        const result = await xmtp.processConvosInviteJoinRequest(
+          request.inviteCode,
+          request.senderInboxId,
+          { messageId: request.messageId }
+        );
+        if (result) {
+          const label = result.conversationName
+            ? `Invite accepted. Added to ${result.conversationName}.`
+            : 'Invite accepted.';
+          dispatchInviteNotice(request, 'accepted', label);
+          if (typeof window !== 'undefined') {
+            try {
+              window.dispatchEvent(new CustomEvent('ui:toast', { detail: label }));
+            } catch {
+              // ignore toast errors
+            }
+          }
+        } else {
+          dispatchInviteNotice(request, 'failed', 'Invite could not be approved by this account.');
+        }
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : 'Failed to approve invite.';
+        dispatchInviteNotice(request, 'failed', `Invite failed: ${messageText}`);
+      } finally {
+        removeInvite(request);
+      }
+    },
+    [dispatchInviteNotice, removeInvite]
+  );
+
+  const handleRejectInvite = useCallback(
+    (request: InviteRequest) => {
+      dispatchInviteNotice(request, 'declined', 'Invite declined.');
+      removeInvite(request);
+    },
+    [dispatchInviteNotice, removeInvite]
+  );
 
   const handleDismissForever = useCallback(() => {
     updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: true });
@@ -1095,6 +1251,17 @@ export function Layout() {
           <DebugLogPanel />
         </div>
       </nav>
+      {activeInvite && (
+        <InviteRequestModal
+          isOpen={Boolean(activeInvite)}
+          request={activeInvite}
+          canApprove={inviteApprovalState.canApprove}
+          approvalHint={inviteApprovalState.hint}
+          requiresWalletSignature={requiresWalletSignature}
+          onApprove={handleApproveInvite}
+          onReject={handleRejectInvite}
+        />
+      )}
       {showPersonalizationReminder && identity && shouldShowPersonalizationNag && (
         <PersonalizationReminderModal
           missingDisplayName={missingDisplayName}

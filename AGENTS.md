@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Dependabot remediation)
+**Last Updated**: 2026-01-24 (Invite approval modal)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -462,6 +462,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Unknown DM Scan
 - Invite requests are now detected by scanning DMs that are still in the XMTP "unknown consent" state on connect and every minute, dispatching synthetic message events so admins see the request blob.
+
+### Convos Invites: Approval Modal
+- Invite requests now trigger a modal that shows group details and requester reputation, allowing the creator to explicitly approve or decline before any wallet signature prompt is shown.
 
 ### ENS Resolution: RPC Fallbacks
 - ENS lookups now use a fallback transport with multiple public mainnet RPC endpoints (configurable via `VITE_MAINNET_RPC_URLS`) to avoid single-provider outages.

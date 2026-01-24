@@ -802,64 +802,26 @@ export function useMessages() {
           replyTo: xmtpMessage.replyToId,
         };
 
-        const addInviteNotice = async (suffix: string, body: string) => {
-          const noticeId = `invite_${message.id}_${suffix}`;
-          const storage = await getStorage();
-          const existing = await storage.getMessage(noticeId);
-          if (existing) return;
-          const notice: Message = {
-            id: noticeId,
-            conversationId,
-            sender: identity?.inboxId ?? identity?.address ?? 'system',
-            sentAt: Date.now(),
-            receivedAt: Date.now(),
-            type: 'system',
-            body,
-            status: 'delivered',
-            reactions: [],
-          };
-          addMessage(conversationId, notice);
-          await storage.putMessage(notice);
-        };
-
         if (parsedInvite && !isHistory && !fromSelf) {
           const targetConversation = conversations.find((c) => c.id === conversationId);
           if (!targetConversation?.isGroup) {
             try {
-              const xmtp = getXmtpClient();
-              void xmtp
-                .processConvosInviteJoinRequest(content, message.sender, { messageId: message.id })
-                .then((result) => {
-                  if (result) {
-                    void addInviteNotice(
-                      'accepted',
-                      result.conversationName
-                        ? `Invite accepted. Added to ${result.conversationName}.`
-                        : 'Invite accepted.'
-                    );
-                    if (typeof window !== 'undefined') {
-                      try {
-                        const label = result.conversationName ? `Added to ${result.conversationName}` : 'Invite accepted';
-                        window.dispatchEvent(new CustomEvent('ui:toast', { detail: label }));
-                      } catch {
-                        // ignore toast errors
-                      }
-                    }
-                  } else {
-                    void addInviteNotice('ignored', 'Invite ignored.');
-                  }
-                })
-                .catch((inviteError) => {
-                  const messageText =
-                    inviteError instanceof Error ? inviteError.message : 'Failed to process invite.';
-                  void addInviteNotice('failed', `Invite failed: ${messageText}`);
-                  console.warn('[useMessages] Invite processing failed:', inviteError);
-                });
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(
+                  new CustomEvent('ui:invite-request', {
+                    detail: {
+                      conversationId,
+                      senderInboxId: message.sender,
+                      messageId: message.id,
+                      inviteCode: content,
+                      payload: parsedInvite.payload,
+                      receivedAt: message.sentAt || Date.now(),
+                    },
+                  })
+                );
+              }
             } catch (inviteError) {
-              const messageText =
-                inviteError instanceof Error ? inviteError.message : 'Failed to process invite.';
-              void addInviteNotice('failed', `Invite failed: ${messageText}`);
-              console.warn('[useMessages] Failed to process invite join request:', inviteError);
+              console.warn('[useMessages] Failed to dispatch invite request UI:', inviteError);
             }
           }
         }
