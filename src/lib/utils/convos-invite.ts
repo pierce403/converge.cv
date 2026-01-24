@@ -692,3 +692,10 @@ export function generateConvosInviteTag(length = 10): string {
 export function derivePublicKey(privateKeyBytes: Uint8Array): Uint8Array {
   return getPublicKey(privateKeyBytes, false);
 }
+
+export function deriveInvitePrivateKeyFromSignature(signatureBytes: Uint8Array): Uint8Array {
+  if (signatureBytes.length < 40) {
+    throw new Error('Signature is too short for invite key derivation');
+  }
+  return secpEtc.hashToPrivateKey(signatureBytes);
+}

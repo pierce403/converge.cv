@@ -45,6 +45,7 @@ import { upload, resolveScheme } from 'thirdweb/storage';
 import {
   createConvosInvite,
   decodeConversationToken,
+  deriveInvitePrivateKeyFromSignature,
   derivePublicKey,
   encodeConvosGroupMetadata,
   generateConvosInviteTag,
@@ -221,6 +222,9 @@ export class XmtpClient {
   private identityBackoffMs = 0;
   private identityCooldownLogUntil = 0;
   private handledInviteMessages: Set<string> = new Set();
+  private inviteDerivedKey: Uint8Array | null = null;
+  private inviteDerivedKeyInboxId: string | null = null;
+  private inviteDerivedKeyPromise: Promise<Uint8Array> | null = null;
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -1640,6 +1644,50 @@ export class XmtpClient {
     }
   }
 
+  private async resolveInvitePrivateKey(creatorInboxId: string): Promise<Uint8Array> {
+    if (!this.identity) {
+      throw new Error('Invite creation requires an active identity');
+    }
+
+    if (this.identity?.privateKey) {
+      const privateKeyHex = this.identity.privateKey.startsWith('0x')
+        ? this.identity.privateKey
+        : `0x${this.identity.privateKey}`;
+      return hexToBytes(privateKeyHex as `0x${string}`);
+    }
+
+    if (this.inviteDerivedKey && this.inviteDerivedKeyInboxId === creatorInboxId) {
+      return this.inviteDerivedKey;
+    }
+
+    if (this.inviteDerivedKeyPromise) {
+      return await this.inviteDerivedKeyPromise;
+    }
+
+    if (!this.identity?.signMessage) {
+      throw new Error('Invite creation requires a local key or wallet signing capability');
+    }
+
+    const message = `Converge Invite Key v1:${creatorInboxId}`;
+    const signMessage = this.identity.signMessage;
+    this.inviteDerivedKeyPromise = (async () => {
+      console.log('[XMTP] Requesting wallet signature to derive invite key...');
+      const signatureHexRaw = await signMessage(message);
+      const signatureHex = signatureHexRaw.startsWith('0x') ? signatureHexRaw : `0x${signatureHexRaw}`;
+      const signatureBytes = hexToBytes(signatureHex as `0x${string}`);
+      const derivedKey = deriveInvitePrivateKeyFromSignature(signatureBytes);
+      this.inviteDerivedKey = derivedKey;
+      this.inviteDerivedKeyInboxId = creatorInboxId;
+      return derivedKey;
+    })();
+
+    try {
+      return await this.inviteDerivedKeyPromise;
+    } finally {
+      this.inviteDerivedKeyPromise = null;
+    }
+  }
+
   async createConvosInvite(conversationId: string): Promise<ConvosInviteResult> {
     if (!this.client) {
       throw new Error('Client not connected');
@@ -1648,10 +1696,6 @@ export class XmtpClient {
     const creatorInboxId = this.client.inboxId ?? this.identity?.inboxId;
     if (!creatorInboxId) {
       throw new Error('Invite creation requires an inbox ID');
-    }
-
-    if (!this.identity?.privateKey) {
-      throw new Error('Invite creation requires a local private key');
     }
 
     const group = await this.getGroupConversation(conversationId);
@@ -1679,10 +1723,7 @@ export class XmtpClient {
       }
     }
 
-    const privateKeyHex = this.identity.privateKey.startsWith('0x')
-      ? this.identity.privateKey
-      : `0x${this.identity.privateKey}`;
-    const privateKeyBytes = hexToBytes(privateKeyHex as `0x${string}`);
+    const privateKeyBytes = await this.resolveInvitePrivateKey(creatorInboxId);
 
     const invite = createConvosInvite({
       conversationId,
@@ -1747,14 +1788,13 @@ export class XmtpClient {
     }
 
     if (!this.identity.privateKey) {
-      console.warn('[XMTP] Missing private key; cannot verify invite signature');
-      return null;
+      if (!this.identity.signMessage) {
+        console.warn('[XMTP] Missing signing capability; cannot verify invite signature');
+        return null;
+      }
     }
 
-    const privateKeyHex = this.identity.privateKey.startsWith('0x')
-      ? this.identity.privateKey
-      : `0x${this.identity.privateKey}`;
-    const privateKeyBytes = hexToBytes(privateKeyHex as `0x${string}`);
+    const privateKeyBytes = await this.resolveInvitePrivateKey(creatorInboxId);
     const expectedPublicKey = derivePublicKey(privateKeyBytes);
 
     const verified = verifyInviteSignature(parsed.payloadBytes, parsed.signatureBytes, expectedPublicKey);
@@ -2678,6 +2718,9 @@ export class XmtpClient {
 
       this.client = null;
       this.identity = null;
+      this.inviteDerivedKey = null;
+      this.inviteDerivedKeyInboxId = null;
+      this.inviteDerivedKeyPromise = null;
       setConnectionStatus('disconnected');
       setError(null);
 

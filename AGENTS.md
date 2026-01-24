@@ -440,8 +440,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-23 (Convos-compatible group invites)
+**Last Updated**: 2026-01-24 (Wallet-signed invite fallback)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-01-24)
+
+### Convos Invites: Wallet-Signed Fallback
+- Invite creation now falls back to a wallet signature-derived key when no local private key exists, allowing wallet-based identities to generate and process invites.
 
 ## Latest Changes (2026-01-22)
 
