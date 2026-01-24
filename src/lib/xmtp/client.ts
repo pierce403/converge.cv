@@ -1725,7 +1725,7 @@ export class XmtpClient {
       const signatureHexRaw = await signMessage(message);
       const signatureHex = signatureHexRaw.startsWith('0x') ? signatureHexRaw : `0x${signatureHexRaw}`;
       const signatureBytes = hexToBytes(signatureHex as `0x${string}`);
-      const derivedKey = deriveInvitePrivateKeyFromSignature(signatureBytes);
+      const derivedKey = await deriveInvitePrivateKeyFromSignature(signatureBytes, message);
       this.inviteDerivedKey = derivedKey;
       this.inviteDerivedKeyInboxId = creatorInboxId;
       return derivedKey;
@@ -1805,22 +1805,18 @@ export class XmtpClient {
     }
 
     if (opts?.messageId && this.handledInviteMessages.has(opts.messageId)) {
-      return null;
+      throw new Error('Invite already processed.');
     }
 
     const parsed = tryParseConvosInvite(inviteCode);
     if (!parsed) {
-      return null;
-    }
-
-    if (opts?.messageId) {
-      this.handledInviteMessages.add(opts.messageId);
+      throw new Error('Invite could not be parsed.');
     }
 
     const creatorInboxId = parsed.payload.creatorInboxId;
     const myInboxId = this.client.inboxId ?? this.identity.inboxId;
     if (!creatorInboxId || !myInboxId) {
-      return null;
+      throw new Error('Invite approval requires an inbox ID.');
     }
 
     if (creatorInboxId.toLowerCase() !== myInboxId.toLowerCase()) {
@@ -1837,11 +1833,8 @@ export class XmtpClient {
       return null;
     }
 
-    if (!this.identity.privateKey) {
-      if (!this.identity.signMessage) {
-        console.warn('[XMTP] Missing signing capability; cannot verify invite signature');
-        return null;
-      }
+    if (!this.identity.privateKey && !this.identity.signMessage) {
+      throw new Error('Invite approval requires a local key or wallet signer.');
     }
 
     const privateKeyBytes = await this.resolveInvitePrivateKey(creatorInboxId);
@@ -1849,8 +1842,7 @@ export class XmtpClient {
 
     const verified = verifyInviteSignature(parsed.payloadBytes, parsed.signatureBytes, expectedPublicKey);
     if (!verified) {
-      console.warn('[XMTP] Invite signature verification failed');
-      return null;
+      throw new Error('Invite signature verification failed.');
     }
 
     let conversationId: string;
@@ -1858,13 +1850,13 @@ export class XmtpClient {
       conversationId = decodeConversationToken(parsed.payload.conversationToken, creatorInboxId, privateKeyBytes);
     } catch (error) {
       console.warn('[XMTP] Failed to decode conversation token from invite:', error);
-      return null;
+      throw new Error('Failed to decrypt invite.');
     }
 
     const group = await this.getGroupConversation(conversationId);
     if (!group) {
       console.warn('[XMTP] Invite join request refers to missing group:', conversationId);
-      return null;
+      throw new Error('Invite group not found.');
     }
 
     try {
@@ -1883,6 +1875,10 @@ export class XmtpClient {
       event: 'invite:accepted',
       details: `Added ${senderInboxId} to ${conversationId}`,
     });
+
+    if (opts?.messageId) {
+      this.handledInviteMessages.add(opts.messageId);
+    }
 
     return {
       conversationId,

@@ -4,6 +4,7 @@ import { hkdf } from '@noble/hashes/hkdf';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha256';
 import { etc as secpEtc, getPublicKey, sign, verify } from '@noble/secp256k1';
+import { hashMessage, recoverPublicKey, hexToBytes } from 'viem';
 
 export type ConvosInvitePayload = {
   conversationToken: string;
@@ -693,9 +694,19 @@ export function derivePublicKey(privateKeyBytes: Uint8Array): Uint8Array {
   return getPublicKey(privateKeyBytes, false);
 }
 
-export function deriveInvitePrivateKeyFromSignature(signatureBytes: Uint8Array): Uint8Array {
-  if (signatureBytes.length < 40) {
-    throw new Error('Signature is too short for invite key derivation');
+export async function deriveInvitePrivateKeyFromSignature(
+  signatureBytes: Uint8Array,
+  message: string
+): Promise<Uint8Array> {
+  try {
+    const hash = hashMessage(message);
+    const recovered = await recoverPublicKey({ hash, signature: signatureBytes });
+    const publicKeyBytes = hexToBytes(recovered);
+    return secpEtc.hashToPrivateKey(publicKeyBytes);
+  } catch (error) {
+    if (signatureBytes.length < 40) {
+      throw new Error('Signature is too short for invite key derivation');
+    }
+    return secpEtc.hashToPrivateKey(signatureBytes);
   }
-  return secpEtc.hashToPrivateKey(signatureBytes);
 }
