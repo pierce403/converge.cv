@@ -3,14 +3,14 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { useContactStore, useFarcasterStore } from '@/lib/stores';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 import { fetchNeynarUserByVerification } from '@/lib/farcaster/neynar';
-import type { ConvosInvitePayload } from '@/lib/utils/convos-invite';
+import type { InvitePayload } from '@/types';
 
 export interface InviteRequest {
   conversationId: string;
   senderInboxId: string;
   messageId?: string;
   inviteCode: string;
-  payload: ConvosInvitePayload;
+  payload: InvitePayload;
   receivedAt: number;
 }
 
@@ -22,6 +22,7 @@ interface InviteRequestModalProps {
   requiresWalletSignature: boolean;
   onApprove: (request: InviteRequest) => void;
   onReject: (request: InviteRequest) => void;
+  onDismiss: (request: InviteRequest) => void;
 }
 
 interface InviteRequesterProfile {
@@ -64,6 +65,7 @@ export function InviteRequestModal({
   requiresWalletSignature,
   onApprove,
   onReject,
+  onDismiss,
 }: InviteRequestModalProps) {
   const [profile, setProfile] = useState<InviteRequesterProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -296,6 +298,12 @@ export function InviteRequestModal({
         </div>
 
         <div className="p-5 border-t border-primary-800/80 flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button
+            className="px-4 py-2 rounded-lg border border-primary-700/70 text-primary-200 hover:bg-primary-800/60"
+            onClick={() => onDismiss(request)}
+          >
+            Not now
+          </button>
           <button
             className="px-4 py-2 rounded-lg border border-primary-700/70 text-primary-200 hover:bg-primary-800/60"
             onClick={() => onReject(request)}

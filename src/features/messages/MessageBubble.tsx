@@ -42,6 +42,33 @@ export function MessageBubble({
     (identityInbox && senderLower === identityInbox) ||
       (identityAddress && senderLower === identityAddress)
   );
+  const inviteMeta = message.metadata?.invite;
+  const isInviteRequest = Boolean(
+    message.type === 'system' &&
+      inviteMeta &&
+      inviteMeta.kind === 'invite-request' &&
+      inviteMeta.inviteCode &&
+      inviteMeta.payload
+  );
+  const invitePayload = inviteMeta?.payload;
+  const isInviteCreator =
+    Boolean(identityInbox && invitePayload?.creatorInboxId) &&
+    invitePayload!.creatorInboxId.toLowerCase() === identityInbox;
+  const inviteExpired = Boolean(
+    invitePayload?.expiresAt && invitePayload.expiresAt.getTime() < Date.now()
+  ) || Boolean(
+    invitePayload?.conversationExpiresAt &&
+      invitePayload.conversationExpiresAt.getTime() < Date.now()
+  );
+  const canApproveInvite = Boolean(isInviteRequest && !isSent && isInviteCreator && !inviteExpired);
+  const inviteStatusHint =
+    !isInviteRequest || isSent
+      ? undefined
+      : !isInviteCreator
+        ? 'Only the invite creator can approve.'
+        : inviteExpired
+          ? 'Invite expired.'
+          : undefined;
 
   const { deleteMessage } = useMessages();
   const [showActions, setShowActions] = useState(false);
@@ -113,6 +140,25 @@ export function MessageBubble({
       pressTimer.current = null;
     }
   };
+
+  const dispatchInviteAction = useCallback(
+    (action: 'approve' | 'reject' | 'open') => {
+      if (!inviteMeta || !invitePayload || typeof window === 'undefined') return;
+      window.dispatchEvent(
+        new CustomEvent(`ui:invite-${action}`, {
+          detail: {
+            conversationId: message.conversationId,
+            senderInboxId: message.sender,
+            messageId: message.id,
+            inviteCode: inviteMeta.inviteCode,
+            payload: invitePayload,
+            receivedAt: message.sentAt,
+          },
+        })
+      );
+    },
+    [inviteMeta, invitePayload, message.conversationId, message.id, message.sender, message.sentAt]
+  );
 
   const onCopy = async () => {
     if (message.type === 'text') {
@@ -274,6 +320,38 @@ export function MessageBubble({
                 <span className="whitespace-pre-wrap break-words">
                   {renderLinkifiedText(message.body)}
                 </span>
+                {isInviteRequest && !isSent && (
+                  <div className="mt-2 flex flex-col items-center gap-2">
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <button
+                        className={`px-2 py-1 rounded-md text-[11px] font-semibold ${
+                          canApproveInvite
+                            ? 'bg-accent-500 text-white hover:bg-accent-400'
+                            : 'bg-primary-900/60 text-primary-400 cursor-not-allowed'
+                        }`}
+                        onClick={() => dispatchInviteAction('approve')}
+                        disabled={!canApproveInvite}
+                      >
+                        Accept
+                      </button>
+                      <button
+                        className="px-2 py-1 rounded-md text-[11px] border border-primary-600/60 text-primary-200 hover:bg-primary-900/50"
+                        onClick={() => dispatchInviteAction('reject')}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        className="px-2 py-1 rounded-md text-[11px] border border-primary-600/60 text-primary-300 hover:bg-primary-900/50"
+                        onClick={() => dispatchInviteAction('open')}
+                      >
+                        Review
+                      </button>
+                    </div>
+                    {inviteStatusHint && (
+                      <span className="text-[10px] text-primary-400">{inviteStatusHint}</span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

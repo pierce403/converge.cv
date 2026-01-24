@@ -81,6 +81,29 @@ export interface Message {
   reactions: Reaction[];
   expiresAt?: number;
   replyTo?: string;
+  metadata?: MessageMetadata;
+}
+
+export interface InvitePayload {
+  conversationToken: string;
+  creatorInboxId: string;
+  tag?: string;
+  name?: string;
+  description?: string;
+  imageUrl?: string;
+  expiresAfterUse?: boolean;
+  expiresAt?: Date;
+  conversationExpiresAt?: Date;
+}
+
+export interface InviteRequestMetadata {
+  kind: 'invite-request';
+  inviteCode: string;
+  payload: InvitePayload;
+}
+
+export interface MessageMetadata {
+  invite?: InviteRequestMetadata;
 }
 
 export interface Reaction {

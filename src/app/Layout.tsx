@@ -87,6 +87,18 @@ export function Layout() {
     });
   }, []);
 
+  const openInvite = useCallback((invite: InviteRequest) => {
+    setInviteQueue((prev) => {
+      const filtered = prev.filter((item) => {
+        if (invite.messageId && item.messageId) {
+          return invite.messageId !== item.messageId;
+        }
+        return !(item.senderInboxId === invite.senderInboxId && item.inviteCode === invite.inviteCode);
+      });
+      return [invite, ...filtered];
+    });
+  }, []);
+
   const removeInvite = useCallback((invite: InviteRequest) => {
     setInviteQueue((prev) =>
       prev.filter((item) => {
@@ -108,21 +120,6 @@ export function Layout() {
       setIsChecking(false);
     }
   };
-
-  useEffect(() => {
-    const handleInviteRequest = (event: Event) => {
-      const custom = event as CustomEvent<InviteRequest>;
-      const detail = custom.detail;
-      if (!detail || !detail.inviteCode || !detail.senderInboxId || !detail.conversationId) {
-        return;
-      }
-      enqueueInvite(detail);
-    };
-    window.addEventListener('ui:invite-request', handleInviteRequest as EventListener);
-    return () => {
-      window.removeEventListener('ui:invite-request', handleInviteRequest as EventListener);
-    };
-  }, [enqueueInvite]);
 
   // Treat auto-generated labels (e.g., "Identity 0x1234…") as "missing" a real display name
   const isAutoLabel = (val?: string | null) => {
@@ -313,6 +310,51 @@ export function Layout() {
     },
     [dispatchInviteNotice, removeInvite]
   );
+
+  useEffect(() => {
+    const handleInviteRequest = (event: Event) => {
+      const custom = event as CustomEvent<InviteRequest>;
+      const detail = custom.detail;
+      if (!detail || !detail.inviteCode || !detail.senderInboxId || !detail.conversationId) {
+        return;
+      }
+      enqueueInvite(detail);
+    };
+    const handleInviteOpen = (event: Event) => {
+      const custom = event as CustomEvent<InviteRequest>;
+      const detail = custom.detail;
+      if (!detail || !detail.inviteCode || !detail.senderInboxId || !detail.conversationId) {
+        return;
+      }
+      openInvite(detail);
+    };
+    const handleInviteApprove = (event: Event) => {
+      const custom = event as CustomEvent<InviteRequest>;
+      const detail = custom.detail;
+      if (!detail || !detail.inviteCode || !detail.senderInboxId || !detail.conversationId) {
+        return;
+      }
+      void handleApproveInvite(detail);
+    };
+    const handleInviteReject = (event: Event) => {
+      const custom = event as CustomEvent<InviteRequest>;
+      const detail = custom.detail;
+      if (!detail || !detail.inviteCode || !detail.senderInboxId || !detail.conversationId) {
+        return;
+      }
+      handleRejectInvite(detail);
+    };
+    window.addEventListener('ui:invite-request', handleInviteRequest as EventListener);
+    window.addEventListener('ui:invite-open', handleInviteOpen as EventListener);
+    window.addEventListener('ui:invite-approve', handleInviteApprove as EventListener);
+    window.addEventListener('ui:invite-reject', handleInviteReject as EventListener);
+    return () => {
+      window.removeEventListener('ui:invite-request', handleInviteRequest as EventListener);
+      window.removeEventListener('ui:invite-open', handleInviteOpen as EventListener);
+      window.removeEventListener('ui:invite-approve', handleInviteApprove as EventListener);
+      window.removeEventListener('ui:invite-reject', handleInviteReject as EventListener);
+    };
+  }, [enqueueInvite, openInvite, handleApproveInvite, handleRejectInvite]);
 
   const handleDismissForever = useCallback(() => {
     updateReminderPrefs({ lastNagAt: Date.now(), dismissedForever: true });
@@ -1260,6 +1302,7 @@ export function Layout() {
           requiresWalletSignature={requiresWalletSignature}
           onApprove={handleApproveInvite}
           onReject={handleRejectInvite}
+          onDismiss={removeInvite}
         />
       )}
       {showPersonalizationReminder && identity && shouldShowPersonalizationNag && (

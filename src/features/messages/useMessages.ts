@@ -310,6 +310,15 @@ export function useMessages() {
           status: 'pending',
           reactions: [],
           replyTo: opts?.replyToId,
+          metadata: parsedInvite
+            ? {
+                invite: {
+                  kind: 'invite-request',
+                  inviteCode: content,
+                  payload: parsedInvite.payload,
+                },
+              }
+            : undefined,
         };
 
         // Add to store immediately
@@ -800,6 +809,15 @@ export function useMessages() {
           status: 'delivered',
           reactions: [],
           replyTo: xmtpMessage.replyToId,
+          metadata: parsedInvite
+            ? {
+                invite: {
+                  kind: 'invite-request',
+                  inviteCode: content,
+                  payload: parsedInvite.payload,
+                },
+              }
+            : undefined,
         };
 
         if (parsedInvite && !isHistory && !fromSelf) {
