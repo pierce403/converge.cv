@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite key re-derivation)
+**Last Updated**: 2026-01-24 (Invite group sync escalation)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -477,6 +477,12 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Key Persistence
 - Wallet-derived invite keys are persisted in the local identity so invite approvals survive reloads; missing keys can be re-derived by re-signing the invite key message with the wallet.
+
+### Convos Invites: Group Sync Retry
+- Invite approvals now trigger a conversation sync before failing when the target group isn’t found locally.
+
+### Convos Invites: Group Sync Escalation
+- Invite approvals now force a full sync and listGroups fallback before failing when the target group isn’t found.
 
 ### ENS Resolution: RPC Fallbacks
 - ENS lookups now use a fallback transport with multiple public mainnet RPC endpoints (configurable via `VITE_MAINNET_RPC_URLS`) to avoid single-provider outages.

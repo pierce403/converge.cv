@@ -1884,9 +1884,42 @@ export class XmtpClient {
       throw new Error('Failed to decrypt invite.');
     }
 
-    const group = await this.getGroupConversation(conversationId);
+    type GroupConversation = Awaited<ReturnType<typeof this.getGroupConversation>>;
+    let group: GroupConversation = await this.getGroupConversation(conversationId);
     if (!group) {
-      console.warn('[XMTP] Invite join request refers to missing group:', conversationId);
+      console.warn('[XMTP] Invite join request refers to missing group, syncing conversations:', conversationId);
+      try {
+        await this.client.conversations.sync();
+      } catch (error) {
+        console.warn('[XMTP] Conversation sync failed while resolving invite group:', error);
+      }
+      group = await this.getGroupConversation(conversationId);
+    }
+
+    if (!group) {
+      console.warn('[XMTP] Invite group still missing, forcing full conversation sync:', conversationId);
+      try {
+        await this.syncConversations({ force: true, reason: 'invite-approve' });
+      } catch (error) {
+        console.warn('[XMTP] Forced conversation sync failed while resolving invite group:', error);
+      }
+      group = await this.getGroupConversation(conversationId);
+    }
+
+    if (!group) {
+      try {
+        const groups = await this.client.conversations.listGroups();
+        const match = groups.find((candidate) => candidate.id === conversationId);
+        if (match) {
+          group = match as GroupConversation;
+        }
+      } catch (error) {
+        console.warn('[XMTP] listGroups failed while resolving invite group:', error);
+      }
+    }
+
+    if (!group) {
+      console.warn('[XMTP] Invite join request refers to missing group after sync attempts:', conversationId);
       throw new Error('Invite group not found.');
     }
 
