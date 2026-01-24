@@ -19,6 +19,7 @@ import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
 import { InviteRequestModal, type InviteRequest } from '@/components/InviteRequestModal';
 import { syncSelfFarcasterProfile } from '@/lib/farcaster/self';
+import { useWalletConnection } from '@/lib/wagmi';
 // Prefer XMTP profile history for names/avatars; fall back to Farcaster for missing fields.
 
 const looksLikeInboxId = (value?: string | null) => {
@@ -43,6 +44,7 @@ export function Layout() {
   const { addConversation, updateConversation } = useConversationStore();
   const { receiveMessage } = useMessages();
   const loadContacts = useContactStore((state) => state.loadContacts);
+  const { signMessage: walletSignMessage, chainId: walletChainId, isConnected: walletConnected } = useWalletConnection();
   const [showPersonalizationReminder, setShowPersonalizationReminder] = useState(false);
   const lastSyncedAt = useXmtpStore((state) => state.lastSyncedAt);
   const connectionStatus = useXmtpStore((state) => state.connectionStatus);
@@ -261,6 +263,14 @@ export function Layout() {
         removeInvite(request);
         return;
       }
+      if (!identity?.privateKey) {
+        if (!walletConnected || !walletSignMessage) {
+          dispatchInviteNotice(request, 'failed', 'Invite approval requires a connected wallet.');
+          removeInvite(request);
+          return;
+        }
+        xmtp.attachWalletSigner(async (message) => await walletSignMessage(message), walletChainId);
+      }
       if (request.payload.expiresAt && request.payload.expiresAt.getTime() < now) {
         dispatchInviteNotice(request, 'failed', 'Invite expired.');
         removeInvite(request);
@@ -300,7 +310,7 @@ export function Layout() {
         removeInvite(request);
       }
     },
-    [dispatchInviteNotice, removeInvite]
+    [dispatchInviteNotice, removeInvite, identity?.privateKey, walletChainId, walletConnected, walletSignMessage]
   );
 
   const handleRejectInvite = useCallback(

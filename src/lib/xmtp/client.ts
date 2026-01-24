@@ -4514,6 +4514,18 @@ export class XmtpClient {
   }
 
   /**
+   * Attach a wallet signer for invite approvals without reconnecting the XMTP client.
+   */
+  attachWalletSigner(signMessage: (message: string) => Promise<string>, chainId?: number): void {
+    if (!this.identity) return;
+    this.identity = {
+      ...this.identity,
+      signMessage,
+      chainId: chainId ?? this.identity.chainId,
+    };
+  }
+
+  /**
    * Get the client's installation ID
    */
   getInstallationId(): string | null {

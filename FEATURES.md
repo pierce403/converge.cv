@@ -66,6 +66,7 @@
 - Invite requests are surfaced even when the DM consent state is unknown by scanning DMs on connect and periodically, then dispatching synthetic message events for valid invite slugs.
 - Invite approvals now present a modal with group details and requester reputation (Farcaster stats when available), letting the creator explicitly accept or decline before any wallet signature prompt appears.
 - Invite request messages include inline Accept/Reject/Review actions so admins can act directly from chat history or open the detailed review modal later.
+- Invite approvals that require a wallet signature now reuse the connected wallet signer (prompting for a signature) instead of silently failing when the signer is missing.
 
 ## Farcaster + Neynar Integration
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.

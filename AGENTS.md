@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite inline actions)
+**Last Updated**: 2026-01-24 (Invite signer attach)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -468,6 +468,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Inline Actions
 - Invite request stubs in chat history now include Accept/Reject/Review actions so admins can approve directly or open the detailed modal later.
+
+### Convos Invites: Wallet Signer Attach
+- Invite approvals now attach the active wallet signer on demand, ensuring the signature prompt appears when the creator doesn’t have a local private key.
 
 ### ENS Resolution: RPC Fallbacks
 - ENS lookups now use a fallback transport with multiple public mainnet RPC endpoints (configurable via `VITE_MAINNET_RPC_URLS`) to avoid single-provider outages.
