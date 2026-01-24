@@ -1696,17 +1696,6 @@ export class XmtpClient {
     }
   }
 
-  private hasInviteKeyFor(creatorInboxId: string): boolean {
-    if (!this.identity) return false;
-    if (this.identity.privateKey) return true;
-    if (this.inviteDerivedKey && this.inviteDerivedKeyInboxId === creatorInboxId) return true;
-    return Boolean(
-      this.identity.inviteKey &&
-        this.identity.inviteKeyInboxId &&
-        this.identity.inviteKeyInboxId.toLowerCase() === creatorInboxId.toLowerCase()
-    );
-  }
-
   private async resolveInvitePrivateKey(creatorInboxId: string): Promise<Uint8Array> {
     if (!this.identity) {
       throw new Error('Invite creation requires an active identity');
@@ -1815,9 +1804,6 @@ export class XmtpClient {
       }
     }
 
-    if (!this.identity.privateKey && !this.hasInviteKeyFor(creatorInboxId)) {
-      throw new Error('Invite key not available on this device. Create a new invite from this device.');
-    }
     const privateKeyBytes = await this.resolveInvitePrivateKey(creatorInboxId);
 
     const invite = createConvosInvite({
