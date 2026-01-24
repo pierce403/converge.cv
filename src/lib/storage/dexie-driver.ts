@@ -482,9 +482,12 @@ export class DexieDriver implements StorageDriver {
     // Update conversation lastMessageAt and preview
     const conversation = await this.dataDb.conversations.get(message.conversationId);
     if (conversation) {
+      const preview = message.type === 'attachment'
+        ? '📎 Attachment'
+        : message.body.substring(0, 100);
       await this.dataDb.conversations.update(message.conversationId, {
         lastMessageAt: message.sentAt,
-        lastMessagePreview: message.type === 'text' ? message.body.substring(0, 100) : '📎 Attachment',
+        lastMessagePreview: preview,
         lastMessageId: message.id,
         lastMessageSender: message.sender,
       });

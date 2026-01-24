@@ -9,7 +9,7 @@ import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Message, Attachment as StoredAttachment, Conversation } from '@/types';
 import { getAddress, isAddress } from 'viem';
-import { isLikelyConvosInviteCode } from '@/lib/utils/convos-invite';
+import { isLikelyConvosInviteCode, tryParseConvosInvite } from '@/lib/utils/convos-invite';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap
 
@@ -17,6 +17,23 @@ const toArrayBuffer = (data: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(data.byteLength);
   copy.set(data);
   return copy.buffer;
+};
+
+const formatInviteSummary = (
+  invite: ReturnType<typeof tryParseConvosInvite>,
+  opts?: { fromSelf?: boolean }
+) => {
+  if (!invite) return null;
+  const { payload } = invite;
+  const lines: string[] = [];
+  lines.push(opts?.fromSelf ? 'Invite request sent' : 'Invite request received');
+  if (payload.name) lines.push(`Group: ${payload.name}`);
+  if (payload.tag) lines.push(`Tag: ${payload.tag}`);
+  if (payload.expiresAt) lines.push(`Invite expires: ${payload.expiresAt.toLocaleString()}`);
+  if (payload.conversationExpiresAt) {
+    lines.push(`Group expires: ${payload.conversationExpiresAt.toLocaleString()}`);
+  }
+  return lines.join('\n');
 };
 
 export function useMessages() {
@@ -277,14 +294,19 @@ export function useMessages() {
         }
         await ensureContactForConversation(conversation);
 
+        const parsedInvite = isLikelyConvosInviteCode(content) ? tryParseConvosInvite(content) : null;
+        const inviteSummary = parsedInvite ? formatInviteSummary(parsedInvite, { fromSelf: true }) : null;
+        const resolvedBody = inviteSummary || content;
+        const resolvedType: Message['type'] = parsedInvite ? 'system' : 'text';
+
         // Create message object
         const message: Message = {
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           conversationId,
           sender: identity.inboxId ?? identity.address,
           sentAt: Date.now(),
-          type: 'text',
-          body: content,
+          type: resolvedType,
+          body: resolvedBody,
           status: 'pending',
           reactions: [],
           replyTo: opts?.replyToId,
@@ -339,7 +361,7 @@ export function useMessages() {
         // Update conversation
         updateConversation(conversationId, {
           lastMessageAt: latestMessageSentAt,
-          lastMessagePreview: content.substring(0, 100),
+          lastMessagePreview: resolvedBody.substring(0, 100),
           lastMessageId: latestMessageId,
           lastMessageSender: latestMessageSender,
         });
@@ -741,25 +763,48 @@ export function useMessages() {
           ? xmtpMessage.content
           : new TextDecoder().decode(xmtpMessage.content);
 
+        const myInbox = identity?.inboxId?.toLowerCase();
+        const myAddr = identity?.address?.toLowerCase();
+        const senderLower = xmtpMessage.senderAddress?.toLowerCase?.();
+        const fromSelf = Boolean(senderLower && (senderLower === myInbox || senderLower === myAddr));
+
+        const parsedInvite = isLikelyConvosInviteCode(content) ? tryParseConvosInvite(content) : null;
+        const inviteSummary = parsedInvite ? formatInviteSummary(parsedInvite, { fromSelf }) : null;
+
         const message: Message = {
           id: xmtpMessage.id,
           conversationId,
           sender: xmtpMessage.senderAddress,
           sentAt: xmtpMessage.sentAt,
           receivedAt: Date.now(),
-          type: 'text',
-          body: content,
+          type: parsedInvite ? 'system' : 'text',
+          body: inviteSummary || content,
           status: 'delivered',
           reactions: [],
           replyTo: xmtpMessage.replyToId,
         };
 
-        const myInbox = identity?.inboxId?.toLowerCase();
-        const myAddr = identity?.address?.toLowerCase();
-        const senderLower = message.sender?.toLowerCase?.();
-        const fromSelf = senderLower && (senderLower === myInbox || senderLower === myAddr);
+        const addInviteNotice = async (suffix: string, body: string) => {
+          const noticeId = `invite_${message.id}_${suffix}`;
+          const storage = await getStorage();
+          const existing = await storage.getMessage(noticeId);
+          if (existing) return;
+          const notice: Message = {
+            id: noticeId,
+            conversationId,
+            sender: identity?.inboxId ?? identity?.address ?? 'system',
+            sentAt: Date.now(),
+            receivedAt: Date.now(),
+            type: 'system',
+            body,
+            status: 'delivered',
+            reactions: [],
+          };
+          addMessage(conversationId, notice);
+          await storage.putMessage(notice);
+        };
 
-        if (!isHistory && !fromSelf && isLikelyConvosInviteCode(content)) {
+        if (parsedInvite && !isHistory && !fromSelf) {
           const targetConversation = conversations.find((c) => c.id === conversationId);
           if (!targetConversation?.isGroup) {
             try {
@@ -767,19 +812,35 @@ export function useMessages() {
               void xmtp
                 .processConvosInviteJoinRequest(content, message.sender, { messageId: message.id })
                 .then((result) => {
-                  if (result && typeof window !== 'undefined') {
-                    try {
-                      const label = result.conversationName ? `Added to ${result.conversationName}` : 'Invite accepted';
-                      window.dispatchEvent(new CustomEvent('ui:toast', { detail: label }));
-                    } catch {
-                      // ignore toast errors
+                  if (result) {
+                    void addInviteNotice(
+                      'accepted',
+                      result.conversationName
+                        ? `Invite accepted. Added to ${result.conversationName}.`
+                        : 'Invite accepted.'
+                    );
+                    if (typeof window !== 'undefined') {
+                      try {
+                        const label = result.conversationName ? `Added to ${result.conversationName}` : 'Invite accepted';
+                        window.dispatchEvent(new CustomEvent('ui:toast', { detail: label }));
+                      } catch {
+                        // ignore toast errors
+                      }
                     }
+                  } else {
+                    void addInviteNotice('ignored', 'Invite ignored.');
                   }
                 })
                 .catch((inviteError) => {
+                  const messageText =
+                    inviteError instanceof Error ? inviteError.message : 'Failed to process invite.';
+                  void addInviteNotice('failed', `Invite failed: ${messageText}`);
                   console.warn('[useMessages] Invite processing failed:', inviteError);
                 });
             } catch (inviteError) {
+              const messageText =
+                inviteError instanceof Error ? inviteError.message : 'Failed to process invite.';
+              void addInviteNotice('failed', `Invite failed: ${messageText}`);
               console.warn('[useMessages] Failed to process invite join request:', inviteError);
             }
           }
@@ -791,10 +852,10 @@ export function useMessages() {
           if (myInbox && senderLower && myInbox === senderLower) {
             const likely = messagesByConversation[conversationId] || [];
             const now = Date.now();
+            const inviteBody = parsedInvite ? inviteSummary : null;
             const candidates = likely.filter(
               (m) =>
-                m.type === 'text' &&
-                m.body === content &&
+                (m.body === content || (inviteBody && m.body === inviteBody)) &&
                 m.sender?.toLowerCase?.() === myAddr &&
                 Math.abs(now - (m.sentAt || now)) < 7000
             );

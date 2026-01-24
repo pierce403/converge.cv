@@ -440,10 +440,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Wallet-signed invite fallback + ENS RPC fallback)
+**Last Updated**: 2026-01-24 (Invite stub messages)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
+
+### Convos Invites: Stub Messages
+- Invite slugs now render as readable system messages in DMs (group name/tag/expiry), and follow-up system notices report acceptance or failure.
 
 ### Convos Invites: Wallet-Signed Fallback
 - Invite creation now falls back to a wallet signature-derived key when no local private key exists, allowing wallet-based identities to generate and process invites.
