@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite group sync escalation)
+**Last Updated**: 2026-01-24 (Invite group diagnostics)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -468,6 +468,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Inline Actions
 - Invite request stubs in chat history now include Accept/Reject/Review actions so admins can approve directly or open the detailed modal later.
+
+### Convos Invites: Group Resolution Diagnostics
+- Invite approval now logs detailed diagnostics when a referenced group cannot be found after sync attempts (conversation ID, local deletion state, sample group IDs, and listGroups/getConversation errors) to pinpoint why approval fails.
 
 ### Convos Invites: Wallet Signer Attach
 - Invite approvals now attach the active wallet signer on demand, ensuring the signature prompt appears when the creator doesn’t have a local private key.

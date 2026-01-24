@@ -1919,8 +1919,40 @@ export class XmtpClient {
     }
 
     if (!group) {
-      console.warn('[XMTP] Invite join request refers to missing group after sync attempts:', conversationId);
-      throw new Error('Invite group not found.');
+      const debugInfo: Record<string, unknown> = {
+        conversationId,
+        creatorInboxId,
+        senderInboxId,
+        myInboxId,
+        lastSyncedAt: this.identity?.lastSyncedAt,
+      };
+      try {
+        const storage = await getStorage();
+        debugInfo.localDeleted = await storage.isConversationDeleted(conversationId);
+      } catch (error) {
+        debugInfo.localDeleted = `error:${error instanceof Error ? error.message : String(error)}`;
+      }
+      try {
+        const listGroups = await this.client.conversations.listGroups({
+          consentStates: [ConsentState.Allowed, ConsentState.Unknown, ConsentState.Denied],
+        });
+        debugInfo.groupCount = listGroups.length;
+        debugInfo.groupIdSample = listGroups.slice(0, 5).map((candidate) => candidate.id);
+        debugInfo.groupIdMatch = listGroups.some((candidate) => candidate.id === conversationId);
+      } catch (error) {
+        debugInfo.listGroupsError = error instanceof Error ? error.message : String(error);
+      }
+      try {
+        const anyConversation = await this.client.conversations.getConversationById(conversationId);
+        if (anyConversation) {
+          debugInfo.conversationClass = (anyConversation as { constructor?: { name?: string } }).constructor?.name;
+          debugInfo.hasMembersFn = typeof (anyConversation as { members?: () => Promise<unknown> }).members === 'function';
+        }
+      } catch (error) {
+        debugInfo.getConversationError = error instanceof Error ? error.message : String(error);
+      }
+      console.warn('[XMTP] Invite join request refers to missing group after sync attempts:', debugInfo);
+      throw new Error(`Invite group not found. Details: ${JSON.stringify(debugInfo)}`);
     }
 
     try {
