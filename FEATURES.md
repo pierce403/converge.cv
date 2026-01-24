@@ -62,6 +62,7 @@
 - Incoming DM messages containing valid invite codes are intercepted: signatures are verified, the conversation token is decrypted, and the sender is added to the target group automatically.
 - Wallet-based identities without a local key can still generate invites by approving a wallet signature that derives the invite signing/encryption key for the session.
 - Invite requests show as a readable system message stub (group name/tag/expiry) instead of raw base64, with follow-up system notices for acceptance or failure.
+- Invite requests are surfaced even when the DM consent state is unknown by scanning DMs on connect and periodically, then dispatching synthetic message events for valid invite slugs.
 
 ## Farcaster + Neynar Integration
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.

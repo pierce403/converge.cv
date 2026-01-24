@@ -15,6 +15,7 @@ import {
   type SafeHmacKey,
   PermissionPolicy,
   PermissionUpdateType,
+  ConsentState,
 } from '@xmtp/browser-sdk';
 import xmtpPackage from '@xmtp/browser-sdk/package.json';
 import { logNetworkEvent, useAuthStore, useContactStore, useConversationStore } from '@/lib/stores';
@@ -49,6 +50,7 @@ import {
   derivePublicKey,
   encodeConvosGroupMetadata,
   generateConvosInviteTag,
+  isLikelyConvosInviteCode,
   parseConvosGroupMetadata,
   tryParseConvosInvite,
   verifyInviteSignature,
@@ -225,6 +227,7 @@ export class XmtpClient {
   private inviteDerivedKey: Uint8Array | null = null;
   private inviteDerivedKeyInboxId: string | null = null;
   private inviteDerivedKeyPromise: Promise<Uint8Array> | null = null;
+  private inviteScanIntervalId: number | null = null;
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -1644,6 +1647,53 @@ export class XmtpClient {
     }
   }
 
+  private async scanInviteJoinRequests(reason = 'manual'): Promise<void> {
+    if (!this.client || typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      const consentStates = [ConsentState.Allowed, ConsentState.Unknown];
+      const dms = await this.client.conversations.listDms({ consentStates });
+      if (!dms?.length) return;
+
+      const storage = await getStorage();
+      for (const dm of dms) {
+        try {
+          await dm.sync();
+        } catch (_syncErr) {
+          // Non-fatal: continue and try to read lastMessage
+        }
+        const last = await dm.lastMessage();
+        if (!last || typeof last.content !== 'string') continue;
+        if (!isLikelyConvosInviteCode(last.content)) continue;
+
+        const existing = await storage.getMessage(last.id);
+        if (existing) continue;
+
+        const sentAt = last.sentAtNs ? Number(last.sentAtNs / 1_000_000n) : Date.now();
+        window.dispatchEvent(
+          new CustomEvent('xmtp:message', {
+            detail: {
+              conversationId: last.conversationId,
+              message: {
+                id: last.id,
+                conversationId: last.conversationId,
+                senderAddress: last.senderInboxId,
+                content: last.content,
+                sentAt,
+              },
+              isHistory: false,
+              scanReason: reason,
+            },
+          })
+        );
+      }
+    } catch (error) {
+      console.warn('[XMTP] Failed to scan invite join requests:', error);
+    }
+  }
+
   private async resolveInvitePrivateKey(creatorInboxId: string): Promise<Uint8Array> {
     if (!this.identity) {
       throw new Error('Invite creation requires an active identity');
@@ -2394,6 +2444,15 @@ export class XmtpClient {
       }
 
       await this.startMessageStream();
+      await this.scanInviteJoinRequests('connect');
+      if (typeof window !== 'undefined') {
+        if (this.inviteScanIntervalId) {
+          clearInterval(this.inviteScanIntervalId);
+        }
+        this.inviteScanIntervalId = window.setInterval(() => {
+          void this.scanInviteJoinRequests('interval');
+        }, 60_000);
+      }
 
       setSyncProgress(100);
       setSyncStatus('complete');
@@ -2688,6 +2747,11 @@ export class XmtpClient {
         console.error('[XMTP] Error closing message stream:', error);
       }
       this.messageStreamCloser = null;
+    }
+
+    if (this.inviteScanIntervalId) {
+      clearInterval(this.inviteScanIntervalId);
+      this.inviteScanIntervalId = null;
     }
 
     if (!this.client) {
