@@ -367,6 +367,7 @@ export function Layout() {
         isHistory?: boolean;
       }>;
       const { conversationId, message, isHistory } = customEvent.detail;
+      const historyMessage = Boolean(isHistory);
 
       console.log('[Layout] Global message listener: received message', {
         conversationId,
@@ -386,6 +387,31 @@ export function Layout() {
           console.info('[Layout] Skipping message for peer marked as deleted:', normalizedSender);
           return;
         }
+
+        // Avoid re-processing messages already stored (history backfill can replay)
+        try {
+          const inMemory = useMessageStore.getState().messagesByConversation[conversationId] || [];
+          const alreadyInMemory = inMemory.some((m) => m.id === message.id);
+          if (!alreadyInMemory) {
+            const existing = await storage.getMessage(message.id);
+            if (existing) {
+              const existingConversation =
+                useConversationStore.getState().conversations.find((c) => c.id === conversationId) ??
+                (await storage.getConversation(conversationId));
+              if (existingConversation && !useConversationStore.getState().conversations.find((c) => c.id === conversationId)) {
+                addConversation(existingConversation);
+              }
+              console.info('[Layout] Skipping duplicate message already stored:', message.id);
+              return;
+            }
+          } else {
+            console.info('[Layout] Skipping duplicate message already in memory:', message.id);
+            return;
+          }
+        } catch (dupErr) {
+          console.warn('[Layout] Duplicate check failed (continuing):', dupErr);
+        }
+
         const contactStore = useContactStore.getState();
         const xmtp = getXmtpClient();
         const existingContact =
@@ -423,11 +449,12 @@ export function Layout() {
           }
         }
 
-        // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact
+        // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact.
+        // For history backfill, skip live profile fetches entirely to reduce network load.
         const nowTs = Date.now();
         const lastSync = existingContact?.lastSyncedAt ?? 0;
         let profile = undefined as Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | undefined;
-        if (!existingContact || nowTs - lastSync > 5 * 60 * 1000) {
+        if (!historyMessage && (!existingContact || nowTs - lastSync > 5 * 60 * 1000)) {
           profile = await xmtp.fetchInboxProfile(senderInboxId);
         }
 
@@ -492,6 +519,18 @@ export function Layout() {
         const preservedReadState = getResyncReadStateFor(conversationId);
 
         const peerKeyBase = contact?.inboxId || senderInboxId;
+
+        if (!conversation) {
+          try {
+            const storedConversation = await storage.getConversation(conversationId);
+            if (storedConversation) {
+              conversation = storedConversation;
+              addConversation(storedConversation);
+            }
+          } catch (loadErr) {
+            console.warn('[Layout] Failed to load conversation from storage:', loadErr);
+          }
+        }
 
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
@@ -567,7 +606,7 @@ export function Layout() {
           }
 
           // If peer contact doesn't exist, fetch peer's profile from XMTP (not sender's)
-          if (!peerContact && peerKey && (!displayName || !avatar)) {
+          if (!historyMessage && !peerContact && peerKey && (!displayName || !avatar)) {
             try {
               const peerProfile = await xmtp.fetchInboxProfile(peerKey);
               if (peerProfile.displayName && !displayName && conversation.displayName !== peerProfile.displayName) {
@@ -636,7 +675,7 @@ export function Layout() {
         // Ensure our profile (displayName/avatar) is sent to this conversation
         // This checks message history and sends missing profile data
         // Do this for both new and existing conversations
-        if (conversation && !conversation.isGroup) {
+        if (conversation && !conversation.isGroup && !historyMessage) {
           try {
             const xmtp = getXmtpClient();
             await xmtp.ensureProfileSent(conversationId);
@@ -670,6 +709,10 @@ export function Layout() {
       const { conversationId, system } = custom.detail;
       try {
         const storage = await getStorage();
+        const existing = await storage.getMessage(system.id);
+        if (existing) {
+          return;
+        }
         const msg = {
           id: system.id,
           conversationId,
@@ -683,10 +726,16 @@ export function Layout() {
         };
         useMessageStore.getState().addMessage(conversationId, msg);
         await storage.putMessage(msg);
-        useConversationStore.getState().updateConversation(conversationId, {
-          lastMessageAt: msg.sentAt,
-          lastMessagePreview: msg.body.substring(0, 100),
-        });
+        const currentLastMessageAt =
+          useConversationStore.getState().conversations.find((c) => c.id === conversationId)?.lastMessageAt ??
+          (await storage.getConversation(conversationId))?.lastMessageAt ??
+          0;
+        if (msg.sentAt >= currentLastMessageAt) {
+          useConversationStore.getState().updateConversation(conversationId, {
+            lastMessageAt: msg.sentAt,
+            lastMessagePreview: msg.body.substring(0, 100),
+          });
+        }
       } catch (err) {
         console.warn('[Layout] Failed to handle system message', err);
       }

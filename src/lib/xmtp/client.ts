@@ -2428,7 +2428,7 @@ export class XmtpClient {
         console.log('[XMTP] History sync enabled – fetching past messages. This may take time if another device needs to provide history.');
         setSyncStatus('syncing-messages');
         setSyncProgress(40);
-        await this.syncHistory({ mode: 'full' });
+        await this.syncHistory({ mode: 'full', skipConversationSync: true });
         setSyncProgress(85);
       } else {
         console.log('[XMTP] Skipping full history sync (local XMTP database detected). Running a light recent sync.');
@@ -2440,6 +2440,7 @@ export class XmtpClient {
           conversationLimit: 8,
           messageLimit: 200,
           lookbackMs: 10 * 60 * 1000,
+          skipConversationSync: true,
         });
       }
 
@@ -3095,12 +3096,14 @@ export class XmtpClient {
     conversationLimit?: number;
     messageLimit?: number;
     lookbackMs?: number;
+    skipConversationSync?: boolean;
   }): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
     const mode = opts?.mode ?? 'full';
+    const skipConversationSync = opts?.skipConversationSync ?? false;
     const recentMode = mode === 'recent';
     const conversationLimit = opts?.conversationLimit ?? 8;
     const lookbackMs = opts?.lookbackMs ?? 10 * 60 * 1000;
@@ -3124,20 +3127,22 @@ export class XmtpClient {
 
     try {
       console.log(`[XMTP] Syncing ${recentMode ? 'recent' : 'full'} history (conversations + messages)...`);
-      // First sync the list of conversations from the network
-      try {
-        await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
-          attempts: 3,
-          initialDelayMs: 800,
-          shouldRetry: (err) => this.isTransientSyncError(err),
-          onRateLimit: () => this.noteGlobalRateLimit('history:conversations.sync'),
-        });
-        this.reduceGlobalCooldown();
-      } catch (error) {
-        if (this.isUninitializedIdentityError(error)) {
-          throw error;
+      // First sync the list of conversations from the network (unless already synced upstream)
+      if (!skipConversationSync) {
+        try {
+          await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
+            attempts: 3,
+            initialDelayMs: 800,
+            shouldRetry: (err) => this.isTransientSyncError(err),
+            onRateLimit: () => this.noteGlobalRateLimit('history:conversations.sync'),
+          });
+          this.reduceGlobalCooldown();
+        } catch (error) {
+          if (this.isUninitializedIdentityError(error)) {
+            throw error;
+          }
+          console.warn('[XMTP] conversations.sync failed during history sync; continuing with cached data', error);
         }
-        console.warn('[XMTP] conversations.sync failed during history sync; continuing with cached data', error);
       }
 
       // Backfill DMs into our app store by dispatching the same custom events
@@ -3183,6 +3188,13 @@ export class XmtpClient {
           if (!shouldProcessConversation(dmId)) {
             continue;
           }
+          if (recentMode) {
+            const cooldownMs = this.getConversationSyncCooldownMs(dmId);
+            if (cooldownMs > 0) {
+              console.warn(`[XMTP] Skipping DM history sync due to cooldown (${Math.round(cooldownMs / 1000)}s):`, dmId);
+              continue;
+            }
+          }
 
           // Force sync messages for this conversation to ensure we have latest
           // The SDK may throw an error even when sync partially succeeds (e.g., if an
@@ -3216,7 +3228,22 @@ export class XmtpClient {
             console.info('[XMTP] Skipping deleted DM conversation during history sync:', dmId);
             continue;
           }
-          const decodedMessages = await dm.messages(messageOptions);
+          const storedConversation = await storage.getConversation(dmId);
+          const baselineMs = recentMode
+            ? Math.max(
+                typeof sinceMs === 'number' ? sinceMs : 0,
+                storedConversation?.lastMessageAt ?? 0
+              )
+            : 0;
+          const perConversationSentAfterNs =
+            recentMode && baselineMs > 0
+              ? BigInt(Math.max(0, baselineMs - lookbackMs)) * 1000000n
+              : undefined;
+          const perConversationOptions =
+            perConversationSentAfterNs || messageLimit
+              ? { sentAfterNs: perConversationSentAfterNs, limit: messageLimit }
+              : messageOptions;
+          const decodedMessages = await dm.messages(perConversationOptions);
           // Oldest first so previews/unreads evolve naturally
           decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
 
@@ -3512,6 +3539,13 @@ export class XmtpClient {
             if (recentMode && !shouldProcessConversation(conv.id)) {
               continue;
             }
+            if (recentMode) {
+              const cooldownMs = this.getConversationSyncCooldownMs(conv.id);
+              if (cooldownMs > 0) {
+                console.warn(`[XMTP] Skipping group history sync due to cooldown (${Math.round(cooldownMs / 1000)}s):`, conv.id);
+                continue;
+              }
+            }
 
             // Force sync messages for this conversation
             // The SDK may throw an error even when sync partially succeeds (e.g., if an
@@ -3544,7 +3578,22 @@ export class XmtpClient {
               console.info('[XMTP] Skipping deleted group conversation during history sync:', conv.id);
               continue;
             }
-            const decodedMessages = await conv.messages(messageOptions);
+            const storedConversation = await storage.getConversation(conv.id);
+            const baselineMs = recentMode
+              ? Math.max(
+                  typeof sinceMs === 'number' ? sinceMs : 0,
+                  storedConversation?.lastMessageAt ?? 0
+                )
+              : 0;
+            const perConversationSentAfterNs =
+              recentMode && baselineMs > 0
+                ? BigInt(Math.max(0, baselineMs - lookbackMs)) * 1000000n
+                : undefined;
+            const perConversationOptions =
+              perConversationSentAfterNs || messageLimit
+                ? { sentAfterNs: perConversationSentAfterNs, limit: messageLimit }
+                : messageOptions;
+            const decodedMessages = await conv.messages(perConversationOptions);
             decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
             for (const m of decodedMessages) {
               const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;

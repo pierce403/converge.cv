@@ -652,11 +652,23 @@ export function useMessages() {
     ) => {
       try {
         const isHistory = options?.isHistory ?? false;
+        const inMemory = messagesByConversation[conversationId] || [];
+        if (inMemory.some((m) => m.id === xmtpMessage.id)) {
+          return;
+        }
+        const storage = await getStorage();
+        try {
+          const existing = await storage.getMessage(xmtpMessage.id);
+          if (existing) {
+            return;
+          }
+        } catch {
+          // ignore storage lookup errors; proceed with processing
+        }
         const remoteAttachment = xmtpMessage.remoteAttachment;
         const inlineAttachment = xmtpMessage.attachment;
         if (remoteAttachment || inlineAttachment) {
           const attachmentId = `att_${xmtpMessage.id}`;
-          const storage = await getStorage();
           let stored = await storage.getAttachment(attachmentId);
 
           if (!stored) {
@@ -736,12 +748,18 @@ export function useMessages() {
           addMessage(conversationId, message);
           await storage.putMessage(message);
 
-          updateConversation(conversationId, {
-            lastMessageAt: message.sentAt,
-            lastMessagePreview: '📎 Attachment',
-            lastMessageId: message.id,
-            lastMessageSender: message.sender,
-          });
+          const currentLastMessageAt =
+            conversations.find((c) => c.id === conversationId)?.lastMessageAt ??
+            (await storage.getConversation(conversationId))?.lastMessageAt ??
+            0;
+          if (message.sentAt >= currentLastMessageAt) {
+            updateConversation(conversationId, {
+              lastMessageAt: message.sentAt,
+              lastMessagePreview: '📎 Attachment',
+              lastMessageId: message.id,
+              lastMessageSender: message.sender,
+            });
+          }
 
           const myInbox = identity?.inboxId?.toLowerCase();
           const myAddr = identity?.address?.toLowerCase();
@@ -874,16 +892,21 @@ export function useMessages() {
         addMessage(conversationId, message);
 
         // Persist to storage
-        const storage = await getStorage();
         await storage.putMessage(message);
 
         // Update conversation
-        updateConversation(conversationId, {
-          lastMessageAt: message.sentAt,
-          lastMessagePreview: message.body.substring(0, 100),
-          lastMessageId: message.id,
-          lastMessageSender: message.sender,
-        });
+        const currentLastMessageAt =
+          conversations.find((c) => c.id === conversationId)?.lastMessageAt ??
+          (await storage.getConversation(conversationId))?.lastMessageAt ??
+          0;
+        if (message.sentAt >= currentLastMessageAt) {
+          updateConversation(conversationId, {
+            lastMessageAt: message.sentAt,
+            lastMessagePreview: message.body.substring(0, 100),
+            lastMessageId: message.id,
+            lastMessageSender: message.sender,
+          });
+        }
 
         // Increment unread if not viewing this conversation
         // (This would be better handled in a global message listener)

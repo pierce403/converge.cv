@@ -440,10 +440,15 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite request scanning)
+**Last Updated**: 2026-01-24 (History sync dedupe + unread fix)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
+
+### Messaging: History Backfill Dedupe
+- Incoming history/backfill events now hydrate existing conversations from storage before creating new ones, preserving last-read state and preventing old messages from lighting up as unread.
+- Duplicate history messages are skipped early, and profile fetch / profile-send checks are bypassed during backfill to cut redundant network traffic.
+- Recent history sync now skips the redundant `conversations.sync` call after connect, respects per-conversation cooldowns, and narrows message windows using stored `lastMessageAt` to avoid replaying old messages.
 
 ### Convos Invites: Stub Messages
 - Invite slugs now render as readable system messages in DMs (group name/tag/expiry), and follow-up system notices report acceptance or failure.
