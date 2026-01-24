@@ -145,6 +145,8 @@ export interface Identity {
   address: string;
   publicKey: string;
   privateKey?: string; // Should be encrypted in storage
+  inviteKey?: string; // Derived invite key for wallet-based identities
+  inviteKeyInboxId?: string; // Inbox ID the invite key is bound to
   createdAt: number;
   /**
    * Timestamp (ms since epoch) of the last successful XMTP "check inbox" / conversation sync.

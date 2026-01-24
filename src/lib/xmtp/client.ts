@@ -27,7 +27,7 @@ import type {
   GroupPermissionPolicyCode,
   GroupPermissionsState,
 } from '@/types';
-import { getAddress, hexToBytes } from 'viem';
+import { bytesToHex, getAddress, hexToBytes } from 'viem';
 import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
 import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
 import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-read-receipt';
@@ -71,6 +71,8 @@ export interface XmtpIdentity {
   signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
   displayName?: string;
   lastSyncedAt?: number;
+  inviteKey?: string;
+  inviteKeyInboxId?: string;
 }
 
 export interface IdentityProbeResult {
@@ -1694,15 +1696,27 @@ export class XmtpClient {
     }
   }
 
+  private hasInviteKeyFor(creatorInboxId: string): boolean {
+    if (!this.identity) return false;
+    if (this.identity.privateKey) return true;
+    if (this.inviteDerivedKey && this.inviteDerivedKeyInboxId === creatorInboxId) return true;
+    return Boolean(
+      this.identity.inviteKey &&
+        this.identity.inviteKeyInboxId &&
+        this.identity.inviteKeyInboxId.toLowerCase() === creatorInboxId.toLowerCase()
+    );
+  }
+
   private async resolveInvitePrivateKey(creatorInboxId: string): Promise<Uint8Array> {
     if (!this.identity) {
       throw new Error('Invite creation requires an active identity');
     }
+    const identity = this.identity;
 
-    if (this.identity?.privateKey) {
-      const privateKeyHex = this.identity.privateKey.startsWith('0x')
-        ? this.identity.privateKey
-        : `0x${this.identity.privateKey}`;
+    if (identity.privateKey) {
+      const privateKeyHex = identity.privateKey.startsWith('0x')
+        ? identity.privateKey
+        : `0x${identity.privateKey}`;
       return hexToBytes(privateKeyHex as `0x${string}`);
     }
 
@@ -1710,16 +1724,24 @@ export class XmtpClient {
       return this.inviteDerivedKey;
     }
 
+    if (identity.inviteKey && identity.inviteKeyInboxId === creatorInboxId) {
+      const inviteKeyHex = identity.inviteKey.startsWith('0x')
+        ? identity.inviteKey
+        : `0x${identity.inviteKey}`;
+      return hexToBytes(inviteKeyHex as `0x${string}`);
+    }
+
     if (this.inviteDerivedKeyPromise) {
       return await this.inviteDerivedKeyPromise;
     }
 
-    if (!this.identity?.signMessage) {
+    if (!identity.signMessage) {
       throw new Error('Invite creation requires a local key or wallet signing capability');
     }
 
     const message = `Converge Invite Key v1:${creatorInboxId}`;
-    const signMessage = this.identity.signMessage;
+    const signMessage = identity.signMessage;
+    const identityAddress = identity.address;
     this.inviteDerivedKeyPromise = (async () => {
       console.log('[XMTP] Requesting wallet signature to derive invite key...');
       const signatureHexRaw = await signMessage(message);
@@ -1728,6 +1750,23 @@ export class XmtpClient {
       const derivedKey = await deriveInvitePrivateKeyFromSignature(signatureBytes, message);
       this.inviteDerivedKey = derivedKey;
       this.inviteDerivedKeyInboxId = creatorInboxId;
+      const derivedHex = bytesToHex(derivedKey);
+      this.identity = {
+        ...identity,
+        inviteKey: derivedHex,
+        inviteKeyInboxId: creatorInboxId,
+      };
+      try {
+        const storage = await getStorage();
+        const stored = await storage.getIdentityByAddress(identityAddress);
+        if (stored) {
+          stored.inviteKey = derivedHex;
+          stored.inviteKeyInboxId = creatorInboxId;
+          await storage.putIdentity(stored);
+        }
+      } catch (error) {
+        console.warn('[XMTP] Failed to persist invite key (non-fatal):', error);
+      }
       return derivedKey;
     })();
 
@@ -1741,6 +1780,9 @@ export class XmtpClient {
   async createConvosInvite(conversationId: string): Promise<ConvosInviteResult> {
     if (!this.client) {
       throw new Error('Client not connected');
+    }
+    if (!this.identity) {
+      throw new Error('Invite creation requires an identity');
     }
 
     const creatorInboxId = this.client.inboxId ?? this.identity?.inboxId;
@@ -1773,6 +1815,9 @@ export class XmtpClient {
       }
     }
 
+    if (!this.identity.privateKey && !this.hasInviteKeyFor(creatorInboxId)) {
+      throw new Error('Invite key not available on this device. Create a new invite from this device.');
+    }
     const privateKeyBytes = await this.resolveInvitePrivateKey(creatorInboxId);
 
     const invite = createConvosInvite({
