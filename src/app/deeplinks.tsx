@@ -16,6 +16,8 @@ export function InviteConnectRedirect() {
   const { code } = useParams<{ code?: string }>();
   const [searchParams] = useSearchParams();
   const inviteCode = code ?? searchParams.get('i') ?? '';
-  const target = inviteCode ? `/onboarding?invite=${encodeURIComponent(inviteCode)}` : '/onboarding';
+  const target = inviteCode
+    ? `/onboarding?invite=${encodeURIComponent(inviteCode)}&inviteAuto=1`
+    : '/onboarding';
   return <Navigate to={target} replace />;
 }

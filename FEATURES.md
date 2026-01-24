@@ -72,6 +72,7 @@
 - Invite approvals now retry a conversation sync before failing if the target group isn’t immediately available locally.
 - Invite approvals now force a full conversation sync (plus listGroups fallback) before giving up on missing groups.
 - Invite approvals normalize UUID-style group IDs (strip dashes) so Convos-formatted invites can match XMTP group IDs.
+- Invite links opened by new users now return to the invite claim flow after onboarding and auto-send the request (so the link only needs to be tapped once).
 
 ## Farcaster + Neynar Integration
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.

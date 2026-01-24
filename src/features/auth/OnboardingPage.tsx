@@ -222,7 +222,8 @@ export function OnboardingPage() {
       const params = new URLSearchParams(window.location.search);
       const inviteTarget = params.get('invite');
       if (inviteTarget) {
-        navigate(`/invite?i=${encodeURIComponent(inviteTarget)}`);
+        const inviteAuto = params.get('inviteAuto') === '1' ? '&auto=1' : '';
+        navigate(`/invite?i=${encodeURIComponent(inviteTarget)}${inviteAuto}`);
         return true;
       }
       const inboxTarget = params.get('i');

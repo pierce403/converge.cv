@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite group normalization)
+**Last Updated**: 2026-01-24 (Invite onboarding auto-claim)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -474,6 +474,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Group ID Normalization
 - Invite approvals normalize UUID-style group IDs by stripping dashes before lookups, matching XMTP’s 32-char group IDs and preventing “group not found” errors.
+
+### Convos Invites: Onboarding Auto-Claim
+- Invite deep links now survive onboarding and auto-send the invite request once the new user completes onboarding, so the link only needs to be opened once.
 
 ### Convos Invites: Wallet Signer Attach
 - Invite approvals now attach the active wallet signer on demand, ensuring the signature prompt appears when the creator doesn’t have a local private key.

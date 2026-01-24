@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '@/lib/stores';
 import {
@@ -15,6 +15,7 @@ export function InviteClaimPage() {
   const { code } = useParams<{ code?: string }>();
   const [searchParams] = useSearchParams();
   const initialInput = code || searchParams.get('i') || '';
+  const autoClaimRequested = searchParams.get('auto') === '1';
 
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isVaultUnlocked = useAuthStore((state) => state.isVaultUnlocked);
@@ -48,7 +49,7 @@ export function InviteClaimPage() {
     }
   }, [input]);
 
-  const handleClaim = async () => {
+  const handleClaim = useCallback(async () => {
     if (!parsed) {
       setError('Paste a valid invite code first.');
       return;
@@ -81,7 +82,18 @@ export function InviteClaimPage() {
     } finally {
       setSending(false);
     }
-  };
+  }, [createConversation, isAuthenticated, isVaultUnlocked, navigate, parsed, sendMessage]);
+
+  const autoClaimedRef = useRef(false);
+
+  useEffect(() => {
+    if (!autoClaimRequested) return;
+    if (autoClaimedRef.current) return;
+    if (!parsed) return;
+    if (!isAuthenticated || !isVaultUnlocked) return;
+    autoClaimedRef.current = true;
+    void handleClaim();
+  }, [autoClaimRequested, handleClaim, isAuthenticated, isVaultUnlocked, parsed]);
 
   return (
     <div className="min-h-full bg-primary-950/90 text-primary-50">
