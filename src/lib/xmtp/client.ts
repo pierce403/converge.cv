@@ -1824,7 +1824,6 @@ export class XmtpClient {
       tag: inviteTag,
       name: details.name?.trim() || undefined,
       description: (parsedMetadata.description ?? details.description)?.trim() || undefined,
-      imageUrl: details.imageUrl?.trim() || undefined,
       conversationExpiresAt: parsedMetadata.expiresAt,
     });
 
