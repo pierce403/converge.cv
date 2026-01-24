@@ -1411,6 +1411,17 @@ export class XmtpClient {
     };
   }
 
+  private normalizeInviteConversationId(conversationId: string): string {
+    const trimmed = conversationId.trim();
+    if (trimmed.includes('-')) {
+      const normalized = trimmed.replace(/-/g, '');
+      if (normalized.length === 32) {
+        return normalized.toLowerCase();
+      }
+    }
+    return trimmed;
+  }
+
   private async buildGroupDetails(conversationId: string, group: Awaited<ReturnType<typeof this.getGroupConversation>>): Promise<GroupDetails> {
     const safeGroup = group;
     if (!safeGroup) {
@@ -1883,35 +1894,66 @@ export class XmtpClient {
       console.warn('[XMTP] Failed to decode conversation token from invite:', error);
       throw new Error('Failed to decrypt invite.');
     }
+    const conversationIdRaw = conversationId;
+    const conversationIdNormalized = this.normalizeInviteConversationId(conversationIdRaw);
+    const conversationIdCandidates =
+      conversationIdNormalized === conversationIdRaw ? [conversationIdRaw] : [conversationIdNormalized, conversationIdRaw];
+    if (conversationIdNormalized !== conversationIdRaw) {
+      console.warn('[XMTP] Normalized invite conversation ID:', {
+        raw: conversationIdRaw,
+        normalized: conversationIdNormalized,
+      });
+    }
 
     type GroupConversation = Awaited<ReturnType<typeof this.getGroupConversation>>;
-    let group: GroupConversation = await this.getGroupConversation(conversationId);
+    let group: GroupConversation = null;
+    let resolvedConversationId = conversationIdCandidates[0];
+    for (const candidate of conversationIdCandidates) {
+      group = await this.getGroupConversation(candidate);
+      if (group) {
+        resolvedConversationId = candidate;
+        break;
+      }
+    }
     if (!group) {
-      console.warn('[XMTP] Invite join request refers to missing group, syncing conversations:', conversationId);
+      console.warn('[XMTP] Invite join request refers to missing group, syncing conversations:', conversationIdCandidates[0]);
       try {
         await this.client.conversations.sync();
       } catch (error) {
         console.warn('[XMTP] Conversation sync failed while resolving invite group:', error);
       }
-      group = await this.getGroupConversation(conversationId);
+      for (const candidate of conversationIdCandidates) {
+        group = await this.getGroupConversation(candidate);
+        if (group) {
+          resolvedConversationId = candidate;
+          break;
+        }
+      }
     }
 
     if (!group) {
-      console.warn('[XMTP] Invite group still missing, forcing full conversation sync:', conversationId);
+      console.warn('[XMTP] Invite group still missing, forcing full conversation sync:', conversationIdCandidates[0]);
       try {
         await this.syncConversations({ force: true, reason: 'invite-approve' });
       } catch (error) {
         console.warn('[XMTP] Forced conversation sync failed while resolving invite group:', error);
       }
-      group = await this.getGroupConversation(conversationId);
+      for (const candidate of conversationIdCandidates) {
+        group = await this.getGroupConversation(candidate);
+        if (group) {
+          resolvedConversationId = candidate;
+          break;
+        }
+      }
     }
 
     if (!group) {
       try {
         const groups = await this.client.conversations.listGroups();
-        const match = groups.find((candidate) => candidate.id === conversationId);
+        const match = groups.find((candidate) => conversationIdCandidates.includes(candidate.id));
         if (match) {
           group = match as GroupConversation;
+          resolvedConversationId = match.id;
         }
       } catch (error) {
         console.warn('[XMTP] listGroups failed while resolving invite group:', error);
@@ -1920,7 +1962,9 @@ export class XmtpClient {
 
     if (!group) {
       const debugInfo: Record<string, unknown> = {
-        conversationId,
+        conversationIdRaw,
+        conversationIdNormalized,
+        conversationIdCandidates,
         creatorInboxId,
         senderInboxId,
         myInboxId,
@@ -1928,7 +1972,7 @@ export class XmtpClient {
       };
       try {
         const storage = await getStorage();
-        debugInfo.localDeleted = await storage.isConversationDeleted(conversationId);
+        debugInfo.localDeleted = await storage.isConversationDeleted(conversationIdCandidates[0]);
       } catch (error) {
         debugInfo.localDeleted = `error:${error instanceof Error ? error.message : String(error)}`;
       }
@@ -1938,12 +1982,12 @@ export class XmtpClient {
         });
         debugInfo.groupCount = listGroups.length;
         debugInfo.groupIdSample = listGroups.slice(0, 5).map((candidate) => candidate.id);
-        debugInfo.groupIdMatch = listGroups.some((candidate) => candidate.id === conversationId);
+        debugInfo.groupIdMatch = listGroups.some((candidate) => conversationIdCandidates.includes(candidate.id));
       } catch (error) {
         debugInfo.listGroupsError = error instanceof Error ? error.message : String(error);
       }
       try {
-        const anyConversation = await this.client.conversations.getConversationById(conversationId);
+        const anyConversation = await this.client.conversations.getConversationById(conversationIdCandidates[0]);
         if (anyConversation) {
           debugInfo.conversationClass = (anyConversation as { constructor?: { name?: string } }).constructor?.name;
           debugInfo.hasMembersFn = typeof (anyConversation as { members?: () => Promise<unknown> }).members === 'function';
@@ -1969,7 +2013,7 @@ export class XmtpClient {
     logNetworkEvent({
       direction: 'inbound',
       event: 'invite:accepted',
-      details: `Added ${senderInboxId} to ${conversationId}`,
+      details: `Added ${senderInboxId} to ${resolvedConversationId}`,
     });
 
     if (opts?.messageId) {
@@ -1977,7 +2021,7 @@ export class XmtpClient {
     }
 
     return {
-      conversationId,
+      conversationId: resolvedConversationId,
       conversationName: group.name ?? undefined,
     };
   }

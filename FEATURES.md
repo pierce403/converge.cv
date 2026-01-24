@@ -71,6 +71,7 @@
 - Wallet-derived invite keys are now persisted per device so approvals work across reloads; if the key isn’t present, the app can re-derive it via a wallet signature.
 - Invite approvals now retry a conversation sync before failing if the target group isn’t immediately available locally.
 - Invite approvals now force a full conversation sync (plus listGroups fallback) before giving up on missing groups.
+- Invite approvals normalize UUID-style group IDs (strip dashes) so Convos-formatted invites can match XMTP group IDs.
 
 ## Farcaster + Neynar Integration
 - Users can supply a Neynar API key (or rely on a built-in default) from Settings to unlock Farcaster-aware features.

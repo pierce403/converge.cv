@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite group diagnostics)
+**Last Updated**: 2026-01-24 (Invite group normalization)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -471,6 +471,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Group Resolution Diagnostics
 - Invite approval now logs detailed diagnostics when a referenced group cannot be found after sync attempts (conversation ID, local deletion state, sample group IDs, and listGroups/getConversation errors) to pinpoint why approval fails.
+
+### Convos Invites: Group ID Normalization
+- Invite approvals normalize UUID-style group IDs by stripping dashes before lookups, matching XMTP’s 32-char group IDs and preventing “group not found” errors.
 
 ### Convos Invites: Wallet Signer Attach
 - Invite approvals now attach the active wallet signer on demand, ensuring the signature prompt appears when the creator doesn’t have a local private key.
