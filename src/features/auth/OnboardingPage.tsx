@@ -217,30 +217,36 @@ export function OnboardingPage() {
     }
   };
 
-  const navigateToPendingTarget = useCallback(() => {
+  const getPendingTargetUrl = useCallback((): string | null => {
     try {
       const params = new URLSearchParams(window.location.search);
       const inviteTarget = params.get('invite');
       if (inviteTarget) {
         const inviteAuto = params.get('inviteAuto') === '1' ? '&auto=1' : '';
-        navigate(`/invite?i=${encodeURIComponent(inviteTarget)}${inviteAuto}`);
-        return true;
+        return `/invite?i=${encodeURIComponent(inviteTarget)}${inviteAuto}`;
       }
       const inboxTarget = params.get('i');
       if (inboxTarget) {
-        navigate(`/i/${encodeURIComponent(inboxTarget)}`);
-        return true;
+        return `/i/${encodeURIComponent(inboxTarget)}`;
       }
       const userTarget = params.get('u');
       if (userTarget) {
-        navigate(`/u/${encodeURIComponent(userTarget)}`);
-        return true;
+        return `/u/${encodeURIComponent(userTarget)}`;
       }
     } catch {
       // ignore deep-link parse failure
     }
+    return null;
+  }, []);
+
+  const navigateToPendingTarget = useCallback(() => {
+    const target = getPendingTargetUrl();
+    if (target) {
+      navigate(target);
+      return true;
+    }
     return false;
-  }, [navigate]);
+  }, [getPendingTargetUrl, navigate]);
 
   const handleKeyfileSelected = async (file: File | null) => {
     setError(null);
@@ -488,7 +494,8 @@ export function OnboardingPage() {
       }
 
       // Force a reload to ensure a clean state for the new inbox
-      window.location.assign('/');
+      const pendingTarget = getPendingTargetUrl();
+      window.location.assign(pendingTarget ?? '/');
     } catch (err) {
       console.error('[Onboarding] Failed to finalize wallet identity:', err);
       setError(

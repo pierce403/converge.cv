@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite avatar removal)
+**Last Updated**: 2026-01-24 (Invite onboarding reload fix)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -477,6 +477,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Onboarding Auto-Claim
 - Invite deep links now survive onboarding and auto-send the invite request once the new user completes onboarding, so the link only needs to be opened once.
+- Wallet connect onboarding now preserves deep-link targets even when forcing a reload, so invite links still auto-claim after the identity is created.
 
 ### Convos Invites: Smaller Payloads
 - Invite creation no longer embeds group avatars in the payload to keep Convos invite links short enough for their handler.
