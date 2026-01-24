@@ -440,10 +440,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (History sync dedupe + unread fix)
+**Last Updated**: 2026-01-24 (Dependabot remediation)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
+
+### Dependency Security: Dependabot Remediation
+- Resolved pnpm audit findings by bumping react-router-dom and pinning patched transitive deps via pnpm overrides (preact, hono, lodash, undici, h3).
+- `pnpm audit` now reports zero vulnerabilities.
 
 ### Messaging: History Backfill Dedupe
 - Incoming history/backfill events now hydrate existing conversations from storage before creating new ones, preserving last-read state and preventing old messages from lighting up as unread.
