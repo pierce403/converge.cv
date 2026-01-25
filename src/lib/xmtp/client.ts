@@ -8,11 +8,23 @@
 import {
   Client,
   type Signer,
-  type SafeInboxState,
-  type SafeGroupMember,
+  type InboxState,
+  type GroupMember,
   type Identifier,
-  type SafeConversationDebugInfo,
-  type SafeHmacKey,
+  IdentifierKind,
+  type ConversationDebugInfo,
+  type HmacKey,
+  type Reaction,
+  type Reply,
+  type Attachment,
+  type RemoteAttachment,
+  LogLevel,
+  ReactionAction,
+  ReactionSchema,
+  encodeText,
+  encryptAttachment,
+  decryptAttachment,
+  getInboxIdForIdentifier,
   PermissionPolicy,
   PermissionUpdateType,
   ConsentState,
@@ -28,18 +40,6 @@ import type {
   GroupPermissionsState,
 } from '@/types';
 import { bytesToHex, getAddress, hexToBytes } from 'viem';
-import { ContentTypeReaction, ReactionCodec, type Reaction as XmtpReaction } from '@xmtp/content-type-reaction';
-import { ContentTypeReply, ReplyCodec } from '@xmtp/content-type-reply';
-import { ContentTypeReadReceipt, ReadReceiptCodec } from '@xmtp/content-type-read-receipt';
-import {
-  AttachmentCodec,
-  ContentTypeRemoteAttachment,
-  RemoteAttachmentCodec,
-  type Attachment as XmtpAttachment,
-  type RemoteAttachment,
-} from '@xmtp/content-type-remote-attachment';
-import { ContentTypeText } from '@xmtp/content-type-text';
-import { GroupUpdatedCodec } from '@xmtp/content-type-group-updated';
 import { getStorage } from '@/lib/storage';
 import { getThirdwebClient } from '@/lib/wallets/providers';
 import { upload, resolveScheme } from 'thirdweb/storage';
@@ -79,7 +79,7 @@ export interface IdentityProbeResult {
   isRegistered: boolean;
   inboxId: string | null;
   installationCount: number;
-  inboxState?: SafeInboxState;
+  inboxState?: InboxState;
 }
 
 interface ConnectOptions {
@@ -102,7 +102,7 @@ export interface XmtpMessage {
   senderAddress: string;
   content: string | Uint8Array;
   contentTypeId?: string;
-  attachment?: XmtpAttachment;
+  attachment?: Attachment;
   remoteAttachment?: RemoteAttachment;
   sentAt: number;
   isLocalFallback?: boolean;
@@ -185,23 +185,23 @@ const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(val
 const toIdentifierHex = (address: string): string =>
   address.startsWith('0x') || address.startsWith('0X') ? address.slice(2) : address;
 
-const EMPTY_ETHEREUM_IDENTIFIER = { identifier: '', identifierKind: 'Ethereum' } as const;
+const EMPTY_ETHEREUM_IDENTIFIER = { identifier: '', identifierKind: IdentifierKind.Ethereum } as const;
 
 function createStubInboxState({
   identifier,
   inboxId,
 }: {
-  identifier?: { identifier: string; identifierKind: 'Ethereum' };
+  identifier?: Identifier;
   inboxId?: string | null;
-}): SafeInboxState {
+}): InboxState {
   const safeIdentifier = (identifier ?? EMPTY_ETHEREUM_IDENTIFIER) as unknown as Identifier;
-  const identifiers = identifier ? [safeIdentifier] : [];
+  const accountIdentifiers = identifier ? [safeIdentifier] : [];
   return {
-    identifiers,
+    accountIdentifiers,
     inboxId: inboxId ?? '',
     installations: [],
     recoveryIdentifier: safeIdentifier,
-  } as unknown as SafeInboxState;
+  } as unknown as InboxState;
 }
 
 /**
@@ -657,7 +657,7 @@ export class XmtpClient {
     if (!this.identity) throw new Error('No identity available');
 
     const performRevocation = async (client: Client<unknown>) => {
-      const state = await client.preferences.inboxState(true);
+      const state = await client.preferences.fetchInboxState();
       const list = (state.installations || []) as unknown as Array<{
         id?: string;
         clientTimestampNs?: bigint;
@@ -717,10 +717,9 @@ export class XmtpClient {
     const temp = await Client.create(signer, {
       env: 'production',
       dbPath,
-      loggingLevel: 'warn',
+      loggingLevel: LogLevel.Warn,
       structuredLogging: false,
       performanceLogging: false,
-      debugEventsEnabled: false,
       disableAutoRegister: true,
     });
 
@@ -739,6 +738,10 @@ export class XmtpClient {
     try {
       if (!msg || typeof msg !== 'object') return undefined;
       const anyMsg = msg as Record<string, unknown>;
+      const contentType = anyMsg['contentType'] as { typeId?: string } | undefined;
+      if (contentType?.typeId) {
+        return contentType.typeId;
+      }
       // Try decoded shape first: encodedContent?.type?.typeId (or type_id)
       const encoded = anyMsg['encodedContent'] as Record<string, unknown> | undefined;
       const typeObj = (encoded && (encoded['type'] as Record<string, unknown> | undefined)) || undefined;
@@ -812,14 +815,31 @@ export class XmtpClient {
     if (!this.client) throw new Error('Client not connected');
     const conv = await this.client.conversations.getConversationById(conversationId);
     if (!conv) throw new Error('Conversation not found');
-    const content: XmtpReaction = {
-      action,
+    let resolvedReferenceInboxId = referenceInboxId;
+    if (!resolvedReferenceInboxId) {
+      try {
+        const details = await this.fetchMessageDetails(targetMessageId);
+        resolvedReferenceInboxId = details?.senderInboxId;
+      } catch {
+        // ignore lookup errors; fallback below
+      }
+    }
+    const mappedAction =
+      action === 'removed' ? ReactionAction.Removed : ReactionAction.Added;
+    const mappedSchema =
+      schema === 'shortcode'
+        ? ReactionSchema.Shortcode
+        : schema === 'custom'
+          ? ReactionSchema.Custom
+          : ReactionSchema.Unicode;
+    const content: Reaction = {
+      action: mappedAction,
       content: emoji,
       reference: targetMessageId,
-      referenceInboxId,
-      schema,
+      referenceInboxId: resolvedReferenceInboxId ?? '',
+      schema: mappedSchema,
     };
-    await conv.send(content, ContentTypeReaction);
+    await conv.sendReaction(content);
     logNetworkEvent({ direction: 'outbound', event: 'message:reaction', details: `Reacted ${emoji}` });
   }
 
@@ -846,13 +866,13 @@ export class XmtpClient {
 
     const conv = await this.client.conversations.getConversationById(conversationId);
     if (!conv) throw new Error('Conversation not found');
-    const replyContent = {
+    const encoded = await encodeText(text);
+    const replyContent: Reply = {
       reference: targetMessageId,
       referenceInboxId,
-      content: text,
-      contentType: ContentTypeText,
+      content: encoded,
     };
-    const messageId = await conv.send(replyContent, ContentTypeReply);
+    const messageId = await conv.sendReply(replyContent);
     const now = Date.now();
     const message: XmtpMessage = {
       id: messageId,
@@ -877,7 +897,7 @@ export class XmtpClient {
     if (!this.client) throw new Error('Client not connected');
     const conv = await this.client.conversations.getConversationById(conversationId);
     if (!conv) throw new Error('Conversation not found');
-    await conv.send({}, ContentTypeReadReceipt);
+    await conv.sendReadReceipt();
     logNetworkEvent({ direction: 'outbound', event: 'message:read_receipt', details: `Read receipt sent` });
   }
 
@@ -905,14 +925,19 @@ export class XmtpClient {
   private isRemoteAttachmentType(typeId: string | undefined): boolean {
     if (!typeId) return false;
     const t = typeId.toLowerCase();
-    return t === ContentTypeRemoteAttachment.typeId.toLowerCase() || t.includes('remotestaticattachment');
+    return (t.includes('remote') && t.includes('attachment')) || t.includes('remotestaticattachment');
   }
 
-  async loadRemoteAttachment(remoteAttachment: RemoteAttachment): Promise<XmtpAttachment> {
-    if (!this.client) {
-      throw new Error('Client not connected');
+  async loadRemoteAttachment(remoteAttachment: RemoteAttachment): Promise<Attachment> {
+    if (!remoteAttachment?.url) {
+      throw new Error('Remote attachment is missing a URL');
     }
-    return await RemoteAttachmentCodec.load(remoteAttachment, this.client);
+    const response = await fetch(remoteAttachment.url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch attachment (${response.status})`);
+    }
+    const payload = new Uint8Array(await response.arrayBuffer());
+    return await decryptAttachment(payload, remoteAttachment);
   }
 
   private async uploadEncryptedAttachmentPayload(payload: Uint8Array, filename: string): Promise<{ uri: string; url: string }> {
@@ -1012,7 +1037,7 @@ export class XmtpClient {
     };
   }
 
-  private createLocalAttachmentMessage(conversationId: string, attachment: XmtpAttachment): XmtpMessage {
+  private createLocalAttachmentMessage(conversationId: string, attachment: Attachment): XmtpMessage {
     const now = Date.now();
     return {
       id: this.generateLocalId('local-attachment'),
@@ -1021,7 +1046,7 @@ export class XmtpClient {
         this.identity?.inboxId ??
         this.identity?.address ??
         'local-sender',
-      content: attachment.filename,
+      content: attachment.filename ?? 'Attachment',
       attachment,
       sentAt: now,
       isLocalFallback: true,
@@ -1046,25 +1071,22 @@ export class XmtpClient {
           }
         } catch (error) {
           // Only warn if it's not the expected "Client not connected" error (though strict check above should prevent it)
-          console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to Utils', error);
+          console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to inbox resolver', error);
         }
       }
 
-      const { getXmtpUtils } = await import('./utils-singleton');
-      const utils = await getXmtpUtils();
-
       const identifier = {
         identifier: toIdentifierHex(normalized).toLowerCase(),
-        identifierKind: 'Ethereum' as const,
+        identifierKind: IdentifierKind.Ethereum,
       };
 
       try {
         // Add timeout to prevent hanging if the worker/network is unresponsive
         const resolved = await Promise.race([
-          this.retryWithBackoff('utils.getInboxIdForIdentifier', () => utils.getInboxIdForIdentifier(identifier, 'production')),
+          this.retryWithBackoff('inbox.getInboxIdForIdentifier', () => getInboxIdForIdentifier(identifier, 'production')),
           new Promise<string | undefined>((_, reject) =>
-            setTimeout(() => reject(new Error('Timeout waiting for Utils')), 5000)
-          )
+            setTimeout(() => reject(new Error('Timeout waiting for inbox resolver')), 5000)
+          ),
         ]);
 
         if (resolved) {
@@ -1150,13 +1172,13 @@ export class XmtpClient {
       identifier: identifier.identifier.startsWith('0x')
         ? identifier.identifier.toLowerCase()
         : identifier.identifier.toLowerCase(),
-      kind: identifier.identifierKind,
+      kind: IdentifierKind[identifier.identifierKind] ?? String(identifier.identifierKind),
       isPrimary: index === 0,
     });
 
     const addressesFromIdentifiers = (identifiers: Identifier[] = []): string[] => {
       return identifiers
-        .filter((identifier) => identifier.identifierKind === 'Ethereum')
+        .filter((identifier) => identifier.identifierKind === IdentifierKind.Ethereum)
         .map((identifier) =>
           identifier.identifier.startsWith('0x')
             ? identifier.identifier.toLowerCase()
@@ -1213,8 +1235,7 @@ export class XmtpClient {
               const senderInboxId = (m as any).senderInboxId?.toLowerCase();
               if (senderInboxId === myInboxId) continue; // Skip our own messages
 
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
+              const raw = typeof m.content === 'string' ? m.content : m.fallback;
               if (typeof raw !== 'string') continue;
               if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
               try {
@@ -1225,11 +1246,12 @@ export class XmtpClient {
                 // Build with overrides from profile message + identifiers from preferences if possible
                 if (!skipIdentityApi) {
                   try {
-                    const latest = await this.retryWithBackoff(
-                      'preferences.getLatestInboxState',
-                      () => this.client!.preferences.getLatestInboxState(normalizedInboxId)
+                    const latestStates = await this.retryWithBackoff(
+                      'preferences.fetchInboxStates',
+                      () => this.client!.preferences.fetchInboxStates([normalizedInboxId])
                     );
-                    if (latest) return buildProfile(latest.identifiers ?? [], obj);
+                    const latest = latestStates?.[0];
+                    if (latest) return buildProfile(latest.accountIdentifiers ?? [], obj);
                   } catch {
                     // fallthrough
                   }
@@ -1251,14 +1273,18 @@ export class XmtpClient {
 
       if (this.client) {
         try {
-          const latest = await this.retryWithBackoff('preferences.getLatestInboxState', () => this.client!.preferences.getLatestInboxState(normalizedInboxId));
+          const latestStates = await this.retryWithBackoff(
+            'preferences.fetchInboxStates',
+            () => this.client!.preferences.fetchInboxStates([normalizedInboxId])
+          );
+          const latest = latestStates?.[0];
           if (latest) {
-            return buildProfile(latest.identifiers ?? []);
+            return buildProfile(latest.accountIdentifiers ?? []);
           }
         } catch (error) {
           // Only log unexpected errors at warn level; expected identity errors are handled quietly
           if (!this.isExpectedIdentityError(error)) {
-            console.warn('[XMTP] fetchInboxProfile: getLatestInboxState failed', error);
+            console.warn('[XMTP] fetchInboxProfile: fetchInboxStates failed', error);
           }
           const recovered = await handleIdentityError(error);
           if (recovered) {
@@ -1270,13 +1296,13 @@ export class XmtpClient {
         }
 
         try {
-          const states = await this.retryWithBackoff('preferences.inboxStateFromInboxIds', () => this.client!.preferences.inboxStateFromInboxIds([normalizedInboxId], true));
+          const states = await this.retryWithBackoff('preferences.fetchInboxStates', () => this.client!.preferences.fetchInboxStates([normalizedInboxId]));
           if (states?.length) {
-            return buildProfile(states[0]?.identifiers ?? []);
+            return buildProfile(states[0]?.accountIdentifiers ?? []);
           }
         } catch (error) {
           if (!this.isExpectedIdentityError(error)) {
-            console.warn('[XMTP] fetchInboxProfile: inboxStateFromInboxIds failed', error);
+            console.warn('[XMTP] fetchInboxProfile: fetchInboxStates failed', error);
           }
           const recovered = await handleIdentityError(error);
           if (recovered) {
@@ -1288,17 +1314,18 @@ export class XmtpClient {
         }
       }
 
-      const { getXmtpUtils } = await import('./utils-singleton');
-      const utils = await getXmtpUtils();
       try {
-        const states = await this.retryWithBackoff('utils.inboxStateFromInboxIds', () => utils.inboxStateFromInboxIds([normalizedInboxId], 'production'));
+        const states = await this.retryWithBackoff(
+          'client.fetchInboxStates',
+          () => Client.fetchInboxStates([normalizedInboxId], 'production')
+        );
         if (states?.length) {
-          const state = states[0] as SafeInboxState;
-          return buildProfile(state.identifiers);
+          const state = states[0] as InboxState;
+          return buildProfile(state.accountIdentifiers ?? []);
         }
       } catch (error) {
         if (!this.isExpectedIdentityError(error)) {
-          console.warn('[XMTP] fetchInboxProfile: Utils inboxStateFromInboxIds failed', error);
+          console.warn('[XMTP] fetchInboxProfile: fetchInboxStates failed', error);
         }
         const recovered = await handleIdentityError(error);
         if (recovered) {
@@ -1316,17 +1343,17 @@ export class XmtpClient {
     const normalized = this.normalizeEthereumAddress(address);
     return {
       identifier: toIdentifierHex(normalized).toLowerCase(),
-      identifierKind: 'Ethereum',
+      identifierKind: IdentifierKind.Ethereum,
     };
   }
 
-  private extractAddressFromMember(member: SafeGroupMember): string | null {
+  private extractAddressFromMember(member: GroupMember): string | null {
     if (!member.accountIdentifiers) {
       return null;
     }
 
     for (const identifier of member.accountIdentifiers) {
-      if (identifier.identifierKind !== 'Ethereum' || !identifier.identifier) {
+      if (identifier.identifierKind !== IdentifierKind.Ethereum || !identifier.identifier) {
         continue;
       }
 
@@ -1357,7 +1384,7 @@ export class XmtpClient {
 
     // Be conservative: some DM wrappers might expose a members-like field.
     // Require presence of at least one group-only API to classify as group.
-    const hasMembersFn = typeof (conversation as { members?: () => Promise<SafeGroupMember[]> }).members === 'function';
+    const hasMembersFn = typeof (conversation as { members?: () => Promise<GroupMember[]> }).members === 'function';
     const hasGroupApi =
       typeof (conversation as { addMembersByIdentifiers?: (ids: Identifier[]) => Promise<void> }).addMembersByIdentifiers ===
       'function' ||
@@ -1376,7 +1403,7 @@ export class XmtpClient {
       imageUrl?: string;
       description?: string;
       sync?: () => Promise<unknown>;
-      members: () => Promise<SafeGroupMember[]>;
+      members: () => Promise<GroupMember[]>;
       listAdmins?: () => Promise<string[]>;
       listSuperAdmins?: () => Promise<string[]>;
       updateName?: (name: string) => Promise<void>;
@@ -1406,8 +1433,8 @@ export class XmtpClient {
         policy: PermissionPolicy,
         metadataField?: unknown,
       ) => Promise<void>;
-      debugInfo?: () => Promise<SafeConversationDebugInfo>;
-      getHmacKeys?: () => Promise<Map<string, SafeHmacKey[]>>;
+      debugInfo?: () => Promise<ConversationDebugInfo>;
+      getHmacKeys?: () => Promise<Map<string, HmacKey[]>>;
     };
   }
 
@@ -1433,7 +1460,7 @@ export class XmtpClient {
       return { invalidMembers, unknownMembers, totalMembers };
     }
 
-    let members: SafeGroupMember[] = [];
+    let members: GroupMember[] = [];
     try {
       members = await group.members();
       totalMembers = members.length;
@@ -1492,7 +1519,7 @@ export class XmtpClient {
       console.warn('[XMTP] Failed to sync group before reading metadata:', conversationId, error);
     }
 
-    let members: SafeGroupMember[] = [];
+    let members: GroupMember[] = [];
     try {
       members = await safeGroup.members();
     } catch (error) {
@@ -2202,7 +2229,7 @@ export class XmtpClient {
               const rawHex = toIdentifierHex(normalized).toLowerCase();
               const identifier: Identifier = {
                 identifier: rawHex,
-                identifierKind: 'Ethereum',
+                identifierKind: IdentifierKind.Ethereum,
               };
               identifierPayloads.push(identifier);
             } else {
@@ -2501,26 +2528,17 @@ export class XmtpClient {
         env: 'production',
         dbPath,
         disableAutoRegister: true,
-        loggingLevel: 'warn',
+        loggingLevel: LogLevel.Warn,
       });
 
       try {
         client = await Client.create(signer, {
           env: 'production',
           dbPath,
-          loggingLevel: 'warn',
+          loggingLevel: LogLevel.Warn,
           structuredLogging: false,
           performanceLogging: false,
-          debugEventsEnabled: false,
           disableAutoRegister: true,
-          codecs: [
-            new ReactionCodec(),
-            new ReplyCodec(),
-            new ReadReceiptCodec(),
-            new AttachmentCodec(),
-            new RemoteAttachmentCodec(),
-            new GroupUpdatedCodec(),
-          ],
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -2531,20 +2549,11 @@ export class XmtpClient {
             client = await Client.create(signer, {
               env: 'production',
               dbPath,
-              loggingLevel: 'warn',
+              loggingLevel: LogLevel.Warn,
               structuredLogging: false,
               performanceLogging: false,
-              debugEventsEnabled: false,
               // Let SDK perform its default registration path; some identity probes are avoided
               disableAutoRegister: false,
-              codecs: [
-                new ReactionCodec(),
-                new ReplyCodec(),
-                new ReadReceiptCodec(),
-                new AttachmentCodec(),
-                new RemoteAttachmentCodec(),
-                new GroupUpdatedCodec(),
-              ],
             });
           } catch (e2) {
             console.warn('[XMTP] Fallback Client.create also failed:', e2);
@@ -2563,7 +2572,7 @@ export class XmtpClient {
         console.warn('[XMTP] Client.init did not return an inboxId; forcing register()');
       }
       try {
-        const preState: SafeInboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => client!.preferences.inboxState(true));
+        const preState: InboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => client!.preferences.fetchInboxState());
         const existing = preState.installations || [];
         const hasOurInstallation = existing.some((inst: unknown) => {
           const id = (inst as { id?: string }).id;
@@ -2786,14 +2795,14 @@ export class XmtpClient {
         // Use client.inboxId as source of truth (authoritative from client.init)
         let inboxId: string | null = this.client.inboxId || null;
         let isRegistered = false;
-        let inboxState: SafeInboxState | undefined;
+        let inboxState: InboxState | undefined;
 
         if (inboxId) {
           console.log('[XMTP] probeIdentity: ✅ Found inboxId from existing client:', inboxId);
           isRegistered = true; // inboxId presence is authoritative
 
           try {
-            inboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true));
+            inboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => this.client!.preferences.fetchInboxState());
             console.log('[XMTP] probeIdentity: Fetched inboxState from existing client:', {
               inboxId: inboxState?.inboxId,
               installationCount: inboxState?.installations?.length ?? 0,
@@ -2848,19 +2857,10 @@ export class XmtpClient {
       console.log('[XMTP] probeIdentity: Creating probe client...');
       client = await Client.create(signer, {
         env: 'production',
-        loggingLevel: 'warn',
+        loggingLevel: LogLevel.Warn,
         structuredLogging: false,
         performanceLogging: false,
-        debugEventsEnabled: false,
         disableAutoRegister: true,
-        codecs: [
-          new ReactionCodec(),
-          new ReplyCodec(),
-          new ReadReceiptCodec(),
-          new AttachmentCodec(),
-          new RemoteAttachmentCodec(),
-          new GroupUpdatedCodec(),
-        ],
       });
       console.log('[XMTP] probeIdentity: Probe client created successfully');
       console.log('[XMTP] probeIdentity: Client inboxId from init:', client.inboxId);
@@ -2883,13 +2883,13 @@ export class XmtpClient {
         }
       }
 
-      let inboxState: SafeInboxState | undefined;
+      let inboxState: InboxState | undefined;
 
       // Use inboxId as source of truth - if we have it, fetch inbox state
       if (inboxId) {
         try {
           // Force refresh from network to get full inbox state
-          inboxState = await this.retryWithBackoff('preferences.inboxState(true)', () => client!.preferences.inboxState(true));
+          inboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => client!.preferences.fetchInboxState());
           console.log('[XMTP] probeIdentity: fetched inboxState:', {
             inboxId: inboxState?.inboxId,
             hasInstallations: Boolean(inboxState?.installations),
@@ -2909,26 +2909,26 @@ export class XmtpClient {
           }
         }
 
-        // Fallback: if we still don't have inboxId, try findInboxIdByIdentifier
+        // Fallback: if we still don't have inboxId, try fetchInboxIdByIdentifier
         if (!inboxId) {
           try {
             const identifier = {
               identifier: toIdentifierHex(identity.address).toLowerCase(),
-              identifierKind: 'Ethereum' as const,
+              identifierKind: IdentifierKind.Ethereum,
             };
-            const resolvedInboxId = await client.findInboxIdByIdentifier(
+            const resolvedInboxId = await client.fetchInboxIdByIdentifier(
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               identifier as any
             );
             if (resolvedInboxId) {
               inboxId = resolvedInboxId;
               isRegistered = true;
-              console.log('[XMTP] probeIdentity: ✅ Got inboxId via findInboxIdByIdentifier:', resolvedInboxId);
+              console.log('[XMTP] probeIdentity: ✅ Got inboxId via fetchInboxIdByIdentifier:', resolvedInboxId);
             } else {
-              console.warn('[XMTP] probeIdentity: ⚠️  No inboxId found via findInboxIdByIdentifier');
+              console.warn('[XMTP] probeIdentity: ⚠️  No inboxId found via fetchInboxIdByIdentifier');
             }
           } catch (error) {
-            console.warn('[XMTP] probeIdentity: findInboxIdByIdentifier failed:', error);
+            console.warn('[XMTP] probeIdentity: fetchInboxIdByIdentifier failed:', error);
           }
         }
       } else if (!isRegistered) {
@@ -3483,7 +3483,7 @@ export class XmtpClient {
           decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
 
           for (const m of decodedMessages) {
-            const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
+            const content = typeof m.content === 'string' ? m.content : m.fallback;
             const typeId = this.getContentTypeIdFromAny(m);
             // Reactions: aggregate onto target message instead of surfacing as bubbles
             try {
@@ -3578,13 +3578,13 @@ export class XmtpClient {
               if (lowerType.includes('reply')) {
                 try {
                   const reply = (m as unknown as { content?: unknown }).content as
-                    | { content?: unknown; reference?: string }
+                    | { content?: unknown; referenceId?: string }
                     | undefined;
                   const body =
                     typeof reply?.content === 'string'
                       ? reply.content
                       : this.formatPayload(reply?.content ?? '');
-                  const replyToId = (reply?.reference ?? '').toString() || undefined;
+                  const replyToId = (reply?.referenceId ?? '').toString() || undefined;
                   const sentAt = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
                   const xmsg: XmtpMessage = {
                     id: m.id,
@@ -3831,7 +3831,7 @@ export class XmtpClient {
             const decodedMessages = await conv.messages(perConversationOptions);
             decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
             for (const m of decodedMessages) {
-              const content = typeof m.content === 'string' ? m.content : m.encodedContent.content;
+              const content = typeof m.content === 'string' ? m.content : m.fallback;
               const typeId = this.getContentTypeIdFromAny(m);
               // Handle reactions first: aggregate onto target and skip bubble
               try {
@@ -3903,13 +3903,13 @@ export class XmtpClient {
                 if (isReply) {
                   try {
                     const reply = (m as unknown as { content?: unknown }).content as
-                      | { content?: unknown; reference?: string }
+                      | { content?: unknown; referenceId?: string }
                       | undefined;
                     const body =
                       typeof reply?.content === 'string'
                         ? reply.content
                         : this.formatPayload(reply?.content ?? '');
-                    const replyToId = (reply?.reference ?? '').toString() || undefined;
+                    const replyToId = (reply?.referenceId ?? '').toString() || undefined;
                     const sentAt = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
                     const xmsg: XmtpMessage = {
                       id: m.id,
@@ -4207,13 +4207,13 @@ export class XmtpClient {
               if (isReply) {
                 try {
                   const reply = (message as unknown as { content?: unknown }).content as
-                    | { content?: unknown; reference?: string }
+                    | { content?: unknown; referenceId?: string }
                     | undefined;
                   const body =
                     typeof reply?.content === 'string'
                       ? reply.content
                       : this.formatPayload(reply?.content ?? '');
-                  const replyToId = (reply?.reference ?? '').toString() || undefined;
+                  const replyToId = (reply?.referenceId ?? '').toString() || undefined;
                   const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
                   const xmsg: XmtpMessage = {
                     id: message.id,
@@ -4421,9 +4421,9 @@ export class XmtpClient {
       // 1) Save to self-DM for same-inbox multi-device sync
       let dm = await this.client.conversations.getDmByInboxId(inboxId);
       if (!dm) {
-        dm = await this.client.conversations.newDm(inboxId);
+        dm = await this.client.conversations.createDm(inboxId);
       }
-      await dm.send(content);
+      await dm.sendText(content);
       console.log('[XMTP] ✅ Saved profile to self-DM');
 
       // 2) Broadcast to all DM peers so contacts can discover latest profile
@@ -4431,7 +4431,7 @@ export class XmtpClient {
         const dms = await this.client.conversations.listDms();
         for (const peerDm of dms) {
           try {
-            await peerDm.send(content);
+            await peerDm.sendText(content);
           } catch (e) {
             console.warn('[XMTP] profile broadcast failed for DM', peerDm.id, e);
           }
@@ -4532,7 +4532,7 @@ export class XmtpClient {
       // Scan newest → oldest for a profile record
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
-        const raw = typeof m.content === 'string' ? m.content : m.encodedContent?.content;
+        const raw = typeof m.content === 'string' ? m.content : m.fallback;
         if (typeof raw !== 'string') continue;
         if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
         try {
@@ -4630,12 +4630,10 @@ export class XmtpClient {
         try {
           const messages = await dm.messages();
           for (const msg of messages) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const senderInboxId = (msg as any).senderInboxId?.toLowerCase();
+            const senderInboxId = (msg as { senderInboxId?: string }).senderInboxId?.toLowerCase();
             if (senderInboxId !== myInboxId.toLowerCase()) continue;
 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const content = typeof msg.content === 'string' ? msg.content : (msg as any).encodedContent?.content;
+            const content = typeof msg.content === 'string' ? msg.content : msg.fallback;
             if (typeof content !== 'string' || !content.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
 
             try {
@@ -4684,7 +4682,7 @@ export class XmtpClient {
           ts: Date.now(),
         };
         const profileContent = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
-        await dm.send(profileContent);
+        await dm.sendText(profileContent);
         console.log('[XMTP] ✅ Sent missing profile data to conversation', {
           conversationId,
           sentDisplayName: needsDisplayName,
@@ -4770,14 +4768,14 @@ export class XmtpClient {
   /**
    * Get the inbox state including all installations.
    * - If connected, refresh from network via Preferences API.
-   * - If not connected, use Utils worker to resolve inboxId & fetch state without a client.
+   * - If not connected, use inbox resolver functions to fetch state without a client.
    */
-  async getInboxState(): Promise<SafeInboxState> {
+  async getInboxState(): Promise<InboxState> {
     const isE2E = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_E2E_TEST === 'true');
-    const fallbackIdentifier: { identifier: string; identifierKind: 'Ethereum' } | undefined = this.identity?.address
+    const fallbackIdentifier: Identifier | undefined = this.identity?.address
       ? {
         identifier: toIdentifierHex(this.identity.address).toLowerCase(),
-        identifierKind: 'Ethereum' as const,
+        identifierKind: IdentifierKind.Ethereum,
       }
       : undefined;
 
@@ -4803,8 +4801,8 @@ export class XmtpClient {
     if (this.client) {
       // Force refresh from network to avoid stale state
       const state = (await withTimeout(
-        this.retryWithBackoff('preferences.inboxState(true)', () => this.client!.preferences.inboxState(true)),
-      )) as SafeInboxState | null | undefined;
+        this.retryWithBackoff('preferences.fetchInboxState', () => this.client!.preferences.fetchInboxState()),
+      )) as InboxState | null | undefined;
 
       if (state) {
         return state;
@@ -4823,33 +4821,31 @@ export class XmtpClient {
 
     const identifier = fallbackIdentifier ?? {
       identifier: toIdentifierHex(this.identity.address).toLowerCase(),
-      identifierKind: 'Ethereum' as const,
+      identifierKind: IdentifierKind.Ethereum,
     };
 
     try {
-      // Use Utils to resolve inboxId & fetch state without creating a full client
-      const { getXmtpUtils } = await import('./utils-singleton');
-      const utils = await getXmtpUtils();
-
-      const inboxId = await withTimeout(this.retryWithBackoff('utils.getInboxIdForIdentifier', () => utils.getInboxIdForIdentifier(identifier, 'production')));
+      // Resolve inboxId & fetch state without creating a full client
+      const inboxId = await withTimeout(
+        this.retryWithBackoff('inbox.getInboxIdForIdentifier', () => getInboxIdForIdentifier(identifier, 'production'))
+      );
       if (!inboxId) {
         console.warn('[XMTP] No inbox registered for this identity; returning empty inbox state');
         return createStubInboxState({ identifier, inboxId: this.identity?.inboxId ?? null });
       }
 
       const states = (await withTimeout(
-        this.retryWithBackoff('utils.inboxStateFromInboxIds', () => utils.inboxStateFromInboxIds([inboxId], 'production')),
-      )) as Array<SafeInboxState | null | undefined>;
+        this.retryWithBackoff('client.fetchInboxStates', () => Client.fetchInboxStates([inboxId], 'production')),
+      )) as Array<InboxState | null | undefined>;
       const state = states.find((value) => Boolean(value)) ?? null;
-      // Utils worker doesn't need explicit close; it dies with page lifecycle.
       if (state) {
-        return state as SafeInboxState;
+        return state as InboxState;
       }
 
-      console.warn('[XMTP] Utils returned empty inbox state array; using stub fallback');
+      console.warn('[XMTP] fetchInboxStates returned empty inbox state array; using stub fallback');
       return createStubInboxState({ identifier, inboxId });
     } catch (error) {
-      console.warn('[XMTP] Failed to fetch inbox state via Utils; returning empty inbox state:', error);
+      console.warn('[XMTP] Failed to fetch inbox state; returning empty inbox state:', error);
       return createStubInboxState({ identifier, inboxId: this.identity?.inboxId ?? null });
     }
   }
@@ -4880,7 +4876,17 @@ export class XmtpClient {
     if (!this.client) {
       throw new Error('Client not connected');
     }
-    return await this.client.getKeyPackageStatusesForInstallationIds(installationIds);
+    return await this.client.fetchKeyPackageStatuses(installationIds);
+  }
+
+  /**
+   * Request a sync from other installations for this inbox.
+   */
+  async sendSyncRequest(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    await this.client.sendSyncRequest();
   }
 
   /**
@@ -4966,13 +4972,13 @@ export class XmtpClient {
     try {
       const identifier = {
         identifier: toIdentifierHex(address).toLowerCase(),
-        identifierKind: 'Ethereum' as const,
+        identifierKind: IdentifierKind.Ethereum,
       };
 
       console.log('[XMTP] findInboxId identifier payload:', identifier);
 
       // Directly ask the client for the inbox ID associated to this identifier.
-      let inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
+      let inboxId = await this.retryWithBackoff('client.fetchInboxIdByIdentifier', () => this.client!.fetchInboxIdByIdentifier(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         identifier as any
       ));
@@ -4987,10 +4993,10 @@ export class XmtpClient {
         try {
           const identifierWith0x = {
             identifier: address.toLowerCase(),
-            identifierKind: 'Ethereum' as const,
+            identifierKind: IdentifierKind.Ethereum,
           };
           console.log('[XMTP] Trying findInboxId with 0x prefix:', identifierWith0x);
-          inboxId = await this.retryWithBackoff('client.findInboxIdByIdentifier', () => this.client!.findInboxIdByIdentifier(
+          inboxId = await this.retryWithBackoff('client.fetchInboxIdByIdentifier', () => this.client!.fetchInboxIdByIdentifier(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             identifierWith0x as any
           ));
@@ -4999,7 +5005,7 @@ export class XmtpClient {
             return inboxId;
           }
         } catch (e) {
-          console.warn('[XMTP] findInboxIdByIdentifier (with 0x) failed:', e);
+          console.warn('[XMTP] fetchInboxIdByIdentifier (with 0x) failed:', e);
         }
       }
 
@@ -5051,82 +5057,78 @@ export class XmtpClient {
         const skipIdentityApi = this.shouldSkipIdentityCalls('createConversation');
 
         // IMPORTANT: Resolve the inbox ID BEFORE creating the DM
-        // The SDK's newDmWithIdentifier checks local cache which may not have the peer
-        // Instead, we resolve the inbox ID via network lookup, then use newDm(inboxId)
+        // The SDK's createDmWithIdentifier checks local cache which may not have the peer
+        // Instead, we resolve the inbox ID via network lookup, then use createDm(inboxId)
 
         // Try multiple methods to get the inbox ID
         try {
-          // Method 1: Direct lookup using client.findInboxIdByIdentifier (queries network)
+          // Method 1: Direct lookup using client.fetchInboxIdByIdentifier (queries network)
           resolvedPeerInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
           console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdFromAddress:', resolvedPeerInboxId);
         } catch (e) {
-          console.warn('[XMTP] getInboxIdFromAddress failed, trying Utils API:', e);
+          console.warn('[XMTP] getInboxIdFromAddress failed, trying inbox resolver:', e);
         }
 
-        // Method 2: Use Utils.getInboxIdForIdentifier (network lookup)
+        // Method 2: Use getInboxIdForIdentifier (network lookup)
         if (!resolvedPeerInboxId && !skipIdentityApi) {
           try {
-            const { getXmtpUtils } = await import('./utils-singleton');
-            const utils = await getXmtpUtils();
             const identifierForLookup = {
               identifier: toIdentifierHex(peerAddressOrInboxId).toLowerCase(),
-              identifierKind: 'Ethereum' as const,
+              identifierKind: IdentifierKind.Ethereum,
             };
             const inboxId = await this.retryWithBackoff(
-              'utils.getInboxIdForIdentifier',
-              () => utils.getInboxIdForIdentifier(identifierForLookup, 'production')
+              'inbox.getInboxIdForIdentifier',
+              () => getInboxIdForIdentifier(identifierForLookup, 'production')
             );
             if (inboxId && !inboxId.startsWith('0x')) {
               resolvedPeerInboxId = inboxId;
-              console.log('[XMTP] ✅ Resolved inbox ID via Utils.getInboxIdForIdentifier:', resolvedPeerInboxId);
+              console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdForIdentifier:', resolvedPeerInboxId);
             }
           } catch (e) {
-            console.warn('[XMTP] Utils.getInboxIdForIdentifier failed:', e);
+            console.warn('[XMTP] getInboxIdForIdentifier failed:', e);
           }
         }
 
         // Method 3: Try with 0x prefix variant
         if (!resolvedPeerInboxId && !skipIdentityApi) {
           try {
-            const { getXmtpUtils } = await import('./utils-singleton');
-            const utils = await getXmtpUtils();
             const identifierWith0x = {
               identifier: peerAddressOrInboxId.toLowerCase(),
-              identifierKind: 'Ethereum' as const,
+              identifierKind: IdentifierKind.Ethereum,
             };
             const inboxId = await this.retryWithBackoff(
-              'utils.getInboxIdForIdentifier',
-              () => utils.getInboxIdForIdentifier(identifierWith0x, 'production')
+              'inbox.getInboxIdForIdentifier',
+              () => getInboxIdForIdentifier(identifierWith0x, 'production')
             );
             if (inboxId && !inboxId.startsWith('0x')) {
               resolvedPeerInboxId = inboxId;
-              console.log('[XMTP] ✅ Resolved inbox ID via Utils (with 0x):', resolvedPeerInboxId);
+              console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdForIdentifier (with 0x):', resolvedPeerInboxId);
             }
           } catch (e) {
-            console.warn('[XMTP] Utils.getInboxIdForIdentifier (with 0x) failed:', e);
+            console.warn('[XMTP] getInboxIdForIdentifier (with 0x) failed:', e);
           }
         }
 
-        // If we resolved the inbox ID, use newDm(inboxId) instead of newDmWithIdentifier
+        // If we resolved the inbox ID, use createDm(inboxId) instead of createDmWithIdentifier
         if (resolvedPeerInboxId) {
           console.log('[XMTP] Creating DM with resolved inbox ID:', resolvedPeerInboxId);
-          dmConversation = await this.client.conversations.newDm(resolvedPeerInboxId);
+          dmConversation = await this.client.conversations.createDm(resolvedPeerInboxId);
         } else {
-          // Fallback to newDmWithIdentifier (may fail if not in local cache)
-          console.log('[XMTP] No inbox ID resolved, falling back to newDmWithIdentifier...');
+          // Fallback to createDmWithIdentifier (may fail if not in local cache)
+          console.log('[XMTP] No inbox ID resolved, falling back to createDmWithIdentifier...');
           const normalizedAddress = this.normalizeEthereumAddress(peerAddressOrInboxId).toLowerCase();
           const identifier = {
             identifier: toIdentifierHex(normalizedAddress),
-            identifierKind: 'Ethereum' as const,
+            identifierKind: IdentifierKind.Ethereum,
           };
-          dmConversation = await this.client.conversations.newDmWithIdentifier(
+          dmConversation = await this.client.conversations.createDmWithIdentifier(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             identifier as any
           );
         }
       } else {
-        console.log('[XMTP] Calling client.conversations.newDm with inbox ID:', inboxIdInput);
-        dmConversation = await this.client.conversations.newDm(inboxIdInput);
+        console.log('[XMTP] Calling client.conversations.createDm with inbox ID:', inboxIdInput);
+        dmConversation = await this.client.conversations.createDm(inboxIdInput);
         resolvedPeerInboxId = inboxIdInput;
       }
 
@@ -5199,13 +5201,11 @@ export class XmtpClient {
                   for (let i = msgs.length - 1; i >= 0; i--) {
                     const m = msgs[i];
                     // Only look at messages from the peer (not from us)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const senderInboxId = (m as any).senderInboxId?.toLowerCase();
+                    const senderInboxId = (m as { senderInboxId?: string }).senderInboxId?.toLowerCase();
                     if (senderInboxId === myInboxId) continue; // Skip our own messages
                     if (senderInboxId !== resolvedPeerInboxId.toLowerCase()) continue; // Must be from the peer
 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const raw = typeof m.content === 'string' ? m.content : (m as any).encodedContent?.content;
+                    const raw = typeof m.content === 'string' ? m.content : m.fallback;
                     if (typeof raw !== 'string') continue;
                     if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
 
@@ -5352,14 +5352,14 @@ export class XmtpClient {
     });
 
     try {
-      let groupConversation: Awaited<ReturnType<typeof this.client.conversations.newGroup>>;
+      let groupConversation: Awaited<ReturnType<typeof this.client.conversations.createGroup>>;
       if (identifiers.length) {
-        groupConversation = await this.client.conversations.newGroupWithIdentifiers(identifiers);
+        groupConversation = await this.client.conversations.createGroupWithIdentifiers(identifiers);
         if (inboxIds.length && typeof (groupConversation as unknown as { addMembers?: (ids: string[]) => Promise<void> }).addMembers === 'function') {
           await (groupConversation as unknown as { addMembers: (ids: string[]) => Promise<void> }).addMembers(inboxIds);
         }
       } else {
-        groupConversation = await this.client.conversations.newGroup(inboxIds);
+        groupConversation = await this.client.conversations.createGroup(inboxIds);
       }
 
       console.log('[XMTP] ✅ Group conversation created:', {
@@ -5422,9 +5422,9 @@ export class XmtpClient {
   /**
    * Send a message to a conversation
    */
-  async sendAttachment(conversationId: string, attachment: XmtpAttachment): Promise<XmtpMessage> {
-    if (attachment.data.byteLength > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Attachment too large (${Math.round(attachment.data.byteLength / (1024 * 1024))}MB). Max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`);
+  async sendAttachment(conversationId: string, attachment: Attachment): Promise<XmtpMessage> {
+    if (attachment.content.byteLength > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`Attachment too large (${Math.round(attachment.content.byteLength / (1024 * 1024))}MB). Max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`);
     }
 
     if (!this.client) {
@@ -5434,7 +5434,7 @@ export class XmtpClient {
         direction: 'status',
         event: 'attachments:send:offline',
         details: `Stored local attachment for ${conversationId}`,
-        payload: this.formatPayload({ filename: attachment.filename, size: attachment.data.byteLength }),
+        payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
       });
       return localMessage;
     }
@@ -5443,7 +5443,7 @@ export class XmtpClient {
       direction: 'outbound',
       event: 'attachments:send',
       details: `Sending attachment on ${conversationId}`,
-      payload: this.formatPayload({ filename: attachment.filename, size: attachment.data.byteLength }),
+      payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
     });
 
     try {
@@ -5457,29 +5457,32 @@ export class XmtpClient {
         throw new Error(`Conversation ${conversationId} not found after sync`);
       }
 
-      const encrypted = await RemoteAttachmentCodec.encodeEncrypted(attachment, new AttachmentCodec());
-      const { url } = await this.uploadEncryptedAttachmentPayload(encrypted.payload, attachment.filename);
+      const encrypted = await encryptAttachment(attachment);
+      const { url } = await this.uploadEncryptedAttachmentPayload(
+        encrypted.payload,
+        attachment.filename ?? 'attachment'
+      );
 
       const remoteAttachment: RemoteAttachment = {
         url,
-        contentDigest: encrypted.digest,
+        contentDigest: encrypted.contentDigest,
         salt: encrypted.salt,
         nonce: encrypted.nonce,
         secret: encrypted.secret,
         scheme: 'https://',
-        contentLength: attachment.data.byteLength,
+        contentLength: encrypted.contentLength ?? attachment.content.byteLength,
         filename: attachment.filename,
       };
 
-      const messageId = await conversation.send(remoteAttachment, ContentTypeRemoteAttachment);
+      const messageId = await conversation.sendRemoteAttachment(remoteAttachment);
       const message: XmtpMessage = {
         id: messageId,
         conversationId,
         senderAddress: this.client?.inboxId ?? this.identity?.address ?? 'unknown',
-        content: attachment.filename,
+        content: attachment.filename ?? 'Attachment',
         attachment,
         remoteAttachment,
-        contentTypeId: ContentTypeRemoteAttachment.typeId,
+        contentTypeId: 'remoteAttachment',
         sentAt: Date.now(),
       };
 
@@ -5498,7 +5501,7 @@ export class XmtpClient {
         direction: 'status',
         event: 'attachments:send:offline',
         details: `Stored local attachment for ${conversationId} after send failure`,
-        payload: this.formatPayload({ filename: attachment.filename, size: attachment.data.byteLength }),
+        payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
       });
       return fallbackMessage;
     }
@@ -5546,7 +5549,7 @@ export class XmtpClient {
       console.log('[XMTP] Found conversation, sending message...');
 
       // Send the message
-      const messageId = await conversation.send(content);
+      const messageId = await conversation.sendText(content);
 
       console.log('[XMTP] ✅ Message sent successfully', { conversationId, messageId });
 
@@ -5635,7 +5638,7 @@ export class XmtpClient {
       // In XMTP v5, canMessage expects an array of Identifier objects
       const identifier = {
         identifier: addressOrInboxId.toLowerCase(),
-        identifierKind: 'Ethereum' as const,
+        identifierKind: IdentifierKind.Ethereum,
       };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -5706,6 +5709,7 @@ export class XmtpClient {
       const senderInboxId: string | undefined = anyRaw['senderInboxId'] as string | undefined;
       const deliveryStatus = anyRaw['deliveryStatus'];
       const kind = anyRaw['kind'];
+      const directType = (anyRaw['contentType'] as { typeId?: string } | undefined)?.typeId;
       const content = anyRaw['content'] as unknown;
       const typeObj = (content && typeof content === 'object' && (content as Record<string, unknown>)['type']) as
         | Record<string, unknown>
@@ -5718,7 +5722,7 @@ export class XmtpClient {
         sentAtNs,
         deliveryStatus,
         kind,
-        contentType: typeof contentType === 'string' ? contentType : undefined,
+        contentType: typeof directType === 'string' ? directType : typeof contentType === 'string' ? contentType : undefined,
       };
     } catch (e) {
       console.warn('[XMTP] fetchMessageDetails failed:', e);
@@ -5740,6 +5744,37 @@ export class XmtpClient {
       const start = Math.max(0, decoded.length - max);
       for (let i = start; i < decoded.length; i++) {
         const m = decoded[i] as unknown as { [k: string]: unknown };
+        const reactions = (m as { reactions?: Array<{ content?: unknown; senderInboxId?: string }> }).reactions;
+        if (Array.isArray(reactions) && reactions.length > 0) {
+          for (const reactionMessage of reactions) {
+            try {
+              const content = reactionMessage.content as
+                | { content?: string; reference?: string; action?: string; referenceInboxId?: string }
+                | undefined;
+              const emoji = (content?.content ?? '').toString();
+              const ref = (content?.reference ?? '').toString() || (m as { id?: string }).id || '';
+              const action = (content?.action ?? 'added').toString();
+              const convId = (m as unknown as { conversationId?: string }).conversationId as string | undefined;
+              const sender = reactionMessage.senderInboxId;
+              if (!convId || !ref || !emoji) continue;
+              window.dispatchEvent(
+                new CustomEvent('xmtp:reaction', {
+                  detail: {
+                    conversationId: convId,
+                    referenceMessageId: ref,
+                    emoji,
+                    action,
+                    senderInboxId: sender,
+                  },
+                })
+              );
+            } catch (e) {
+              console.warn('[XMTP] backfillReactionsForConversation parse failed', e);
+            }
+          }
+          continue;
+        }
+
         const typeId = this.getContentTypeIdFromAny(m);
         const lowerType = (typeId || '').toLowerCase();
         if (!lowerType.includes('reaction')) continue;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Identifier, SafeInboxState, SafeInstallation } from '@xmtp/browser-sdk';
+import { IdentifierKind, type Identifier, type InboxState, type Installation } from '@xmtp/browser-sdk';
 import { useAuthStore, useConversationStore } from '@/lib/stores';
 import { getXmtpClient, type GroupKeySummary } from '@/lib/xmtp';
 
@@ -158,13 +158,13 @@ function formatFingerprint(value: string): string {
 function normalizeIdentifier(identifier: Identifier): string {
   const raw = String(identifier?.identifier ?? '');
   if (!raw) return '';
-  if ((identifier?.identifierKind ?? '').toLowerCase() === 'ethereum') {
+  if (identifier?.identifierKind === IdentifierKind.Ethereum) {
     return raw.startsWith('0x') ? raw : `0x${raw}`;
   }
   return raw;
 }
 
-function getInstallationBytes(installation: SafeInstallation): Uint8Array | null {
+function getInstallationBytes(installation: Installation): Uint8Array | null {
   if (installation?.bytes instanceof Uint8Array) {
     return installation.bytes;
   }
@@ -321,7 +321,7 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
 
       try {
         const xmtp = getXmtpClient();
-        let inboxState: SafeInboxState | null = null;
+        let inboxState: InboxState | null = null;
         try {
           inboxState = await xmtp.getInboxState();
         } catch (err) {
@@ -366,16 +366,16 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
 
         const identityNodes: KeyExplorerNode[] = [];
         const seenIdentifiers = new Set<string>();
-        (inboxState?.identifiers ?? []).forEach((identifier, index) => {
+        (inboxState?.accountIdentifiers ?? []).forEach((identifier, index) => {
           const normalized = normalizeIdentifier(identifier);
-          const kind = (identifier?.identifierKind ?? 'Identifier').toLowerCase();
+          const kindLabel = IdentifierKind[identifier.identifierKind] ?? 'Identifier';
           const short = shortId(normalized);
-          let title = `${identifier.identifierKind ?? 'Identifier'} ${short}`;
+          let title = `${kindLabel} ${short}`;
           let description = 'Linked identity for this inbox.';
-          if (kind === 'ethereum') {
+          if (identifier.identifierKind === IdentifierKind.Ethereum) {
             title = `EOA ${short}`;
             description = 'Signs identity actions for this inbox.';
-          } else if (kind === 'passkey') {
+          } else if (identifier.identifierKind === IdentifierKind.Passkey) {
             title = `Passkey ${short}`;
             description = 'Passkey credential bound to this inbox.';
           }
@@ -758,4 +758,3 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
     </div>
   );
 }
-

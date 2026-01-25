@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { describe, it, expect } from 'vitest';
 
 // Ensure we run in a Node environment without jsdom APIs interfering
@@ -20,22 +21,65 @@ describe('fix-xmtp-wasm-worker script', () => {
   );
 
   const locateWorkerPath = () => {
-    const entries = fs
-      .readdirSync(pnpmStore, { withFileTypes: true })
-      .filter((dirent) => dirent.isDirectory())
-      .map((dirent) => dirent.name);
+    const require = createRequire(import.meta.url);
 
-    const wasmBindingsEntry = entries.find((name) => name.startsWith('@xmtp+wasm-bindings@'));
-    if (!wasmBindingsEntry) {
-      throw new Error('Unable to locate @xmtp/wasm-bindings virtual store entry');
+    const resolveModulePath = (specifier: string) => {
+      try {
+        return require.resolve(specifier, { paths: [projectRoot] });
+      } catch {
+        return null;
+      }
+    };
+
+    const resolvePackageDir = (specifier: string) => {
+      const resolvedEntry = resolveModulePath(specifier);
+      return resolvedEntry ? path.resolve(path.dirname(resolvedEntry), '..') : null;
+    };
+
+    let bindingsRoot = resolvePackageDir('@xmtp/wasm-bindings');
+
+    if (!bindingsRoot) {
+      const browserSdkRoot = resolvePackageDir('@xmtp/browser-sdk');
+
+      if (browserSdkRoot) {
+        const siblingCandidate = path.resolve(browserSdkRoot, '..', 'wasm-bindings');
+        const nestedNodeModulesCandidate = path.join(
+          browserSdkRoot,
+          'node_modules',
+          '@xmtp',
+          'wasm-bindings',
+        );
+
+        if (fs.existsSync(siblingCandidate)) {
+          bindingsRoot = siblingCandidate;
+        } else if (fs.existsSync(nestedNodeModulesCandidate)) {
+          bindingsRoot = nestedNodeModulesCandidate;
+        }
+      }
+    }
+
+    if (!bindingsRoot) {
+      const entries = fs
+        .readdirSync(pnpmStore, { withFileTypes: true })
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => dirent.name);
+
+      const wasmBindingsEntry = entries.find((name) => name.startsWith('@xmtp+wasm-bindings@'));
+      if (!wasmBindingsEntry) {
+        throw new Error('Unable to locate @xmtp/wasm-bindings virtual store entry');
+      }
+
+      bindingsRoot = path.join(
+        pnpmStore,
+        wasmBindingsEntry,
+        'node_modules',
+        '@xmtp',
+        'wasm-bindings',
+      );
     }
 
     return path.join(
-      pnpmStore,
-      wasmBindingsEntry,
-      'node_modules',
-      '@xmtp',
-      'wasm-bindings',
+      bindingsRoot,
       'dist',
       'snippets',
       'diesel-wasm-sqlite-36e85657e47f3be3',

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { generateMnemonic, mnemonicToAccount, english } from 'viem/accounts';
 import { bytesToHex } from 'viem';
-import type { Identifier } from '@xmtp/browser-sdk';
+import { IdentifierKind, type Identifier } from '@xmtp/browser-sdk';
 import { WalletSelector } from './WalletSelector';
 import { useAuth } from './useAuth';
 import { useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
@@ -85,9 +85,9 @@ const ensure0xPrefix = (value: string): string =>
   value.startsWith('0x') ? value : `0x${value}`;
 
 const formatIdentifier = (identifier: Identifier): string => {
-  const kind = identifier.identifierKind.toLowerCase();
+  const kind = identifier.identifierKind;
 
-  if (kind === 'ethereum') {
+  if (kind === IdentifierKind.Ethereum) {
     return ensure0xPrefix(identifier.identifier);
   }
 
@@ -99,20 +99,12 @@ const getPreferredLabel = (identifiers: Identifier[] | undefined, address: strin
     return `Wallet ${shortAddress(address)}`;
   }
 
-  const priorityOrder = ['ens', 'lens'];
-  for (const priority of priorityOrder) {
-    const match = identifiers.find((item) => item.identifierKind.toLowerCase() === priority);
-    if (match) {
-      return match.identifier;
-    }
-  }
-
-  const ethereumIdentifier = identifiers.find((item) => item.identifierKind.toLowerCase() === 'ethereum');
+  const ethereumIdentifier = identifiers.find((item) => item.identifierKind === IdentifierKind.Ethereum);
   if (ethereumIdentifier) {
     return ensure0xPrefix(ethereumIdentifier.identifier);
   }
 
-  return `Wallet ${shortAddress(address)}`;
+  return identifiers[0]?.identifier || `Wallet ${shortAddress(address)}`;
 };
 
 interface WalletIdentityCandidate {
@@ -476,7 +468,7 @@ export function OnboardingPage() {
         setCurrentInbox(inboxId);
       }
 
-      const label = getPreferredLabel(probeResult?.inboxState?.identifiers, walletCandidate.address);
+      const label = getPreferredLabel(probeResult?.inboxState?.accountIdentifiers, walletCandidate.address);
       const success = await auth.createIdentity(
         walletCandidate.address,
         undefined,
@@ -726,7 +718,7 @@ export function OnboardingPage() {
     }
 
     const remoteInstallations = probeResult.inboxState?.installations ?? [];
-    const remoteIdentifiers = probeResult.inboxState?.identifiers ?? [];
+    const remoteIdentifiers: Identifier[] = probeResult.inboxState?.accountIdentifiers ?? [];
     const recoveryIdentifier = probeResult.inboxState?.recoveryIdentifier;
     const recoveryAddress = recoveryIdentifier ? `0x${recoveryIdentifier.identifier}` : null;
     const installationCount = probeResult.installationCount ?? 0;
@@ -871,11 +863,14 @@ export function OnboardingPage() {
                 <div>
                   <div className="text-xs uppercase tracking-wide text-primary-400">Linked identifiers</div>
                   <ul className="mt-2 space-y-1 text-xs text-primary-200">
-                    {remoteIdentifiers.map((identifier) => (
-                      <li key={`${identifier.identifier}-${identifier.identifierKind}`}>
-                        {identifier.identifierKind}: {formatIdentifier(identifier)}
-                      </li>
-                    ))}
+                    {remoteIdentifiers.map((identifier) => {
+                      const kindLabel = IdentifierKind[identifier.identifierKind] ?? String(identifier.identifierKind);
+                      return (
+                        <li key={`${identifier.identifier}-${identifier.identifierKind}`}>
+                          {kindLabel}: {formatIdentifier(identifier)}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}

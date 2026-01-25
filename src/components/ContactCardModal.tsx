@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { IdentifierKind } from '@xmtp/browser-sdk';
 import { useAuthStore, useContactStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { Contact, ContactIdentity } from '@/lib/stores/contact-store';
@@ -101,7 +102,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       }
       type SafeInboxStateLite = {
         inboxId: string;
-        identifiers?: Array<{ identifierKind: string; identifier: string }>;
+        accountIdentifiers?: Array<{ identifierKind: string | number; identifier: string }>;
       };
       const { getXmtpUtils } = await import('@/lib/xmtp/utils-singleton');
       const utils = await getXmtpUtils();
@@ -109,8 +110,14 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const state = states[0];
       if (state) {
         // Extract Ethereum addresses from identifiers
-        const accountAddresses = (state.identifiers || [])
-          .filter((id) => id.identifierKind.toLowerCase() === 'ethereum')
+        const accountAddresses = (state.accountIdentifiers || [])
+          .filter((id) => {
+            const kind =
+              typeof id.identifierKind === 'number'
+                ? IdentifierKind[id.identifierKind]
+                : id.identifierKind;
+            return (kind || '').toLowerCase() === 'ethereum';
+          })
           .map((id) => {
             const identifier = id.identifier;
             return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
@@ -566,7 +573,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // Refresh linked identities from XMTP identity service
       type SafeInboxStateLite = {
         inboxId: string;
-        identifiers?: Array<{ identifierKind: string; identifier: string }>;
+        accountIdentifiers?: Array<{ identifierKind: string | number; identifier: string }>;
       };
       const looksLikeInboxId = (value: string): boolean => {
         const v = value.trim().toLowerCase();
@@ -580,8 +587,14 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           const states = (await utils.inboxStateFromInboxIds([normalizedInboxId], 'production')) as unknown as SafeInboxStateLite[];
           const state = states[0];
           if (state) {
-            const accountAddresses = (state.identifiers || [])
-              .filter((id) => id.identifierKind.toLowerCase() === 'ethereum')
+            const accountAddresses = (state.accountIdentifiers || [])
+              .filter((id) => {
+                const kind =
+                  typeof id.identifierKind === 'number'
+                    ? IdentifierKind[id.identifierKind]
+                    : id.identifierKind;
+                return (kind || '').toLowerCase() === 'ethereum';
+              })
               .map((id) => {
                 const identifier = id.identifier;
                 return identifier.startsWith('0x') ? identifier : `0x${identifier}`;

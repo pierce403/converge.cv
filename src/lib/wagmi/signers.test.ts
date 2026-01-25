@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEOASigner, createSCWSigner, createEphemeralSigner } from './signers';
+import { IdentifierKind } from '@xmtp/browser-sdk';
 
 vi.mock('viem/accounts', () => ({
   privateKeyToAccount: (_pk: string) => ({
@@ -15,7 +16,7 @@ describe('wagmi signers', () => {
 
     const id = await Promise.resolve(signer.getIdentifier());
     expect(id.identifier).toBe('0xabcdefabcdef1234567890abcdefabcdef1234');
-    expect(id.identifierKind).toBe('Ethereum');
+    expect(id.identifierKind).toBe(IdentifierKind.Ethereum);
 
     const bytes = await signer.signMessage('hello');
     expect(Array.from(bytes)).toEqual(Array.from(Buffer.from('hello')));

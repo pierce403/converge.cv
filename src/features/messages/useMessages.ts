@@ -478,7 +478,7 @@ export function useMessages() {
           const sentMessage = await xmtp.sendAttachment(conversationId, {
             filename,
             mimeType,
-            data: new Uint8Array(fileBuffer),
+            content: new Uint8Array(fileBuffer),
           });
 
           const resolvedId = sentMessage.id || message.id;
@@ -683,13 +683,13 @@ export function useMessages() {
           if (!stored) {
             try {
               if (inlineAttachment) {
-                const buffer = toArrayBuffer(inlineAttachment.data);
+                const buffer = toArrayBuffer(inlineAttachment.content);
                 const meta: StoredAttachment = {
                   id: attachmentId,
                   messageId: xmtpMessage.id,
-                  filename: inlineAttachment.filename,
+                  filename: inlineAttachment.filename ?? 'Attachment',
                   mimeType: inlineAttachment.mimeType,
-                  size: inlineAttachment.data.byteLength,
+                  size: inlineAttachment.content.byteLength,
                 };
                 await storage.putAttachment(meta, buffer);
                 stored = { attachment: meta, data: buffer };
@@ -706,13 +706,13 @@ export function useMessages() {
                   }
                 } else {
                   const decoded = await getXmtpClient().loadRemoteAttachment(remoteAttachment);
-                  const buffer = toArrayBuffer(decoded.data);
+                  const buffer = toArrayBuffer(decoded.content);
                   const meta: StoredAttachment = {
                     id: attachmentId,
                     messageId: xmtpMessage.id,
-                    filename: decoded.filename,
+                    filename: decoded.filename ?? 'Attachment',
                     mimeType: decoded.mimeType,
-                    size: decoded.data.byteLength,
+                    size: decoded.content.byteLength,
                     storageRef: remoteAttachment.url,
                     sha256: remoteAttachment.contentDigest,
                   };

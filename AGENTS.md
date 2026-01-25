@@ -187,18 +187,19 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
 - Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
+- XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
-  - **XMTP SDK v5.0.1 on protocol v3**: ✅ Fully working!
-  - **Upgraded from v3.0.5 → v5.0.1** (October 28, 2025)
+  - **XMTP SDK v6.1.2 on protocol v3**: ✅ Fully working!
+  - **Upgraded from v5.0.1 → v6.1.2** (January 25, 2026)
   - Following xmtp.chat reference implementation
   - Identities properly registered on XMTP production network
   - Wallet generation uses proper secp256k1 (address derived from private key via `viem`)
   - Message streaming active via `conversations.streamAllMessages()`
   - Incoming messages displayed in real-time
   - Can message and be messaged from xmtp.chat and other XMTP protocol v3+ clients
-  - **Key difference from v3**: `getIdentifier()` is synchronous in v5 (was async in v3)
+  - **Key difference from v3**: `getIdentifier()` is synchronous in v5+ (was async in v3)
 
 ### 🚧 TODO
 - Message sending: ✅ First-message send path fixed (use `getConversationById` before `send`) and DM creation via identifier. Monitor for edge cases and delivery state UX.
@@ -232,7 +233,7 @@ pnpm typecheck        # TypeScript type checking
 
 User wants to enable:
 1. **Create new identity from nothing** → ✅ DONE (identities now properly registered on XMTP network)
-2. **Message someone on the Base app** → ✅ DM creation + sending working (v5, identifier-based)
+2. **Message someone on the Base app** → ✅ DM creation + sending working (v6, identifier-based)
 3. Worry about connecting existing identities later → Deferred
 
 Focus on **friction-free onboarding** for new users first.
@@ -260,6 +261,14 @@ Focus on **friction-free onboarding** for new users first.
 - Latest bug fixes and performance improvements
 - Aligned with xmtp.chat reference implementation
 - Better future compatibility (v2 deprecating June 2025)
+
+**v6 Upgrade (January 25, 2026)**:
+- Built-in content types; removed `@xmtp/content-type-*` dependencies and codec registration.
+- New message helpers (`sendText`, `sendReaction`, `sendReply`, `sendRemoteAttachment`, `sendReadReceipt`) replace manual `send()` for core types.
+- Conversation APIs renamed to `createDm`/`createGroup` and `createDmWithIdentifier`/`createGroupWithIdentifiers`.
+- `Utils` class removed; use `getInboxIdForIdentifier`, `generateInboxId`, and `Client.fetchInboxStates`.
+- Attachment helpers now live in the SDK (`encryptAttachment`/`decryptAttachment`); `Attachment.content` replaces `data`.
+- Identifier kind is now an enum (`IdentifierKind`); inbox state exposes `accountIdentifiers`.
 
 **Solution**:
 1. **Downgrade to v3.0.5** - The version that cthulhu.bot uses successfully
@@ -441,7 +450,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-25 (Group member validation tool)
+**Last Updated**: 2026-01-25 (Browser SDK 6.1.2 upgrade)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-25)
@@ -449,8 +458,10 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Group Settings: Member Validation Tool
 - Added a Group Settings diagnostic that validates member identity updates and lists invalid/unknown inbox IDs for troubleshooting invite failures.
 
-### Planning: Browser SDK 6.1.2 Upgrade Notes
-- Reviewed XMTP browser-sdk 6.x release notes; added TODO refactor tasks for built-in content types, API renames, sendSyncRequest usage, and Utils removal.
+### XMTP SDK: Browser SDK 6.1.2 Upgrade
+- Upgraded `@xmtp/browser-sdk` to 6.1.2 and removed `@xmtp/content-type-*` dependencies in favor of built-in content types + `send*` helpers.
+- Replaced `Utils` usage with `generateInboxId`/`getInboxIdForIdentifier` and `Client.fetchInboxStates`; updated identifier-kind enum handling across onboarding, profiles, and contact cards.
+- Updated conversation APIs to `createDm`/`createGroup` and `createDmWithIdentifier`/`createGroupWithIdentifiers`, plus attachment helpers (`encryptAttachment`/`decryptAttachment`) and `sendSyncRequest` for resync.
 
 ## Latest Changes (2026-01-24)
 

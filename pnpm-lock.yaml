@@ -64,29 +64,8 @@ importers:
         specifier: 2.22.1
         version: 2.22.1(@tanstack/query-core@5.90.5)(@types/react@18.3.26)(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(viem@2.43.2(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.75))
       '@xmtp/browser-sdk':
-        specifier: ^5.0.1
-        version: 5.0.1
-      '@xmtp/content-type-group-updated':
-        specifier: ^2.0.2
-        version: 2.0.2
-      '@xmtp/content-type-primitives':
-        specifier: ^2.0.2
-        version: 2.0.2
-      '@xmtp/content-type-reaction':
-        specifier: ^2.0.2
-        version: 2.0.2
-      '@xmtp/content-type-read-receipt':
-        specifier: ^2.0.2
-        version: 2.0.2
-      '@xmtp/content-type-remote-attachment':
-        specifier: ^2.0.2
-        version: 2.0.2
-      '@xmtp/content-type-reply':
-        specifier: ^2.0.2
-        version: 2.0.2
-      '@xmtp/content-type-text':
-        specifier: ^2.0.2
-        version: 2.0.2
+        specifier: ^6.1.2
+        version: 6.1.2
       '@xmtp/proto':
         specifier: ^3.73.0
         version: 3.87.0
@@ -2815,37 +2794,23 @@ packages:
   '@walletconnect/window-metadata@1.0.1':
     resolution: {integrity: sha512-9koTqyGrM2cqFRW517BPY/iEtUDx2r1+Pwwu5m7sJ7ka79wi3EyqhqcICk/yDmv6jAS1rjKgTKXlEhanYjijcA==}
 
-  '@xmtp/browser-sdk@5.0.1':
-    resolution: {integrity: sha512-BMxiTUFOFQ6CX4w3rLXyC/hHr0T4craeEP7gXWST+G/AZp64/GcImXgLN2tcLRs20U/ZDo+yGnMlAkiOdQ+u4Q==}
-    engines: {node: '>=20'}
+  '@xmtp/browser-sdk@6.1.2':
+    resolution: {integrity: sha512-qaITYSkUETfKvqNPq4iL9GhGAH+V4cLmGCBD5hWIHEP/ze18boBl3pWLdspvj8U6mOSrXJ3r8kM7Ct1CH7rmsQ==}
+    engines: {node: '>=22'}
 
-  '@xmtp/content-type-group-updated@2.0.2':
-    resolution: {integrity: sha512-ZUGLtzWALo5jimk5hYBVXjbdaKT6zP6a9wK0Urzl9H+Xv2w+H3fYDhwAidU0PXTcLL81qlUM6joxKVlsF5udvA==}
+  '@xmtp/content-type-primitives@3.0.0':
+    resolution: {integrity: sha512-gxK6+k0ywOz39LFJjrUF3fOXWXR3aAmIkF7e0rFz7c27izDimZC5E2oja9iz/CYyzDS6lf9Pm31qRcGTMSYaHg==}
 
-  '@xmtp/content-type-primitives@2.0.2':
-    resolution: {integrity: sha512-OTUsCD48sO2Eg69dfre32OSnXSkmefbSZA4L0S58LqYK6+hMymFRRjEH4fvPzXc9WCw5FmCYEG7DFAaB680HiQ==}
-
-  '@xmtp/content-type-reaction@2.0.2':
-    resolution: {integrity: sha512-v7wGMycSsUi8NyLR+ytjDhNY4Nr4p8qNwKx8LZPlA8IwLacq2Bp2vKxlOAnGX7m5XP9ivpBNNZvkpR5Limvz1g==}
-
-  '@xmtp/content-type-read-receipt@2.0.2':
-    resolution: {integrity: sha512-klrdEhWt5OtE3dhBZiFRvjheI3d5XlLbIz9TMkvvPAaG4fvqJeMvlkkKqpyUUeVFTe6JQp1VfzT0bEL7RAhzMg==}
-
-  '@xmtp/content-type-remote-attachment@2.0.2':
-    resolution: {integrity: sha512-gV2yU6UWsLQcJ228B7jOvtzUyK/+TfG0EUevxbz3OUuWpVpoo110qAa3HWUlahL1fWuaoFSX9GmESyw2UJWAQw==}
-
-  '@xmtp/content-type-reply@2.0.2':
-    resolution: {integrity: sha512-tks5WEevzOzUTmpvpJjxLH5jil3cHSddWgS5MPfm8bGU5hCUfy8uojlVaFEUbBBjpDVwU1o++SW5h5HggHKsgg==}
-
-  '@xmtp/content-type-text@2.0.2':
-    resolution: {integrity: sha512-nlRufOYPrG5sNbruNPCsb6Qk9/jmJ5lMooPsZEo4Dbwda/2S4bSvrrIncT6if7M2SCha3hxtlgJlFGeTtHy4gQ==}
+  '@xmtp/node-bindings@1.8.0':
+    resolution: {integrity: sha512-dyppg1pQNsEdGH13RfsbkbXdnUdjufak6ea1YahjCROgmaJClDpMHcMcSfMzoJzASanU58MwEdCgYUF638NKgw==}
+    engines: {node: '>=22'}
 
   '@xmtp/proto@3.87.0':
     resolution: {integrity: sha512-aWXaWcsCGlWCD3iQNMqCOHVckili+mUu3y1hQuQmHnIQUVfIV/5o+zMmZ1sP6t2GSWo/GnDr3XBjI7nZh9V9QA==}
 
-  '@xmtp/wasm-bindings@1.5.4':
-    resolution: {integrity: sha512-4A3ERdZjWjOCQJ6jfoqXsN0uaYn/xa8PY9HRw2nrNsAx7jR6dBaDm4bD19uNE3PEcJiWn+lr/G7Cu93D+uQ9TQ==}
-    engines: {node: '>=20'}
+  '@xmtp/wasm-bindings@1.8.1':
+    resolution: {integrity: sha512-EH6oMtXAn/Rl8pg/e+dtj2uGDHl6Z35G+yzTNm/EMa1R3e9iNVKQWMFemz9L70lPhAKKkmYMyZRCCCLxgvTnxw==}
+    engines: {node: '>=22'}
 
   '@yarnpkg/lockfile@1.1.0':
     resolution: {integrity: sha512-GpSwvyXOcOOlV70vbnzjj4fW5xW/FdUF6nQEt1ENy7m4ZCczi1+/buVUPAqmGfqznsORNFzUMjctTIp8a9tuCQ==}
@@ -5665,10 +5630,6 @@ packages:
 
   util@0.12.5:
     resolution: {integrity: sha512-kZf/K6hEIrWHI6XqOFUiiMa+79wE/D8Q+NCNAWclkyg3b4d2k7s0QGepNjiABc+aR3N1PAyHL7p6UcLY6LmrnA==}
-
-  uuid@11.1.0:
-    resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
-    hasBin: true
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
@@ -10525,45 +10486,16 @@ snapshots:
       '@walletconnect/window-getters': 1.0.1
       tslib: 1.14.1
 
-  '@xmtp/browser-sdk@5.0.1':
+  '@xmtp/browser-sdk@6.1.2':
     dependencies:
-      '@xmtp/content-type-group-updated': 2.0.2
-      '@xmtp/content-type-primitives': 2.0.2
-      '@xmtp/content-type-text': 2.0.2
-      '@xmtp/wasm-bindings': 1.5.4
-      uuid: 11.1.0
+      '@xmtp/content-type-primitives': 3.0.0
+      '@xmtp/wasm-bindings': 1.8.1
 
-  '@xmtp/content-type-group-updated@2.0.2':
+  '@xmtp/content-type-primitives@3.0.0':
     dependencies:
-      '@xmtp/content-type-primitives': 2.0.2
-      '@xmtp/proto': 3.87.0
+      '@xmtp/node-bindings': 1.8.0
 
-  '@xmtp/content-type-primitives@2.0.2':
-    dependencies:
-      '@xmtp/proto': 3.87.0
-
-  '@xmtp/content-type-reaction@2.0.2':
-    dependencies:
-      '@xmtp/content-type-primitives': 2.0.2
-
-  '@xmtp/content-type-read-receipt@2.0.2':
-    dependencies:
-      '@xmtp/content-type-primitives': 2.0.2
-
-  '@xmtp/content-type-remote-attachment@2.0.2':
-    dependencies:
-      '@noble/secp256k1': 2.3.0
-      '@xmtp/content-type-primitives': 2.0.2
-      '@xmtp/proto': 3.87.0
-
-  '@xmtp/content-type-reply@2.0.2':
-    dependencies:
-      '@xmtp/content-type-primitives': 2.0.2
-      '@xmtp/proto': 3.87.0
-
-  '@xmtp/content-type-text@2.0.2':
-    dependencies:
-      '@xmtp/content-type-primitives': 2.0.2
+  '@xmtp/node-bindings@1.8.0': {}
 
   '@xmtp/proto@3.87.0':
     dependencies:
@@ -10572,7 +10504,7 @@ snapshots:
       rxjs: 7.8.2
       undici: 6.23.0
 
-  '@xmtp/wasm-bindings@1.5.4': {}
+  '@xmtp/wasm-bindings@1.8.1': {}
 
   '@yarnpkg/lockfile@1.1.0': {}
 
@@ -13649,8 +13581,6 @@ snapshots:
       is-generator-function: 1.1.2
       is-typed-array: 1.1.15
       which-typed-array: 1.1.19
-
-  uuid@11.1.0: {}
 
   uuid@8.3.2: {}
 

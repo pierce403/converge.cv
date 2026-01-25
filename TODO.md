@@ -4,15 +4,6 @@
 
 This is the live backlog. Keep it short and current. Completed work should move to `AGENTS.md` or stay in git history.
 
-## Refactor (Browser SDK 6.1.2 upgrade)
-
-- Upgrade `@xmtp/browser-sdk` to 6.1.2 and update breaking API names (create* conversations, fetch* preferences, functions vs properties, `duplicateDms`).
-- Migrate to built-in content types: remove `@xmtp/content-type-*` deps and codec registration; use new `sendText`/`sendReaction`/`sendReply`/`sendAttachment`/`sendRemoteAttachment`/`sendReadReceipt` methods; keep `send()` only for custom EncodedContent.
-- Replace `Utils` class usage with standalone `generateInboxId`/`getInboxIdForIdentifier` if any remain.
-- Use enriched message fields (`numReplies`, `reactions`, `reply.inReplyTo`) to drop extra reply/reaction queries where possible.
-- Consider `client.sendSyncRequest()` for “Resync All” to simplify cross-device sync recovery.
-- Verify logging options + gatewayHost handling after upgrade; remove any empty-string gatewayHost workarounds if present.
-
 ## P0 (must fix)
 
 - Encrypt private keys at rest in IndexedDB (device-based; keep no-passphrase default).

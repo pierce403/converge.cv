@@ -387,6 +387,11 @@ export function ChatList() {
               if (currentIdentity) {
                 try {
                   await xmtp.connect(currentIdentity, { enableHistorySync: true });
+                  try {
+                    await xmtp.sendSyncRequest();
+                  } catch (e) {
+                    console.warn('[Resync] XMTP sendSyncRequest failed:', e);
+                  }
                 } catch (e) {
                   console.warn('[Resync] XMTP reconnect failed:', e);
                 }
