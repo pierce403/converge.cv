@@ -449,6 +449,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Group Settings: Member Validation Tool
 - Added a Group Settings diagnostic that validates member identity updates and lists invalid/unknown inbox IDs for troubleshooting invite failures.
 
+### Planning: Browser SDK 6.1.2 Upgrade Notes
+- Reviewed XMTP browser-sdk 6.x release notes; added TODO refactor tasks for built-in content types, API renames, sendSyncRequest usage, and Utils removal.
+
 ## Latest Changes (2026-01-24)
 
 ### Dependency Security: Dependabot Remediation
