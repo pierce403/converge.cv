@@ -1422,6 +1422,44 @@ export class XmtpClient {
     return trimmed;
   }
 
+  private async validateGroupMembersForInvite(
+    group: Awaited<ReturnType<typeof this.getGroupConversation>>
+  ): Promise<{ invalidMembers: string[]; unknownMembers: string[] }> {
+    const invalidMembers: string[] = [];
+    const unknownMembers: string[] = [];
+
+    if (!group) {
+      return { invalidMembers, unknownMembers };
+    }
+
+    let members: SafeGroupMember[] = [];
+    try {
+      members = await group.members();
+    } catch (error) {
+      console.warn('[XMTP] Failed to load group members for invite validation:', error);
+      return { invalidMembers, unknownMembers };
+    }
+
+    for (const member of members) {
+      const inboxId = member.inboxId;
+      if (!inboxId) {
+        continue;
+      }
+      try {
+        const profile = await this.fetchInboxProfile(inboxId);
+        const hasIdentity = Boolean(profile.addresses.length || profile.identities.length);
+        if (!hasIdentity) {
+          invalidMembers.push(inboxId);
+        }
+      } catch (error) {
+        console.warn('[XMTP] Failed to validate invite member identity:', inboxId, error);
+        unknownMembers.push(inboxId);
+      }
+    }
+
+    return { invalidMembers, unknownMembers };
+  }
+
   private async buildGroupDetails(conversationId: string, group: Awaited<ReturnType<typeof this.getGroupConversation>>): Promise<GroupDetails> {
     const safeGroup = group;
     if (!safeGroup) {
@@ -1815,6 +1853,21 @@ export class XmtpClient {
       }
     }
 
+    const membershipCheck = await this.validateGroupMembersForInvite(group);
+    if (membershipCheck.invalidMembers.length) {
+      const sample = membershipCheck.invalidMembers.slice(0, 3).join(', ');
+      const suffix =
+        membershipCheck.invalidMembers.length > 3
+          ? ` (+${membershipCheck.invalidMembers.length - 3} more)`
+          : '';
+      console.warn('[XMTP] Invite blocked due to missing identity updates:', membershipCheck);
+      throw new Error(
+        `Invite blocked: group has members missing identity updates (${sample}${suffix}). Remove them and try again.`
+      );
+    } else if (membershipCheck.unknownMembers.length) {
+      console.warn('[XMTP] Invite member validation incomplete (network issues):', membershipCheck.unknownMembers);
+    }
+
     const privateKeyBytes = await this.resolveInvitePrivateKey(creatorInboxId);
 
     const invite = createConvosInvite({
@@ -1996,6 +2049,33 @@ export class XmtpClient {
       }
       console.warn('[XMTP] Invite join request refers to missing group after sync attempts:', debugInfo);
       throw new Error(`Invite group not found. Details: ${JSON.stringify(debugInfo)}`);
+    }
+
+    const membershipCheck = await this.validateGroupMembersForInvite(group);
+    if (membershipCheck.invalidMembers.length) {
+      const sample = membershipCheck.invalidMembers.slice(0, 3).join(', ');
+      const suffix =
+        membershipCheck.invalidMembers.length > 3
+          ? ` (+${membershipCheck.invalidMembers.length - 3} more)`
+          : '';
+      throw new Error(
+        `Invite failed: group has members missing identity updates (${sample}${suffix}). Remove them and try again.`
+      );
+    } else if (membershipCheck.unknownMembers.length) {
+      console.warn('[XMTP] Invite join validation incomplete (network issues):', membershipCheck.unknownMembers);
+    }
+
+    try {
+      const senderProfile = await this.fetchInboxProfile(senderInboxId);
+      const senderHasIdentity = Boolean(senderProfile.addresses.length || senderProfile.identities.length);
+      if (!senderHasIdentity) {
+        throw new Error('Invite requester is not registered on XMTP.');
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Invite requester validation failed.');
     }
 
     try {

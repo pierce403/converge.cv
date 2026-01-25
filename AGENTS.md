@@ -440,7 +440,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Group @-mentions)
+**Last Updated**: 2026-01-24 (Invite membership validation)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-01-24)
@@ -496,6 +496,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Invites: Group Sync Escalation
 - Invite approvals now force a full sync and listGroups fallback before failing when the target group isn’t found.
+
+### Convos Invites: Membership Validation
+- Invite creation and approval now verify that all group members have identity updates; invites are blocked when invalid members would trigger XMTPiOS “SequenceId not found in local db” sync errors.
 
 ### ENS Resolution: RPC Fallbacks
 - ENS lookups now use a fallback transport with multiple public mainnet RPC endpoints (configurable via `VITE_MAINNET_RPC_URLS`) to avoid single-provider outages.
