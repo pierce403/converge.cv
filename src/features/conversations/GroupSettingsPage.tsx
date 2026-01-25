@@ -83,6 +83,7 @@ export function GroupSettingsPage() {
     promoteMemberToAdmin,
     demoteAdminToMember,
     refreshGroupDetails,
+    validateGroupMembers,
     deleteGroup,
   } = useConversations();
   const { identity } = useAuthStore();
@@ -101,6 +102,14 @@ export function GroupSettingsPage() {
   const [contactSearchTerm, setContactSearchTerm] = useState('');
   const [selectedContactInboxIds, setSelectedContactInboxIds] = useState<string[]>([]);
   const [isAddingContacts, setIsAddingContacts] = useState(false);
+  const [isValidatingMembers, setIsValidatingMembers] = useState(false);
+  const [memberValidationError, setMemberValidationError] = useState('');
+  const [memberValidation, setMemberValidation] = useState<{
+    invalidMembers: string[];
+    unknownMembers: string[];
+    totalMembers: number;
+    checkedAt: number;
+  } | null>(null);
 
   // Group avatar helpers — mirror user avatar flow: accept a file and turn it into a base64 data URL
   const MAX_AVATAR_DATA_URL_BYTES = 256 * 1024; // user-profile parity
@@ -323,6 +332,14 @@ export function GroupSettingsPage() {
 
     return members;
   }, [conversation, contactsByAddress, contactsByInboxId, adminInboxSet, adminAddressSet, superAdminInboxSet]);
+
+  const memberByInboxId = useMemo(() => {
+    const map = new Map<string, GroupMember>();
+    for (const member of memberEntries) {
+      map.set(member.inboxId.toLowerCase(), member);
+    }
+    return map;
+  }, [memberEntries]);
 
   const identityAddressLower = identity?.address?.toLowerCase();
   const identityInboxLower = identity?.inboxId?.toLowerCase();
@@ -860,6 +877,30 @@ export function GroupSettingsPage() {
     }
   };
 
+  const handleValidateMembers = async () => {
+    if (!conversation) {
+      setMemberValidationError('Group conversation not available.');
+      return;
+    }
+    setIsValidatingMembers(true);
+    setMemberValidationError('');
+    try {
+      const result = await validateGroupMembers(conversation.id);
+      const payload = { ...result, checkedAt: Date.now() };
+      setMemberValidation(payload);
+      console.log('[GroupSettings] Member validation result:', {
+        conversationId: conversation.id,
+        ...payload,
+      });
+    } catch (err) {
+      console.error('[GroupSettings] Failed to validate members:', err);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setMemberValidationError(`Failed to validate members: ${message}`);
+    } finally {
+      setIsValidatingMembers(false);
+    }
+  };
+
   const getContactForMember = (member: GroupMember): Contact | undefined => {
     if (member.address) {
       const match = contactsByAddress.get(member.address.toLowerCase());
@@ -906,6 +947,20 @@ export function GroupSettingsPage() {
       return `${value.slice(0, 8)}...${value.slice(-4)}`;
     }
     return value;
+  };
+
+  const describeMemberByInboxId = (inboxId: string) => {
+    const member = memberByInboxId.get(inboxId.toLowerCase());
+    if (member) {
+      return {
+        label: getMemberDisplayName(member),
+        secondary: member.address ?? member.inboxId,
+      };
+    }
+    return {
+      label: formatIdentifier(inboxId),
+      secondary: inboxId,
+    };
   };
 
   const getContactDisplayName = (contact: Contact) => contact.preferredName || contact.name;
@@ -1291,6 +1346,81 @@ export function GroupSettingsPage() {
                 );
               })}
             </ul>
+          </div>
+
+          {/* Member Diagnostics */}
+          <div>
+            <h2 className="text-lg font-semibold mb-2">Member Diagnostics</h2>
+            <p className="text-sm text-primary-300 mb-3">
+              Validate that every member has XMTP identity updates. Members missing identity updates can break invite
+              approvals and some clients.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleValidateMembers}
+                disabled={isValidatingMembers}
+              >
+                {isValidatingMembers ? 'Validating…' : 'Validate members'}
+              </button>
+              {memberValidation && (
+                <span className="text-xs text-primary-400">
+                  Last checked {new Date(memberValidation.checkedAt).toLocaleString()}
+                </span>
+              )}
+            </div>
+            {memberValidationError && (
+              <p className="text-xs text-red-400 mt-2">{memberValidationError}</p>
+            )}
+            {memberValidation && (
+              <div className="mt-3 text-sm text-primary-200 space-y-3">
+                <p>
+                  Checked {memberValidation.totalMembers} members.{' '}
+                  {memberValidation.invalidMembers.length} missing identity updates,{' '}
+                  {memberValidation.unknownMembers.length} unknown.
+                </p>
+                {memberValidation.invalidMembers.length === 0 && memberValidation.unknownMembers.length === 0 && (
+                  <p className="text-accent-300">All members have identity updates.</p>
+                )}
+                {memberValidation.invalidMembers.length > 0 && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-900/20 p-3 space-y-2">
+                    <p className="text-amber-200 font-medium">Missing identity updates</p>
+                    <ul className="space-y-2">
+                      {memberValidation.invalidMembers.map((inboxId) => {
+                        const details = describeMemberByInboxId(inboxId);
+                        return (
+                          <li key={inboxId} className="flex flex-col">
+                            <span className="text-primary-50">{details.label}</span>
+                            <span className="text-xs text-primary-400">
+                              {formatIdentifier(details.secondary)}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+                {memberValidation.unknownMembers.length > 0 && (
+                  <div className="rounded-lg border border-primary-700/60 bg-primary-900/40 p-3 space-y-2">
+                    <p className="text-primary-200 font-medium">Unknown status (network errors)</p>
+                    <ul className="space-y-2">
+                      {memberValidation.unknownMembers.map((inboxId) => {
+                        const details = describeMemberByInboxId(inboxId);
+                        return (
+                          <li key={inboxId} className="flex flex-col">
+                            <span className="text-primary-50">{details.label}</span>
+                            <span className="text-xs text-primary-400">
+                              {formatIdentifier(details.secondary)}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Danger Zone */}

@@ -1424,20 +1424,22 @@ export class XmtpClient {
 
   private async validateGroupMembersForInvite(
     group: Awaited<ReturnType<typeof this.getGroupConversation>>
-  ): Promise<{ invalidMembers: string[]; unknownMembers: string[] }> {
+  ): Promise<{ invalidMembers: string[]; unknownMembers: string[]; totalMembers: number }> {
     const invalidMembers: string[] = [];
     const unknownMembers: string[] = [];
+    let totalMembers = 0;
 
     if (!group) {
-      return { invalidMembers, unknownMembers };
+      return { invalidMembers, unknownMembers, totalMembers };
     }
 
     let members: SafeGroupMember[] = [];
     try {
       members = await group.members();
+      totalMembers = members.length;
     } catch (error) {
       console.warn('[XMTP] Failed to load group members for invite validation:', error);
-      return { invalidMembers, unknownMembers };
+      return { invalidMembers, unknownMembers, totalMembers };
     }
 
     for (const member of members) {
@@ -1457,7 +1459,25 @@ export class XmtpClient {
       }
     }
 
-    return { invalidMembers, unknownMembers };
+    return { invalidMembers, unknownMembers, totalMembers };
+  }
+
+  async validateGroupMembers(
+    conversationId: string
+  ): Promise<{ invalidMembers: string[]; unknownMembers: string[]; totalMembers: number }> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    const group = await this.getGroupConversation(conversationId);
+    if (!group) {
+      throw new Error('Group not found');
+    }
+    try {
+      await group.sync?.();
+    } catch (error) {
+      console.warn('[XMTP] Failed to sync group before member validation:', conversationId, error);
+    }
+    return this.validateGroupMembersForInvite(group);
   }
 
   private async buildGroupDetails(conversationId: string, group: Awaited<ReturnType<typeof this.getGroupConversation>>): Promise<GroupDetails> {

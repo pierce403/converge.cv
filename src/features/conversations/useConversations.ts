@@ -1028,6 +1028,11 @@ export function useConversations() {
     [updateConversationAndPersist],
   );
 
+  const validateGroupMembers = useCallback(async (conversationId: string) => {
+    const xmtp = getXmtpClient();
+    return xmtp.validateGroupMembers(conversationId);
+  }, []);
+
   // Load conversations when authenticated and unlocked
   useEffect(() => {
     if (isAuthenticated && isVaultUnlocked) {
@@ -1057,6 +1062,7 @@ export function useConversations() {
     removeMembersFromGroup,
     promoteMemberToAdmin,
     demoteAdminToMember,
+    validateGroupMembers,
     refreshGroupDetails,
     deleteGroup,
   };

@@ -186,6 +186,7 @@ pnpm typecheck        # TypeScript type checking
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
+- Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
@@ -440,8 +441,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-24 (Invite membership validation)
+**Last Updated**: 2026-01-25 (Group member validation tool)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-01-25)
+
+### Group Settings: Member Validation Tool
+- Added a Group Settings diagnostic that validates member identity updates and lists invalid/unknown inbox IDs for troubleshooting invite failures.
 
 ## Latest Changes (2026-01-24)
 
