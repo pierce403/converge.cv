@@ -227,7 +227,7 @@ export function PersonalizationReminderModal({
                   </button>
                 )}
               </div>
-              <p className="mt-1 text-xs text-primary-400">Max 256KB. Image is stored in your XMTP profile for discovery.</p>
+              <p className="mt-1 text-xs text-primary-400">Max 256KB. Saved to your inbox so you can recover it after a reinstall.</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-primary-300">Display Name</label>

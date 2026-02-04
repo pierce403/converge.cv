@@ -56,10 +56,14 @@ import {
   verifyInviteSignature,
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
+import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ConvergeProfileContent } from './profile-codec';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap for remote attachment downloads/uploads
+const MAX_PROFILE_AVATAR_BYTES = 256 * 1024; // Avatar images must be <=256KB (base64 data URLs are allowed)
+const MAX_PROFILE_AVATAR_URL_CHARS = 4096; // Safety cap for non-data URLs
+const CONVERGE_PROFILE_CODEC = new ConvergeProfileCodec();
 
 export interface XmtpIdentity {
   address: string;
@@ -211,7 +215,8 @@ export class XmtpClient {
   private client: Client<unknown> | null = null;
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
-  private static readonly PROFILE_PREFIX = 'cv:profile:'; // JSON payload marker for profile records
+  private static readonly LEGACY_PROFILE_PREFIX = 'cv:profile:'; // Legacy text marker for pre-codec profile messages
+  private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
   private inboxErrorCooldown: Map<string, number> = new Map();
   // Track which inboxIds have already logged an error this session (to reduce noise)
@@ -230,6 +235,41 @@ export class XmtpClient {
   private inviteDerivedKeyInboxId: string | null = null;
   private inviteDerivedKeyPromise: Promise<Uint8Array> | null = null;
   private inviteScanIntervalId: number | null = null;
+
+  private static estimateDataUrlBytes(dataUrl: string): number | null {
+    try {
+      const commaIndex = dataUrl.indexOf(',');
+      if (commaIndex < 0) return null;
+      const meta = dataUrl.slice(0, commaIndex);
+      if (!/;base64/i.test(meta)) {
+        // Non-base64 data URL: treat char count as rough proxy
+        return dataUrl.length - commaIndex - 1;
+      }
+      const base64 = dataUrl
+        .slice(commaIndex + 1)
+        // Be tolerant of accidental whitespace/newlines
+        .replace(/\s+/g, '');
+      if (!base64) return 0;
+      const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+      const bytes = Math.floor((base64.length * 3) / 4) - padding;
+      return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private static sanitizeProfileAvatarUrl(value?: string): string | undefined {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (!trimmed) return undefined;
+
+    if (/^data:/i.test(trimmed)) {
+      const bytes = XmtpClient.estimateDataUrlBytes(trimmed);
+      if (bytes == null) return undefined;
+      return bytes <= MAX_PROFILE_AVATAR_BYTES ? trimmed : undefined;
+    }
+
+    return trimmed.length <= MAX_PROFILE_AVATAR_URL_CHARS ? trimmed : undefined;
+  }
 
   // Basic 429/rate-limit detection
   private isRateLimitError(err: unknown): boolean {
@@ -773,6 +813,63 @@ export class XmtpClient {
     return undefined;
   }
 
+  private static isConvergeProfileContentType(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false;
+    const ct = value as Record<string, unknown>;
+    return (
+      ct['authorityId'] === XmtpClient.PROFILE_CONTENT_TYPE.authorityId &&
+      ct['typeId'] === XmtpClient.PROFILE_CONTENT_TYPE.typeId &&
+      ct['versionMajor'] === XmtpClient.PROFILE_CONTENT_TYPE.versionMajor &&
+      ct['versionMinor'] === XmtpClient.PROFILE_CONTENT_TYPE.versionMinor
+    );
+  }
+
+  private static parseLegacyProfileText(text: string): { displayName?: string; avatarUrl?: string } | null {
+    if (!text.startsWith(XmtpClient.LEGACY_PROFILE_PREFIX)) return null;
+    try {
+      const json = text.slice(XmtpClient.LEGACY_PROFILE_PREFIX.length);
+      const obj = JSON.parse(json) as { type?: unknown; displayName?: unknown; avatarUrl?: unknown } | null;
+      if (!obj || obj.type !== 'profile') return null;
+      return {
+        displayName: typeof obj.displayName === 'string' && obj.displayName.trim() ? obj.displayName : undefined,
+        avatarUrl: typeof obj.avatarUrl === 'string' && obj.avatarUrl.trim() ? obj.avatarUrl : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private static extractProfileUpdate(msg: unknown): { displayName?: string; avatarUrl?: string } | null {
+    if (!msg || typeof msg !== 'object') return null;
+    const anyMsg = msg as Record<string, unknown>;
+    const contentType = anyMsg['contentType'];
+    if (XmtpClient.isConvergeProfileContentType(contentType)) {
+      const content = anyMsg['content'];
+      if (content && typeof content === 'object') {
+        const obj = content as Partial<ConvergeProfileContent> & Record<string, unknown>;
+        if (obj.type && obj.type !== 'profile') return null;
+        const displayName = typeof obj.displayName === 'string' && obj.displayName.trim() ? obj.displayName : undefined;
+        const avatarUrl = typeof obj.avatarUrl === 'string' && obj.avatarUrl.trim() ? obj.avatarUrl : undefined;
+        if (displayName || avatarUrl) return { displayName, avatarUrl };
+      }
+      return null;
+    }
+
+    const content = anyMsg['content'];
+    if (typeof content === 'string') {
+      const parsed = XmtpClient.parseLegacyProfileText(content);
+      if (parsed) return parsed;
+    }
+
+    const fallback = anyMsg['fallback'];
+    if (typeof fallback === 'string') {
+      const parsed = XmtpClient.parseLegacyProfileText(fallback);
+      if (parsed) return parsed;
+    }
+
+    return null;
+  }
+
   private isMissingConversationKeyError(err: unknown): boolean {
     if (err == null) {
       return false;
@@ -1235,31 +1332,24 @@ export class XmtpClient {
               const senderInboxId = (m as any).senderInboxId?.toLowerCase();
               if (senderInboxId === myInboxId) continue; // Skip our own messages
 
-              const raw = typeof m.content === 'string' ? m.content : m.fallback;
-              if (typeof raw !== 'string') continue;
-              if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
-              try {
-                const obj = JSON.parse(raw.slice(XmtpClient.PROFILE_PREFIX.length)) as {
-                  displayName?: string;
-                  avatarUrl?: string;
-                };
-                // Build with overrides from profile message + identifiers from preferences if possible
-                if (!skipIdentityApi) {
-                  try {
-                    const latestStates = await this.retryWithBackoff(
-                      'preferences.fetchInboxStates',
-                      () => this.client!.preferences.fetchInboxStates([normalizedInboxId])
-                    );
-                    const latest = latestStates?.[0];
-                    if (latest) return buildProfile(latest.accountIdentifiers ?? [], obj);
-                  } catch {
-                    // fallthrough
-                  }
+              const profileUpdate = XmtpClient.extractProfileUpdate(m);
+              if (!profileUpdate) continue;
+
+              // Build with overrides from profile message + identifiers from preferences if possible
+              if (!skipIdentityApi) {
+                try {
+                  const latestStates = await this.retryWithBackoff(
+                    'preferences.fetchInboxStates',
+                    () => this.client!.preferences.fetchInboxStates([normalizedInboxId])
+                  );
+                  const latest = latestStates?.[0];
+                  if (latest) return buildProfile(latest.accountIdentifiers ?? [], profileUpdate);
+                } catch {
+                  // fallthrough
                 }
-                return buildProfile([], obj);
-              } catch {
-                // ignore malformed profile messages
               }
+
+              return buildProfile([], profileUpdate);
             }
           }
         } catch (err) {
@@ -2535,6 +2625,7 @@ export class XmtpClient {
         client = await Client.create(signer, {
           env: 'production',
           dbPath,
+          codecs: [CONVERGE_PROFILE_CODEC],
           loggingLevel: LogLevel.Warn,
           structuredLogging: false,
           performanceLogging: false,
@@ -2549,6 +2640,7 @@ export class XmtpClient {
             client = await Client.create(signer, {
               env: 'production',
               dbPath,
+              codecs: [CONVERGE_PROFILE_CODEC],
               loggingLevel: LogLevel.Warn,
               structuredLogging: false,
               performanceLogging: false,
@@ -3515,10 +3607,9 @@ export class XmtpClient {
               // ignore
             }
             // Handle profile broadcasts silently (do not surface as chat messages)
-            if (typeof content === 'string' && content.startsWith(XmtpClient.PROFILE_PREFIX)) {
+            const profileUpdate = XmtpClient.extractProfileUpdate(m);
+            if (profileUpdate) {
               try {
-                const json = content.slice(XmtpClient.PROFILE_PREFIX.length);
-                const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
                 const senderInboxId = m.senderInboxId;
                 if (senderInboxId) {
                   const contactStore = useContactStore.getState();
@@ -3528,8 +3619,8 @@ export class XmtpClient {
                   if (existingContact) {
                     await contactStore.upsertContactProfile({
                       inboxId: senderInboxId,
-                      displayName: obj.displayName,
-                      avatarUrl: obj.avatarUrl,
+                      displayName: profileUpdate.displayName,
+                      avatarUrl: profileUpdate.avatarUrl,
                       source: 'inbox',
                       metadata: { ...existingContact, lastSyncedAt: Date.now() },
                     });
@@ -3538,7 +3629,7 @@ export class XmtpClient {
                     direction: 'inbound',
                     event: 'profile:received',
                     details: `Profile update from ${senderInboxId}`,
-                    payload: JSON.stringify(obj),
+                    payload: JSON.stringify(profileUpdate),
                   });
                 }
               } catch (e) {
@@ -4143,6 +4234,47 @@ export class XmtpClient {
               console.warn('[XMTP] Failed to inspect message kind', err);
             }
 
+            // Handle Converge profile messages silently (metadata only).
+            const profileUpdate = XmtpClient.extractProfileUpdate(message);
+            if (profileUpdate) {
+              try {
+                const senderInboxId = message.senderInboxId;
+                if (senderInboxId) {
+                  const contactStore = useContactStore.getState();
+                  const existingContact =
+                    contactStore.getContactByInboxId(senderInboxId) ??
+                    contactStore.getContactByAddress(senderInboxId);
+                  if (existingContact) {
+                    await contactStore.upsertContactProfile({
+                      inboxId: senderInboxId,
+                      displayName: profileUpdate.displayName,
+                      avatarUrl: profileUpdate.avatarUrl,
+                      source: 'inbox',
+                      metadata: { ...existingContact, lastSyncedAt: Date.now() },
+                    });
+                  }
+                  try {
+                    window.dispatchEvent(
+                      new CustomEvent('ui:toast', {
+                        detail: `Profile updated for ${senderInboxId}`,
+                      })
+                    );
+                  } catch (err) {
+                    console.warn('[UI] Toast dispatch failed', err);
+                  }
+                  logNetworkEvent({
+                    direction: 'inbound',
+                    event: 'profile:received',
+                    details: `Profile update from ${senderInboxId}`,
+                    payload: JSON.stringify(profileUpdate),
+                  });
+                }
+              } catch (e) {
+                console.warn('[XMTP] Failed to process profile message', e);
+              }
+              continue;
+            }
+
             // If content type is not text, surface appropriately
             try {
               const typeId = this.getContentTypeIdFromAny(message);
@@ -4315,48 +4447,6 @@ export class XmtpClient {
               details: `From ${message.senderInboxId}`,
             });
 
-            // Handle profile broadcasts silently (do not surface as chat messages)
-            if (typeof message.content === 'string' && message.content.startsWith(XmtpClient.PROFILE_PREFIX)) {
-              try {
-                const payload = message.content.slice(XmtpClient.PROFILE_PREFIX.length);
-                const obj = JSON.parse(payload) as { displayName?: string; avatarUrl?: string };
-                const senderInboxId = message.senderInboxId;
-                if (senderInboxId) {
-                  const contactStore = useContactStore.getState();
-                  const existingContact =
-                    contactStore.getContactByInboxId(senderInboxId) ??
-                    contactStore.getContactByAddress(senderInboxId);
-                  if (existingContact) {
-                    await contactStore.upsertContactProfile({
-                      inboxId: senderInboxId,
-                      displayName: obj.displayName,
-                      avatarUrl: obj.avatarUrl,
-                      source: 'inbox',
-                      metadata: { ...existingContact, lastSyncedAt: Date.now() },
-                    });
-                  }
-                  try {
-                    window.dispatchEvent(
-                      new CustomEvent('ui:toast', {
-                        detail: `Profile updated for ${senderInboxId}`,
-                      })
-                    );
-                  } catch (err) {
-                    console.warn('[UI] Toast dispatch failed', err);
-                  }
-                  logNetworkEvent({
-                    direction: 'inbound',
-                    event: 'profile:received',
-                    details: `Profile update from ${senderInboxId}`,
-                    payload: JSON.stringify(obj),
-                  });
-                }
-              } catch (e) {
-                console.warn('[XMTP] Failed to process profile message', e);
-              }
-              continue;
-            }
-
             // Dispatch to message store
             console.log('[XMTP] Dispatching custom event xmtp:message');
             window.dispatchEvent(new CustomEvent('xmtp:message', {
@@ -4407,15 +4497,14 @@ export class XmtpClient {
     }
 
     // Ensure payload stays reasonably small
-    const payload = {
+    const payload: ConvergeProfileContent = {
       type: 'profile',
       v: 1,
       displayName: displayName?.trim() || undefined,
-      avatarUrl: avatarUrl && avatarUrl.length <= 256 * 1024 ? avatarUrl : undefined,
+      avatarUrl: XmtpClient.sanitizeProfileAvatarUrl(avatarUrl),
       ts: Date.now(),
     };
-
-    const content = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
+    const encoded = CONVERGE_PROFILE_CODEC.encode(payload);
 
     try {
       // 1) Save to self-DM for same-inbox multi-device sync
@@ -4423,15 +4512,15 @@ export class XmtpClient {
       if (!dm) {
         dm = await this.client.conversations.createDm(inboxId);
       }
-      await dm.sendText(content);
+      await dm.send(encoded, { shouldPush: false });
       console.log('[XMTP] ✅ Saved profile to self-DM');
 
-      // 2) Broadcast to all DM peers so contacts can discover latest profile
+      // 2) Broadcast to allowed DM peers so contacts can discover latest profile
       try {
-        const dms = await this.client.conversations.listDms();
+        const dms = await this.client.conversations.listDms({ consentStates: [ConsentState.Allowed] });
         for (const peerDm of dms) {
           try {
-            await peerDm.sendText(content);
+            await peerDm.send(encoded, { shouldPush: false });
           } catch (e) {
             console.warn('[XMTP] profile broadcast failed for DM', peerDm.id, e);
           }
@@ -4444,7 +4533,7 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'outbound',
         event: 'profile:save',
-        details: 'Profile saved and broadcast to DMs',
+        details: 'Profile saved and broadcast to allowed DMs',
       });
     } catch (error) {
       console.error('[XMTP] Failed to save profile to network:', error);
@@ -4532,18 +4621,11 @@ export class XmtpClient {
       // Scan newest → oldest for a profile record
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
-        const raw = typeof m.content === 'string' ? m.content : m.fallback;
-        if (typeof raw !== 'string') continue;
-        if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
-        try {
-          const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
-          const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
-          console.log('[XMTP] ✅ Loaded profile from self-DM:', { displayName: obj.displayName, hasAvatar: !!obj.avatarUrl });
-          logNetworkEvent({ direction: 'inbound', event: 'profile:load', details: 'Profile loaded from self-DM' });
-          return { displayName: obj.displayName, avatarUrl: obj.avatarUrl };
-        } catch (e) {
-          console.warn('[XMTP] Failed to parse profile message', e);
-        }
+        const profileUpdate = XmtpClient.extractProfileUpdate(m);
+        if (!profileUpdate) continue;
+        console.log('[XMTP] ✅ Loaded profile from self-DM:', { displayName: profileUpdate.displayName, hasAvatar: !!profileUpdate.avatarUrl });
+        logNetworkEvent({ direction: 'inbound', event: 'profile:load', details: 'Profile loaded from self-DM' });
+        return { displayName: profileUpdate.displayName, avatarUrl: profileUpdate.avatarUrl };
       }
 
       console.log('[XMTP] loadOwnProfile: No profile messages found in self-DM, sync succeeded:', syncSucceeded);
@@ -4633,22 +4715,17 @@ export class XmtpClient {
             const senderInboxId = (msg as { senderInboxId?: string }).senderInboxId?.toLowerCase();
             if (senderInboxId !== myInboxId.toLowerCase()) continue;
 
-            const content = typeof msg.content === 'string' ? msg.content : msg.fallback;
-            if (typeof content !== 'string' || !content.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
+            const profileUpdate = XmtpClient.extractProfileUpdate(msg);
+            if (!profileUpdate) continue;
 
-            try {
-              const json = content.slice(XmtpClient.PROFILE_PREFIX.length);
-              const profileData = JSON.parse(json) as { displayName?: string; avatarUrl?: string; type?: string };
-              if (profileData.type === 'profile') {
-                if (profileData.displayName && !foundDisplayName) {
-                  foundDisplayName = true;
-                }
-                if (profileData.avatarUrl && !foundAvatar) {
-                  foundAvatar = true;
-                }
-              }
-            } catch (e) {
-              // Ignore parse errors
+            if (profileUpdate.displayName && !foundDisplayName) {
+              foundDisplayName = true;
+            }
+            if (profileUpdate.avatarUrl && !foundAvatar) {
+              foundAvatar = true;
+            }
+            if (foundDisplayName && foundAvatar) {
+              break;
             }
           }
         } catch (e) {
@@ -4674,15 +4751,15 @@ export class XmtpClient {
       const needsAvatar = !foundAvatar && myProfile?.avatarUrl;
 
       if (needsDisplayName || needsAvatar) {
-        const payload = {
+        const payload: ConvergeProfileContent = {
           type: 'profile',
           v: 1,
           displayName: myProfile?.displayName?.trim() || undefined,
-          avatarUrl: myProfile?.avatarUrl,
+          avatarUrl: XmtpClient.sanitizeProfileAvatarUrl(myProfile?.avatarUrl),
           ts: Date.now(),
         };
-        const profileContent = `${XmtpClient.PROFILE_PREFIX}${JSON.stringify(payload)}`;
-        await dm.sendText(profileContent);
+        const encoded = CONVERGE_PROFILE_CODEC.encode(payload);
+        await dm.send(encoded, { shouldPush: false });
         console.log('[XMTP] ✅ Sent missing profile data to conversation', {
           conversationId,
           sentDisplayName: needsDisplayName,
@@ -5148,16 +5225,6 @@ export class XmtpClient {
         console.warn('[XMTP] ⚠️  Could not resolve inbox ID for address, using address as peerId:', peerForStore);
       }
 
-      // Ensure our profile (displayName/avatar) is sent to this conversation
-      // This checks message history and sends missing profile data
-      if (resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x') && dmConversation) {
-        try {
-          await this.ensureProfileSent(dmConversation.id, dmConversation);
-        } catch (profileSendError) {
-          console.warn('[XMTP] Failed to ensure profile sent to new DM (non-fatal):', profileSendError);
-        }
-      }
-
       // Fetch peer's profile immediately after resolving inbox ID to get display name and avatar
       let profileDisplayName: string | undefined;
       let profileAvatar: string | undefined;
@@ -5205,25 +5272,17 @@ export class XmtpClient {
                     if (senderInboxId === myInboxId) continue; // Skip our own messages
                     if (senderInboxId !== resolvedPeerInboxId.toLowerCase()) continue; // Must be from the peer
 
-                    const raw = typeof m.content === 'string' ? m.content : m.fallback;
-                    if (typeof raw !== 'string') continue;
-                    if (!raw.startsWith(XmtpClient.PROFILE_PREFIX)) continue;
-
-                    try {
-                      const json = raw.slice(XmtpClient.PROFILE_PREFIX.length);
-                      const obj = JSON.parse(json) as { displayName?: string; avatarUrl?: string };
-                      if (obj.displayName) profileDisplayName = obj.displayName;
-                      if (obj.avatarUrl) profileAvatar = obj.avatarUrl;
-                      console.log('[XMTP] ✅ Found profile in DM:', {
-                        inboxId: resolvedPeerInboxId,
-                        displayName: profileDisplayName,
-                        hasAvatar: !!profileAvatar,
-                        dmId: dm.id,
-                      });
-                      break; // Use the most recent profile message
-                    } catch (e) {
-                      console.warn('[XMTP] Failed to parse profile message from DM:', e);
-                    }
+                    const profileUpdate = XmtpClient.extractProfileUpdate(m);
+                    if (!profileUpdate) continue;
+                    if (profileUpdate.displayName) profileDisplayName = profileUpdate.displayName;
+                    if (profileUpdate.avatarUrl) profileAvatar = profileUpdate.avatarUrl;
+                    console.log('[XMTP] ✅ Found profile in DM:', {
+                      inboxId: resolvedPeerInboxId,
+                      displayName: profileDisplayName,
+                      hasAvatar: !!profileAvatar,
+                      dmId: dm.id,
+                    });
+                    break; // Use the most recent profile message
                   }
 
                   // If we found profile, stop searching
@@ -5547,6 +5606,17 @@ export class XmtpClient {
       }
 
       console.log('[XMTP] Found conversation, sending message...');
+
+      // Best-effort: share our profile in DMs only when we are actively sending a message.
+      // Avoid sending profile updates in response to inbound messages (consent/spam semantics).
+      const isDm = typeof (conversation as { peerInboxId?: () => Promise<string> }).peerInboxId === 'function';
+      if (isDm) {
+        try {
+          await this.ensureProfileSent(conversationId, conversation);
+        } catch (profileError) {
+          console.warn('[XMTP] Failed to ensure profile sent (non-fatal):', profileError);
+        }
+      }
 
       // Send the message
       const messageId = await conversation.sendText(content);

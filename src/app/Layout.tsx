@@ -880,18 +880,6 @@ export function Layout() {
           } catch (e) { /* ignore */ }
         }
 
-        // Ensure our profile (displayName/avatar) is sent to this conversation
-        // This checks message history and sends missing profile data
-        // Do this for both new and existing conversations
-        if (conversation && !conversation.isGroup && !historyMessage) {
-          try {
-            const xmtp = getXmtpClient();
-            await xmtp.ensureProfileSent(conversationId);
-          } catch (profileError) {
-            console.warn('[Layout] Failed to ensure profile sent (non-fatal):', profileError);
-          }
-        }
-
         // Skip storing profile messages as regular messages (they're metadata, not chat content)
         if (!isProfileMessage) {
           console.log('[Layout] Processing message with receiveMessage()');

@@ -225,7 +225,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status: `pnpm test --run` fails because the XMTP upstream fixtures under `tmp/xmtp-js/**` resolve bare module aliases and because `fix-xmtp-wasm-worker.test.ts` and `crypto/vault.test.ts` need environment shims—expect these failures until the suite is triaged.
+- Current Vitest status (2026-02-03): `pnpm test --run` passes.
 
 ---
 
@@ -450,8 +450,15 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-01-25 (Browser SDK 6.1.2 upgrade)
+**Last Updated**: 2026-02-03 (Profile content type + consent-safe sharing)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-02-03)
+
+### Profile: Custom Content Type + Consent-Safe Sending
+- Profile updates now use a silent custom content type (`converge.cv/profile:1.0`) instead of plain-text `cv:profile:` messages (legacy messages are still parsed for backward compatibility).
+- Profile updates are never auto-sent in response to inbound messages; they are only sent when the user saves their profile (broadcast to **allowed** DMs) or when the user sends a DM message.
+- Updated personalization copy to avoid claiming profiles are “discoverable” via XMTP.
 
 ## Latest Changes (2026-01-25)
 
