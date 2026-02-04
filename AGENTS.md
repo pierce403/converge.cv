@@ -450,8 +450,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-02-03 (Profile content type + consent-safe sharing)
+**Last Updated**: 2026-02-04 (Dependabot remediation)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-02-04)
+
+### Dependency Security: Dependabot Remediation
+- Resolved Dependabot moderate advisories by bumping the `hono` override to `4.11.7` (patched), which is pulled transitively via wagmi/porto.
 
 ## Latest Changes (2026-02-03)
 
