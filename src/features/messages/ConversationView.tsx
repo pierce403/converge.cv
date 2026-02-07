@@ -35,11 +35,16 @@ export function ConversationView() {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+  const isPrependingRef = useRef(false);
+  const initialLoadRef = useRef(false);
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isInviteModalOpen, setInviteModalOpen] = useState(false);
   const lastScrollTopRef = useRef<number>(0);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
   const {
     conversations,
@@ -59,7 +64,7 @@ export function ConversationView() {
   const hasLoadedConversation = useMessageStore(
     (state) => state.loadedConversations[conversationId] ?? false,
   );
-  const { sendMessage, sendAttachment, loadMessages, sendReadReceiptFor } = useMessages();
+  const { sendMessage, sendAttachment, loadMessages, loadOlderMessages, sendReadReceiptFor } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
   const isContact = useContactStore((state) => state.isContact);
@@ -155,7 +160,11 @@ export function ConversationView() {
 
   useEffect(() => {
     if (id) {
-      loadMessages(id);
+      initialLoadRef.current = false;
+      setHasMoreMessages(true);
+      loadMessages(id).then((result) => {
+        setHasMoreMessages(result.hasMore);
+      });
     }
   }, [id, loadMessages]);
 
@@ -172,6 +181,8 @@ export function ConversationView() {
       const scrollTop = container.scrollTop;
       const isAtTop = scrollTop <= 5; // Small threshold for touch devices
       lastScrollTopRef.current = scrollTop;
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      isAtBottomRef.current = distanceFromBottom < 80;
 
       // If already at top and user tries to scroll further (scrollTop stays at 0)
       // This happens when browser tries to scroll but we're already at top
@@ -182,12 +193,37 @@ export function ConversationView() {
         }
         refreshTimeout = window.setTimeout(() => {
           if (container.scrollTop <= 5 && !isRefreshing && !isConversationLoading) {
-            isPulling = true;
-            setIsRefreshing(true);
-            loadMessages(id, true).finally(() => {
-              setIsRefreshing(false);
-              isPulling = false;
-            });
+            if (hasMoreMessages && !isLoadingOlder) {
+              isPulling = true;
+              setIsLoadingOlder(true);
+              const prevHeight = container.scrollHeight;
+              const prevTop = container.scrollTop;
+              isPrependingRef.current = true;
+              loadOlderMessages(id)
+                .then((result) => {
+                  setHasMoreMessages(result.hasMore);
+                  requestAnimationFrame(() => {
+                    const nextHeight = container.scrollHeight;
+                    container.scrollTop = nextHeight - prevHeight + prevTop;
+                    isPrependingRef.current = false;
+                  });
+                })
+                .finally(() => {
+                  setIsLoadingOlder(false);
+                  isPulling = false;
+                });
+            } else if (!isRefreshing) {
+              isPulling = true;
+              setIsRefreshing(true);
+              loadMessages(id, true)
+                .then((result) => {
+                  setHasMoreMessages(result.hasMore);
+                })
+                .finally(() => {
+                  setIsRefreshing(false);
+                  isPulling = false;
+                });
+            }
           }
         }, 100);
       }
@@ -204,14 +240,38 @@ export function ConversationView() {
       const pullDistance = touchY - touchStartY;
       const isPullingDown = pullDistance > 30 && isAtTop; // Require 30px pull
 
-      // If pulling down at top, trigger refresh
+      // If pulling down at top, load older messages (or refresh when at the beginning)
       if (isPullingDown && !isRefreshing && !isConversationLoading && !isPulling) {
         isPulling = true;
-        setIsRefreshing(true);
-        loadMessages(id, true).finally(() => {
-          setIsRefreshing(false);
-          isPulling = false;
-        });
+        if (hasMoreMessages && !isLoadingOlder) {
+          setIsLoadingOlder(true);
+          const prevHeight = container.scrollHeight;
+          const prevTop = container.scrollTop;
+          isPrependingRef.current = true;
+          loadOlderMessages(id)
+            .then((result) => {
+              setHasMoreMessages(result.hasMore);
+              requestAnimationFrame(() => {
+                const nextHeight = container.scrollHeight;
+                container.scrollTop = nextHeight - prevHeight + prevTop;
+                isPrependingRef.current = false;
+              });
+            })
+            .finally(() => {
+              setIsLoadingOlder(false);
+              isPulling = false;
+            });
+        } else {
+          setIsRefreshing(true);
+          loadMessages(id, true)
+            .then((result) => {
+              setHasMoreMessages(result.hasMore);
+            })
+            .finally(() => {
+              setIsRefreshing(false);
+              isPulling = false;
+            });
+        }
       }
     };
 
@@ -227,7 +287,15 @@ export function ConversationView() {
         window.clearTimeout(refreshTimeout);
       }
     };
-  }, [id, loadMessages, isRefreshing, isConversationLoading]);
+  }, [
+    id,
+    loadMessages,
+    loadOlderMessages,
+    isRefreshing,
+    isConversationLoading,
+    hasMoreMessages,
+    isLoadingOlder,
+  ]);
 
 
 
@@ -332,8 +400,26 @@ export function ConversationView() {
   // This component just displays messages from the store
 
   useEffect(() => {
-    // Scroll to bottom when messages change
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!messagesContainerRef.current) {
+      return;
+    }
+    if (messages.length === 0) {
+      return;
+    }
+    if (!initialLoadRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      initialLoadRef.current = true;
+      return;
+    }
+    if (isPrependingRef.current) {
+      return;
+    }
+    if (isAtBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  useEffect(() => {
     if (id && messages.length > 0 && conversation && !conversation.isGroup) {
       // Compute latest incoming message timestamp; send one receipt if needed
       const myInbox = identity?.inboxId?.toLowerCase();
@@ -980,6 +1066,11 @@ export function ConversationView() {
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto px-4 py-4 bg-primary-950/30"
       >
+        {isLoadingOlder && (
+          <div className="flex items-center justify-center py-2 text-xs text-primary-300">
+            Loading older messages...
+          </div>
+        )}
         {isRefreshing && (
           <div className="flex items-center justify-center py-2 text-sm text-primary-300">
             <svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">

@@ -12,6 +12,7 @@ import { getAddress, isAddress } from 'viem';
 import { isLikelyConvosInviteCode, tryParseConvosInvite } from '@/lib/utils/convos-invite';
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap
+const MESSAGE_PAGE_SIZE = 50;
 
 const toArrayBuffer = (data: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(data.byteLength);
@@ -40,6 +41,7 @@ export function useMessages() {
   const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
   const isSending = useMessageStore((state) => state.isSending);
   const setMessages = useMessageStore((state) => state.setMessages);
+  const prependMessages = useMessageStore((state) => state.prependMessages);
   const addMessage = useMessageStore((state) => state.addMessage);
   const updateMessage = useMessageStore((state) => state.updateMessage);
   const removeMessage = useMessageStore((state) => state.removeMessage);
@@ -136,7 +138,12 @@ export function useMessages() {
    * Load messages for a conversation
    */
   const loadMessages = useCallback(
-    async (conversationId: string, syncFromNetwork = false) => {
+    async (
+      conversationId: string,
+      syncFromNetwork = false,
+      opts?: { pageSize?: number }
+    ): Promise<{ count: number; hasMore: boolean }> => {
+      const pageSize = opts?.pageSize ?? MESSAGE_PAGE_SIZE;
       try {
         setLoading(conversationId, true);
 
@@ -146,7 +153,7 @@ export function useMessages() {
         }
 
         const storage = await getStorage();
-        let messages = await storage.listMessages(conversationId, { limit: 100 });
+        let messages = await storage.listMessages(conversationId, { limit: pageSize });
         // Filter legacy reaction and reply placeholder bubbles persisted prior to aggregation/structured handling
         messages = messages.filter(
           (m) =>
@@ -166,13 +173,51 @@ export function useMessages() {
             // Non-fatal if offline
           }
         })();
+        return { count: messages.length, hasMore: messages.length >= pageSize };
       } catch (error) {
         console.error('Failed to load messages:', error);
+        return { count: 0, hasMore: false };
       } finally {
         setLoading(conversationId, false);
       }
     },
     [setLoading, setMessages, syncConversation]
+  );
+
+  const loadOlderMessages = useCallback(
+    async (
+      conversationId: string,
+      opts?: { pageSize?: number }
+    ): Promise<{ count: number; hasMore: boolean }> => {
+      const pageSize = opts?.pageSize ?? MESSAGE_PAGE_SIZE;
+      const existing = messagesByConversation[conversationId] || [];
+      if (existing.length === 0) {
+        return loadMessages(conversationId, false, { pageSize });
+      }
+      const oldest = existing[0]?.sentAt;
+      if (!oldest) {
+        return { count: 0, hasMore: false };
+      }
+      try {
+        const storage = await getStorage();
+        let messages = await storage.listMessages(conversationId, { limit: pageSize, before: oldest });
+        messages = messages.filter(
+          (m) =>
+            !(
+              m.type === 'system' &&
+              (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))
+            )
+        );
+        if (messages.length > 0) {
+          prependMessages(conversationId, messages);
+        }
+        return { count: messages.length, hasMore: messages.length >= pageSize };
+      } catch (error) {
+        console.error('Failed to load older messages:', error);
+        return { count: 0, hasMore: false };
+      }
+    },
+    [messagesByConversation, prependMessages, loadMessages]
   );
 
   const ensureContactForConversation = useCallback(
@@ -934,6 +979,7 @@ export function useMessages() {
     isSending,
     clearMessages,
     loadMessages,
+    loadOlderMessages,
     sendMessage,
     sendAttachment,
     reactToMessage,

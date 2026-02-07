@@ -450,8 +450,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ---
 
-**Last Updated**: 2026-02-04 (Dependabot remediation)
+**Last Updated**: 2026-02-07 (Message pagination)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-02-07)
+
+### Messaging: Lazy History Loading
+- Conversations now load the newest message window first and only prepend older history when the user scrolls upward, keeping long threads performant while preserving full IndexedDB history.
 
 ## Latest Changes (2026-02-04)
 

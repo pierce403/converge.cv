@@ -17,6 +17,7 @@ interface MessageState {
 
   // Actions
   setMessages: (conversationId: string, messages: Message[]) => void;
+  prependMessages: (conversationId: string, messages: Message[]) => void;
   addMessage: (conversationId: string, message: Message) => void;
   updateMessage: (messageId: string, updates: Partial<Message>) => void;
   removeMessage: (messageId: string) => void;
@@ -44,6 +45,26 @@ export const useMessageStore = create<MessageState>((set) => ({
         [conversationId]: true,
       },
     })),
+
+  prependMessages: (conversationId, messages) =>
+    set((state) => {
+      const existing = state.messagesByConversation[conversationId] || [];
+      const merged = new Map<string, Message>();
+      for (const message of [...messages, ...existing]) {
+        merged.set(message.id, message);
+      }
+      const updated = sortMessagesBySentAt(Array.from(merged.values()));
+      return {
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: updated,
+        },
+        loadedConversations: {
+          ...state.loadedConversations,
+          [conversationId]: true,
+        },
+      };
+    }),
 
   addMessage: (conversationId, message) =>
     set((state) => {
