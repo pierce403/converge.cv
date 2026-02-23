@@ -30,12 +30,32 @@ export type ConvosGroupMetadata = {
   tag?: string;
   expiresAt?: Date;
   isEncoded?: boolean;
+  isCompressed?: boolean;
+  source?: 'description' | 'appData';
+  profiles?: ConvosGroupProfile[];
+  imageEncryptionKey?: Uint8Array;
+  encryptedGroupImage?: ConvosEncryptedImageRef;
+};
+
+export type ConvosEncryptedImageRef = {
+  url: string;
+  salt?: Uint8Array;
+  nonce?: Uint8Array;
+};
+
+export type ConvosGroupProfile = {
+  inboxId: string;
+  name?: string;
+  imageUrl?: string;
+  encryptedImageUrl?: string;
+  encryptedImageSalt?: Uint8Array;
+  encryptedImageNonce?: Uint8Array;
 };
 
 type ProtobufField = {
   fieldNumber: number;
   wireType: number;
-  value: number | Uint8Array;
+  value: number | bigint | Uint8Array;
 };
 
 const BASE64URL_CLEAN_RE = /[^A-Za-z0-9_-]/g;
@@ -44,6 +64,9 @@ const INVITE_TOKEN_VERSION = 1;
 const INVITE_TOKEN_SALT = new TextEncoder().encode('ConvosInviteV1');
 const CONVERSATION_TOKEN_MIN_BYTES = 1 + 12 + 3 + 16;
 const CONVOS_METADATA_COMPRESSED_MARKER = 0x1f;
+const CONVOS_METADATA_MAX_DECOMPRESSED_BYTES = 10 * 1024 * 1024; // 10MB guardrail against decompression bombs
+const CONVOS_METADATA_COMPRESSION_THRESHOLD = 100; // Mirrors Convos iOS threshold
+const CONVOS_PROFILE_MAX_DISPLAY_NAME = 50; // Matches Convos NameLimits.maxDisplayNameLength
 
 if (!secpEtc.hmacSha256Sync) {
   secpEtc.hmacSha256Sync = (key, ...msgs) => hmac(sha256, key, concatBytes(...msgs));
@@ -179,6 +202,14 @@ function parseProtobufFields(bytes: Uint8Array): ProtobufField[] {
         if (end > bytes.length) {
           throw new Error('Fixed64 field exceeds buffer length');
         }
+        let value = 0n;
+        for (let i = 0; i < 8; i++) {
+          value |= BigInt(bytes[offset + i]) << BigInt(i * 8);
+        }
+        if (value & (1n << 63n)) {
+          value -= 1n << 64n;
+        }
+        fields.push({ fieldNumber, wireType, value });
         offset = end;
         break;
       }
@@ -230,6 +261,223 @@ function parseTimestamp(bytes: Uint8Array): Date | undefined {
   } catch {
     return undefined;
   }
+}
+
+function toUint8Array(value: ArrayBuffer | ArrayBufferView): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}
+
+function encodeSFixed64Field(fieldNumber: number, value: number): Uint8Array {
+  let big = BigInt(Math.trunc(value));
+  if (big < 0) {
+    big = (1n << 64n) + big;
+  }
+  const bytes = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) {
+    bytes[i] = Number((big >> BigInt(i * 8)) & 0xffn);
+  }
+  return concatBytes(encodeKey(fieldNumber, 1), bytes);
+}
+
+function uint32FromBigEndian(bytes: Uint8Array): number {
+  return (
+    (bytes[0] << 24) |
+    (bytes[1] << 16) |
+    (bytes[2] << 8) |
+    bytes[3]
+  ) >>> 0;
+}
+
+function uint32ToBigEndian(value: number): Uint8Array {
+  return Uint8Array.from([
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  ]);
+}
+
+async function transformBytes(
+  input: Uint8Array,
+  transformer: { writable: WritableStream<BufferSource>; readable: ReadableStream<Uint8Array> },
+): Promise<Uint8Array | null> {
+  try {
+    const writer = transformer.writable.getWriter();
+    await writer.write(input as unknown as BufferSource);
+    await writer.close();
+    const transformedBuffer = await new Response(transformer.readable).arrayBuffer();
+    return new Uint8Array(transformedBuffer);
+  } catch {
+    return null;
+  }
+}
+
+async function compressConvosMetadataPayload(payload: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === 'undefined') {
+    return null;
+  }
+
+  if (payload.length > 0xffffffff) {
+    return null;
+  }
+
+  const compressed = await transformBytes(payload, new CompressionStream('deflate'));
+  if (!compressed?.length) {
+    return null;
+  }
+
+  return concatBytes(
+    Uint8Array.from([CONVOS_METADATA_COMPRESSED_MARKER]),
+    uint32ToBigEndian(payload.length),
+    compressed,
+  );
+}
+
+async function decompressConvosMetadataPayload(data: Uint8Array): Promise<Uint8Array | null> {
+  if (data.length < 5 || data[0] !== CONVOS_METADATA_COMPRESSED_MARKER) {
+    return null;
+  }
+
+  if (typeof DecompressionStream === 'undefined') {
+    return null;
+  }
+
+  const expectedSize = uint32FromBigEndian(data.slice(1, 5));
+  if (
+    expectedSize <= 0 ||
+    expectedSize > CONVOS_METADATA_MAX_DECOMPRESSED_BYTES
+  ) {
+    return null;
+  }
+
+  const compressedPayload = data.slice(5);
+  if (!compressedPayload.length) {
+    return null;
+  }
+
+  const decompressed = await transformBytes(compressedPayload, new DecompressionStream('deflate'));
+  if (!decompressed || decompressed.length !== expectedSize) {
+    return null;
+  }
+
+  return decompressed;
+}
+
+function decodeHex(value: string): Uint8Array | null {
+  const normalized = value.trim().replace(/^0x/i, '').toLowerCase();
+  if (!normalized || normalized.length % 2 !== 0 || !/^[0-9a-f]+$/.test(normalized)) {
+    return null;
+  }
+  const out = new Uint8Array(normalized.length / 2);
+  for (let i = 0; i < normalized.length; i += 2) {
+    out[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+  }
+  return out;
+}
+
+function parseConvosEncryptedImageRef(raw: Uint8Array): ConvosEncryptedImageRef | undefined {
+  try {
+    const fields = parseProtobufFields(raw);
+    const url = fields.find((f) => f.fieldNumber === 1 && f.wireType === 2 && f.value instanceof Uint8Array);
+    const salt = fields.find((f) => f.fieldNumber === 2 && f.wireType === 2 && f.value instanceof Uint8Array);
+    const nonce = fields.find((f) => f.fieldNumber === 3 && f.wireType === 2 && f.value instanceof Uint8Array);
+    const decodedUrl = url && url.value instanceof Uint8Array ? decodeUtf8(url.value)?.trim() ?? '' : '';
+    if (!decodedUrl) return undefined;
+    return {
+      url: decodedUrl,
+      salt: salt && salt.value instanceof Uint8Array ? toUint8Array(salt.value) : undefined,
+      nonce: nonce && nonce.value instanceof Uint8Array ? toUint8Array(nonce.value) : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function encodeConvosEncryptedImageRef(ref?: ConvosEncryptedImageRef): Uint8Array | null {
+  if (!ref?.url?.trim()) return null;
+  const fields: Uint8Array[] = [];
+  const urlField = encodeStringField(1, ref.url.trim());
+  if (!urlField) return null;
+  fields.push(urlField);
+  if (ref.salt?.length) fields.push(encodeLengthDelimited(2, ref.salt));
+  if (ref.nonce?.length) fields.push(encodeLengthDelimited(3, ref.nonce));
+  return concatBytes(...fields);
+}
+
+function parseConvosProfile(raw: Uint8Array): ConvosGroupProfile | null {
+  try {
+    const fields = parseProtobufFields(raw);
+    const inboxField = fields.find((f) => f.fieldNumber === 1 && f.wireType === 2 && f.value instanceof Uint8Array);
+    if (!inboxField || !(inboxField.value instanceof Uint8Array) || !inboxField.value.length) {
+      return null;
+    }
+
+    const inboxId = bytesToHex(inboxField.value);
+    if (!inboxId) {
+      return null;
+    }
+
+    const nameField = fields.find((f) => f.fieldNumber === 2 && f.wireType === 2 && f.value instanceof Uint8Array);
+    const imageField = fields.find((f) => f.fieldNumber === 3 && f.wireType === 2 && f.value instanceof Uint8Array);
+    const encryptedImageField = fields.find(
+      (f) => f.fieldNumber === 4 && f.wireType === 2 && f.value instanceof Uint8Array,
+    );
+    const encryptedImage = encryptedImageField && encryptedImageField.value instanceof Uint8Array
+      ? parseConvosEncryptedImageRef(encryptedImageField.value)
+      : undefined;
+
+    return {
+      inboxId,
+      name: nameField && nameField.value instanceof Uint8Array ? decodeUtf8(nameField.value)?.trim() || undefined : undefined,
+      imageUrl: imageField && imageField.value instanceof Uint8Array ? decodeUtf8(imageField.value)?.trim() || undefined : undefined,
+      encryptedImageUrl: encryptedImage?.url,
+      encryptedImageSalt: encryptedImage?.salt,
+      encryptedImageNonce: encryptedImage?.nonce,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function encodeConvosProfile(profile: ConvosGroupProfile): Uint8Array | null {
+  const inboxBytes = decodeHex(profile.inboxId);
+  if (!inboxBytes?.length) {
+    return null;
+  }
+
+  const fields: Uint8Array[] = [encodeLengthDelimited(1, inboxBytes)];
+  const trimmedName = sanitizeConvosProfileDisplayName(profile.name);
+  const nameField = encodeStringField(2, trimmedName);
+  if (nameField) fields.push(nameField);
+
+  const imageUrl = typeof profile.imageUrl === 'string' ? profile.imageUrl.trim() : '';
+  const imageField = encodeStringField(3, imageUrl || undefined);
+  if (imageField) fields.push(imageField);
+
+  const encryptedImage = encodeConvosEncryptedImageRef(
+    profile.encryptedImageUrl
+      ? {
+          url: profile.encryptedImageUrl,
+          salt: profile.encryptedImageSalt,
+          nonce: profile.encryptedImageNonce,
+        }
+      : undefined,
+  );
+  if (encryptedImage) {
+    fields.push(encodeLengthDelimited(4, encryptedImage));
+  }
+
+  return concatBytes(...fields);
+}
+
+export function sanitizeConvosProfileDisplayName(value?: string): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return undefined;
+  return trimmed.length > CONVOS_PROFILE_MAX_DISPLAY_NAME
+    ? trimmed.slice(0, CONVOS_PROFILE_MAX_DISPLAY_NAME)
+    : trimmed;
 }
 
 function normalizeCreatorInboxId(bytes: Uint8Array, decodedString?: string | null): string {
@@ -610,27 +858,248 @@ export function tryParseConvosInvite(input: string): ParsedConvosInvite | null {
   }
 }
 
-export function parseConvosGroupMetadata(raw: string | null | undefined): ConvosGroupMetadata {
+export async function parseConvosGroupAppData(raw: string | null | undefined): Promise<ConvosGroupMetadata> {
   if (!raw) {
-    return { description: undefined, tag: undefined, expiresAt: undefined, isEncoded: false };
+    return {
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      isCompressed: false,
+      source: 'appData',
+      profiles: [],
+    };
   }
+
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return { description: '', tag: undefined, expiresAt: undefined, isEncoded: false };
-  }
-  if (!isBase64Url(trimmed)) {
-    return { description: trimmed, tag: undefined, expiresAt: undefined, isEncoded: false };
+  if (!trimmed || !isBase64Url(trimmed)) {
+    return {
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      isCompressed: false,
+      source: 'appData',
+      profiles: [],
+    };
   }
 
   let decoded: Uint8Array;
   try {
     decoded = fromBase64Url(trimmed);
   } catch {
-    return { description: trimmed, tag: undefined, expiresAt: undefined, isEncoded: false };
+    return {
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      isCompressed: false,
+      source: 'appData',
+      profiles: [],
+    };
+  }
+
+  let payload = decoded;
+  let isCompressed = false;
+  if (payload[0] === CONVOS_METADATA_COMPRESSED_MARKER) {
+    isCompressed = true;
+    const decompressed = await decompressConvosMetadataPayload(payload);
+    if (!decompressed) {
+      return {
+        tag: undefined,
+        expiresAt: undefined,
+        isEncoded: false,
+        isCompressed: true,
+        source: 'appData',
+        profiles: [],
+      };
+    }
+    payload = decompressed;
+  }
+
+  try {
+    const fields = parseProtobufFields(payload);
+    const tagField = fields.find((candidate) => candidate.fieldNumber === 1 && candidate.wireType === 2);
+    const expiresField = fields.find((candidate) => candidate.fieldNumber === 3 && candidate.wireType === 1);
+    const imageKeyField = fields.find((candidate) => candidate.fieldNumber === 4 && candidate.wireType === 2);
+    const encryptedGroupImageField = fields.find(
+      (candidate) => candidate.fieldNumber === 5 && candidate.wireType === 2,
+    );
+
+    const profiles = fields
+      .filter((candidate) => candidate.fieldNumber === 2 && candidate.wireType === 2)
+      .map((candidate) =>
+        candidate.value instanceof Uint8Array
+          ? parseConvosProfile(candidate.value)
+          : null,
+      )
+      .filter((candidate): candidate is ConvosGroupProfile => Boolean(candidate));
+
+    let expiresAt: Date | undefined;
+    if (expiresField && typeof expiresField.value === 'bigint') {
+      const expiresSeconds = Number(expiresField.value);
+      if (Number.isFinite(expiresSeconds) && expiresSeconds > 0) {
+        expiresAt = new Date(expiresSeconds * 1000);
+      }
+    }
+
+    const encryptedGroupImage =
+      encryptedGroupImageField && encryptedGroupImageField.value instanceof Uint8Array
+        ? parseConvosEncryptedImageRef(encryptedGroupImageField.value)
+        : undefined;
+
+    return {
+      tag:
+        tagField && tagField.value instanceof Uint8Array
+          ? decodeUtf8(tagField.value)?.trim() || undefined
+          : undefined,
+      expiresAt,
+      isEncoded: true,
+      isCompressed,
+      source: 'appData',
+      profiles,
+      imageEncryptionKey:
+        imageKeyField && imageKeyField.value instanceof Uint8Array
+          ? toUint8Array(imageKeyField.value)
+          : undefined,
+      encryptedGroupImage,
+    };
+  } catch {
+    return {
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      isCompressed,
+      source: 'appData',
+      profiles: [],
+    };
+  }
+}
+
+export async function encodeConvosGroupAppData(metadata: ConvosGroupMetadata): Promise<string> {
+  const fields: Uint8Array[] = [];
+
+  const tagField = encodeStringField(1, metadata.tag?.trim() || undefined);
+  if (tagField) fields.push(tagField);
+
+  for (const profile of metadata.profiles ?? []) {
+    const encoded = encodeConvosProfile(profile);
+    if (encoded) {
+      fields.push(encodeLengthDelimited(2, encoded));
+    }
+  }
+
+  if (metadata.expiresAt) {
+    const seconds = Math.floor(metadata.expiresAt.getTime() / 1000);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      fields.push(encodeSFixed64Field(3, seconds));
+    }
+  }
+
+  if (metadata.imageEncryptionKey?.length) {
+    fields.push(encodeLengthDelimited(4, metadata.imageEncryptionKey));
+  }
+
+  const encryptedGroupImage = encodeConvosEncryptedImageRef(metadata.encryptedGroupImage);
+  if (encryptedGroupImage) {
+    fields.push(encodeLengthDelimited(5, encryptedGroupImage));
+  }
+
+  const payload = fields.length ? concatBytes(...fields) : new Uint8Array();
+  if (payload.length > CONVOS_METADATA_COMPRESSION_THRESHOLD) {
+    const compressed = await compressConvosMetadataPayload(payload);
+    if (compressed && compressed.length < payload.length) {
+      return toBase64Url(compressed);
+    }
+  }
+
+  return toBase64Url(payload);
+}
+
+export function upsertConvosGroupProfile(
+  profiles: ConvosGroupProfile[] | undefined,
+  profile: ConvosGroupProfile,
+): ConvosGroupProfile[] {
+  const sanitizedInboxId = profile.inboxId.trim().replace(/^0x/i, '').toLowerCase();
+  if (!sanitizedInboxId) {
+    return Array.isArray(profiles) ? [...profiles] : [];
+  }
+
+  const nextProfile: ConvosGroupProfile = {
+    inboxId: sanitizedInboxId,
+    name: sanitizeConvosProfileDisplayName(profile.name),
+    imageUrl: typeof profile.imageUrl === 'string' && profile.imageUrl.trim() ? profile.imageUrl.trim() : undefined,
+    encryptedImageUrl:
+      typeof profile.encryptedImageUrl === 'string' && profile.encryptedImageUrl.trim()
+        ? profile.encryptedImageUrl.trim()
+        : undefined,
+    encryptedImageSalt: profile.encryptedImageSalt,
+    encryptedImageNonce: profile.encryptedImageNonce,
+  };
+
+  const existing = Array.isArray(profiles) ? profiles : [];
+  const index = existing.findIndex(
+    (candidate) => candidate.inboxId.trim().replace(/^0x/i, '').toLowerCase() === sanitizedInboxId,
+  );
+
+  if (index < 0) {
+    return [...existing, nextProfile];
+  }
+
+  const out = [...existing];
+  out[index] = nextProfile;
+  return out;
+}
+
+export function parseConvosGroupMetadata(raw: string | null | undefined): ConvosGroupMetadata {
+  if (!raw) {
+    return {
+      description: undefined,
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      source: 'description',
+    };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {
+      description: '',
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      source: 'description',
+    };
+  }
+  if (!isBase64Url(trimmed)) {
+    return {
+      description: trimmed,
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      source: 'description',
+    };
+  }
+
+  let decoded: Uint8Array;
+  try {
+    decoded = fromBase64Url(trimmed);
+  } catch {
+    return {
+      description: trimmed,
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      source: 'description',
+    };
   }
 
   if (decoded[0] === CONVOS_METADATA_COMPRESSED_MARKER) {
-    return { description: trimmed, tag: undefined, expiresAt: undefined, isEncoded: true };
+    return {
+      description: trimmed,
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: true,
+      isCompressed: true,
+      source: 'description',
+    };
   }
 
   try {
@@ -656,9 +1125,16 @@ export function parseConvosGroupMetadata(raw: string | null | undefined): Convos
       tag,
       expiresAt,
       isEncoded: true,
+      source: 'description',
     };
   } catch {
-    return { description: trimmed, tag: undefined, expiresAt: undefined, isEncoded: false };
+    return {
+      description: trimmed,
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      source: 'description',
+    };
   }
 }
 

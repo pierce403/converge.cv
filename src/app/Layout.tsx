@@ -1039,6 +1039,8 @@ export function Layout() {
                 permissionLevel: m.permissionLevel,
                 isAdmin: m.isAdmin,
                 isSuperAdmin: m.isSuperAdmin,
+                displayName: m.displayName,
+                avatar: m.avatar,
               }));
               const merged: Partial<Conversation> = {
                 members: uniqueMembers,

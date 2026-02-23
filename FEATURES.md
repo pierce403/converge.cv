@@ -34,6 +34,8 @@
 - Incoming Converge profile updates (`converge.cv/profile:1.0`, legacy `cv:profile:`) are handled as silent metadata messages (no bubble / no push) to update contact display names and avatars, preferring the inline payload over fetched profiles while avoiding blocked or deleted peers.
 - Profile fetches are throttled to a five-minute window per contact to reduce redundant network calls while still refreshing stale records.
 - Identity/profile lookups honor rate-limit backoff signals (429/resource exhausted) by pausing XMTP identity API calls for an adaptive cooldown and falling back to minimal profiles until the cooldown clears.
+- Group conversations now read Convos profile metadata from XMTP `group.appData` (including compressed Convos payloads), hydrating member display names/avatars in chat and group settings where available.
+- Sending a group message now performs a best-effort upsert of the sender’s Convos-style profile (name + URL avatar) into group appData so Convos clients can discover Converge profile updates.
 
 ## Group Management
 - Group settings expose metadata editing for name, image, and description alongside XMTP permission updates, member invites/removals, and admin promotions/demotions.
@@ -63,6 +65,7 @@
 ## Group Invites (Convos-Compatible)
 - Group chat menus can generate Convos-compatible invite codes and provide one-click copy buttons for the Convos link, Converge link, or raw invite slug.
 - Generated invites embed an encrypted conversation token (ChaCha20-Poly1305 + HKDF) and a signed payload using the creator’s secp256k1 key, mirroring Convos’ signed invite format.
+- Invite tag storage now prefers Convos’ current channel (`group.updateAppData`) and preserves legacy description-based metadata as a fallback for older groups.
 - Incoming DM messages containing valid invite codes are intercepted and queued for creator approval; accepted requests verify the signature, decrypt the conversation token, and add the sender to the target group.
 - Wallet-based identities without a local key can still generate invites by approving a wallet signature that derives the invite signing/encryption key for the session.
 - Invite requests show as a readable system message stub (group name/tag/expiry) instead of raw base64, with follow-up system notices for acceptance or failure.

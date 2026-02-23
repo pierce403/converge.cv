@@ -48,12 +48,17 @@ import {
   decodeConversationToken,
   deriveInvitePrivateKeyFromSignature,
   derivePublicKey,
+  encodeConvosGroupAppData,
   encodeConvosGroupMetadata,
   generateConvosInviteTag,
   isLikelyConvosInviteCode,
+  parseConvosGroupAppData,
   parseConvosGroupMetadata,
+  sanitizeConvosProfileDisplayName,
   tryParseConvosInvite,
+  upsertConvosGroupProfile,
   verifyInviteSignature,
+  type ConvosGroupProfile,
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ConvergeProfileContent } from './profile-codec';
@@ -74,6 +79,7 @@ export interface XmtpIdentity {
   walletType?: 'EOA' | 'SCW'; // Optional hint for wallet-based identities
   signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
   displayName?: string;
+  avatar?: string;
   lastSyncedAt?: number;
   inviteKey?: string;
   inviteKeyInboxId?: string;
@@ -135,6 +141,8 @@ export interface GroupMemberSummary {
   permissionLevel?: number;
   isAdmin: boolean;
   isSuperAdmin: boolean;
+  displayName?: string;
+  avatar?: string;
   identifiers: Identifier[];
 }
 
@@ -269,6 +277,14 @@ export class XmtpClient {
     }
 
     return trimmed.length <= MAX_PROFILE_AVATAR_URL_CHARS ? trimmed : undefined;
+  }
+
+  private static sanitizeConvosProfileImageUrl(value?: string): string | undefined {
+    const sanitized = XmtpClient.sanitizeProfileAvatarUrl(value);
+    if (!sanitized) return undefined;
+    // Convos stores image references as URLs in appData. Data URLs are too large for metadata and not interoperable.
+    if (/^data:/i.test(sanitized)) return undefined;
+    return sanitized;
   }
 
   // Basic 429/rate-limit detection
@@ -1492,6 +1508,7 @@ export class XmtpClient {
       name?: string;
       imageUrl?: string;
       description?: string;
+      appData?: string;
       sync?: () => Promise<unknown>;
       members: () => Promise<GroupMember[]>;
       listAdmins?: () => Promise<string[]>;
@@ -1499,6 +1516,7 @@ export class XmtpClient {
       updateName?: (name: string) => Promise<void>;
       updateImageUrl?: (imageUrl: string) => Promise<void>;
       updateDescription?: (description: string) => Promise<void>;
+      updateAppData?: (appData: string) => Promise<void>;
       addMembersByIdentifiers?: (identifiers: Identifier[]) => Promise<void>;
       removeMembersByIdentifiers?: (identifiers: Identifier[]) => Promise<void>;
       addMembers?: (inboxIds: string[]) => Promise<void>;
@@ -1636,16 +1654,31 @@ export class XmtpClient {
       }
     })();
 
+    const rawDescription = typeof safeGroup.description === 'string' ? safeGroup.description : '';
+    const legacyMetadata = parseConvosGroupMetadata(rawDescription);
+    const rawAppData = typeof safeGroup.appData === 'string' ? safeGroup.appData : '';
+    const appMetadata = await parseConvosGroupAppData(rawAppData);
+    const profileByInbox = new Map<string, ConvosGroupProfile>();
+    for (const profile of appMetadata.profiles ?? []) {
+      const normalized = profile.inboxId.trim().replace(/^0x/i, '').toLowerCase();
+      if (!normalized) continue;
+      profileByInbox.set(normalized, profile);
+    }
+
     const memberSummaries: GroupMemberSummary[] = members.map((member) => {
       const address = this.extractAddressFromMember(member) ?? undefined;
       const isAdmin = adminInboxIds.includes(member.inboxId);
       const isSuperAdmin = superAdminInboxIds.includes(member.inboxId);
+      const normalizedInbox = member.inboxId.trim().replace(/^0x/i, '').toLowerCase();
+      const convosProfile = profileByInbox.get(normalizedInbox);
       return {
         inboxId: member.inboxId,
         address,
         permissionLevel: member.permissionLevel,
         isAdmin,
         isSuperAdmin,
+        displayName: convosProfile?.name,
+        avatar: convosProfile?.imageUrl,
         identifiers: member.accountIdentifiers ?? [],
       };
     });
@@ -1694,16 +1727,14 @@ export class XmtpClient {
       console.warn('[XMTP] Failed to load group permissions:', conversationId, error);
     }
 
-    const rawDescription = typeof safeGroup.description === 'string' ? safeGroup.description : '';
-    const parsedMetadata = parseConvosGroupMetadata(rawDescription);
-    const resolvedDescription = parsedMetadata.description ?? rawDescription ?? '';
+    const resolvedDescription = legacyMetadata.description ?? rawDescription ?? '';
 
     return {
       id: conversationId,
       name: safeGroup.name ?? '',
       imageUrl: safeGroup.imageUrl ?? '',
       description: resolvedDescription,
-      inviteTag: parsedMetadata.tag,
+      inviteTag: appMetadata.tag ?? legacyMetadata.tag,
       members: memberSummaries,
       adminAddresses,
       superAdminAddresses,
@@ -1809,13 +1840,18 @@ export class XmtpClient {
       }
       if (updates.description !== undefined && typeof group.updateDescription === 'function') {
         let descriptionToSend = updates.description ?? '';
-        const rawDescription = typeof group.description === 'string' ? group.description : '';
-        const parsedMetadata = parseConvosGroupMetadata(rawDescription);
-        if (parsedMetadata.tag) {
+        const legacyMetadata = parseConvosGroupMetadata(
+          typeof group.description === 'string' ? group.description : '',
+        );
+        const appMetadata = await parseConvosGroupAppData(
+          typeof group.appData === 'string' ? group.appData : '',
+        );
+        // Preserve legacy description-embedded tag only when appData does not already carry the tag.
+        if (!appMetadata.tag && legacyMetadata.tag) {
           descriptionToSend = encodeConvosGroupMetadata({
-            description: updates.description ?? parsedMetadata.description ?? '',
-            tag: parsedMetadata.tag,
-            expiresAt: parsedMetadata.expiresAt,
+            description: updates.description ?? legacyMetadata.description ?? '',
+            tag: legacyMetadata.tag,
+            expiresAt: legacyMetadata.expiresAt,
           });
         }
         await group.updateDescription(descriptionToSend);
@@ -1972,21 +2008,32 @@ export class XmtpClient {
 
     const details = await this.buildGroupDetails(conversationId, group);
     const rawDescription = typeof group.description === 'string' ? group.description : '';
-    const parsedMetadata = parseConvosGroupMetadata(rawDescription);
-    let inviteTag = details.inviteTag ?? parsedMetadata.tag;
+    const legacyMetadata = parseConvosGroupMetadata(rawDescription);
+    const rawAppData = typeof group.appData === 'string' ? group.appData : '';
+    const appMetadata = await parseConvosGroupAppData(rawAppData);
+    let inviteTag = details.inviteTag ?? appMetadata.tag ?? legacyMetadata.tag;
 
     if (!inviteTag) {
       inviteTag = generateConvosInviteTag();
-      const descriptionForMetadata = parsedMetadata.description ?? details.description ?? '';
-      const encoded = encodeConvosGroupMetadata({
-        description: descriptionForMetadata,
-        tag: inviteTag,
-        expiresAt: parsedMetadata.expiresAt,
-      });
-      if (typeof group.updateDescription === 'function') {
+
+      if (typeof group.updateAppData === 'function' && (!rawAppData || appMetadata.isEncoded)) {
+        const encodedAppData = await encodeConvosGroupAppData({
+          ...appMetadata,
+          tag: inviteTag,
+        });
+        await group.updateAppData(encodedAppData);
+      } else if (typeof group.updateDescription === 'function') {
+        const descriptionForMetadata = legacyMetadata.description ?? details.description ?? '';
+        const encoded = encodeConvosGroupMetadata({
+          description: descriptionForMetadata,
+          tag: inviteTag,
+          expiresAt: legacyMetadata.expiresAt,
+        });
         await group.updateDescription(encoded);
+      } else if (rawAppData && !appMetadata.isEncoded) {
+        console.warn('[XMTP] Group appData is present but unreadable; refusing to overwrite invite metadata');
       } else {
-        console.warn('[XMTP] Group updateDescription unavailable; invite tag may not propagate to other clients');
+        console.warn('[XMTP] Group metadata update unavailable; invite tag may not propagate to other clients');
       }
     }
 
@@ -2013,8 +2060,8 @@ export class XmtpClient {
       privateKeyBytes,
       tag: inviteTag,
       name: details.name?.trim() || undefined,
-      description: (parsedMetadata.description ?? details.description)?.trim() || undefined,
-      conversationExpiresAt: parsedMetadata.expiresAt,
+      description: (legacyMetadata.description ?? details.description)?.trim() || undefined,
+      conversationExpiresAt: appMetadata.expiresAt ?? legacyMetadata.expiresAt,
     });
 
     logNetworkEvent({
@@ -3345,6 +3392,8 @@ export class XmtpClient {
             permissionLevel: m.permissionLevel,
             isAdmin: m.isAdmin,
             isSuperAdmin: m.isSuperAdmin,
+            displayName: m.displayName,
+            avatar: m.avatar,
           }));
           const conversation: Conversation = {
             id,
@@ -4655,6 +4704,78 @@ export class XmtpClient {
     return null;
   }
 
+  private getOwnConvosGroupProfileDraft(): { displayName?: string; imageUrl?: string } {
+    const storeIdentity = useAuthStore.getState().identity;
+    const localDisplayName = sanitizeConvosProfileDisplayName(
+      this.identity?.displayName ?? storeIdentity?.displayName,
+    );
+    const localImageUrl = XmtpClient.sanitizeConvosProfileImageUrl(
+      this.identity?.avatar ?? storeIdentity?.avatar,
+    );
+    return {
+      displayName: localDisplayName,
+      imageUrl: localImageUrl,
+    };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async ensureConvosGroupProfilePublished(conversationId: string, groupConversation?: any): Promise<void> {
+    if (!this.client) return;
+
+    const inboxIdRaw = (this.client.inboxId ?? this.identity?.inboxId ?? '').trim();
+    const inboxId = inboxIdRaw.replace(/^0x/i, '').toLowerCase();
+    if (!inboxId) return;
+
+    const group = groupConversation ?? (await this.getGroupConversation(conversationId));
+    if (!group || typeof group.updateAppData !== 'function') return;
+
+    const rawAppData = typeof group.appData === 'string' ? group.appData : '';
+    const appMetadata = await parseConvosGroupAppData(rawAppData);
+    if (rawAppData && !appMetadata.isEncoded) {
+      // Unknown metadata format; avoid clobbering it.
+      return;
+    }
+
+    const existingProfile = (appMetadata.profiles ?? []).find(
+      (candidate) => candidate.inboxId.trim().replace(/^0x/i, '').toLowerCase() === inboxId,
+    );
+
+    const draft = this.getOwnConvosGroupProfileDraft();
+    const nextDisplayName = draft.displayName ?? sanitizeConvosProfileDisplayName(existingProfile?.name);
+    const nextImageUrl = draft.imageUrl ?? XmtpClient.sanitizeConvosProfileImageUrl(existingProfile?.imageUrl);
+
+    if (!nextDisplayName && !nextImageUrl) {
+      return;
+    }
+
+    const currentDisplayName = sanitizeConvosProfileDisplayName(existingProfile?.name);
+    const currentImageUrl = XmtpClient.sanitizeConvosProfileImageUrl(existingProfile?.imageUrl);
+    if (currentDisplayName === nextDisplayName && currentImageUrl === nextImageUrl) {
+      return;
+    }
+
+    const nextProfiles = upsertConvosGroupProfile(appMetadata.profiles, {
+      inboxId,
+      name: nextDisplayName,
+      imageUrl: nextImageUrl,
+    });
+
+    const encoded = await encodeConvosGroupAppData({
+      ...appMetadata,
+      profiles: nextProfiles,
+    });
+    if (rawAppData && encoded === rawAppData) {
+      return;
+    }
+
+    await group.updateAppData(encoded);
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'group:profile_publish',
+      details: `Published profile in appData for group ${conversationId}`,
+    });
+  }
+
   /**
    * Check conversation history to see if we've sent our profile (displayName/avatar),
    * and send any missing profile data. Updates conversation record with sent flags.
@@ -5615,6 +5736,12 @@ export class XmtpClient {
           await this.ensureProfileSent(conversationId, conversation);
         } catch (profileError) {
           console.warn('[XMTP] Failed to ensure profile sent (non-fatal):', profileError);
+        }
+      } else {
+        try {
+          await this.ensureConvosGroupProfilePublished(conversationId, conversation);
+        } catch (profileError) {
+          console.warn('[XMTP] Failed to publish group profile (non-fatal):', profileError);
         }
       }
 

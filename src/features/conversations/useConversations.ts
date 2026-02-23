@@ -48,6 +48,8 @@ export const groupDetailsToConversationUpdates = (details: GroupDetails): Partia
     permissionLevel: member.permissionLevel,
     isAdmin: member.isAdmin,
     isSuperAdmin: member.isSuperAdmin,
+    displayName: member.displayName,
+    avatar: member.avatar,
   }));
 
   const updates: Partial<Conversation> = {

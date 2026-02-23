@@ -187,6 +187,8 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
 - Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
+- Convos group metadata compatibility now includes latest `appData` parsing (compressed protobuf), invite tag reads/writes via `updateAppData`, and member profile hydration from appData profiles.
+- Group sends now best-effort publish the sender’s Convos-style member profile (name + URL avatar) into group appData so Convos clients can see Converge profiles.
 - XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
@@ -449,9 +451,23 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-
-**Last Updated**: 2026-02-07 (Message pagination)
+**Last Updated**: 2026-02-23 (Convos appData profile interoperability)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-02-23)
+
+### Convos Profiles + Group Metadata Interop
+- Pulled latest `tmp/convos-ios` (`origin/dev`) and aligned Converge with Convos’ current profile channel: group `appData` metadata (not DM profile text blobs).
+- Added Convos `appData` parser/encoder support for:
+  - compressed payload format (`0x1f` marker + 4-byte BE original size + zlib data),
+  - invite tag (`field 1`),
+  - member profiles (`field 2`, inboxId bytes + name/image/encryptedImage),
+  - expiration timestamp (`field 3`, `sfixed64` unix seconds),
+  - image encryption metadata passthrough (`fields 4-5`).
+- Group detail hydration now reads Convos appData and maps member profile names/avatars into `groupMembers`, so Converge can display Convos profile names in group chats.
+- Invite-tag updates now prefer `group.updateAppData(...)`; legacy description-embedded metadata remains as fallback for older groups.
+- Group message sends now best-effort upsert the local user profile into Convos appData so Convos clients can read Converge profile updates.
+- Added tests in `src/lib/utils/convos-invite.test.ts` covering appData roundtrip, compressed parsing, profile upsert normalization, and Convos display-name limits.
 
 ## Latest Changes (2026-02-07)
 
