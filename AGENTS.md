@@ -451,7 +451,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-23 (Convos appData profile interoperability)
+**Last Updated**: 2026-02-23 (XMTP identity rate-limit hardening)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-23)
@@ -468,6 +468,11 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Invite-tag updates now prefer `group.updateAppData(...)`; legacy description-embedded metadata remains as fallback for older groups.
 - Group message sends now best-effort upsert the local user profile into Convos appData so Convos clients can read Converge profile updates.
 - Added tests in `src/lib/utils/convos-invite.test.ts` covering appData roundtrip, compressed parsing, profile upsert normalization, and Convos display-name limits.
+
+### XMTP Identity Rate-Limit Hardening
+- Tightened `Client.create` fallback logic so `connect()` only retries the fallback path for real CORS-style failures, not generic `GetInboxIds` errors.
+- Added explicit identity cooldown checks before `connect()` / `probeIdentity()` client creation calls to avoid repeated identity endpoint hits during active rate-limit windows.
+- On identity rate-limit failures, `connect()` now records identity cooldown immediately and surfaces a user-facing retry window message instead of repeatedly retrying.
 
 ## Latest Changes (2026-02-07)
 

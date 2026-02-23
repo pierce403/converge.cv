@@ -2636,6 +2636,13 @@ export class XmtpClient {
     let client: Client<unknown> | null = null;
 
     try {
+      if (this.shouldSkipIdentityCalls('connect:client.create')) {
+        const cooldownMs = this.getIdentityCooldownMs();
+        throw new Error(
+          `XMTP identity endpoint is cooling down after rate limits. Retry in ~${Math.max(1, Math.ceil(cooldownMs / 1000))}s.`
+        );
+      }
+
       setConnectionStatus('connecting');
       setError(null);
 
@@ -2679,8 +2686,15 @@ export class XmtpClient {
           disableAutoRegister: true,
         });
       } catch (e) {
+        if (this.isRateLimitError(e)) {
+          this.noteIdentityRateLimit('connect:client.create');
+          throw e;
+        }
         const msg = e instanceof Error ? e.message : String(e);
-        const looksLikeCors = /get[_-]?inbox[_-]?ids/i.test(msg) || /CORS policy/i.test(msg);
+        const looksLikeCors =
+          /cors/i.test(msg) ||
+          /access-control-allow-origin/i.test(msg) ||
+          /blocked by cors/i.test(msg);
         if (looksLikeCors) {
           console.warn('[XMTP] Client.create failed during identity probe (possibly CORS). Retrying without disableAutoRegister.');
           try {
@@ -2695,8 +2709,11 @@ export class XmtpClient {
               disableAutoRegister: false,
             });
           } catch (e2) {
+            if (this.isRateLimitError(e2)) {
+              this.noteIdentityRateLimit('connect:client.create:fallback');
+            }
             console.warn('[XMTP] Fallback Client.create also failed:', e2);
-            throw e; // bubble original for upstream handling
+            throw e2;
           }
         } else {
           throw e;
@@ -2847,6 +2864,9 @@ export class XmtpClient {
         setSyncProgress(0);
       }, 2000);
     } catch (error) {
+      if (this.isRateLimitError(error)) {
+        this.noteIdentityRateLimit('connect');
+      }
       console.warn('[XMTP] Connection failed:', error);
       console.warn('[XMTP] Error type:', typeof error);
       console.warn('[XMTP] Error constructor:', error?.constructor?.name);
@@ -2860,6 +2880,11 @@ export class XmtpClient {
       }
 
       let errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (this.isRateLimitError(error)) {
+        const cooldownMs = this.getIdentityCooldownMs();
+        errorMessage = `XMTP is rate-limiting identity requests. Retry in about ${Math.max(1, Math.ceil(cooldownMs / 1000))}s.`;
+      }
 
       // Detect the 10/10 installation limit error
       if (errorMessage.includes('10/10 installations') || errorMessage.includes('already registered 10')) {
@@ -2989,18 +3014,32 @@ export class XmtpClient {
       }
     }
 
+    if (this.shouldSkipIdentityCalls('probeIdentity:client.create')) {
+      const cooldownMs = this.getIdentityCooldownMs();
+      throw new Error(
+        `XMTP identity endpoint is cooling down after rate limits. Retry in ~${Math.max(1, Math.ceil(cooldownMs / 1000))}s.`
+      );
+    }
+
     const signer = await this.createSigner(identity);
     let client: Client<unknown> | null = null;
 
     try {
       console.log('[XMTP] probeIdentity: Creating probe client...');
-      client = await Client.create(signer, {
-        env: 'production',
-        loggingLevel: LogLevel.Warn,
-        structuredLogging: false,
-        performanceLogging: false,
-        disableAutoRegister: true,
-      });
+      try {
+        client = await Client.create(signer, {
+          env: 'production',
+          loggingLevel: LogLevel.Warn,
+          structuredLogging: false,
+          performanceLogging: false,
+          disableAutoRegister: true,
+        });
+      } catch (error) {
+        if (this.isRateLimitError(error)) {
+          this.noteIdentityRateLimit('probeIdentity:client.create');
+        }
+        throw error;
+      }
       console.log('[XMTP] probeIdentity: Probe client created successfully');
       console.log('[XMTP] probeIdentity: Client inboxId from init:', client.inboxId);
 
