@@ -18,6 +18,7 @@ import {
 import { useWalletProviderStore } from '@/lib/stores';
 import type { WalletProvider } from '@/lib/wallets/providers';
 import { getThirdwebClient } from '@/lib/wallets/providers';
+import { runWithWalletSignatureStatus } from '@/lib/wagmi/signature-status';
 
 export interface WalletOption {
   id: string;
@@ -208,6 +209,20 @@ function WagmiWalletConnectionProvider({
     await disconnectAsync();
   }, [disconnectAsync]);
 
+  const signMessage = useCallback(
+    async (message: string, accountAddress?: string) =>
+      await runWithWalletSignatureStatus({
+        provider,
+        message,
+        run: async () =>
+          await signMessageAsync({
+            message,
+            account: accountAddress as `0x${string}` | undefined,
+          }),
+      }),
+    [provider, signMessageAsync]
+  );
+
   const value = useMemo<WalletConnectionValue>(
     () => ({
       provider,
@@ -221,11 +236,7 @@ function WagmiWalletConnectionProvider({
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
-      signMessage: async (message: string, accountAddress?: string) =>
-        await signMessageAsync({
-          message,
-          account: accountAddress as `0x${string}` | undefined,
-        }),
+      signMessage,
     }),
     [
       provider,
@@ -238,7 +249,7 @@ function WagmiWalletConnectionProvider({
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
-      signMessageAsync,
+      signMessage,
     ]
   );
 
@@ -337,6 +348,20 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
     }
   }, [authenticated, logout, disconnectAsync]);
 
+  const signMessage = useCallback(
+    async (message: string, accountAddress?: string) =>
+      await runWithWalletSignatureStatus({
+        provider: 'privy',
+        message,
+        run: async () =>
+          await signMessageAsync({
+            message,
+            account: accountAddress as `0x${string}` | undefined,
+          }),
+      }),
+    [signMessageAsync]
+  );
+
   const value = useMemo<WalletConnectionValue>(
     () => ({
       provider: 'privy',
@@ -350,11 +375,7 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
-      signMessage: async (message: string, accountAddress?: string) =>
-        await signMessageAsync({
-          message,
-          account: accountAddress as `0x${string}` | undefined,
-        }),
+      signMessage,
     }),
     [
       setProvider,
@@ -366,7 +387,7 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
       connectWallet,
       connectDefaultWallet,
       disconnectWallet,
-      signMessageAsync,
+      signMessage,
     ]
   );
 
@@ -418,7 +439,11 @@ function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode })
       if (!activeAccount) {
         throw new Error('No Thirdweb account is connected.');
       }
-      return await activeAccount.signMessage({ message });
+      return await runWithWalletSignatureStatus({
+        provider: 'thirdweb',
+        message,
+        run: async () => await activeAccount.signMessage({ message }),
+      });
     },
     [activeAccount]
   );

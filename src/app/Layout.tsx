@@ -5,6 +5,7 @@ import { DebugLogPanel } from '@/components/DebugLogPanel';
 import { ToastContainer } from '@/components/ToastContainer';
 import { SyncProgressBar } from '@/components/SyncProgressBar';
 import { OperationProgressBar } from '@/components/OperationProgressBar';
+import { WalletSignatureModal } from '@/components/WalletSignatureModal';
 import { useAuthStore, useConversationStore, useContactStore, useFarcasterStore, useInboxRegistryStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
@@ -1026,6 +1027,7 @@ export function Layout() {
   return (
     <div className="flex h-full flex-col text-primary-50">
       <OperationProgressBar />
+      <WalletSignatureModal />
       {/* Sync progress bar */}
       <SyncProgressBar />
       <ToastContainer />

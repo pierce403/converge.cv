@@ -185,6 +185,7 @@ pnpm typecheck        # TypeScript type checking
 - Clean UI with proper feature messaging
 - Desktop browser chat view now uses a persistent split pane (conversation list left, selected thread right)
 - Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
+- External wallet signing now shows a global blocking modal so users clearly see when Converge is waiting on signature approval/rejection
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
@@ -453,7 +454,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (Wallet signing dedupe + desktop split chat workspace)
+**Last Updated**: 2026-02-24 (Wallet signing dedupe + signature waiting modal + desktop split chat workspace)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
@@ -464,6 +465,12 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Added short failure cooldown after signing errors to prevent immediate repeated wallet prompt loops.
 - Added an auth restore in-flight guard in `AppRouter` so `checkExistingIdentity()` cannot run concurrently during startup.
 - Added unit coverage in `src/lib/wagmi/signers.test.ts` for concurrent dedupe and expiry-based refresh behavior.
+
+### Wallet Signature Waiting Modal
+- Added a global `WalletSignatureModal` mounted in `Layout` that blocks UI while wallet signatures are pending.
+- Added `runWithWalletSignatureStatus(...)` (`src/lib/wagmi/signature-status.ts`) to emit pending/resolved/rejected events around wallet sign calls.
+- Wrapped native wagmi, Privy, and Thirdweb `signMessage` paths with this tracker so external wallet signature waits are always visible.
+- Added tests in `src/lib/wagmi/signature-status.test.ts` for pending→resolved and pending→rejected event flows.
 
 ### Desktop Chat Workspace
 - Added a responsive `ChatWorkspace` route wrapper for `/` and `/chat/:id`.
