@@ -186,6 +186,7 @@ pnpm typecheck        # TypeScript type checking
 - Desktop browser chat view now uses a persistent split pane (conversation list left, selected thread right)
 - Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
 - External wallet signing now shows a global blocking modal so users clearly see when Converge is waiting on signature approval/rejection
+- Contact Details refresh now uses Farcaster display names (not fname/username) as the preferred Converge display label, with username as fallback only
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
@@ -454,7 +455,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (Wallet signing dedupe + signature waiting modal + desktop split chat workspace)
+**Last Updated**: 2026-02-24 (wallet-signature UX + desktop split workspace + Farcaster display-name refresh fix)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
@@ -471,6 +472,12 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Added `runWithWalletSignatureStatus(...)` (`src/lib/wagmi/signature-status.ts`) to emit pending/resolved/rejected events around wallet sign calls.
 - Wrapped native wagmi, Privy, and Thirdweb `signMessage` paths with this tracker so external wallet signature waits are always visible.
 - Added tests in `src/lib/wagmi/signature-status.test.ts` for pending→resolved and pending→rejected event flows.
+
+### Farcaster Contact Name Consistency
+- Added shared `pickFarcasterDisplayName(...)` helper (`src/lib/farcaster/display-name.ts`) with precedence `display_name` → `displayName` → `username`/`fname`.
+- Updated Contact Details refresh (`ContactCardModal`) to use this helper so Converge display names prefer Farcaster display names across desktop and mobile refresh flows.
+- Updated self-profile Farcaster sync to reuse the same helper for consistent name selection rules.
+- Added unit tests in `src/lib/farcaster/display-name.test.ts` to lock the selection order.
 
 ### Desktop Chat Workspace
 - Added a responsive `ChatWorkspace` route wrapper for `/` and `/chat/:id`.

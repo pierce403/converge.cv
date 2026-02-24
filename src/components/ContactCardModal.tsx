@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom';
 import { isEthereumAddress, resolveENS, resolveENSFromAddress } from '@/lib/utils/ens';
 import { getStorage } from '@/lib/storage';
 import { fetchNeynarUserByVerification, fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
+import { pickFarcasterDisplayName } from '@/lib/farcaster/display-name';
 
 interface ContactCardModalProps {
   contact: Contact;
@@ -313,7 +314,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           }
 
           if (fcResolvedProfile) {
-            preferName(fcResolvedProfile.username, 'farcaster');
+            preferName(pickFarcasterDisplayName(fcResolvedProfile), 'farcaster');
             preferAvatar(fcResolvedProfile.pfp_url, 'farcaster');
           }
         } catch (fcError) {

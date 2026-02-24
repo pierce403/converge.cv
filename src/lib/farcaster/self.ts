@@ -2,6 +2,7 @@ import type { Identity } from '@/types';
 import type { Contact, ContactProfileInput } from '@/lib/stores/contact-store';
 import { resolveFidFromAddress } from './service';
 import { fetchNeynarUserProfile } from './neynar';
+import { pickFarcasterDisplayName } from './display-name';
 
 const isAutoLabel = (val?: string | null): boolean => {
   if (!val) return true;
@@ -27,14 +28,6 @@ const shouldFillDisplayName = (displayName?: string | null): boolean => {
 const shouldFillAvatar = (avatar?: string | null): boolean => {
   const raw = avatar?.trim();
   return !raw;
-};
-
-const pickFarcasterDisplayName = (profile: { display_name?: string; username?: string }): string | null => {
-  const display = profile.display_name?.trim();
-  if (display) return display;
-  const username = profile.username?.trim();
-  if (username) return username;
-  return null;
 };
 
 export async function syncSelfFarcasterProfile(args: {

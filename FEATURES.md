@@ -37,6 +37,7 @@
 - Incoming Converge profile updates (`converge.cv/profile:1.0`) are handled as silent metadata messages (no bubble / no push) to update contact display names and avatars, preferring the inline payload over fetched profiles while avoiding blocked or deleted peers.
 - Profile fetches are throttled to a five-minute window per contact to reduce redundant network calls while still refreshing stale records.
 - Identity/profile lookups honor rate-limit backoff signals (429/resource exhausted) by pausing XMTP identity API calls for an adaptive cooldown and falling back to minimal profiles until the cooldown clears.
+- Contact Details refresh now prefers Farcaster `display_name` (human display name) over Farcaster username/fname when updating Converge contact display names, with username only as fallback.
 - Group conversations now read Convos profile metadata from XMTP `group.appData` (including compressed Convos payloads), hydrating member display names/avatars in chat and group settings where available.
 - Sending a group message now performs a best-effort upsert of the sender’s Convos-style profile (name + URL avatar) into group appData so Convos clients can discover Converge profile updates.
 
