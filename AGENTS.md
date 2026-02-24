@@ -440,7 +440,7 @@ These links are high-signal for XMTP behaviors and should be considered required
 
 Guidance:
 - Before starting related work, open and keep these two docs in your session context. If needed, fetch the raw text locally for quick grep:
-  - `curl -L https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt -o tmp/xmtp-llms-full.txt`
+  - `curl -L https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt -o code/xmtp-llms-full.txt`
 - Treat these as required context when implementing or debugging anything that involves LLMs, assistants, or message flows that may be model-driven.
 
 ### Farcaster / Neynar Docs (Load for Farcaster features)
@@ -451,13 +451,19 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-23 (XMTP identity rate-limit hardening)
+**Last Updated**: 2026-02-24 (Convos CLI profile spec + code directory rename)
 **Updated By**: AI Agent
+
+## Latest Changes (2026-02-24)
+
+### Docs + Dev Setup
+- Added `CONVOS_PROFILE_SPEC.md` documenting how convos-cli writes per-conversation profiles into XMTP group `appData`.
+- Renamed the local scratch directory from `tmp/` to `code/` and updated ignore/exclude rules and references.
 
 ## Latest Changes (2026-02-23)
 
 ### Convos Profiles + Group Metadata Interop
-- Pulled latest `tmp/convos-ios` (`origin/dev`) and aligned Converge with Convos’ current profile channel: group `appData` metadata (not DM profile text blobs).
+- Pulled latest `code/convos-ios` (`origin/dev`) and aligned Converge with Convos’ current profile channel: group `appData` metadata (not DM profile text blobs).
 - Added Convos `appData` parser/encoder support for:
   - compressed payload format (`0x1f` marker + 4-byte BE original size + zlib data),
   - invite tag (`field 1`),

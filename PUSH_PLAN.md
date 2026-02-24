@@ -33,7 +33,7 @@ This document describes how we will implement push notifications for the Converg
 
 ## What convos‑ios Does (Summary)
 
-From the `tmp/convos-ios` snapshot:
+From the `code/convos-ios` snapshot:
 
 - iOS uses a Notification Service Extension (NSE) (`NotificationService/NotificationService.swift`).
   - APNs delivers a push to the NSE.
@@ -112,4 +112,3 @@ Unknowns to finalize:
 - Enrich push titles with sender display names via server‑side public profile resolution (ENS/XMTP profile), still without including message plaintext.
 - Tap actions: Add “Reply” action that opens a quick reply composer in the app view.
 - Unsubscribe on sign‑out and rotate subscriptions when installations change.
-
