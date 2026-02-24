@@ -510,6 +510,17 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         metadata: latestMetadata,
       });
 
+      // Use the persisted refresh result as metadata for any follow-up upserts.
+      // This avoids stale placeholder names from the original subject clobbering the
+      // resolved display name (e.g. reverting to inboxId on next open).
+      const stabilizedMetadata: Partial<Contact> = {
+        ...latestMetadata,
+        name: refreshedContact.name,
+        preferredName: refreshedContact.preferredName,
+        avatar: refreshedContact.avatar,
+        preferredAvatar: refreshedContact.preferredAvatar,
+      };
+
       setPreferredName(refreshedContact.preferredName ?? refreshedContact.name ?? '');
       setAvatarUrlState(refreshedContact.preferredAvatar ?? refreshedContact.avatar);
 
@@ -628,7 +639,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                   : mergedAddressList,
               identities: refreshedIdentities,
               source: subject.source ?? 'inbox',
-              metadata: latestMetadata,
+              metadata: stabilizedMetadata,
             });
           }
         } catch (stateError) {

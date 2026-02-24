@@ -38,6 +38,7 @@
 - Profile fetches are throttled to a five-minute window per contact to reduce redundant network calls while still refreshing stale records.
 - Identity/profile lookups honor rate-limit backoff signals (429/resource exhausted) by pausing XMTP identity API calls for an adaptive cooldown and falling back to minimal profiles until the cooldown clears.
 - Contact Details refresh now prefers Farcaster `display_name` (human display name) over Farcaster username/fname when updating Converge contact display names, with username only as fallback.
+- Contact Details refresh now persists the resolved display label across reopen cycles by preventing follow-up identity upserts from overwriting the refreshed name with stale placeholder metadata.
 - Group conversations now read Convos profile metadata from XMTP `group.appData` (including compressed Convos payloads), hydrating member display names/avatars in chat and group settings where available.
 - Sending a group message now performs a best-effort upsert of the sender’s Convos-style profile (name + URL avatar) into group appData so Convos clients can discover Converge profile updates.
 

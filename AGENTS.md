@@ -455,7 +455,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (wallet-signature UX + desktop split workspace + Farcaster display-name refresh fix)
+**Last Updated**: 2026-02-24 (wallet-signature UX + desktop split workspace + Farcaster display-name persistence fix)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
@@ -476,6 +476,8 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Farcaster Contact Name Consistency
 - Added shared `pickFarcasterDisplayName(...)` helper (`src/lib/farcaster/display-name.ts`) with precedence `display_name` → `displayName` → `username`/`fname`.
 - Updated Contact Details refresh (`ContactCardModal`) to use this helper so Converge display names prefer Farcaster display names across desktop and mobile refresh flows.
+- Fixed Contact Details reopen regression where a second identity-state upsert could overwrite the freshly resolved Farcaster display name with stale placeholder metadata (falling back to inboxId after closing/reopening).
+- Contact refresh now stabilizes follow-up upsert metadata from the first persisted refresh result (`name` / `preferredName` / avatar) so the resolved display label remains durable.
 - Updated self-profile Farcaster sync to reuse the same helper for consistent name selection rules.
 - Added unit tests in `src/lib/farcaster/display-name.test.ts` to lock the selection order.
 
