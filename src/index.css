@@ -82,15 +82,14 @@ html, body {
   height: calc(var(--vh, 1vh) * 100);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 @supports (height: 100dvh) {
-  #root { height: 100dvh; }
+  #root { height: min(100dvh, calc(var(--vh, 1vh) * 100)); }
 }
 
 /* Bottom nav behavior when keyboard is open */
-.keyboard-open nav {
-  transform: translateY(100%);
-  opacity: 0;
-  pointer-events: none;
+.keyboard-open .app-bottom-nav {
+  display: none;
 }

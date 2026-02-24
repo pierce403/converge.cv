@@ -455,10 +455,17 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (wallet-signature UX + desktop split workspace + profile avatar rendering hardening)
+**Last Updated**: 2026-02-24 (mobile PWA keyboard layout stabilization + wallet-signature UX + desktop split workspace)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
+
+### Mobile PWA Keyboard Layout Stability
+- Updated viewport meta with `interactive-widget=resizes-content` so supported mobile browsers resize content areas correctly when software keyboards open.
+- App root sizing now remains bounded by both VisualViewport-derived `--vh` and `100dvh`, with root overflow clipped to prevent extra keyboard-induced scroll regions.
+- Bottom nav now uses a stable class (`app-bottom-nav`) and is fully removed from layout (`display: none`) while keyboard mode is active, eliminating the gap above the keyboard.
+- `useVisualViewport` cleanup now clears stale keyboard state (`keyboard-open` class and keyboard offset variable) on unmount.
+- Added regression tests in `src/lib/utils/useVisualViewport.test.tsx` for viewport var updates, keyboard-open toggle thresholds, and cleanup behavior.
 
 ### Wallet Signing Loop Prevention
 - Added signer-side single-flight dedupe for wallet signatures so concurrent identical XMTP sign requests trigger only one wallet prompt.

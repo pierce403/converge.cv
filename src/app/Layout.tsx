@@ -1069,7 +1069,7 @@ export function Layout() {
       </main>
 
       {/* Bottom navigation */}
-      <nav className="sticky bottom-0 bg-primary-950/80 border-t border-primary-800/60 px-4 py-3 backdrop-blur-md shadow-inner" style={{ paddingBottom: 'var(--safe-bottom)' }}>
+      <nav className="app-bottom-nav sticky bottom-0 bg-primary-950/80 border-t border-primary-800/60 px-4 py-3 backdrop-blur-md shadow-inner" style={{ paddingBottom: 'var(--safe-bottom)' }}>
         <div className="flex justify-around max-w-lg mx-auto">
           <Link
             to="/contacts"

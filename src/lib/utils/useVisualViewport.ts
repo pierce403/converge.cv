@@ -31,6 +31,8 @@ export function useVisualViewport(): void {
       vv?.removeEventListener('resize', apply);
       vv?.removeEventListener('scroll', apply);
       window.removeEventListener('resize', apply);
+      root.classList.remove('keyboard-open');
+      root.style.setProperty('--keyboard-offset', '0px');
     };
   }, []);
 }
