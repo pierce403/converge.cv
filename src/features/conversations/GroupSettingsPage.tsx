@@ -5,7 +5,7 @@ import { useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations/useConversations';
 import { getAddress } from 'viem';
 import type { GroupMember } from '@/types';
-import { sanitizeImageSrc } from '@/lib/utils/image';
+import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 import type { Contact } from '@/lib/stores/contact-store';
 import {
   PermissionPolicy,
@@ -970,8 +970,9 @@ export function GroupSettingsPage() {
     if (safeAvatar) {
       return <img src={safeAvatar} alt="Contact avatar" className="w-full h-full rounded-full object-cover" />;
     }
-    if (avatar) {
-      return <span className="text-lg" aria-hidden>{avatar}</span>;
+    const avatarGlyph = sanitizeAvatarGlyph(avatar);
+    if (avatarGlyph) {
+      return <span className="text-lg" aria-hidden>{avatarGlyph}</span>;
     }
     return <span className="text-white font-semibold" aria-hidden>{fallback.slice(0, 2).toUpperCase()}</span>;
   };
@@ -1291,10 +1292,11 @@ export function GroupSettingsPage() {
                 const avatar = getMemberAvatar(member);
                 const fallbackLabel = member.address ?? member.inboxId;
                 const safeMemberAvatar = sanitizeImageSrc(avatar);
+                const memberAvatarGlyph = sanitizeAvatarGlyph(avatar);
                 const avatarContent = safeMemberAvatar
                   ? <img src={safeMemberAvatar} alt="Member avatar" className="w-full h-full rounded-full object-cover" />
-                  : avatar
-                    ? <span className="text-lg" aria-hidden>{avatar}</span>
+                  : memberAvatarGlyph
+                    ? <span className="text-lg" aria-hidden>{memberAvatarGlyph}</span>
                     : <span className="text-white font-semibold" aria-hidden>{fallbackLabel.slice(0, 2).toUpperCase()}</span>;
                 const secondaryLine = member.address ?? member.inboxId;
 

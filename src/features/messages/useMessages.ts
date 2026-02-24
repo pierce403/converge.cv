@@ -37,6 +37,57 @@ const formatInviteSummary = (
   return lines.join('\n');
 };
 
+const parseProfileMessageBody = (
+  raw: string
+): { displayName?: string; avatarUrl?: string } | null => {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const candidates: string[] = [trimmed];
+  if (trimmed.startsWith('cv:profile:')) {
+    candidates.push(trimmed.slice('cv:profile:'.length).trim());
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate.startsWith('{')) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown> | null;
+      if (!parsed || typeof parsed !== 'object') {
+        continue;
+      }
+
+      const typeValue = typeof parsed.type === 'string' ? parsed.type.trim().toLowerCase() : '';
+      if (typeValue !== 'profile') {
+        continue;
+      }
+
+      const versionValue = typeof parsed.v === 'number' ? parsed.v : undefined;
+      if (versionValue !== undefined && versionValue !== 1) {
+        continue;
+      }
+
+      const displayName =
+        typeof parsed.displayName === 'string' && parsed.displayName.trim()
+          ? parsed.displayName.trim()
+          : undefined;
+      const avatarUrl =
+        typeof parsed.avatarUrl === 'string' && parsed.avatarUrl.trim()
+          ? parsed.avatarUrl.trim()
+          : undefined;
+
+      if (displayName || avatarUrl) {
+        return { displayName, avatarUrl };
+      }
+    } catch {
+      // Ignore invalid JSON payloads.
+    }
+  }
+
+  return null;
+};
+
 export function useMessages() {
   const messagesByConversation = useMessageStore((state) => state.messagesByConversation);
   const isSending = useMessageStore((state) => state.isSending);
@@ -158,8 +209,8 @@ export function useMessages() {
         messages = messages.filter(
           (m) =>
             !(
-              m.type === 'system' &&
-              (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))
+              (m.type === 'system' && (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))) ||
+              (m.type === 'text' && Boolean(parseProfileMessageBody(m.body)))
             )
         );
         setMessages(conversationId, messages);
@@ -204,8 +255,8 @@ export function useMessages() {
         messages = messages.filter(
           (m) =>
             !(
-              m.type === 'system' &&
-              (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))
+              (m.type === 'system' && (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))) ||
+              (m.type === 'text' && Boolean(parseProfileMessageBody(m.body)))
             )
         );
         if (messages.length > 0) {
@@ -848,6 +899,21 @@ export function useMessages() {
           ? xmtpMessage.content
           : new TextDecoder().decode(xmtpMessage.content);
 
+        const parsedProfileMessage = parseProfileMessageBody(content);
+        if (parsedProfileMessage) {
+          try {
+            await upsertContactProfile({
+              inboxId: xmtpMessage.senderAddress,
+              displayName: parsedProfileMessage.displayName,
+              avatarUrl: parsedProfileMessage.avatarUrl,
+              source: 'inbox',
+            });
+          } catch (profileError) {
+            console.warn('[useMessages] Failed to apply profile metadata message:', profileError);
+          }
+          return;
+        }
+
         const myInbox = identity?.inboxId?.toLowerCase();
         const myAddr = identity?.address?.toLowerCase();
         const senderLower = xmtpMessage.senderAddress?.toLowerCase?.();
@@ -968,6 +1034,7 @@ export function useMessages() {
       identity,
       removeMessage,
       conversations,
+      upsertContactProfile,
     ]
   );
 

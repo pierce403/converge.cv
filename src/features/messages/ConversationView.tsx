@@ -7,7 +7,7 @@ import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { getContactInfo } from '@/lib/default-contacts';
-import { sanitizeImageSrc } from '@/lib/utils/image';
+import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import { GroupInviteModal } from '@/features/conversations/GroupInviteModal';
 import type { Message } from '@/types';
@@ -707,8 +707,9 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     if (safeAvatar) {
       return <img src={safeAvatar} alt="Conversation avatar" className="w-full h-full rounded-full object-cover" />;
     }
-    if (avatar) {
-      return <span className="text-lg" aria-hidden>{avatar}</span>;
+    const avatarGlyph = sanitizeAvatarGlyph(avatar);
+    if (avatarGlyph) {
+      return <span className="text-lg" aria-hidden>{avatarGlyph}</span>;
     }
     const label = fallback.startsWith('0x') && fallback.length > 6
       ? fallback.slice(2, 4).toUpperCase()

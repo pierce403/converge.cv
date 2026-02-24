@@ -15,7 +15,7 @@ import { useContactStore, useAuthStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { ConversationDetailsModal } from '@/features/conversations/ConversationDetailsModal';
-import { sanitizeImageSrc } from '@/lib/utils/image';
+import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 
 export function ChatList() {
   const { conversations, isLoading } = useConversations();
@@ -100,10 +100,11 @@ export function ChatList() {
         />
       );
     }
-    if (avatar) {
+    const avatarGlyph = sanitizeAvatarGlyph(avatar);
+    if (avatarGlyph) {
       return (
         <span className="text-lg" aria-hidden>
-          {avatar}
+          {avatarGlyph}
         </span>
       );
     }
@@ -123,6 +124,19 @@ export function ChatList() {
     }
     if (value.length > 18) {
       return `${value.slice(0, 10)}...${value.slice(-4)}`;
+    }
+    return value;
+  };
+
+  const normalizePreviewText = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('cv:profile:')) return 'Profile updated';
+    if (trimmed.startsWith('{') && trimmed.includes('"type"') && trimmed.includes('"profile"')) {
+      return 'Profile updated';
+    }
+    if (trimmed.startsWith('data:image/')) {
+      return 'Profile updated';
     }
     return value;
   };
@@ -203,10 +217,11 @@ export function ChatList() {
           const msgs = messagesByConversation[conversation.id] || [];
           if (msgs.length) {
             const last = msgs[msgs.length - 1];
-            if (last.type === 'text') subtitle = last.body;
+            if (last.type === 'text') subtitle = normalizePreviewText(last.body);
             else if (last.type === 'system') subtitle = last.body;
             else subtitle = '📎 Attachment';
           }
+          subtitle = normalizePreviewText(subtitle);
           if (!subtitle) {
             subtitle = conversationDescription || 'No messages yet';
           }

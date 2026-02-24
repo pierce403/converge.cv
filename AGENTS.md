@@ -455,7 +455,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (wallet-signature UX + desktop split workspace + Farcaster display-name persistence fix)
+**Last Updated**: 2026-02-24 (wallet-signature UX + desktop split workspace + profile avatar rendering hardening)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
@@ -480,6 +480,12 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Contact refresh now stabilizes follow-up upsert metadata from the first persisted refresh result (`name` / `preferredName` / avatar) so the resolved display label remains durable.
 - Updated self-profile Farcaster sync to reuse the same helper for consistent name selection rules.
 - Added unit tests in `src/lib/farcaster/display-name.test.ts` to lock the selection order.
+
+### Profile Avatar Rendering + Metadata Safety
+- Relaxed image source sanitization to accept valid `data:image/*` URLs with additional metadata params (e.g., charset/name), matching Converge profile avatar payloads more reliably.
+- Added `sanitizeAvatarGlyph(...)` and switched avatar renderers (Chat list, Message bubbles, Conversation header, Group settings) to only render short non-URL glyphs as text; unreadable long payloads now fall back to initials instead of dumping raw base64 strings.
+- Added defensive parsing in `useMessages` so legacy/stray text profile payloads (`type: "profile"`) are consumed as metadata and excluded from visible message history/previews.
+- Added image utility test coverage for richer data-URL formats and glyph sanitization.
 
 ### Desktop Chat Workspace
 - Added a responsive `ChatWorkspace` route wrapper for `/` and `/chat/:id`.

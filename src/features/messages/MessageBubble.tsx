@@ -8,7 +8,7 @@ import { formatMessageTime } from '@/lib/utils/date';
 import { useAuthStore, useMessageStore } from '@/lib/stores';
 import { MessageActionsModal } from './MessageActionsModal';
 import { useMessages } from './useMessages';
-import { sanitizeImageSrc } from '@/lib/utils/image';
+import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 import { getStorage } from '@/lib/storage';
 import { normalizeMentionLabel, tokenizeMessage } from '@/lib/utils/mentions';
 
@@ -202,8 +202,9 @@ export function MessageBubble({
     if (safeAvatar) {
       return <img src={safeAvatar} alt="Sender avatar" className="w-full h-full rounded-full object-cover" />;
     }
-    if (avatarUrl) {
-      return <span className="text-lg" aria-hidden>{avatarUrl}</span>;
+    const avatarGlyph = sanitizeAvatarGlyph(avatarUrl);
+    if (avatarGlyph) {
+      return <span className="text-lg" aria-hidden>{avatarGlyph}</span>;
     }
     return (
       <span className="text-xs font-semibold text-white" aria-hidden>

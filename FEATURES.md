@@ -28,6 +28,7 @@
 - Group chat composer supports @-mentions with live member suggestions; mentions render inline with highlight styling and incoming messages that mention you are visually emphasized.
 - Conversations load the most recent messages first and lazily prepend older history only when the user scrolls upward, keeping large threads fast while preserving full local storage history.
 - Desktop-width chat routes now render a persistent split view: conversation list on the left, selected conversation on the right, with mobile behavior unchanged.
+- Avatar rendering now prevents raw URL/data payload strings from being printed as text in avatar slots; non-image avatar values are treated as short glyphs only (otherwise initials fallback).
 
 ## Conversation Controls
 - Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp.
@@ -39,6 +40,7 @@
 - Identity/profile lookups honor rate-limit backoff signals (429/resource exhausted) by pausing XMTP identity API calls for an adaptive cooldown and falling back to minimal profiles until the cooldown clears.
 - Contact Details refresh now prefers Farcaster `display_name` (human display name) over Farcaster username/fname when updating Converge contact display names, with username only as fallback.
 - Contact Details refresh now persists the resolved display label across reopen cycles by preventing follow-up identity upserts from overwriting the refreshed name with stale placeholder metadata.
+- Legacy/stray text profile payloads are now recognized and consumed as metadata (not chat bubbles), preventing base64-heavy profile payloads from showing in conversation previews/history.
 - Group conversations now read Convos profile metadata from XMTP `group.appData` (including compressed Convos payloads), hydrating member display names/avatars in chat and group settings where available.
 - Sending a group message now performs a best-effort upsert of the sender’s Convos-style profile (name + URL avatar) into group appData so Convos clients can discover Converge profile updates.
 
