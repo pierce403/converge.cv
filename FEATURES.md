@@ -4,6 +4,7 @@
 - Landing flow keeps the experience minimal by defaulting to a single-step landing view and switching into wallet selection when the user arrives with `?connect=1` (e.g., from the inbox switcher).
 - Registry hydration runs on load so previously used inboxes are listed with last-opened timestamps and buttons to reopen them without re-onboarding.
 - Wallet connect, probing, and keyfile import are unified under a single `view` state machine (`'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'`) so all entry points share status messaging and error handling.
+- Wallet-based XMTP signing requests are deduplicated and cached per challenge, with expiry-aware refresh so reconnect flows avoid repeated wallet signature popups.
 - Switching inboxes surfaces step-by-step status banners (closing current inbox, preparing storage, loading the target inbox, reloading) so users see progress while the app swaps namespaces.
 - The identity switcher includes a profile card that previews display name and avatar, lets users update and publish changes to XMTP, resync profile details from the network, and surface a QR code for sharing the current address without leaving the modal.
 - Deep links like `/u/:userId` (ENS/address) and `/i/:inboxId` open a DM composer when already signed in, or route through onboarding and then return to the target.

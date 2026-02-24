@@ -23,6 +23,7 @@ export function AppRouter() {
   const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const clearAllRef = useRef(false);
+  const authRestoreInFlightRef = useRef(false);
   const clearAllFlag =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('clear_all_data') === 'true';
@@ -141,14 +142,21 @@ export function AppRouter() {
     // Only attempt to restore identity when user is not yet authenticated.
     // Prevents double-connect loops after onboarding (e.g., WalletConnect reopening Rainbow).
     if (clearAllFlag) {
+      authRestoreInFlightRef.current = false;
       setIsCheckingAuth(false);
       return;
     }
     if (!isAuthenticated) {
+      if (authRestoreInFlightRef.current) {
+        return;
+      }
+      authRestoreInFlightRef.current = true;
       checkExistingIdentity().finally(() => {
+        authRestoreInFlightRef.current = false;
         setIsCheckingAuth(false);
       });
     } else {
+      authRestoreInFlightRef.current = false;
       setIsCheckingAuth(false);
     }
   }, [clearAllFlag, isAuthenticated, checkExistingIdentity]);

@@ -184,6 +184,7 @@ pnpm typecheck        # TypeScript type checking
 - Identity storage in IndexedDB
 - Clean UI with proper feature messaging
 - Desktop browser chat view now uses a persistent split pane (conversation list left, selected thread right)
+- Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
@@ -452,10 +453,17 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (Desktop split chat workspace + local-first XMTP caching)
+**Last Updated**: 2026-02-24 (Wallet signing dedupe + desktop split chat workspace)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
+
+### Wallet Signing Loop Prevention
+- Added signer-side single-flight dedupe for wallet signatures so concurrent identical XMTP sign requests trigger only one wallet prompt.
+- Added signature reuse cache keyed by wallet/challenge with expiry-aware validity tracking and a refresh skew window (refresh only near expiration).
+- Added short failure cooldown after signing errors to prevent immediate repeated wallet prompt loops.
+- Added an auth restore in-flight guard in `AppRouter` so `checkExistingIdentity()` cannot run concurrently during startup.
+- Added unit coverage in `src/lib/wagmi/signers.test.ts` for concurrent dedupe and expiry-based refresh behavior.
 
 ### Desktop Chat Workspace
 - Added a responsive `ChatWorkspace` route wrapper for `/` and `/chat/:id`.
