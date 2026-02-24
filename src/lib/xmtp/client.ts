@@ -2928,10 +2928,20 @@ export class XmtpClient {
           // Our device is already registered; do not register again
           mustRegister = false;
           console.log('[XMTP] Installation already present; skipping register()');
-        } else if (mustRegister && count >= 10) {
-          // Cannot register a new installation when already at limit
-          throw new Error('⚠️ Installation limit reached (10/10). Please revoke old installations in Settings → XMTP Installations or use Force Recover.');
-        } else if (count >= 8) {
+        } else {
+          // If our installation is missing from the inbox state, we must register it to initialize
+          // the identity locally. This can happen when the OPFS sqlite db was cleared/evicted,
+          // so we treat register=false as "don't re-register if already registered", not "never register".
+          if (count >= 10) {
+            // Cannot register a new installation when already at limit
+            throw new Error('⚠️ Installation limit reached (10/10). Please revoke old installations in Settings → XMTP Installations or use Force Recover.');
+          }
+
+          mustRegister = true;
+          console.warn('[XMTP] Installation missing from inbox state; forcing register() to initialize identity');
+        }
+
+        if (count >= 8) {
           console.warn('[XMTP] Installation count nearing limit:', count);
           logNetworkEvent({ direction: 'status', event: 'connect:installation_warning', details: `Installation count ${count}/10` });
         }
@@ -2948,7 +2958,17 @@ export class XmtpClient {
 
       if (mustRegister) {
         console.log('[XMTP] Registering inbox/installation after probe');
-        await client.register();
+        await this.retryWithDelay('client.register', () => client!.register(), {
+          attempts: 2,
+          initialDelayMs: 1000,
+          shouldRetry: (err) => this.isTransientNetworkError(err) || this.isRateLimitError(err),
+          onRateLimit: () => this.noteIdentityRateLimit('connect:client.register'),
+        });
+        this.reduceIdentityCooldown();
+
+        if (!client.inboxId) {
+          throw new Error('Client.register completed but inboxId is still missing');
+        }
       } else {
         console.log('[XMTP] Skipping register() per options or pre-check');
       }
@@ -2976,7 +2996,7 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'status',
         event: 'connect:registration_check',
-        details: `Register step ${shouldRegister ? 'completed' : 'skipped'}; inbox ID: ${client.inboxId}`,
+        details: `Register step ${mustRegister ? 'completed' : 'skipped'} (requested=${shouldRegister}); inbox ID: ${client.inboxId}`,
       });
 
       setConnectionStatus('connected');
