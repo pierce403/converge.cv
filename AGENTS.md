@@ -451,14 +451,15 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (Converge DM profile spec)
+**Last Updated**: 2026-02-24 (Remove legacy cv:profile support)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
 
 ### Docs + Dev Setup
 - Added `CONVOS_PROFILE_SPEC.md` documenting how convos-cli writes per-conversation profiles into XMTP group `appData`.
-- Added `CONVERGE_PROFILE_SPEC.md` documenting Converge's DM profile metadata flow and legacy `cv:profile:` handling.
+- Added `CONVERGE_PROFILE_SPEC.md` documenting Converge's DM profile metadata flow.
+- Removed legacy `cv:profile:` handling in favor of the `converge.cv/profile:1.0` content type only.
 - Renamed the local scratch directory from `tmp/` to `code/` and updated ignore/exclude rules and references.
 - Reviewed `convos-web` `appData` usage: group `appData` stores protobuf metadata (profiles, invite tag, expiry, image encryption key, encrypted group image) with optional deflate-raw compression + base64url encoding; profile avatars are re-encrypted with the group image key before upload.
 

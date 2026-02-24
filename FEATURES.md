@@ -31,7 +31,7 @@
 - A destructive “Delete conversation” option removes the thread locally and navigates back to the inbox to prevent resurface during resyncs.
 
 ## Profile Sharing and Enrichment
-- Incoming Converge profile updates (`converge.cv/profile:1.0`, legacy `cv:profile:`) are handled as silent metadata messages (no bubble / no push) to update contact display names and avatars, preferring the inline payload over fetched profiles while avoiding blocked or deleted peers.
+- Incoming Converge profile updates (`converge.cv/profile:1.0`) are handled as silent metadata messages (no bubble / no push) to update contact display names and avatars, preferring the inline payload over fetched profiles while avoiding blocked or deleted peers.
 - Profile fetches are throttled to a five-minute window per contact to reduce redundant network calls while still refreshing stale records.
 - Identity/profile lookups honor rate-limit backoff signals (429/resource exhausted) by pausing XMTP identity API calls for an adaptive cooldown and falling back to minimal profiles until the cooldown clears.
 - Group conversations now read Convos profile metadata from XMTP `group.appData` (including compressed Convos payloads), hydrating member display names/avatars in chat and group settings where available.

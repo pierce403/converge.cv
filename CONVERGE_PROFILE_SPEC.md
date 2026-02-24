@@ -2,7 +2,7 @@
 
 ## Scope
 - **Groups**: Converge delegates group profile management to Convos-style `appData` metadata and intends to stay aligned with Convos' schema and behavior. See `CONVOS_PROFILE_SPEC.md` for details.
-- **DMs**: Converge manages DM profile data itself using a custom XMTP content type and a legacy text fallback.
+- **DMs**: Converge manages DM profile data itself using a custom XMTP content type.
 
 ## DM Profile Content Type
 Converge publishes DM profile metadata as a silent XMTP message using a custom content type:
@@ -58,34 +58,18 @@ Implementation: `src/lib/xmtp/client.ts` (`saveProfile`, `ensureProfileSent`)
 Profile messages are **parsed and consumed as metadata**, not displayed:
 
 - **Stream/backfill** handlers detect profile payloads and skip chat bubble creation.
-- **Layout** explicitly skips storing legacy profile messages as normal messages.
 - Contact/profile state is updated from profile payloads when available.
 
 Implementation:
 - `src/lib/xmtp/client.ts` (`extractProfileUpdate`, stream/backfill handlers)
-- `src/app/Layout.tsx` (legacy `cv:profile:` suppression)
-
-## Legacy Compatibility (Text Prefix)
-Older Converge profile messages used a text prefix:
-
-```
-cv:profile:{...json...}
-```
-
-These are still parsed for backward compatibility:
-- If `content` or `fallback` is a string starting with `cv:profile:`, it is treated as a profile payload.
-- Legacy payloads are ignored as chat content and not stored as normal messages.
-
-Implementation: `src/lib/xmtp/client.ts` (`LEGACY_PROFILE_PREFIX`, `parseLegacyProfileText`)
 
 ## Why Profile Messages Don’t Show Up in Conversation History
-Profile updates are **metadata-only**. Converge intentionally intercepts them and skips writing them into the message list to keep chat history clean. This applies to both the new content type and the legacy `cv:profile:` prefix.
+Profile updates are **metadata-only**. Converge intentionally intercepts them and skips writing them into the message list to keep chat history clean.
 
 Implementation:
 - `src/lib/xmtp/client.ts` (stream/backfill skip)
-- `src/app/Layout.tsx` (legacy skip)
 
 ## Summary
 - **Groups**: use Convos `appData` profiles (shared, interoperable).
-- **DMs**: use Converge’s `converge.cv/profile:1.0` content type + legacy `cv:profile:` fallback.
+- **DMs**: use Converge’s `converge.cv/profile:1.0` content type.
 - Profile messages are silent, consent-safe, and excluded from normal chat history.

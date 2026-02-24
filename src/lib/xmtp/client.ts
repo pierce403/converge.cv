@@ -223,7 +223,6 @@ export class XmtpClient {
   private client: Client<unknown> | null = null;
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
-  private static readonly LEGACY_PROFILE_PREFIX = 'cv:profile:'; // Legacy text marker for pre-codec profile messages
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
   private inboxErrorCooldown: Map<string, number> = new Map();
@@ -840,21 +839,6 @@ export class XmtpClient {
     );
   }
 
-  private static parseLegacyProfileText(text: string): { displayName?: string; avatarUrl?: string } | null {
-    if (!text.startsWith(XmtpClient.LEGACY_PROFILE_PREFIX)) return null;
-    try {
-      const json = text.slice(XmtpClient.LEGACY_PROFILE_PREFIX.length);
-      const obj = JSON.parse(json) as { type?: unknown; displayName?: unknown; avatarUrl?: unknown } | null;
-      if (!obj || obj.type !== 'profile') return null;
-      return {
-        displayName: typeof obj.displayName === 'string' && obj.displayName.trim() ? obj.displayName : undefined,
-        avatarUrl: typeof obj.avatarUrl === 'string' && obj.avatarUrl.trim() ? obj.avatarUrl : undefined,
-      };
-    } catch {
-      return null;
-    }
-  }
-
   private static extractProfileUpdate(msg: unknown): { displayName?: string; avatarUrl?: string } | null {
     if (!msg || typeof msg !== 'object') return null;
     const anyMsg = msg as Record<string, unknown>;
@@ -870,19 +854,6 @@ export class XmtpClient {
       }
       return null;
     }
-
-    const content = anyMsg['content'];
-    if (typeof content === 'string') {
-      const parsed = XmtpClient.parseLegacyProfileText(content);
-      if (parsed) return parsed;
-    }
-
-    const fallback = anyMsg['fallback'];
-    if (typeof fallback === 'string') {
-      const parsed = XmtpClient.parseLegacyProfileText(fallback);
-      if (parsed) return parsed;
-    }
-
     return null;
   }
 
