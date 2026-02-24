@@ -2,8 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { Layout } from './Layout';
 import { OnboardingPage, LockScreen, useAuth } from '@/features/auth';
-import { ChatList } from '@/features/conversations';
-import { ConversationView } from '@/features/messages';
+import { ChatWorkspace } from '@/features/conversations/ChatWorkspace';
 import { NewChatPage } from '@/features/conversations/NewChatPage';
 import { SettingsPage } from '@/features/settings';
 import { DebugPage } from '@/features/debug';
@@ -219,8 +218,8 @@ export function AppRouter() {
   return (
     <Routes>
       <Route path="/" element={<Layout />}>
-        <Route index element={<ChatList />} />
-        <Route path="chat/:id" element={<ConversationView />} />
+        <Route index element={<ChatWorkspace />} />
+        <Route path="chat/:id" element={<ChatWorkspace />} />
         <Route path="chat/:conversationId/settings" element={<GroupSettingsPage />} />
         <Route path="new-chat" element={<NewChatPage />} />
         <Route path="new-group" element={<NewGroupPage />} />

@@ -29,7 +29,11 @@ const formatIdentifier = (value: string) => {
   return value;
 };
 
-export function ConversationView() {
+type ConversationViewProps = {
+  showBackButton?: boolean;
+};
+
+export function ConversationView({ showBackButton = true }: ConversationViewProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -726,14 +730,16 @@ export function ConversationView() {
     <div className="flex flex-col h-full text-primary-50">
       {/* Header */}
       <div className="bg-primary-950/70 border-b border-primary-800/60 px-4 py-3 flex items-center gap-3 backdrop-blur-md">
-        <button
-          onClick={() => navigate('/')}
-          className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors"
-        >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
+        {showBackButton && (
+          <button
+            onClick={() => navigate('/')}
+            className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        )}
 
         {conversation.isGroup ? (
           <>

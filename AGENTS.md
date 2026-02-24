@@ -183,6 +183,7 @@ pnpm typecheck        # TypeScript type checking
 - Vault unlocked by default
 - Identity storage in IndexedDB
 - Clean UI with proper feature messaging
+- Desktop browser chat view now uses a persistent split pane (conversation list left, selected thread right)
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
@@ -451,10 +452,16 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (Local-first XMTP caching + sync dedupe)
+**Last Updated**: 2026-02-24 (Desktop split chat workspace + local-first XMTP caching)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
+
+### Desktop Chat Workspace
+- Added a responsive `ChatWorkspace` route wrapper for `/` and `/chat/:id`.
+- On desktop-width viewports (>= `lg`), chats now stay in a two-pane layout: `ChatList` is always visible on the left and the selected `ConversationView` renders on the right.
+- On mobile viewports, existing behavior is preserved (`/` shows chat list, `/chat/:id` shows a single conversation).
+- `ConversationView` now accepts `showBackButton` so the desktop pane can hide the mobile back affordance.
 
 ### Docs + Dev Setup
 - Added `CONVOS_PROFILE_SPEC.md` documenting how convos-cli writes per-conversation profiles into XMTP group `appData`.
