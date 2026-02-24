@@ -271,6 +271,8 @@ export class XmtpClient {
     dmByInbox: { hit: 0, miss: 0 },
     inboxState: { hit: 0, miss: 0 },
   };
+  private identityInitInFlight: Promise<void> | null = null;
+  private identityInitAttempts = 0;
   // Cache + in-flight dedupe to avoid spamming the worker bridge and identity/preferences endpoints.
   private dmByInboxCache = new KeyedAsyncCache<unknown | null>({
     ttlMs: 10 * 60 * 1000,
@@ -326,6 +328,8 @@ export class XmtpClient {
     this.syncCounters.dmSyncCalls = 0;
     this.syncCounters.groupSyncCalls = 0;
     this.syncCounters.backfillMessages = 0;
+    this.identityInitInFlight = null;
+    this.identityInitAttempts = 0;
   }
 
   private async getDmByInboxIdCached(inboxId: string): Promise<unknown | null> {
@@ -435,6 +439,15 @@ export class XmtpClient {
     try {
       const msg = err instanceof Error ? err.message : String(err ?? '');
       return /uninitialized identity/i.test(msg);
+    } catch {
+      return false;
+    }
+  }
+
+  private isWalletSigningUnavailableError(err: unknown): boolean {
+    try {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      return /wallet signing is not available/i.test(msg) || /reconnect your wallet/i.test(msg);
     } catch {
       return false;
     }
@@ -586,6 +599,84 @@ export class XmtpClient {
   public recordRateLimitGlobal(error: unknown, reason: string): void {
     if (this.isRateLimitError(error)) {
       this.noteGlobalRateLimit(reason);
+    }
+  }
+
+  private async ensureIdentityInitialized(reason: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    if (this.identityInitInFlight) {
+      await this.identityInitInFlight;
+      return;
+    }
+
+    // Avoid infinite loops when the signer is unavailable (e.g., wallet disconnected).
+    if (this.identityInitAttempts >= 2) {
+      throw new Error('XMTP identity is uninitialized and could not be repaired automatically.');
+    }
+    this.identityInitAttempts += 1;
+
+    this.identityInitInFlight = (async () => {
+      logNetworkEvent({
+        direction: 'status',
+        event: 'identity:register',
+        details: `Registering identity (reason=${reason})`,
+      });
+
+      await this.retryWithDelay('client.register', () => this.client!.register(), {
+        attempts: 2,
+        initialDelayMs: 1000,
+        shouldRetry: (err) => this.isTransientNetworkError(err) || this.isRateLimitError(err),
+        onRateLimit: () => this.noteIdentityRateLimit('client.register'),
+      });
+
+      this.reduceIdentityCooldown();
+
+      logNetworkEvent({
+        direction: 'status',
+        event: 'identity:register',
+        details: `Identity registered (reason=${reason})`,
+      });
+    })();
+
+    try {
+      await this.identityInitInFlight;
+    } finally {
+      this.identityInitInFlight = null;
+    }
+  }
+
+  private async conversationsSyncWithRecovery(reason: string): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    const runSync = async () => {
+      await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
+        attempts: 3,
+        initialDelayMs: 800,
+        shouldRetry: (err) => this.isTransientSyncError(err),
+        onRateLimit: () => this.noteGlobalRateLimit(`conversations.sync:${reason}`),
+      });
+      this.reduceGlobalCooldown();
+    };
+
+    try {
+      await runSync();
+    } catch (error) {
+      if (!this.isUninitializedIdentityError(error)) {
+        throw error;
+      }
+
+      console.warn(
+        `[XMTP] conversations.sync failed due to uninitialized identity; attempting client.register() (reason=${reason})`,
+        error
+      );
+
+      await this.ensureIdentityInitialized(reason);
+      await runSync();
     }
   }
 
@@ -2250,7 +2341,7 @@ export class XmtpClient {
     if (!group) {
       console.warn('[XMTP] Invite join request refers to missing group, syncing conversations:', conversationIdCandidates[0]);
       try {
-        await this.client.conversations.sync();
+        await this.conversationsSyncWithRecovery('invite-approve');
       } catch (error) {
         console.warn('[XMTP] Conversation sync failed while resolving invite group:', error);
       }
@@ -3366,13 +3457,7 @@ export class XmtpClient {
     let syncFailed = false;
     console.log('[XMTP] Syncing conversations...');
     try {
-      await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
-        attempts: 3,
-        initialDelayMs: 800,
-        shouldRetry: (err) => this.isTransientSyncError(err),
-        onRateLimit: () => this.noteGlobalRateLimit('conversations.sync'),
-      });
-      this.reduceGlobalCooldown();
+      await this.conversationsSyncWithRecovery(opts?.reason ?? 'syncConversations');
     } catch (error) {
       if (this.isUninitializedIdentityError(error)) {
         console.error('[XMTP] conversations.sync failed due to uninitialized identity:', error);
@@ -3644,13 +3729,7 @@ export class XmtpClient {
       // First sync the list of conversations from the network (unless already synced upstream)
       if (!skipConversationSync) {
         try {
-          await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
-            attempts: 3,
-            initialDelayMs: 800,
-            shouldRetry: (err) => this.isTransientSyncError(err),
-            onRateLimit: () => this.noteGlobalRateLimit('history:conversations.sync'),
-          });
-          this.reduceGlobalCooldown();
+          await this.conversationsSyncWithRecovery(`history:${mode}`);
         } catch (error) {
           if (this.isUninitializedIdentityError(error)) {
             throw error;
@@ -4751,7 +4830,7 @@ export class XmtpClient {
       // cache was actually cleared. Without this, getDmByInboxId returns null.
       try {
         console.log('[XMTP] loadOwnProfile: Syncing conversations first...');
-        await this.client.conversations.sync();
+        await this.conversationsSyncWithRecovery('loadOwnProfile');
       } catch (convSyncErr) {
         console.warn('[XMTP] loadOwnProfile: Conversation sync failed (continuing):', convSyncErr);
       }
@@ -5769,7 +5848,7 @@ export class XmtpClient {
       let conversation = await this.client.conversations.getConversationById(conversationId);
       if (!conversation) {
         console.log('[XMTP] Conversation not found in cache, syncing before retry…');
-        await this.client.conversations.sync();
+        await this.conversationsSyncWithRecovery('sendAttachment');
         conversation = await this.client.conversations.getConversationById(conversationId);
       }
       if (!conversation) {
@@ -5814,6 +5893,10 @@ export class XmtpClient {
 
       return message;
     } catch (error) {
+      if (this.isUninitializedIdentityError(error) || this.isWalletSigningUnavailableError(error)) {
+        throw new Error('XMTP identity needs reinitialization. Reconnect your wallet and try again.');
+      }
+
       console.warn('[XMTP] Failed to send attachment via XMTP, storing locally:', error);
       const fallbackMessage = this.createLocalAttachmentMessage(conversationId, attachment);
       logNetworkEvent({
@@ -5857,7 +5940,7 @@ export class XmtpClient {
 
       if (!conversation) {
         console.log('[XMTP] Conversation not found in cache, syncing before retry…');
-        await this.client.conversations.sync();
+        await this.conversationsSyncWithRecovery('sendMessage');
         conversation = await this.client.conversations.getConversationById(conversationId);
       }
 
@@ -5907,6 +5990,10 @@ export class XmtpClient {
 
       return message;
     } catch (error) {
+      if (this.isUninitializedIdentityError(error) || this.isWalletSigningUnavailableError(error)) {
+        throw new Error('XMTP identity needs reinitialization. Reconnect your wallet and try again.');
+      }
+
       console.warn('[XMTP] Failed to send message via XMTP, storing locally:', error);
       const fallbackMessage = this.createLocalMessage(conversationId, content);
 

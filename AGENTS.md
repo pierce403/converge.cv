@@ -468,6 +468,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Added class-local TTL + in-flight dedupe caches around the biggest offenders:
   - `conversations.getDmByInboxId()` (10m hit, 60s negative)
   - `preferences.fetchInboxStates()` / `Client.fetchInboxStates()` (6h hit)
+- Fixed “Uninitialized identity” sends by auto-attempting `client.register()` on demand (e.g. send / inbox check) before asking the user to reconnect a wallet.
 - Message streaming now uses `streamAllMessages({ disableSync: true, consentStates: [Allowed, Unknown] })` to avoid redundant implicit sync and to receive unknown-consent invite requests without periodic DM scans.
 - Connect-time sync is incremental by default:
   - `enableHistorySync` defaults to `false`

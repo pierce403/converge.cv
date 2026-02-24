@@ -103,6 +103,15 @@ export function Layout() {
       await getXmtpClient().syncConversations({ force: true, reason: 'manual' });
     } catch (e) {
       console.error('Failed to check inbox', e);
+      try {
+        window.dispatchEvent(
+          new CustomEvent('ui:toast', {
+            detail: 'Inbox check failed. If this is a wallet identity, reconnect your wallet and try again.',
+          })
+        );
+      } catch {
+        // ignore
+      }
     } finally {
       setIsChecking(false);
     }

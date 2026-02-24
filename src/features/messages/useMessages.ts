@@ -411,6 +411,12 @@ export function useMessages() {
           console.error('Failed to send via XMTP:', xmtpError);
           updateMessage(message.id, { status: 'failed' });
           await storage.updateMessageStatus(message.id, 'failed');
+          try {
+            const msg = xmtpError instanceof Error ? xmtpError.message : 'Failed to send message.';
+            window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg }));
+          } catch {
+            // ignore
+          }
         }
 
         // Update conversation
@@ -578,6 +584,12 @@ export function useMessages() {
           console.error('Failed to send attachment via XMTP:', xmtpError);
           updateMessage(message.id, { status: 'failed' });
           await storage.updateMessageStatus(message.id, 'failed');
+          try {
+            const msg = xmtpError instanceof Error ? xmtpError.message : 'Failed to send attachment.';
+            window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg }));
+          } catch {
+            // ignore
+          }
         }
 
         updateConversation(conversationId, {
