@@ -459,6 +459,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Docs + Dev Setup
 - Added `CONVOS_PROFILE_SPEC.md` documenting how convos-cli writes per-conversation profiles into XMTP group `appData`.
 - Renamed the local scratch directory from `tmp/` to `code/` and updated ignore/exclude rules and references.
+- Reviewed `convos-web` `appData` usage: group `appData` stores protobuf metadata (profiles, invite tag, expiry, image encryption key, encrypted group image) with optional deflate-raw compression + base64url encoding; profile avatars are re-encrypted with the group image key before upload.
 
 ## Latest Changes (2026-02-23)
 
