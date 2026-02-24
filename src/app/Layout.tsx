@@ -12,7 +12,6 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
-import type { Contact } from '@/lib/stores/contact-store';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
@@ -21,20 +20,6 @@ import { InviteRequestModal, type InviteRequest } from '@/components/InviteReque
 import { syncSelfFarcasterProfile } from '@/lib/farcaster/self';
 import { useWalletConnection } from '@/lib/wagmi';
 // Prefer XMTP profile history for names/avatars; fall back to Farcaster for missing fields.
-
-const looksLikeInboxId = (value?: string | null) => {
-  if (!value) {
-    return false;
-  }
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed || trimmed.startsWith('0x')) {
-    return false;
-  }
-  if (trimmed.length < 24) {
-    return false;
-  }
-  return /^[0-9a-f]+$/.test(trimmed);
-};
 
 export function Layout() {
   // Sync CSS --vh and keyboard-open class with VisualViewport
@@ -538,36 +523,6 @@ export function Layout() {
   // Global message listener - handles ALL incoming XMTP messages
   // Intentionally register once; store/state is accessed via getState() where needed.
   useEffect(() => {
-    const shouldRefreshContact = (contact: Contact): boolean => {
-      const now = Date.now();
-      const lastSynced = contact.lastSyncedAt ?? 0;
-      const refreshIntervalMs = 30 * 60 * 1000; // 30 minutes
-      if (!contact.preferredName || !contact.preferredAvatar) {
-        return true;
-      }
-      return now - lastSynced > refreshIntervalMs;
-    };
-
-    const enrichContactProfile = async (contact: Contact) => {
-      try {
-        if (!shouldRefreshContact(contact)) return;
-        const xmtp = getXmtpClient();
-        const profile = await xmtp.fetchInboxProfile(contact.inboxId);
-        await useContactStore.getState().upsertContactProfile({
-          inboxId: profile.inboxId,
-          displayName: profile.displayName,
-          avatarUrl: profile.avatarUrl,
-          primaryAddress: profile.primaryAddress,
-          addresses: profile.addresses,
-          identities: profile.identities,
-          source: 'inbox',
-          metadata: { ...contact, lastSyncedAt: Date.now() },
-        });
-      } catch (error) {
-        console.warn('[Layout] Failed to enrich contact profile:', error);
-      }
-    };
-
     const handleIncomingMessage = async (event: Event) => {
       const customEvent = event as CustomEvent<{
         conversationId: string;
@@ -575,7 +530,6 @@ export function Layout() {
         isHistory?: boolean;
       }>;
       const { conversationId, message, isHistory } = customEvent.detail;
-      const historyMessage = Boolean(isHistory);
 
       console.log('[Layout] Global message listener: received message', {
         conversationId,
@@ -621,7 +575,6 @@ export function Layout() {
         }
 
         const contactStore = useContactStore.getState();
-        const xmtp = getXmtpClient();
         const existingContact =
           contactStore.getContactByInboxId(senderInboxId) ?? contactStore.getContactByAddress(senderInboxId);
 
@@ -631,52 +584,17 @@ export function Layout() {
           return;
         }
 
-        // Avoid hammering utils/preferences for every message: refresh at most every 5 minutes per contact.
-        // For history backfill, skip live profile fetches entirely to reduce network load.
-        const nowTs = Date.now();
-        const lastSync = existingContact?.lastSyncedAt ?? 0;
-        let profile = undefined as Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | undefined;
-        if (!historyMessage && (!existingContact || nowTs - lastSync > 5 * 60 * 1000)) {
-          profile = await xmtp.fetchInboxProfile(senderInboxId);
-        }
-
-        let contact = existingContact;
-        // Only automatically add to contacts if they have a display name set
-        if (profile && profile.displayName) {
-          contact = await contactStore.upsertContactProfile({
-            inboxId: senderInboxId,
-            displayName: profile.displayName,
-            avatarUrl: profile.avatarUrl,
-            primaryAddress: profile.primaryAddress,
-            addresses: profile.addresses,
-            identities: profile.identities,
-            source: 'inbox',
-          });
-        }
-
-        if (contact?.isBlocked) {
-          console.info('[Layout] Dropping message after contact refresh because contact is blocked:', senderInboxId);
-          return;
-        }
-
-        // Enrich with ENS (and Farcaster if available) asynchronously
-        if (contact) {
-          void enrichContactProfile(contact);
-        }
-
+        const contact = existingContact;
         const fallbackAddress =
           contact?.primaryAddress ??
-          contact?.addresses?.[0] ??
-          profile?.primaryAddress ??
-          profile?.addresses?.[0];
+          contact?.addresses?.[0];
         const resolvedDisplayName =
           contact?.preferredName ??
           contact?.name ??
-          profile?.displayName ??
           fallbackAddress ??
           senderInboxId ??
           'Unknown Sender';
-        const resolvedAvatar = contact?.preferredAvatar ?? contact?.avatar ?? profile?.avatarUrl;
+        const resolvedAvatar = contact?.preferredAvatar ?? contact?.avatar;
 
         let conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
         const preservedReadState = getResyncReadStateFor(conversationId);
@@ -766,28 +684,6 @@ export function Layout() {
           const avatar = peerContact?.preferredAvatar ?? peerContact?.avatar;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
-          }
-
-          // If peer contact doesn't exist, fetch peer's profile from XMTP (not sender's)
-          if (!historyMessage && !peerContact && peerKey && (!displayName || !avatar)) {
-            try {
-              const peerProfile = await xmtp.fetchInboxProfile(peerKey);
-              if (peerProfile.displayName && !displayName && conversation.displayName !== peerProfile.displayName) {
-                updates.displayName = peerProfile.displayName;
-              } else if (
-                !displayName &&
-                (looksLikeInboxId(conversation.displayName) || !conversation.displayName) &&
-                (peerProfile.primaryAddress || peerProfile.addresses?.[0])
-              ) {
-                updates.displayName = peerProfile.primaryAddress || peerProfile.addresses?.[0];
-              }
-              if (peerProfile.avatarUrl && !avatar && conversation.displayAvatar !== peerProfile.avatarUrl) {
-                updates.displayAvatar = peerProfile.avatarUrl;
-              }
-            } catch (e) {
-              // Non-fatal - will use fallback formatIdentifier in ConversationView
-              console.warn('[Layout] Failed to fetch peer profile for conversation:', e);
-            }
           }
 
           if (Object.keys(updates).length > 0) {
@@ -1113,35 +1009,6 @@ export function Layout() {
         }
       } catch (e) {
         console.warn('[Layout] Pending profile flush skipped:', e);
-      }
-
-      // 2) Proactively enrich contacts from XMTP
-      try {
-        const state = useContactStore.getState();
-        for (const c of state.contacts) {
-          const now = Date.now();
-          const last = c.lastSyncedAt ?? 0;
-          if (!c.preferredName || !c.preferredAvatar || now - last > 30 * 60 * 1000) {
-            try {
-              const xmtp = getXmtpClient();
-              const profile = await xmtp.fetchInboxProfile(c.inboxId);
-              await state.upsertContactProfile({
-                inboxId: profile.inboxId,
-                displayName: profile.displayName,
-                avatarUrl: profile.avatarUrl,
-                primaryAddress: profile.primaryAddress,
-                addresses: profile.addresses,
-                identities: profile.identities,
-                source: 'inbox',
-                metadata: { ...c, lastSyncedAt: Date.now() },
-              });
-            } catch {
-              // non-fatal
-            }
-          }
-        }
-      } catch {
-        // ignore
       }
     };
     run();

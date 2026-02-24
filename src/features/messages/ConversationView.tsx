@@ -9,7 +9,6 @@ import { ContactCardModal } from '@/components/ContactCardModal';
 import { getContactInfo } from '@/lib/default-contacts';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
-import { getXmtpClient } from '@/lib/xmtp';
 import { GroupInviteModal } from '@/features/conversations/GroupInviteModal';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
@@ -314,87 +313,6 @@ export function ConversationView() {
       setActiveConversation(null);
     };
   }, [id, setActiveConversation]);
-
-  useEffect(() => {
-    if (!conversation?.isGroup) {
-      return;
-    }
-
-    const memberSet = new Set<string>();
-    conversation.groupMembers?.forEach((member) => {
-      if (member.inboxId) {
-        memberSet.add(member.inboxId.toLowerCase());
-      }
-    });
-    conversation.memberInboxes?.forEach((memberInbox) => {
-      if (memberInbox) {
-        memberSet.add(memberInbox.toLowerCase());
-      }
-    });
-
-    if (memberSet.size === 0) {
-      return;
-    }
-
-    const myInboxLower = identity?.inboxId?.toLowerCase();
-    let cancelled = false;
-
-    const run = async () => {
-      try {
-        const xmtp = getXmtpClient();
-        const contactStore = useContactStore.getState();
-        for (const memberInbox of memberSet) {
-          if (cancelled) {
-            break;
-          }
-          if (!memberInbox) {
-            continue;
-          }
-          if (myInboxLower && memberInbox === myInboxLower) {
-            continue;
-          }
-          try {
-            const existing = contactStore.getContactByInboxId(memberInbox);
-            if (!existing) {
-              continue;
-            }
-
-            const now = Date.now();
-            const last = existing.lastSyncedAt ?? 0;
-            if (existing.preferredName && existing.preferredAvatar && now - last < 30 * 60 * 1000) {
-              continue;
-            }
-
-            const profile = await xmtp.fetchInboxProfile(memberInbox);
-            if (cancelled) {
-              return;
-            }
-
-            await contactStore.upsertContactProfile({
-              inboxId: profile.inboxId ?? memberInbox,
-              displayName: profile.displayName,
-              avatarUrl: profile.avatarUrl,
-              primaryAddress: profile.primaryAddress,
-              addresses: profile.addresses,
-              identities: profile.identities,
-              source: 'inbox',
-              metadata: { ...existing, lastSyncedAt: Date.now() },
-            });
-          } catch (error) {
-            console.warn('[ConversationView] Failed to refresh member profile', memberInbox, error);
-          }
-        }
-      } catch (error) {
-        console.warn('[ConversationView] Failed to load group member profiles', error);
-      }
-    };
-
-    void run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [conversation?.id, conversation?.isGroup, conversation?.groupMembers, conversation?.memberInboxes, identity?.inboxId]);
 
   // Note: Message handling is done globally in Layout.tsx
   // This component just displays messages from the store

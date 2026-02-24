@@ -237,10 +237,29 @@ export function ContactsPage() {
               try {
                 const xmtp = (await import('@/lib/xmtp')).getXmtpClient();
                 for (const c of contacts) {
-                  const key = c.inboxId || c.primaryAddress || c.addresses?.[0];
-                  if (!key) continue;
                   try {
-                    const profile = await xmtp.fetchInboxProfile(String(key));
+                    let inboxId = c.inboxId;
+                    if (!inboxId || inboxId.startsWith('0x')) {
+                      const addressCandidate = c.primaryAddress || c.addresses?.[0];
+                      if (addressCandidate) {
+                        try {
+                          const resolved =
+                            (await xmtp.getInboxIdFromAddress(addressCandidate)) ||
+                            (await xmtp.deriveInboxIdFromAddress(addressCandidate));
+                          if (resolved && !resolved.startsWith('0x')) {
+                            inboxId = resolved.toLowerCase();
+                          }
+                        } catch (resolveErr) {
+                          console.warn('[Contacts] Failed to resolve inbox id during refresh', resolveErr);
+                        }
+                      }
+                    }
+
+                    if (!inboxId || inboxId.startsWith('0x')) {
+                      continue;
+                    }
+
+                    const profile = await xmtp.refreshInboxProfile(inboxId);
                     await upsertContactProfile({
                       inboxId: profile.inboxId,
                       displayName: profile.displayName,
@@ -252,7 +271,7 @@ export function ContactsPage() {
                       metadata: c,
                     });
                   } catch (e) {
-                    console.warn('[Contacts] Refresh failed for', key, e);
+                    console.warn('[Contacts] Refresh failed for', c.inboxId || c.primaryAddress || c.addresses?.[0], e);
                   }
                 }
                 alert('Contacts refreshed.');

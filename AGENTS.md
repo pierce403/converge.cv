@@ -451,7 +451,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (Remove legacy cv:profile support)
+**Last Updated**: 2026-02-24 (Local-first XMTP caching + sync dedupe)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
@@ -462,6 +462,19 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Removed legacy `cv:profile:` handling in favor of the `converge.cv/profile:1.0` content type only.
 - Renamed the local scratch directory from `tmp/` to `code/` and updated ignore/exclude rules and references.
 - Reviewed `convos-web` `appData` usage: group `appData` stores protobuf metadata (profiles, invite tag, expiry, image encryption key, encrypted group image) with optional deflate-raw compression + base64url encoding; profile avatars are re-encrypted with the group image key before upload.
+
+### Local-First XMTP Caching + Sync Dedupe
+- `fetchInboxProfile(...)` is now local-first by default (`mode: 'local'`) and never triggers identity/profile network calls unless explicitly refreshed via `refreshInboxProfile(...)`.
+- Added class-local TTL + in-flight dedupe caches around the biggest offenders:
+  - `conversations.getDmByInboxId()` (10m hit, 60s negative)
+  - `preferences.fetchInboxStates()` / `Client.fetchInboxStates()` (6h hit)
+- Message streaming now uses `streamAllMessages({ disableSync: true, consentStates: [Allowed, Unknown] })` to avoid redundant implicit sync and to receive unknown-consent invite requests without periodic DM scans.
+- Connect-time sync is incremental by default:
+  - `enableHistorySync` defaults to `false`
+  - recent backfill lookback tightened to ~30s
+  - per-conversation `dm.sync()`/`group.sync()` throttled via persisted `lastSyncedAt` (5m)
+- Removed background “remote profile refresh” loops; profile ingestion is event-driven (persisted on receipt of `converge.cv/profile:1.0` messages).
+- Added debug-only “Run Deep History Sync” control and cache/sync instrumentation entries in the Debug Network Log.
 
 ## Latest Changes (2026-02-23)
 

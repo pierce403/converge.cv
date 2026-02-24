@@ -1,10 +1,9 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore } from '@/lib/stores';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import type { ContactIdentity } from '@/lib/stores/contact-store';
-import { getXmtpClient } from '@/lib/xmtp';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 
 interface UserInfoModalProps {
@@ -28,37 +27,9 @@ export function UserInfoModal({ inboxId, onClose }: UserInfoModalProps) {
   const isContactFn = useContactStore((s) => s.isContact);
   const isAlreadyContact = isContactFn(inboxId);
 
-  const upsertContactProfile = useContactStore((s) => s.upsertContactProfile);
-
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
   };
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const xmtp = getXmtpClient();
-        const profile = await xmtp.fetchInboxProfile(inboxId);
-        if (!mounted) return;
-        await upsertContactProfile({
-          inboxId: profile.inboxId,
-          displayName: profile.displayName,
-          avatarUrl: profile.avatarUrl,
-          primaryAddress: profile.primaryAddress,
-          addresses: profile.addresses,
-          identities: profile.identities,
-          source: 'inbox',
-        });
-      } catch (e) {
-        // Non-fatal if profile fetch fails
-        console.warn('[UserInfoModal] Profile fetch failed', e);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [inboxId, upsertContactProfile]);
 
   return (
     <>

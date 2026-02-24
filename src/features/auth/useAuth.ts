@@ -78,7 +78,7 @@ export function useAuth() {
       const xmtp = getXmtpClient();
       const shouldRegister = options?.register === true;
       const shouldSyncHistory =
-        options?.enableHistorySync !== undefined ? options.enableHistorySync : true;
+        options?.enableHistorySync !== undefined ? options.enableHistorySync : false;
 
       // Pull the persisted identity so the XMTP client can throttle redundant syncs across reloads.
       let lastSyncedAt: number | undefined;
@@ -227,7 +227,7 @@ export function useAuth() {
           {
             register: options?.register !== false,
             enableHistorySync:
-              options?.enableHistorySync !== undefined ? options.enableHistorySync : true,
+              options?.enableHistorySync !== undefined ? options.enableHistorySync : false,
             labelOverride: options?.label,
             skipRegistryUpdate: options?.skipRegistryUpdate,
           }

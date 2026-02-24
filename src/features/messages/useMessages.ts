@@ -256,18 +256,19 @@ export function useMessages() {
       }
 
       // Fetch profile from XMTP to get display name and avatar
-      // Use the derived inbox ID, or the address if derivation failed
+      // Use the derived inbox ID (network mode)
       let profile = undefined;
       try {
         const xmtp = getXmtpClient();
-        const profileLookupKey = actualInboxId.startsWith('0x') ? normalizedAddress || actualInboxId : actualInboxId;
-        profile = await xmtp.fetchInboxProfile(profileLookupKey);
-        console.log('[useMessages] Fetched profile for new contact:', profile);
+        if (!actualInboxId.startsWith('0x')) {
+          profile = await xmtp.refreshInboxProfile(actualInboxId);
+          console.log('[useMessages] Refreshed profile for new contact:', profile);
 
-        // If profile has a valid inbox ID (not an address), use it
-        if (profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10) {
-          actualInboxId = profile.inboxId.toLowerCase();
-          console.log('[useMessages] Using inbox ID from profile:', actualInboxId);
+          // If profile has a valid inbox ID (not an address), use it
+          if (profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10) {
+            actualInboxId = profile.inboxId.toLowerCase();
+            console.log('[useMessages] Using inbox ID from profile:', actualInboxId);
+          }
         }
       } catch (e) {
         console.warn('[useMessages] Failed to fetch profile for new contact, will use fallback:', e);

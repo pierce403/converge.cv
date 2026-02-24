@@ -91,8 +91,13 @@ export function useConversations() {
         return;
       }
 
-      const refreshIntervalMs = 30 * 60 * 1000; // 30 minutes
       let storageInstance: Awaited<ReturnType<typeof getStorage>> | null = null;
+      const contactStore = useContactStore.getState();
+
+      const isHexAddress = (value?: string) =>
+        Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
+      const isAddressLike = (value?: string | null) =>
+        Boolean(value && (isHexAddress(value) || looksLikeInboxId(value)));
 
       for (const conversation of items) {
         if (conversation.isGroup) {
@@ -106,101 +111,31 @@ export function useConversations() {
             continue;
           }
 
-          const contactStore = useContactStore.getState();
-          const existingContact =
+          const contact =
             contactStore.getContactByInboxId(peerIdLower) ??
             contactStore.getContactByAddress(peerIdLower);
 
-          const now = Date.now();
-          const lastSynced = existingContact?.lastSyncedAt ?? 0;
-          const hasFreshProfile =
-            existingContact?.preferredName &&
-            existingContact?.preferredAvatar &&
-            now - lastSynced < refreshIntervalMs;
-
-          if (hasFreshProfile) {
+          // Local-first: never refresh profiles from the network in this background hydration pass.
+          if (!contact) {
             continue;
           }
 
-          const xmtp = getXmtpClient();
-          let inboxId = peerIdLower;
-          if (peerIdLower.startsWith('0x')) {
-            try {
-              const derived = await xmtp.deriveInboxIdFromAddress(peerIdLower);
-              if (derived) {
-                inboxId = derived.toLowerCase();
-              }
-            } catch (err) {
-              console.warn('[useConversations] Failed to derive inbox id from address', err);
-            }
-          }
-
-          let profile = await xmtp.fetchInboxProfile(inboxId);
-
-          // If XMTP resolved the canonical inbox id, prefer it
-          const canonicalInboxId = profile.inboxId?.toLowerCase?.() ?? inboxId;
-          if (canonicalInboxId !== inboxId) {
-            try {
-              profile = await xmtp.fetchInboxProfile(canonicalInboxId);
-            } catch (err) {
-              console.warn('[useConversations] Failed to refetch profile for canonical inbox id', err);
-            }
-          }
-
-          const metadata = existingContact
-            ? { lastSyncedAt: Date.now() }
-            : undefined;
-
-          const updatedContact = existingContact
-            ? await contactStore.upsertContactProfile({
-                inboxId: canonicalInboxId,
-                displayName: profile.displayName,
-                avatarUrl: profile.avatarUrl,
-                primaryAddress: profile.primaryAddress,
-                addresses: profile.addresses,
-                identities: profile.identities,
-                source: 'inbox',
-                metadata,
-              })
-            : undefined;
-
           const updates: Partial<Conversation> = {};
-          if (!conversation.isGroup && canonicalInboxId && conversation.peerId.toLowerCase() !== canonicalInboxId) {
+          const canonicalInboxId = contact.inboxId?.toLowerCase?.();
+          if (
+            canonicalInboxId &&
+            !canonicalInboxId.startsWith('0x') &&
+            conversation.peerId.toLowerCase() !== canonicalInboxId
+          ) {
             updates.peerId = canonicalInboxId;
           }
 
-          const isHexAddress = (value?: string) =>
-            Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
-          const isAddressLike = (value?: string | null) =>
-            Boolean(value && (isHexAddress(value) || looksLikeInboxId(value)));
-
-          const contactDisplayName =
-            updatedContact?.preferredName ||
-            updatedContact?.name ||
-            existingContact?.preferredName ||
-            existingContact?.name;
-          const profileDisplayName =
-            profile.displayName ||
-            profile.primaryAddress ||
-            profile.addresses?.[0] ||
-            canonicalInboxId;
-          let displayName = contactDisplayName || profileDisplayName;
-
-          // Avoid downgrading a human-friendly name to a hex address if we already have one
-          if (
-            displayName &&
-            isAddressLike(displayName) &&
-            (contactDisplayName || (!isAddressLike(conversation.displayName) && conversation.displayName))
-          ) {
-            displayName = contactDisplayName || conversation.displayName || displayName;
-          }
-
-          if (displayName && conversation.displayName !== displayName) {
+          const displayName = contact.preferredName ?? contact.name;
+          if (displayName && !isAddressLike(displayName) && conversation.displayName !== displayName) {
             updates.displayName = displayName;
           }
 
-          const avatar =
-            updatedContact?.preferredAvatar || updatedContact?.avatar || profile.avatarUrl;
+          const avatar = contact.preferredAvatar ?? contact.avatar;
           if (avatar && conversation.displayAvatar !== avatar) {
             updates.displayAvatar = avatar;
           }
@@ -342,12 +277,19 @@ export function useConversations() {
                 continue;
               }
               let key = peerLower;
-              if (isXmtpConnected && peerLower.startsWith('0x')) {
-                try {
-                  const inboxId = await xmtp.deriveInboxIdFromAddress(peerLower);
-                  if (inboxId) key = inboxId.toLowerCase();
-                } catch {
-                  // ignore failures (e.g., offline or blocked); keep address as key
+              if (peerLower.startsWith('0x')) {
+                // Prefer local contact mapping to avoid identity lookups on load.
+                const localContact = useContactStore.getState().getContactByAddress(peerLower);
+                const localInbox = localContact?.inboxId?.toLowerCase?.();
+                if (localInbox && !localInbox.startsWith('0x')) {
+                  key = localInbox;
+                } else if (isXmtpConnected) {
+                  try {
+                    const inboxId = await xmtp.deriveInboxIdFromAddress(peerLower);
+                    if (inboxId) key = inboxId.toLowerCase();
+                  } catch {
+                    // ignore failures (e.g., offline or blocked); keep address as key
+                  }
                 }
               }
               const existing = byPeer.get(key);
@@ -459,44 +401,48 @@ export function useConversations() {
             }
           }
           
-          // Fetch profile using the resolved inbox ID (or address if resolution failed)
-          const profile = await xmtp.fetchInboxProfile(finalInboxId);
-          
-          // Only use profile inbox ID if it's valid (not an address)
-          const profileInboxId = profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10
-            ? profile.inboxId.toLowerCase()
-            : finalInboxId;
-          
-          // Final check: never store an address as the inbox ID
-          if (profileInboxId.startsWith('0x')) {
-            console.error('[useConversations] ERROR: Cannot store contact with address as inbox ID:', profileInboxId);
-            // Don't create the contact if we can't get a valid inbox ID
-            // The conversation will still work, but contact info won't be available
-            throw new Error('Could not resolve inbox ID for contact');
+          if (finalInboxId.startsWith('0x')) {
+            console.warn('[useConversations] Skipping profile refresh because inboxId is still address-like:', finalInboxId);
+          } else {
+            // Fetch profile from XMTP (explicit network refresh)
+            const profile = await xmtp.refreshInboxProfile(finalInboxId);
+
+            // Only use profile inbox ID if it's valid (not an address)
+            const profileInboxId = profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10
+              ? profile.inboxId.toLowerCase()
+              : finalInboxId;
+
+            // Final check: never store an address as the inbox ID
+            if (profileInboxId.startsWith('0x')) {
+              console.error('[useConversations] ERROR: Cannot store contact with address as inbox ID:', profileInboxId);
+              // Don't create the contact if we can't get a valid inbox ID
+              // The conversation will still work, but contact info won't be available
+              throw new Error('Could not resolve inbox ID for contact');
+            }
+
+            await contactStore.upsertContactProfile({
+              inboxId: profileInboxId,
+              displayName: profile.displayName,
+              avatarUrl: profile.avatarUrl,
+              primaryAddress: profile.primaryAddress || (normalizedInput.startsWith('0x') ? normalizedInput : undefined),
+              addresses: profile.addresses || (normalizedInput.startsWith('0x') ? [normalizedInput] : []),
+              identities: profile.identities || (normalizedInput.startsWith('0x')
+                ? [
+                    {
+                      identifier: normalizedInput,
+                      kind: 'Ethereum',
+                      isPrimary: true,
+                    },
+                  ]
+                : []),
+              source: 'inbox',
+            });
+            console.log('[useConversations] ✅ Fetched and stored contact profile:', {
+              inboxId: profileInboxId,
+              displayName: profile.displayName,
+              hasAvatar: !!profile.avatarUrl,
+            });
           }
-          
-          await contactStore.upsertContactProfile({
-            inboxId: profileInboxId,
-            displayName: profile.displayName,
-            avatarUrl: profile.avatarUrl,
-            primaryAddress: profile.primaryAddress || (normalizedInput.startsWith('0x') ? normalizedInput : undefined),
-            addresses: profile.addresses || (normalizedInput.startsWith('0x') ? [normalizedInput] : []),
-            identities: profile.identities || (normalizedInput.startsWith('0x')
-              ? [
-                  {
-                    identifier: normalizedInput,
-                    kind: 'Ethereum',
-                    isPrimary: true,
-                  },
-                ]
-              : []),
-            source: 'inbox',
-          });
-          console.log('[useConversations] ✅ Fetched and stored contact profile:', {
-            inboxId: profileInboxId,
-            displayName: profile.displayName,
-            hasAvatar: !!profile.avatarUrl,
-          });
         } catch (profileError) {
           // Non-fatal - conversation creation succeeded, profile fetch can fail
           console.warn('[useConversations] Failed to fetch/store profile for new conversation (non-fatal):', profileError);

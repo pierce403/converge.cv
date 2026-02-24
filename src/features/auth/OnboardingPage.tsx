@@ -316,7 +316,7 @@ export function OnboardingPage() {
 
       const success = await auth.createIdentity(account.address, privateKeyHex, undefined, undefined, {
         register: true,
-        enableHistorySync: true,
+        enableHistorySync: false,
         label: `Identity ${shortAddress(account.address)}`,
         mnemonic,
       });
@@ -356,7 +356,7 @@ export function OnboardingPage() {
         undefined,
         {
           register: true,
-          enableHistorySync: true,
+          enableHistorySync: false,
           // Don't pass label - will fetch from XMTP
           mnemonic: keyfileCandidate.mnemonic,
         }
@@ -384,7 +384,7 @@ export function OnboardingPage() {
         }
 
         if (identity?.inboxId && xmtp.isConnected()) {
-          const profile = await xmtp.fetchInboxProfile(identity.inboxId);
+          const profile = await xmtp.refreshInboxProfile(identity.inboxId);
           if (profile.displayName) {
             const storage = await getStorage();
             const updatedIdentity = { ...identity, displayName: profile.displayName };

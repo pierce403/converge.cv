@@ -7,6 +7,7 @@ import {
   useXmtpStore,
 } from '@/lib/stores';
 import { formatDistanceToNow } from '@/lib/utils/date';
+import { getXmtpClient } from '@/lib/xmtp';
 import { WebWorkersPanel } from './WebWorkersPanel';
 import { KeyExplorerModal } from './KeyExplorerModal';
 import { IgnoredConversationsModal } from './IgnoredConversationsModal';
@@ -69,6 +70,7 @@ export function DebugPage() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
   const [inviteSending, setInviteSending] = useState(false);
+  const [deepSyncRunning, setDeepSyncRunning] = useState(false);
 
   async function refreshPushStatus() {
     try {
@@ -656,6 +658,49 @@ export function DebugPage() {
               Last connected {lastConnected ? formatDistanceToNow(lastConnected) : 'never'}
             </p>
             {xmtpError && <p className="mt-1 text-sm text-red-400">{xmtpError}</p>}
+            <button
+              type="button"
+              disabled={connectionStatus !== 'connected' || deepSyncRunning}
+              onClick={async () => {
+                if (deepSyncRunning) return;
+                const confirmed = window.confirm(
+                  'Run deep history sync?\n\nThis can be slow and may trigger a lot of network traffic. It is not required for normal usage.'
+                );
+                if (!confirmed) return;
+
+                setDeepSyncRunning(true);
+                logNetworkEvent({
+                  direction: 'status',
+                  event: 'history:deep_sync',
+                  details: 'Starting full history sync',
+                });
+
+                try {
+                  await getXmtpClient().runFullHistorySync();
+                  logNetworkEvent({
+                    direction: 'status',
+                    event: 'history:deep_sync',
+                    details: 'Full history sync complete',
+                  });
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+                  logNetworkEvent({
+                    direction: 'status',
+                    event: 'history:deep_sync',
+                    details: `Full history sync failed: ${message}`,
+                  });
+                } finally {
+                  setDeepSyncRunning(false);
+                }
+              }}
+              className="mt-3 rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Run a full history backfill (debug-only)"
+            >
+              {deepSyncRunning ? 'Running deep sync…' : 'Run Deep History Sync'}
+            </button>
+            <p className="mt-2 text-xs text-primary-300">
+              Warning: This may take minutes and will retry network sync. Prefer the default local-first mode.
+            </p>
           </article>
         </section>
 

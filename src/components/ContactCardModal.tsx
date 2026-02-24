@@ -393,11 +393,17 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // XMTP profile last (message history)
       if (isXmtpConnected) {
         try {
-          const targetInbox = subject.inboxId || subject.primaryAddress || subject.addresses?.[0];
+          const targetInbox = (() => {
+            const inbox = subject.inboxId?.trim();
+            if (inbox && !inbox.toLowerCase().startsWith('0x')) {
+              return inbox;
+            }
+            return latestInboxId;
+          })();
           if (targetInbox) {
             console.log('[ContactCardModal] Refreshing profile for', targetInbox);
-            const profile = await xmtp.fetchInboxProfile(String(targetInbox));
-            console.log('[ContactCardModal] fetchInboxProfile result:', profile);
+            const profile = await xmtp.refreshInboxProfile(String(targetInbox));
+            console.log('[ContactCardModal] refreshInboxProfile result:', profile);
             ingestProfile(profile);
             preferName(profile?.displayName, 'xmtp');
             preferAvatar(profile?.avatarUrl, 'xmtp');
@@ -410,7 +416,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // Fetch canonical profile if inbox ID changed
       if (latestInboxId && latestInboxId !== subject.inboxId?.toLowerCase()) {
         try {
-          const canonicalProfile = await xmtp.fetchInboxProfile(latestInboxId);
+          const canonicalProfile = await xmtp.refreshInboxProfile(latestInboxId);
           ingestProfile(canonicalProfile);
           preferName(canonicalProfile?.displayName, 'xmtp');
           preferAvatar(canonicalProfile?.avatarUrl, 'xmtp');

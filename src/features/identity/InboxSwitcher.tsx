@@ -217,7 +217,7 @@ export function InboxSwitcher() {
       const label = `Identity ${shortAddress(account.address)}`;
       const ok = await createIdentity(account.address, privateKeyHex, undefined, undefined, {
         register: true,
-        enableHistorySync: true,
+        enableHistorySync: false,
         label,
         mnemonic,
       });

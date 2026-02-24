@@ -96,7 +96,7 @@ export function InviteRequestModal({
 
         if (!contact) {
           try {
-            inboxProfile = await getXmtpClient().fetchInboxProfile(request.senderInboxId);
+            inboxProfile = await getXmtpClient().refreshInboxProfile(request.senderInboxId);
             if (inboxProfile && (inboxProfile.displayName || inboxProfile.avatarUrl || inboxProfile.primaryAddress)) {
               contact = await contactStore.upsertContactProfile({
                 inboxId: request.senderInboxId,
