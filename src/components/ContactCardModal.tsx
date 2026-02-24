@@ -266,10 +266,11 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const ingestProfile = (profile: Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | null) => {
         if (!profile) return;
         if (profile.displayName) {
-          latestProfileDisplayName = profile.displayName;
+          // Keep source priority intact (Farcaster > ENS > XMTP > message).
+          preferName(profile.displayName, 'xmtp');
         }
         if (profile.avatarUrl) {
-          latestProfileAvatar = profile.avatarUrl;
+          preferAvatar(profile.avatarUrl, 'xmtp');
         }
         addAddress(profile.primaryAddress);
         profile.addresses?.forEach(addAddress);
@@ -406,8 +407,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             const profile = await xmtp.refreshInboxProfile(String(targetInbox));
             console.log('[ContactCardModal] refreshInboxProfile result:', profile);
             ingestProfile(profile);
-            preferName(profile?.displayName, 'xmtp');
-            preferAvatar(profile?.avatarUrl, 'xmtp');
           }
         } catch (e) {
           console.warn('[ContactCardModal] Profile refresh skipped/failed:', e);
@@ -419,8 +418,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         try {
           const canonicalProfile = await xmtp.refreshInboxProfile(latestInboxId);
           ingestProfile(canonicalProfile);
-          preferName(canonicalProfile?.displayName, 'xmtp');
-          preferAvatar(canonicalProfile?.avatarUrl, 'xmtp');
         } catch (canonicalError) {
           console.warn('[ContactCardModal] Failed to fetch canonical inbox profile:', canonicalError);
         }
