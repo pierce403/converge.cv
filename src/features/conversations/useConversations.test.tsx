@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { useConversations, groupDetailsToConversationUpdates } from './useConversations';
@@ -11,6 +11,9 @@ let conversationRecord: Conversation;
 const xmtpMock = {
   addMembersToGroup: vi.fn(),
   removeMembersFromGroup: vi.fn(),
+  resolveInboxIdForAddress: vi.fn(),
+  isConnected: vi.fn(() => false),
+  getInboxId: vi.fn(() => null),
 };
 
 const mockStorage = {
@@ -18,6 +21,8 @@ const mockStorage = {
   putConversation: vi.fn(async (conv: Conversation) => {
     conversationRecord = conv;
   }),
+  listConversations: vi.fn(async (): Promise<Conversation[]> => []),
+  isPeerDeleted: vi.fn(async () => false),
   markConversationDeleted: vi.fn(async () => undefined),
   unmarkConversationDeletion: vi.fn(async () => undefined),
   unmarkPeerDeletion: vi.fn(async () => undefined),
@@ -70,6 +75,13 @@ describe('useConversations controls', () => {
     });
     xmtpMock.addMembersToGroup.mockReset();
     xmtpMock.removeMembersFromGroup.mockReset();
+    xmtpMock.resolveInboxIdForAddress.mockReset();
+    xmtpMock.isConnected.mockReset();
+    xmtpMock.getInboxId.mockReset();
+    xmtpMock.isConnected.mockReturnValue(false);
+    xmtpMock.getInboxId.mockReturnValue(null);
+    mockStorage.listConversations.mockResolvedValue([]);
+    mockStorage.isPeerDeleted.mockResolvedValue(false);
   });
 
   it('toggles mute/unmute and records deletion markers', async () => {
@@ -276,5 +288,55 @@ describe('groupDetailsToConversationUpdates', () => {
     expect(updates.memberInboxes).toEqual(['inbox-a', 'inbox-b']);
     expect(updates.superAdminInboxes).toEqual(['inbox-b']);
     expect(updates.groupPermissions?.policySet.addMemberPolicy).toBe(1);
+  });
+});
+
+describe('loadConversations identity lookup dedupe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({
+      isAuthenticated: false,
+      isVaultUnlocked: false,
+      identity: null,
+      vaultSecrets: null,
+    });
+  });
+
+  it('uses a single resolver lookup for address-like peer IDs during cleanup', async () => {
+    const peerAddress = '0x1111111111111111111111111111111111111111';
+    const resolvedInbox = 'f'.repeat(64);
+    const seededConversation: Conversation = {
+      id: 'addr-conv',
+      peerId: peerAddress,
+      lastMessageAt: 0,
+      unreadCount: 0,
+      pinned: false,
+      archived: false,
+      createdAt: 0,
+      lastMessagePreview: '',
+      lastMessageSender: '',
+      isGroup: false,
+    };
+
+    mockStorage.listConversations.mockResolvedValue([seededConversation]);
+    xmtpMock.isConnected.mockReturnValue(true);
+    xmtpMock.resolveInboxIdForAddress.mockResolvedValue(resolvedInbox);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.loadConversations();
+    });
+
+    await waitFor(() => {
+      expect(xmtpMock.resolveInboxIdForAddress).toHaveBeenCalledTimes(1);
+    });
+    expect(xmtpMock.resolveInboxIdForAddress).toHaveBeenCalledWith(
+      peerAddress.toLowerCase(),
+      { context: 'useConversations:loadConversations:cleanup' },
+    );
   });
 });

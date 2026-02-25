@@ -282,18 +282,15 @@ export function useMessages() {
         ? getAddress(recipientInboxId as `0x${string}`)
         : undefined;
       const addressList = normalizedAddress ? [normalizedAddress.toLowerCase()] : [];
+      const xmtp = getXmtpClient();
 
       // If recipientInboxId looks like an address, try to derive the actual inbox ID
       let actualInboxId = recipientInboxId;
       if (normalizedAddress) {
         try {
-          const xmtp = getXmtpClient();
-          // Use getInboxIdFromAddress first (more reliable for registered users)
-          let derivedInboxId = await xmtp.getInboxIdFromAddress(normalizedAddress);
-          if (!derivedInboxId) {
-            // Fallback to deriveInboxIdFromAddress if getInboxIdFromAddress fails
-            derivedInboxId = await xmtp.deriveInboxIdFromAddress(normalizedAddress);
-          }
+          const derivedInboxId = await xmtp.resolveInboxIdForAddress(normalizedAddress, {
+            context: 'useMessages:ensureContactForConversation',
+          });
           if (derivedInboxId && !derivedInboxId.startsWith('0x')) {
             // Only use if it's actually an inbox ID (not an address)
             actualInboxId = derivedInboxId.toLowerCase();
@@ -310,7 +307,6 @@ export function useMessages() {
       // Use the derived inbox ID (network mode)
       let profile = undefined;
       try {
-        const xmtp = getXmtpClient();
         if (!actualInboxId.startsWith('0x')) {
           profile = await xmtp.refreshInboxProfile(actualInboxId);
           console.log('[useMessages] Refreshed profile for new contact:', profile);
@@ -327,20 +323,7 @@ export function useMessages() {
 
       // Ensure we're not using an address as the inbox ID
       if (actualInboxId.startsWith('0x')) {
-        console.error('[useMessages] ERROR: Contact inbox ID is still an address:', actualInboxId);
-        // Try one more time to get the inbox ID
-        if (normalizedAddress) {
-          try {
-            const xmtp = getXmtpClient();
-            const lastAttempt = await xmtp.getInboxIdFromAddress(normalizedAddress);
-            if (lastAttempt && !lastAttempt.startsWith('0x')) {
-              actualInboxId = lastAttempt.toLowerCase();
-              console.log('[useMessages] Successfully resolved inbox ID on last attempt:', actualInboxId);
-            }
-          } catch (e) {
-            console.error('[useMessages] Final attempt to resolve inbox ID failed:', e);
-          }
-        }
+        console.warn('[useMessages] Contact inbox ID remained address-like after single resolver attempt:', actualInboxId);
       }
 
       if (actualInboxId.toLowerCase().startsWith('0x')) {

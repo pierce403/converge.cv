@@ -222,6 +222,11 @@ export interface InboxProfile {
   }>;
 }
 
+export interface CanMessageWithInboxResult {
+  canMessage: boolean;
+  inboxId: string | null;
+}
+
 export interface GroupKeySummary {
   currentEpoch?: number | null;
   maybeForked?: boolean;
@@ -270,6 +275,7 @@ export class XmtpClient {
   private cacheCounters = {
     dmByInbox: { hit: 0, miss: 0 },
     inboxState: { hit: 0, miss: 0 },
+    addressInbox: { hit: 0, miss: 0, network: 0, cooldownSkip: 0 },
   };
   private identityInitInFlight: Promise<void> | null = null;
   private identityInitAttempts = 0;
@@ -293,6 +299,17 @@ export class XmtpClient {
     },
     onMiss: () => {
       this.cacheCounters.inboxState.miss += 1;
+    },
+  });
+  private addressInboxCache = new KeyedAsyncCache<string | null>({
+    ttlMs: 15 * 60 * 1000,
+    negativeTtlMs: 60 * 1000,
+    isNegative: (value) => !value,
+    onHit: () => {
+      this.cacheCounters.addressInbox.hit += 1;
+    },
+    onMiss: () => {
+      this.cacheCounters.addressInbox.miss += 1;
     },
   });
   private syncCounters = {
@@ -321,10 +338,15 @@ export class XmtpClient {
   private clearXmtpCaches(): void {
     this.dmByInboxCache.clear();
     this.inboxStatesCache.clear();
+    this.addressInboxCache.clear();
     this.cacheCounters.dmByInbox.hit = 0;
     this.cacheCounters.dmByInbox.miss = 0;
     this.cacheCounters.inboxState.hit = 0;
     this.cacheCounters.inboxState.miss = 0;
+    this.cacheCounters.addressInbox.hit = 0;
+    this.cacheCounters.addressInbox.miss = 0;
+    this.cacheCounters.addressInbox.network = 0;
+    this.cacheCounters.addressInbox.cooldownSkip = 0;
     this.syncCounters.dmSyncCalls = 0;
     this.syncCounters.groupSyncCalls = 0;
     this.syncCounters.backfillMessages = 0;
@@ -1356,58 +1378,108 @@ export class XmtpClient {
     };
   }
 
-  async deriveInboxIdFromAddress(address: string): Promise<string | null> {
-    try {
-      const normalized = this.normalizeEthereumAddress(address);
+  private isValidResolvedInboxId(value: unknown): value is string {
+    if (typeof value !== 'string') return false;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized || normalized.startsWith('0x')) return false;
+    if (normalized.length < 24) return false;
+    return /^[0-9a-f]+$/i.test(normalized);
+  }
 
-      if (this.shouldSkipIdentityCalls('deriveInboxIdFromAddress')) {
+  private async resolveInboxIdForAddressNetwork(
+    normalizedAddress: `0x${string}`,
+    context: string,
+    opts?: { allowStaticFallback?: boolean },
+  ): Promise<string | null> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+
+    this.cacheCounters.addressInbox.network += 1;
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'identity:lookup',
+      details: `Resolving inbox for ${normalizedAddress} (context=${context})`,
+    });
+
+    const identifier = {
+      identifier: toIdentifierHex(normalizedAddress).toLowerCase(),
+      identifierKind: IdentifierKind.Ethereum,
+    };
+
+    try {
+      const inboxId = await this.retryWithBackoff('client.fetchInboxIdByIdentifier', () =>
+        this.client!.fetchInboxIdByIdentifier(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          identifier as any,
+        ),
+      );
+      if (this.isValidResolvedInboxId(inboxId)) {
+        return inboxId.toLowerCase();
+      }
+    } catch (error) {
+      console.warn(`[XMTP] ${context}: fetchInboxIdByIdentifier failed for ${normalizedAddress}`, error);
+    }
+
+    if (opts?.allowStaticFallback === false) {
+      return null;
+    }
+
+    try {
+      const fallback = await this.retryWithBackoff('inbox.getInboxIdForIdentifier', () =>
+        getInboxIdForIdentifier(identifier, 'production'),
+      );
+      if (this.isValidResolvedInboxId(fallback)) {
+        return fallback.toLowerCase();
+      }
+    } catch (error) {
+      console.warn(`[XMTP] ${context}: getInboxIdForIdentifier fallback failed for ${normalizedAddress}`, error);
+    }
+
+    return null;
+  }
+
+  async resolveInboxIdForAddress(
+    address: string,
+    opts?: {
+      bypassCache?: boolean;
+      allowStaticFallback?: boolean;
+      context?: string;
+    },
+  ): Promise<string | null> {
+    const context = opts?.context ?? 'resolveInboxIdForAddress';
+    try {
+      const normalized = this.normalizeEthereumAddress(address).toLowerCase() as `0x${string}`;
+      if (this.shouldSkipIdentityCalls(context)) {
+        this.cacheCounters.addressInbox.cooldownSkip += 1;
+        logNetworkEvent({
+          direction: 'status',
+          event: 'identity:lookup:skipped',
+          details: `Skipped inbox resolve for ${normalized} (context=${context}) due to cooldown`,
+        });
         return null;
       }
 
-      // Optimization: Check if client is connected before calling getInboxIdFromAddress
-      // This prevents "Client not connected" errors from filling the logs
-      if (this.client) {
-        try {
-          const existing = await this.getInboxIdFromAddress(normalized);
-          if (existing) {
-            return existing;
-          }
-        } catch (error) {
-          // Only warn if it's not the expected "Client not connected" error (though strict check above should prevent it)
-          console.warn('[XMTP] deriveInboxIdFromAddress: getInboxIdFromAddress failed, falling back to inbox resolver', error);
-        }
+      const fetcher = async (): Promise<string | null> =>
+        await this.resolveInboxIdForAddressNetwork(normalized, context, {
+          allowStaticFallback: opts?.allowStaticFallback,
+        });
+
+      if (opts?.bypassCache) {
+        return await fetcher();
       }
 
-      const identifier = {
-        identifier: toIdentifierHex(normalized).toLowerCase(),
-        identifierKind: IdentifierKind.Ethereum,
-      };
-
-      try {
-        // Add timeout to prevent hanging if the worker/network is unresponsive
-        const resolved = await Promise.race([
-          this.retryWithBackoff('inbox.getInboxIdForIdentifier', () => getInboxIdForIdentifier(identifier, 'production')),
-          new Promise<string | undefined>((_, reject) =>
-            setTimeout(() => reject(new Error('Timeout waiting for inbox resolver')), 5000)
-          ),
-        ]);
-
-        if (resolved) {
-          return resolved;
-        }
-      } catch (error) {
-        console.warn(`[XMTP] deriveInboxIdFromAddress: getInboxIdForIdentifier failed or timed out for address ${normalized}`, error);
-      }
-
-      // Don't call generateInboxId - that's only for unregistered users
-      // If we got here, the user is likely registered but we couldn't find their inbox ID
-      // This shouldn't happen, but if it does, return null instead of the address
-      console.warn(`[XMTP] deriveInboxIdFromAddress: Could not resolve inbox ID for address ${normalized}`);
-      return null;
+      return await this.addressInboxCache.get(normalized, fetcher);
     } catch (error) {
-      console.error(`[XMTP] deriveInboxIdFromAddress failed for ${address}:`, error);
+      if (!(error instanceof Error && /Client not connected/i.test(error.message))) {
+        console.warn(`[XMTP] ${context}: failed to resolve inbox for ${address}`, error);
+      }
       return null;
     }
+  }
+
+  async deriveInboxIdFromAddress(address: string): Promise<string | null> {
+    return await this.resolveInboxIdForAddress(address, { context: 'deriveInboxIdFromAddress' });
   }
 
   getInboxProfileLocal(inboxId: string): InboxProfile {
@@ -3061,7 +3133,7 @@ export class XmtpClient {
         logNetworkEvent({
           direction: 'status',
           event: 'cache:summary',
-          details: `getDmByInboxId hit=${this.cacheCounters.dmByInbox.hit} miss=${this.cacheCounters.dmByInbox.miss}; fetchInboxStates hit=${this.cacheCounters.inboxState.hit} miss=${this.cacheCounters.inboxState.miss}`,
+          details: `getDmByInboxId hit=${this.cacheCounters.dmByInbox.hit} miss=${this.cacheCounters.dmByInbox.miss}; fetchInboxStates hit=${this.cacheCounters.inboxState.hit} miss=${this.cacheCounters.inboxState.miss}; resolveInboxIdForAddress hit=${this.cacheCounters.addressInbox.hit} miss=${this.cacheCounters.addressInbox.miss} network=${this.cacheCounters.addressInbox.network} cooldownSkip=${this.cacheCounters.addressInbox.cooldownSkip}`,
         });
       } catch {
         // ignore debug store failures
@@ -5398,59 +5470,7 @@ export class XmtpClient {
     if (!this.client) {
       throw new Error('Client not connected');
     }
-
-    if (this.shouldSkipIdentityCalls('getInboxIdFromAddress')) {
-      return null;
-    }
-
-    console.log('[XMTP] Looking up inbox ID for address:', address);
-
-    try {
-      const identifier = {
-        identifier: toIdentifierHex(address).toLowerCase(),
-        identifierKind: IdentifierKind.Ethereum,
-      };
-
-      console.log('[XMTP] findInboxId identifier payload:', identifier);
-
-      // Directly ask the client for the inbox ID associated to this identifier.
-      let inboxId = await this.retryWithBackoff('client.fetchInboxIdByIdentifier', () => this.client!.fetchInboxIdByIdentifier(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        identifier as any
-      ));
-
-      if (inboxId) {
-        console.log('[XMTP] ✅ Found inbox ID:', inboxId, 'for address:', address);
-        return inboxId;
-      }
-
-      // Try with full address (with 0x) in case the SDK expects it
-      if (address.startsWith('0x')) {
-        try {
-          const identifierWith0x = {
-            identifier: address.toLowerCase(),
-            identifierKind: IdentifierKind.Ethereum,
-          };
-          console.log('[XMTP] Trying findInboxId with 0x prefix:', identifierWith0x);
-          inboxId = await this.retryWithBackoff('client.fetchInboxIdByIdentifier', () => this.client!.fetchInboxIdByIdentifier(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            identifierWith0x as any
-          ));
-          if (inboxId) {
-            console.log('[XMTP] ✅ Found inbox ID (with 0x):', inboxId, 'for address:', address);
-            return inboxId;
-          }
-        } catch (e) {
-          console.warn('[XMTP] fetchInboxIdByIdentifier (with 0x) failed:', e);
-        }
-      }
-
-      console.warn('[XMTP] ⚠️  No inbox ID found for address:', address);
-      return null;
-    } catch (error) {
-      console.error('[XMTP] ❌ Failed to get inbox ID:', error);
-      return null;
-    }
+    return await this.resolveInboxIdForAddress(address, { context: 'getInboxIdFromAddress' });
   }
 
   /**
@@ -5490,60 +5510,9 @@ export class XmtpClient {
       let resolvedPeerInboxId: string | null = null;
       if (isEthereumAddress(peerAddressOrInboxId)) {
         console.log('[XMTP] Detected Ethereum address, resolving inbox ID first...');
-        const skipIdentityApi = this.shouldSkipIdentityCalls('createConversation');
-
-        // IMPORTANT: Resolve the inbox ID BEFORE creating the DM
-        // The SDK's createDmWithIdentifier checks local cache which may not have the peer
-        // Instead, we resolve the inbox ID via network lookup, then use createDm(inboxId)
-
-        // Try multiple methods to get the inbox ID
-        try {
-          // Method 1: Direct lookup using client.fetchInboxIdByIdentifier (queries network)
-          resolvedPeerInboxId = await this.getInboxIdFromAddress(peerAddressOrInboxId);
-          console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdFromAddress:', resolvedPeerInboxId);
-        } catch (e) {
-          console.warn('[XMTP] getInboxIdFromAddress failed, trying inbox resolver:', e);
-        }
-
-        // Method 2: Use getInboxIdForIdentifier (network lookup)
-        if (!resolvedPeerInboxId && !skipIdentityApi) {
-          try {
-            const identifierForLookup = {
-              identifier: toIdentifierHex(peerAddressOrInboxId).toLowerCase(),
-              identifierKind: IdentifierKind.Ethereum,
-            };
-            const inboxId = await this.retryWithBackoff(
-              'inbox.getInboxIdForIdentifier',
-              () => getInboxIdForIdentifier(identifierForLookup, 'production')
-            );
-            if (inboxId && !inboxId.startsWith('0x')) {
-              resolvedPeerInboxId = inboxId;
-              console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdForIdentifier:', resolvedPeerInboxId);
-            }
-          } catch (e) {
-            console.warn('[XMTP] getInboxIdForIdentifier failed:', e);
-          }
-        }
-
-        // Method 3: Try with 0x prefix variant
-        if (!resolvedPeerInboxId && !skipIdentityApi) {
-          try {
-            const identifierWith0x = {
-              identifier: peerAddressOrInboxId.toLowerCase(),
-              identifierKind: IdentifierKind.Ethereum,
-            };
-            const inboxId = await this.retryWithBackoff(
-              'inbox.getInboxIdForIdentifier',
-              () => getInboxIdForIdentifier(identifierWith0x, 'production')
-            );
-            if (inboxId && !inboxId.startsWith('0x')) {
-              resolvedPeerInboxId = inboxId;
-              console.log('[XMTP] ✅ Resolved inbox ID via getInboxIdForIdentifier (with 0x):', resolvedPeerInboxId);
-            }
-          } catch (e) {
-            console.warn('[XMTP] getInboxIdForIdentifier (with 0x) failed:', e);
-          }
-        }
+        resolvedPeerInboxId = await this.resolveInboxIdForAddress(peerAddressOrInboxId, {
+          context: 'createConversation',
+        });
 
         // If we resolved the inbox ID, use createDm(inboxId) instead of createDmWithIdentifier
         if (resolvedPeerInboxId) {
@@ -6059,69 +6028,55 @@ export class XmtpClient {
    * Check if an address or inbox ID can receive XMTP messages
    * Accepts either an Ethereum address (0x...) or an inbox ID
    */
-  async canMessage(addressOrInboxId: string): Promise<boolean> {
+  async canMessageWithInbox(addressOrInboxId: string): Promise<CanMessageWithInboxResult> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
 
-    if (!isEthereumAddress(addressOrInboxId)) {
-      console.log('[XMTP] Input is not an Ethereum address, assuming inbox ID is valid');
-      return true;
+    const normalizedInput = String(addressOrInboxId ?? '').trim();
+    if (!normalizedInput) {
+      return { canMessage: false, inboxId: null };
     }
 
-    console.log('[XMTP] Checking if can receive messages:', addressOrInboxId);
-
-    logNetworkEvent({
-      direction: 'outbound',
-      event: 'canMessage',
-      details: `Checking if ${addressOrInboxId} can receive XMTP messages`,
-    });
+    if (!isEthereumAddress(normalizedInput)) {
+      return {
+        canMessage: true,
+        inboxId: this.isValidResolvedInboxId(normalizedInput)
+          ? normalizedInput.toLowerCase()
+          : null,
+      };
+    }
 
     try {
-      // In XMTP v5, canMessage expects an array of Identifier objects
-      const identifier = {
-        identifier: addressOrInboxId.toLowerCase(),
-        identifierKind: IdentifierKind.Ethereum,
-      };
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const canMsgMap = await this.client.canMessage([identifier as any]);
-
-      // The SDK returns a Map where:
-      // - If input is an address: key = inbox ID (if registered), value = true
-      // - If input is inbox ID: key = inbox ID, value = true
-      // So we need to check if ANY value in the map is true
-      let result = false;
-      for (const [key, value] of canMsgMap) {
-        console.log(`[XMTP] canMessage map entry: ${key} = ${value}`);
-        if (value) {
-          result = true;
-          break;
-        }
-      }
-
-      console.log(`[XMTP] canMessage result for ${addressOrInboxId}:`, result);
+      const resolvedInboxId = await this.resolveInboxIdForAddress(normalizedInput, {
+        context: 'canMessageWithInbox',
+      });
+      const canMessage = Boolean(resolvedInboxId);
 
       logNetworkEvent({
         direction: 'status',
         event: 'canMessage:result',
-        details: `${addressOrInboxId} ${result ? 'can' : 'cannot'} receive messages`,
+        details: `${normalizedInput} ${canMessage ? 'can' : 'cannot'} receive messages`,
+        payload: resolvedInboxId ? this.formatPayload({ inboxId: resolvedInboxId }) : undefined,
       });
 
-      return result;
+      return {
+        canMessage,
+        inboxId: resolvedInboxId,
+      };
     } catch (error) {
-      console.error('[XMTP] canMessage check failed:', error);
-
       logNetworkEvent({
         direction: 'status',
         event: 'canMessage:error',
         details: error instanceof Error ? error.message : String(error),
       });
-
-      // Fallback: assume true (will fail later if actually can't message)
-      console.warn('[XMTP] ⚠️  canMessage failed, assuming inbox is valid');
-      return true;
+      return { canMessage: false, inboxId: null };
     }
+  }
+
+  async canMessage(addressOrInboxId: string): Promise<boolean> {
+    const result = await this.canMessageWithInbox(addressOrInboxId);
+    return result.canMessage;
   }
 
   /**

@@ -15,12 +15,17 @@ const mockResolveXmtpAddressFromFarcasterUser = vi.fn();
 const mockResolveContactName = vi.fn();
 
 const mockDeriveInboxIdFromAddress = vi.fn(async (_address: string): Promise<string | null> => null);
-const mockCanMessage = vi.fn(async (_inboxId: string): Promise<boolean> => true);
+const mockResolveInboxIdForAddress = vi.fn(async (_address: string): Promise<string | null> => null);
+const mockCanMessageWithInbox = vi.fn(async (_inboxId: string) => ({
+  canMessage: true,
+  inboxId: null as string | null,
+}));
 
 vi.mock('@/lib/xmtp', () => ({
   getXmtpClient: () => ({
     deriveInboxIdFromAddress: (address: string) => mockDeriveInboxIdFromAddress(address),
-    canMessage: (inboxId: string) => mockCanMessage(inboxId),
+    resolveInboxIdForAddress: (address: string) => mockResolveInboxIdForAddress(address),
+    canMessageWithInbox: (inboxId: string) => mockCanMessageWithInbox(inboxId),
     isConnected: () => true,
   }),
 }));
@@ -57,7 +62,8 @@ describe('contact store', () => {
     useContactStore.setState({ contacts: [], isLoading: false });
 
     mockDeriveInboxIdFromAddress.mockResolvedValue(null);
-    mockCanMessage.mockResolvedValue(true);
+    mockResolveInboxIdForAddress.mockResolvedValue(null);
+    mockCanMessageWithInbox.mockResolvedValue({ canMessage: true, inboxId: null });
   });
 
   it('blocks contacts with a persisted placeholder when missing', async () => {
@@ -224,8 +230,10 @@ describe('contact store', () => {
       preferredName: user.username ? `${user.username}.fcast.id` : undefined,
     }));
 
-    mockDeriveInboxIdFromAddress.mockImplementation(async (address: string) => `inbox:${address.toLowerCase()}`);
-    mockCanMessage.mockResolvedValue(true);
+    mockCanMessageWithInbox.mockImplementation(async (address: string) => ({
+      canMessage: true,
+      inboxId: `inbox:${address.toLowerCase()}`,
+    }));
 
     const store = useContactStore.getState();
     await store.syncFarcasterContacts(123);
@@ -253,6 +261,10 @@ describe('contact store', () => {
     expect(alice.farcasterPowerBadge).toBe(true);
     expect(alice.inboxId).toBe(`inbox:${addr1}`);
     expect(alice.addresses?.map((address) => address.toLowerCase())).toContain(addr1.toLowerCase());
+    expect(mockCanMessageWithInbox).toHaveBeenCalledTimes(2);
+    expect(mockCanMessageWithInbox).toHaveBeenNthCalledWith(1, addr1);
+    expect(mockCanMessageWithInbox).toHaveBeenNthCalledWith(2, addr2);
+    expect(mockDeriveInboxIdFromAddress).not.toHaveBeenCalled();
 
     expect(useContactStore.getState().contacts).toHaveLength(2);
   });

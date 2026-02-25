@@ -741,9 +741,22 @@ export const useContactStore = create<ContactState>()(
               }
             );
 
-            const inboxId =
-              existingContact?.inboxId ??
-              (await getXmtpClient().deriveInboxIdFromAddress?.(xmtpAddress));
+            const existingInboxId = existingContact?.inboxId;
+            let inboxId =
+              existingInboxId && !isAddressLikeInboxId(existingInboxId)
+                ? existingInboxId
+                : null;
+            let canReceive = true;
+
+            if (!inboxId) {
+              if (xmtp?.isConnected?.() && xmtp?.canMessageWithInbox) {
+                const lookup = await xmtp.canMessageWithInbox(xmtpAddress);
+                inboxId = lookup.inboxId;
+                canReceive = lookup.canMessage;
+              } else {
+                inboxId = await xmtp.resolveInboxIdForAddress?.(xmtpAddress);
+              }
+            }
 
             if (!inboxId || isAddressLikeInboxId(inboxId)) {
               skippedContacts.push(user.fid);
@@ -755,9 +768,6 @@ export const useContactStore = create<ContactState>()(
               });
               continue;
             }
-
-            const canReceive =
-              xmtp?.isConnected?.() && xmtp?.canMessage ? await xmtp.canMessage(xmtpAddress) : true;
             if (!canReceive) {
               skippedContacts.push(user.fid);
               report(current, total, `Skipping ${userName} - no XMTP inbox for ${shorten(inboxId)}`, {

@@ -285,7 +285,9 @@ export function useConversations() {
                   key = localInbox;
                 } else if (isXmtpConnected) {
                   try {
-                    const inboxId = await xmtp.deriveInboxIdFromAddress(peerLower);
+                    const inboxId = await xmtp.resolveInboxIdForAddress(peerLower, {
+                      context: 'useConversations:loadConversations:cleanup',
+                    });
                     if (inboxId) key = inboxId.toLowerCase();
                   } catch {
                     // ignore failures (e.g., offline or blocked); keep address as key
@@ -362,7 +364,9 @@ export function useConversations() {
         let inboxKey = normalizedInput;
         if (normalizedInput.startsWith('0x')) {
           try {
-            const inboxId = await xmtp.deriveInboxIdFromAddress(normalizedInput);
+            const inboxId = await xmtp.resolveInboxIdForAddress(normalizedInput, {
+              context: 'useConversations:createConversation:precheck',
+            });
             if (inboxId) inboxKey = inboxId.toLowerCase();
           } catch (e) {
             // ignore
@@ -391,7 +395,9 @@ export function useConversations() {
           if (actualPeerId.startsWith('0x')) {
             // Try one more time to resolve the inbox ID
             try {
-              const resolved = await xmtp.getInboxIdFromAddress(actualPeerId);
+              const resolved = await xmtp.resolveInboxIdForAddress(actualPeerId, {
+                context: 'useConversations:createConversation:postCreate',
+              });
               if (resolved && !resolved.startsWith('0x')) {
                 finalInboxId = resolved.toLowerCase();
                 console.log('[useConversations] ✅ Resolved inbox ID from address:', actualPeerId, '->', finalInboxId);

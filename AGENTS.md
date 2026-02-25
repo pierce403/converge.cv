@@ -187,6 +187,7 @@ pnpm typecheck        # TypeScript type checking
 - Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
 - External wallet signing now shows a global blocking modal so users clearly see when Converge is waiting on signature approval/rejection
 - Contact Details refresh now uses Farcaster display names (not fname/username) as the preferred Converge display label, with username as fallback only
+- Address→inbox identity lookup now uses a shared cached resolver (`resolveInboxIdForAddress`) and `canMessageWithInbox`, reducing repeated `IdentityApi/GetInboxIds` calls across DM creation, send preflight, contacts refresh, and Farcaster sync
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
@@ -455,11 +456,31 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-25 (mobile composer send-tap + alignment fix)
+**Last Updated**: 2026-02-25 (identity lookup pressure reduction + resolver caching)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-02-25)
+
+### XMTP Identity Lookup Pressure Reduction (Web App)
+- Added `resolveInboxIdForAddress(...)` to `src/lib/xmtp/client.ts` with:
+  - address→inbox TTL cache (15m hit, 60s negative),
+  - in-flight dedupe via `KeyedAsyncCache`,
+  - identity-cooldown skip handling,
+  - bounded fallback (`fetchInboxIdByIdentifier` first, `getInboxIdForIdentifier` fallback).
+- Added `canMessageWithInbox(...)` returning `{ canMessage, inboxId }`, and updated legacy `canMessage(...)`, `getInboxIdFromAddress(...)`, and `deriveInboxIdFromAddress(...)` to delegate to the shared resolver pipeline.
+- Simplified `createConversation(...)` address handling to a single resolver lookup before `createDm`, with `createDmWithIdentifier` as fallback only when unresolved.
+- Updated high-frequency UI/store call paths to avoid chained lookups:
+  - `src/features/messages/useMessages.ts` send preflight now performs one inbox resolve attempt.
+  - `src/features/conversations/useConversations.ts` address canonicalization and create flow use the shared resolver.
+  - `src/features/contacts/ContactsPage.tsx` refresh action uses one resolver call.
+  - `src/lib/stores/contact-store.ts` Farcaster sync uses `canMessageWithInbox` once per address instead of separate derive + canMessage calls.
+- Added resolver instrumentation counters to cache summary logs (`resolveInboxIdForAddress hit/miss/network/cooldownSkip`) plus debug network events for lookup and cooldown skips.
+- Added regression coverage:
+  - `src/lib/xmtp/address-resolver.test.ts` (concurrent dedupe, negative TTL cache, cooldown short-circuit).
+  - `src/features/messages/useMessages.test.tsx` (send preflight only resolves once).
+  - `src/features/conversations/useConversations.test.tsx` (address cleanup uses a single resolver call).
+  - `src/lib/stores/contact-store.test.ts` (Farcaster sync uses `canMessageWithInbox` and avoids extra derive lookup).
 
 ### Mobile Composer Send + Alignment
 - Fixed mobile send-button tap behavior while the software keyboard is open by preventing pointer-down focus-steal on the send button; taps now send immediately instead of first collapsing the keyboard.

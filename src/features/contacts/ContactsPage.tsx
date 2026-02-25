@@ -243,9 +243,9 @@ export function ContactsPage() {
                       const addressCandidate = c.primaryAddress || c.addresses?.[0];
                       if (addressCandidate) {
                         try {
-                          const resolved =
-                            (await xmtp.getInboxIdFromAddress(addressCandidate)) ||
-                            (await xmtp.deriveInboxIdFromAddress(addressCandidate));
+                          const resolved = await xmtp.resolveInboxIdForAddress(addressCandidate, {
+                            context: 'ContactsPage:refresh',
+                          });
                           if (resolved && !resolved.startsWith('0x')) {
                             inboxId = resolved.toLowerCase();
                           }
