@@ -3,6 +3,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MessageComposer } from './MessageComposer';
 
 describe('MessageComposer', () => {
+  it('does not force the send button to bottom alignment', () => {
+    render(<MessageComposer onSend={vi.fn()} />);
+
+    const sendButton = screen.getByRole('button', { name: 'Send message' });
+    expect(sendButton.className).not.toContain('self-end');
+  });
+
   it('sends trimmed message when tapping the send button', () => {
     const onSend = vi.fn();
 

@@ -321,7 +321,7 @@ export function MessageComposer({
             onPointerDown={handleSendPointerDown}
             disabled={disabled || !message.trim()}
             aria-label="Send message"
-            className="h-[44px] w-[44px] self-end flex items-center justify-center bg-accent-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-lg border border-transparent"
+            className="h-[44px] w-[44px] flex items-center justify-center bg-accent-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-lg border border-transparent"
           >
             <svg className="w-6 h-6 rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path

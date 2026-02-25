@@ -464,6 +464,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Mobile Composer Send + Alignment
 - Fixed mobile send-button tap behavior while the software keyboard is open by preventing pointer-down focus-steal on the send button; taps now send immediately instead of first collapsing the keyboard.
 - Tightened composer control sizing/alignment by standardizing attachment button, textarea min-height/padding, and send button dimensions so the orange send button lines up with the input field.
+- Removed `self-end` from the send button class list so it no longer anchors to the bottom edge of the composer row when the textarea is taller than 44px.
 - Added `MessageComposer` regression coverage to assert send-button pointer interactions still submit trimmed text content.
 
 ## Latest Changes (2026-02-24)
