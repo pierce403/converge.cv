@@ -455,8 +455,16 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (mobile PWA keyboard detection hardening + wallet-signature UX + desktop split workspace)
+**Last Updated**: 2026-02-25 (mobile composer send-tap + alignment fix)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-02-25)
+
+### Mobile Composer Send + Alignment
+- Fixed mobile send-button tap behavior while the software keyboard is open by preventing pointer-down focus-steal on the send button; taps now send immediately instead of first collapsing the keyboard.
+- Tightened composer control sizing/alignment by standardizing attachment button, textarea min-height/padding, and send button dimensions so the orange send button lines up with the input field.
+- Added `MessageComposer` regression coverage to assert send-button pointer interactions still submit trimmed text content.
 
 ## Latest Changes (2026-02-24)
 
