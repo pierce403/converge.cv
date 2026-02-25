@@ -455,7 +455,7 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-24 (mobile PWA keyboard layout stabilization + wallet-signature UX + desktop split workspace)
+**Last Updated**: 2026-02-24 (mobile PWA keyboard detection hardening + wallet-signature UX + desktop split workspace)
 **Updated By**: AI Agent
 
 ## Latest Changes (2026-02-24)
@@ -464,6 +464,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Updated viewport meta with `interactive-widget=resizes-content` so supported mobile browsers resize content areas correctly when software keyboards open.
 - App root sizing now remains bounded by both VisualViewport-derived `--vh` and `100dvh`, with root overflow clipped to prevent extra keyboard-induced scroll regions.
 - Bottom nav now uses a stable class (`app-bottom-nav`) and is fully removed from layout (`display: none`) while keyboard mode is active, eliminating the gap above the keyboard.
+- Keyboard detection now also uses the last non-focused viewport height as a baseline plus focused-input heuristics, fixing cases where mobile PWAs keep `window.innerHeight` and `visualViewport.height` in lockstep while the keyboard is open.
 - `useVisualViewport` cleanup now clears stale keyboard state (`keyboard-open` class and keyboard offset variable) on unmount.
 - Added regression tests in `src/lib/utils/useVisualViewport.test.tsx` for viewport var updates, keyboard-open toggle thresholds, and cleanup behavior.
 

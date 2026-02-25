@@ -101,6 +101,46 @@ describe('useVisualViewport', () => {
     expect(root.classList.contains('keyboard-open')).toBe(false);
   });
 
+  it('uses focused-input baseline fallback when innerHeight tracks visualViewport', () => {
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: 900,
+    });
+    const viewport = createMockVisualViewport(900);
+
+    const root = document.createElement('div');
+    root.id = 'root';
+    document.body.appendChild(root);
+
+    render(<HookHarness />, { container: root });
+    expect(root.classList.contains('keyboard-open')).toBe(false);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    root.appendChild(input);
+    input.focus();
+
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: 760,
+    });
+    viewport.setHeight(760);
+    viewport.emit('resize');
+    expect(root.classList.contains('keyboard-open')).toBe(true);
+
+    input.blur();
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: 900,
+    });
+    viewport.setHeight(900);
+    viewport.emit('resize');
+    expect(root.classList.contains('keyboard-open')).toBe(false);
+  });
+
   it('cleans up listeners and keyboard class on unmount', () => {
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
@@ -109,6 +149,7 @@ describe('useVisualViewport', () => {
     });
     const viewport = createMockVisualViewport(760); // keyboard-open initially true
     const removeWindowListenerSpy = vi.spyOn(window, 'removeEventListener');
+    const removeDocumentListenerSpy = vi.spyOn(document, 'removeEventListener');
 
     const root = document.createElement('div');
     root.id = 'root';
@@ -122,6 +163,8 @@ describe('useVisualViewport', () => {
     expect(viewport.removeEventListener).toHaveBeenCalledWith('resize', expect.any(Function));
     expect(viewport.removeEventListener).toHaveBeenCalledWith('scroll', expect.any(Function));
     expect(removeWindowListenerSpy).toHaveBeenCalledWith('resize', expect.any(Function));
+    expect(removeDocumentListenerSpy).toHaveBeenCalledWith('focusin', expect.any(Function));
+    expect(removeDocumentListenerSpy).toHaveBeenCalledWith('focusout', expect.any(Function));
     expect(root.classList.contains('keyboard-open')).toBe(false);
     expect(root.style.getPropertyValue('--keyboard-offset')).toBe('0px');
   });

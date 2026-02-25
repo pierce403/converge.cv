@@ -64,7 +64,7 @@
 ## Static Hosting and PWA Polish
 - The app is delivered as static HTML/CSS/JS through GitHub Pages and uses Workbox-powered vite-plugin-pwa to precache the shell for quick reloads.
 - Mobile-friendly styles, responsive layout primitives, and install prompts keep the experience "app-like" on phones, with viewport-safe spacing and touch-target sizing to match PWA expectations.
-- Keyboard-open behavior in mobile PWA mode now uses VisualViewport-driven app height and fully removes the bottom nav from layout while typing, preventing header jump/hidden states and eliminating keyboard gap spacers.
+- Keyboard-open behavior in mobile PWA mode now uses VisualViewport-driven app height and fully removes the bottom nav from layout while typing, with a focused-input viewport-baseline fallback so iOS/PWA keyboard states still hide nav even when `innerHeight` tracks `visualViewport.height`.
 
 ## Debug and Diagnostics
 - The `/debug` console aggregates logs, XMTP network events, and runtime errors with tools for clearing caches, inspecting storage, and managing push notifications.
