@@ -372,7 +372,10 @@ export function useConversations() {
             // ignore
           }
         }
-        const found = existing.find((c) => !c.isGroup && c.peerId.toLowerCase() === inboxKey);
+        const candidatePeerIds = new Set<string>([inboxKey, normalizedInput]);
+        const found = existing.find(
+          (c) => !c.isGroup && candidatePeerIds.has(c.peerId.toLowerCase())
+        );
 
         if (found) {
           return found;

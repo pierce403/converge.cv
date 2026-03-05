@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useConversationStore } from './conversation-store';
+import type { Conversation } from '@/types';
 
-const baseConversation = (id: string) => ({
+const baseConversation = (id: string, overrides: Partial<Conversation> = {}): Conversation => ({
   id,
-  peerId: id,
-  lastMessageAt: Date.now(),
+  peerId: overrides.peerId ?? id,
+  lastMessageAt: overrides.lastMessageAt ?? Date.now(),
   unreadCount: 0,
   pinned: false,
   archived: false,
-  createdAt: Date.now(),
+  createdAt: overrides.createdAt ?? Date.now(),
+  ...overrides,
 });
 
 describe('conversation store', () => {
@@ -41,5 +43,34 @@ describe('conversation store', () => {
     store.removeConversation('c2');
     expect(useConversationStore.getState().conversations.find((c) => c.id === 'c2')).toBeUndefined();
     expect(useConversationStore.getState().activeConversationId).toBeNull();
+  });
+
+  it('dedupes addConversation by id', () => {
+    const store = useConversationStore.getState();
+    const older = baseConversation('same-id', { lastMessageAt: 1000, createdAt: 1000 });
+    const newer = baseConversation('same-id', { lastMessageAt: 2000, createdAt: 2000 });
+
+    store.addConversation(older);
+    store.addConversation(newer);
+
+    const conversations = useConversationStore.getState().conversations;
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0].id).toBe('same-id');
+    expect(conversations[0].lastMessageAt).toBe(2000);
+  });
+
+  it('dedupes DM conversations by peer and keeps newest non-local entry', () => {
+    const store = useConversationStore.getState();
+    store.setConversations([
+      baseConversation('local-1', { peerId: 'peer-a', lastMessageAt: 1000 }),
+      baseConversation('server-1', { peerId: 'peer-a', lastMessageAt: 900 }),
+      baseConversation('server-2', { peerId: 'peer-b', lastMessageAt: 800 }),
+      baseConversation('server-3', { peerId: 'peer-a', lastMessageAt: 1100 }),
+    ]);
+
+    const conversations = useConversationStore.getState().conversations;
+    expect(conversations).toHaveLength(2);
+    expect(conversations.find((c) => c.peerId === 'peer-a')?.id).toBe('server-3');
+    expect(conversations.find((c) => c.peerId === 'peer-b')?.id).toBe('server-2');
   });
 });

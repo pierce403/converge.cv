@@ -724,7 +724,7 @@ export function Layout() {
           // Deduplicate against existing by peer id also when conversation already existed
           try {
             const store = useConversationStore.getState();
-            const peerKey = (peerKeyBase ?? conversation!.peerId)?.toLowerCase?.();
+            const peerKey = (conversation!.peerId ?? peerKeyBase)?.toLowerCase?.();
             if (peerKey) {
               const dupes = store.conversations.filter(
                 (c) => !c.isGroup && c.id !== conversation!.id && c.peerId.toLowerCase() === peerKey

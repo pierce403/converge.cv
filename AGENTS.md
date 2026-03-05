@@ -456,9 +456,27 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-02-25 (identity lookup pressure reduction + resolver caching)
+**Last Updated**: 2026-03-05 (chat-list duplicate collapse during history replay)
 **Updated By**: AI Agent
 
+
+## Latest Changes (2026-03-05)
+
+### Chat List Duplicate Collapse During Message Load
+- Fixed an intermittent duplicate-row issue in Chats while XMTP history replay was dispatching many `xmtp:message` events.
+- Root cause:
+  - `conversation-store` `addConversation(...)` prepended blindly, so concurrent inserts could duplicate entries in memory.
+  - Layout-level DM dedupe sometimes keyed off the current message sender instead of the conversation peer; during self-authored history messages this prevented peer-level collapse.
+- Changes shipped:
+  - `src/lib/stores/conversation-store.ts` now dedupes conversation state on `setConversations`, `addConversation`, and `updateConversation`:
+    - dedupe by conversation ID,
+    - dedupe DMs by canonical peer key,
+    - prefer non-local conversation IDs and newer `lastMessageAt`.
+  - `src/app/Layout.tsx` peer-level dedupe now uses `conversation.peerId` first (instead of sender-derived key), so history replays of self messages still collapse duplicate DMs correctly.
+  - `src/features/conversations/useConversations.ts` DM precheck now treats both the resolved inbox ID and the original normalized address as existing-peer candidates before creating a new conversation.
+  - Added regression coverage in `src/lib/stores/conversation-store.test.ts` for duplicate-by-ID and duplicate-by-peer collapse behavior.
+- Validation:
+  - CI-equivalent checks pass: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build`.
 
 ## Latest Changes (2026-02-25)
 
