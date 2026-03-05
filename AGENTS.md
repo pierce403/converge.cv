@@ -456,11 +456,21 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-03-05 (chat-list duplicate collapse during history replay)
+**Last Updated**: 2026-03-05 (incoming conversation discovery + chat-list duplicate collapse)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-03-05)
+
+### Incoming Conversation Discovery Reliability
+- Fixed a regression where existing chats continued receiving live messages, but brand-new inbound DMs could fail to appear until manual reload/resync.
+- Root cause:
+  - `syncConversations(...)` persisted newly discovered DMs/groups to IndexedDB but did not refresh `useConversationStore`, so UI state could miss network-discovered conversations.
+  - No periodic post-connect discovery pass existed, so if message stream delivery missed first-contact discovery, new chats could remain invisible.
+- Changes shipped (`src/lib/xmtp/client.ts`):
+  - Added a throttled background discovery loop (60s, visibility-aware, single-flight) that runs `syncConversations({ soft: true, minIntervalMs: 45s, reason: 'background-discovery' })` and invite scanning while connected.
+  - Added `refreshConversationStoreFromStorage(...)` and now call it at the end of `syncConversations(...)` so any newly persisted conversations are reflected in UI state immediately.
+  - Background discovery loop now starts after successful connect/stream startup and is always stopped during disconnect and connect-error paths.
 
 ### Chat List Duplicate Collapse During Message Load
 - Fixed an intermittent duplicate-row issue in Chats while XMTP history replay was dispatching many `xmtp:message` events.

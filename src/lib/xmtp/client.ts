@@ -267,7 +267,10 @@ export class XmtpClient {
   private client: Client<unknown> | null = null;
   private identity: XmtpIdentity | null = null;
   private messageStreamCloser: { close: () => void } | null = null;
+  private backgroundDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private backgroundDiscoveryInFlight = false;
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
+  private static readonly BACKGROUND_DISCOVERY_INTERVAL_MS = 60 * 1000;
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
   private inboxErrorCooldown: Map<string, number> = new Map();
   // Track which inboxIds have already logged an error this session (to reduce noise)
@@ -352,6 +355,58 @@ export class XmtpClient {
     this.syncCounters.backfillMessages = 0;
     this.identityInitInFlight = null;
     this.identityInitAttempts = 0;
+  }
+
+  private stopBackgroundDiscoveryLoop(): void {
+    if (this.backgroundDiscoveryTimer) {
+      clearInterval(this.backgroundDiscoveryTimer);
+      this.backgroundDiscoveryTimer = null;
+    }
+    this.backgroundDiscoveryInFlight = false;
+  }
+
+  private startBackgroundDiscoveryLoop(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    this.stopBackgroundDiscoveryLoop();
+    this.backgroundDiscoveryTimer = setInterval(() => {
+      if (!this.client || this.backgroundDiscoveryInFlight) {
+        return;
+      }
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+
+      this.backgroundDiscoveryInFlight = true;
+      void (async () => {
+        try {
+          await this.syncConversations({
+            soft: true,
+            minIntervalMs: 45 * 1000,
+            reason: 'background-discovery',
+          });
+          await this.scanInviteJoinRequests('background-discovery');
+        } catch (error) {
+          console.warn('[XMTP] Background conversation discovery failed:', error);
+        } finally {
+          this.backgroundDiscoveryInFlight = false;
+        }
+      })();
+    }, XmtpClient.BACKGROUND_DISCOVERY_INTERVAL_MS);
+  }
+
+  private async refreshConversationStoreFromStorage(
+    storage: Awaited<ReturnType<typeof getStorage>>,
+    context: string
+  ): Promise<void> {
+    try {
+      const latest = await storage.listConversations({ archived: false });
+      useConversationStore.getState().setConversations(latest);
+    } catch (error) {
+      console.warn(`[XMTP] Failed to refresh conversation store after ${context}:`, error);
+    }
   }
 
   private async getDmByInboxIdCached(inboxId: string): Promise<unknown | null> {
@@ -2863,6 +2918,7 @@ export class XmtpClient {
    */
   async connect(identity: XmtpIdentity, options?: ConnectOptions): Promise<void> {
     const { setConnectionStatus, setLastConnected, setError, connectionStatus } = useXmtpStore.getState();
+    this.stopBackgroundDiscoveryLoop();
 
     // If already connected with the same identity, don't reconnect
     if (this.client && this.identity?.address === identity.address) {
@@ -3127,6 +3183,7 @@ export class XmtpClient {
 
       await this.startMessageStream();
       await this.scanInviteJoinRequests('connect');
+      this.startBackgroundDiscoveryLoop();
 
       // Instrumentation (aggregated): prove caches + sync dedupe are working without spamming the log.
       try {
@@ -3148,6 +3205,7 @@ export class XmtpClient {
         setSyncProgress(0);
       }, 2000);
     } catch (error) {
+      this.stopBackgroundDiscoveryLoop();
       if (this.isRateLimitError(error)) {
         this.noteIdentityRateLimit('connect');
       }
@@ -3435,6 +3493,7 @@ export class XmtpClient {
    */
   async disconnect(): Promise<void> {
     const { setConnectionStatus, setError } = useXmtpStore.getState();
+    this.stopBackgroundDiscoveryLoop();
 
     // Stop message streaming
     if (this.messageStreamCloser) {
@@ -3737,6 +3796,8 @@ export class XmtpClient {
     } catch (ensureErr) {
       console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
     }
+
+    await this.refreshConversationStoreFromStorage(storage, 'syncConversations');
 
     if (!syncFailed) {
       const syncedAt = Date.now();
