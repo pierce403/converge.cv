@@ -13,6 +13,16 @@ import { isLikelyConvosInviteCode, tryParseConvosInvite } from '@/lib/utils/conv
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap
 const MESSAGE_PAGE_SIZE = 50;
+const XMTP_INBOX_WITH_0X_REGEX = /^0x[a-f0-9]{64}$/i;
+
+const normalizeIdentityKey = (value?: string | null): string => {
+  const trimmed = value?.trim().toLowerCase() || '';
+  if (!trimmed) return '';
+  if (XMTP_INBOX_WITH_0X_REGEX.test(trimmed)) {
+    return trimmed.slice(2);
+  }
+  return trimmed;
+};
 
 const toArrayBuffer = (data: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(data.byteLength);
@@ -701,7 +711,8 @@ export function useMessages() {
    */
   // Track last receipt sent per conversation to avoid spamming
   // Persist last sent read-receipt timestamp per conversation on the global object.
-  type ReceiptMap = Record<string, number>;
+  type ReceiptState = { ackedAt: number; sentAt: number };
+  type ReceiptMap = Record<string, ReceiptState | number>;
   const getReceiptMap = useCallback(() => {
     const g = globalThis as unknown as { __cv_last_receipts?: ReceiptMap };
     if (!g.__cv_last_receipts) g.__cv_last_receipts = {};
@@ -711,15 +722,35 @@ export function useMessages() {
   const sendReadReceiptFor = useCallback(
     async (conversationId: string, latestIncomingAt?: number) => {
       try {
+        const conversation = conversations.find((c) => c.id === conversationId);
+        if (!conversation || conversation.isGroup) {
+          return;
+        }
+
+        // Self-DMs should never emit read receipts (they appear as "{}" in some clients).
+        const myAddress = normalizeIdentityKey(identity?.address);
+        const myInbox = normalizeIdentityKey(identity?.inboxId);
+        const peer = normalizeIdentityKey(conversation.peerId);
+        if ((myInbox && peer === myInbox) || (myAddress && peer === myAddress)) {
+          return;
+        }
+
+        const mine = new Set<string>();
+        if (myAddress) {
+          mine.add(myAddress);
+        }
+        if (myInbox) {
+          mine.add(myInbox);
+          mine.add(`0x${myInbox}`);
+        }
+
         // Compute latest incoming ts if not provided
         let latest = latestIncomingAt;
         if (latest == null) {
-          const mineAddr = identity?.address?.toLowerCase();
-          const mineInbox = identity?.inboxId?.toLowerCase();
           const list = messagesByConversation[conversationId] || [];
           for (const m of list) {
-            const s = m.sender?.toLowerCase?.();
-            const fromPeer = s && s !== mineAddr && s !== mineInbox;
+            const s = normalizeIdentityKey(m.sender);
+            const fromPeer = s && !mine.has(s);
             if (fromPeer) {
               latest = Math.max(latest || 0, m.sentAt || 0);
             }
@@ -728,18 +759,29 @@ export function useMessages() {
         if (!latest) return;
 
         const map = getReceiptMap();
-        const prev = map[conversationId] || 0;
+        const raw = map[conversationId];
+        const previousAckedAt =
+          typeof raw === 'number'
+            ? raw
+            : raw?.ackedAt ?? 0;
+        const previousSentAt =
+          typeof raw === 'number'
+            ? 0
+            : raw?.sentAt ?? 0;
         const now = Date.now();
         // Only send if we haven't acknowledged up to this message yet, and rate-limit to avoid duplicates
-        if (latest <= prev || now - prev < 5000) return;
+        if (latest <= previousAckedAt || now - previousSentAt < 5000) return;
 
         await getXmtpClient().sendReadReceipt(conversationId);
-        map[conversationId] = latest;
+        map[conversationId] = {
+          ackedAt: latest,
+          sentAt: now,
+        };
       } catch {
         // non-fatal
       }
     },
-    [identity, messagesByConversation, getReceiptMap]
+    [identity, messagesByConversation, getReceiptMap, conversations]
   );
 
   /**

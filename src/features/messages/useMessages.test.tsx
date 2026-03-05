@@ -10,6 +10,7 @@ const xmtpMock = {
   resolveInboxIdForAddress: vi.fn(),
   refreshInboxProfile: vi.fn(),
   sendMessage: vi.fn(),
+  sendReadReceipt: vi.fn(),
 };
 
 const mockStorage = {
@@ -98,6 +99,7 @@ describe('useMessages resolver usage', () => {
       sentAt: Date.now(),
       isLocalFallback: false,
     });
+    xmtpMock.sendReadReceipt.mockResolvedValue(undefined);
   });
 
   it('resolves inbox ID only once per send preflight', async () => {
@@ -115,5 +117,66 @@ describe('useMessages resolver usage', () => {
       '0x1111111111111111111111111111111111111111',
       { context: 'useMessages:ensureContactForConversation' },
     );
+  });
+
+  it('does not send read receipts for self DMs', async () => {
+    useConversationStore.setState({
+      conversations: [
+        {
+          id: 'c1',
+          peerId: 'self-inbox',
+          lastMessageAt: 0,
+          unreadCount: 0,
+          pinned: false,
+          archived: false,
+          createdAt: 0,
+          isGroup: false,
+        } as Conversation,
+      ],
+      activeConversationId: null,
+      isLoading: false,
+    });
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.sendReadReceiptFor('c1', Date.now() - 10_000);
+    });
+
+    expect(xmtpMock.sendReadReceipt).not.toHaveBeenCalled();
+  });
+
+  it('throttles repeated read receipts even when latest message timestamps are old', async () => {
+    useConversationStore.setState({
+      conversations: [
+        {
+          id: 'c1',
+          peerId: 'peer-inbox',
+          lastMessageAt: 0,
+          unreadCount: 0,
+          pinned: false,
+          archived: false,
+          createdAt: 0,
+          isGroup: false,
+        } as Conversation,
+      ],
+      activeConversationId: null,
+      isLoading: false,
+    });
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.sendReadReceiptFor('c1', 1_000);
+      await api!.sendReadReceiptFor('c1', 1_001);
+    });
+
+    expect(xmtpMock.sendReadReceipt).toHaveBeenCalledTimes(1);
   });
 });

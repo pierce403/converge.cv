@@ -456,11 +456,27 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-03-05 (incoming conversation discovery + chat-list duplicate collapse)
+**Last Updated**: 2026-03-05 (incoming conversation discovery + chat-list duplicate collapse + self-DM read-receipt suppression)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-03-05)
+
+### Self-DM Read Receipt Spam Guard
+- Fixed a cross-client interop issue where Converge self-chat sessions could produce repeated `{}` entries in xmtp.chat.
+- Root cause:
+  - Converge emitted DM read-receipt payloads for self DMs.
+  - Read-receipt throttling used the last acknowledged message timestamp as a send-time limiter, which could allow rapid duplicate emits when ack timestamps were old.
+- Changes shipped (`src/features/messages/useMessages.ts`):
+  - Added identity normalization for address/inbox comparisons (including inbox IDs with/without `0x` prefix).
+  - Skipped read-receipt sends for self DMs entirely.
+  - Split receipt state into `{ ackedAt, sentAt }` so dedupe and rate-limit checks are independent.
+  - Kept backward compatibility for existing in-memory numeric receipt entries.
+- Added regression tests (`src/features/messages/useMessages.test.tsx`):
+  - `does not send read receipts for self DMs`
+  - `throttles repeated read receipts even when latest message timestamps are old`
+- Validation:
+  - `pnpm test --run src/features/messages/useMessages.test.tsx` passes.
 
 ### Incoming Conversation Discovery Reliability
 - Fixed a regression where existing chats continued receiving live messages, but brand-new inbound DMs could fail to appear until manual reload/resync.
