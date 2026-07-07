@@ -75,7 +75,7 @@
 
 ## Debug and Diagnostics
 - The `/debug` console aggregates logs, XMTP network events, and runtime errors with tools for clearing caches, inspecting storage, and managing push notifications.
-- A "Claim Invite Code" tool accepts Convos invite links or raw codes, extracts the creator inbox ID from the signed invite payload, and sends the sanitized invite slug via XMTP DM to request access.
+- A "Claim Invite Code" tool accepts Convos invite links or raw codes (including current `https://popup.convos.org/v2?i=...` links), extracts the creator inbox ID from the signed invite payload, and sends the sanitized invite slug via XMTP DM to request access.
 
 ## Group Invites (Convos-Compatible)
 - Group chat menus can generate Convos-compatible invite codes and provide one-click copy buttons for the Convos link, Converge link, or raw invite slug.

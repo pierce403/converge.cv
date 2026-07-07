@@ -789,14 +789,34 @@ export function parseConvosInvite(input: string): ParsedConvosInvite {
   const payloadFields = parseProtobufFields(payloadBytes);
   const payload: Partial<ConvosInvitePayload> = {};
 
-  const getStringField = (fieldNumber: number): string | undefined => {
+  const getBytesField = (fieldNumber: number): Uint8Array | undefined => {
     const field = payloadFields.find(
       (candidate) => candidate.fieldNumber === fieldNumber && candidate.wireType === 2,
     );
     if (!field || !(field.value instanceof Uint8Array)) {
       return undefined;
     }
-    return decodeUtf8(field.value) ?? undefined;
+    return field.value;
+  };
+
+  const getStringField = (fieldNumber: number): string | undefined => {
+    const bytes = getBytesField(fieldNumber);
+    if (!bytes) {
+      return undefined;
+    }
+    return decodeUtf8(bytes) ?? undefined;
+  };
+
+  const getBase64UrlOrStringField = (fieldNumber: number): string | undefined => {
+    const bytes = getBytesField(fieldNumber);
+    if (!bytes) {
+      return undefined;
+    }
+    const decoded = decodeUtf8(bytes)?.trim();
+    if (decoded && isBase64Url(decoded)) {
+      return decoded;
+    }
+    return toBase64Url(bytes);
   };
 
   const creatorField = payloadFields.find(
@@ -811,7 +831,7 @@ export function parseConvosInvite(input: string): ParsedConvosInvite {
   const creatorString = decodeUtf8(creatorBytes);
   payload.creatorInboxId = normalizeCreatorInboxId(creatorBytes, creatorString);
 
-  payload.conversationToken = getStringField(1) ?? '';
+  payload.conversationToken = getBase64UrlOrStringField(1) ?? '';
   payload.tag = getStringField(3);
   payload.name = getStringField(4);
   payload.description = getStringField(5);
