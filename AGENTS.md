@@ -456,9 +456,16 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-03-05 (incoming conversation discovery + chat-list duplicate collapse + self-DM read-receipt suppression)
+**Last Updated**: 2026-07-07 (Convos popup v2 invite claim parsing)
 **Updated By**: AI Agent
 
+
+
+## Latest Changes (2026-07-07)
+
+### Convos Popup v2 Invite Claim Parsing
+- Invite claim parsing now accepts current `https://popup.convos.org/v2?i=...` links whose signed payload stores the encrypted conversation token as raw bytes instead of a UTF-8 base64url string.
+- Added regression coverage for extracting and parsing the current popup v2 link format, including creator inbox and invite tag extraction.
 
 ## Latest Changes (2026-03-05)
 

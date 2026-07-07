@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   encodeConvosGroupAppData,
+  extractConvosInviteCode,
   parseConvosGroupAppData,
+  parseConvosInvite,
   sanitizeConvosProfileDisplayName,
   upsertConvosGroupProfile,
 } from './convos-invite';
@@ -103,6 +105,25 @@ describe('convos invite metadata utils', () => {
     expect(parsed.isEncoded).toBe(true);
     expect(parsed.isCompressed).toBe(true);
     expect(parsed.tag).toBe('compressed-tag');
+  });
+
+  it('extracts and parses current popup.convos.org v2 invite links', () => {
+    const inviteCode =
+      'Cm8KPwFi60tQh86A-P9SudQquYnOUrBw_u-Ww6W5balnA4LhWs0r9b93FVXZ02qqi1KGZmK-Mpmqhb3ZSdq47eNMnBIgQ9OkZGgjKYjpQbUXZP9NBg_ieSmfAPl-kEcQRyKvGPwaCmRoaTZDNWloWHASQTGBzqUNDRP7ARA_---jB8EkIpylcyvyVjS52z4N3IqDD_eR0ubZ7BUW5r38Xb2tqa65G2inOOEDb5j46DK37L0B';
+    const inviteLink = `https://popup.convos.org/v2?i=${inviteCode}`;
+
+    expect(extractConvosInviteCode(inviteLink)).toBe(inviteCode);
+
+    const parsed = parseConvosInvite(inviteLink);
+
+    expect(parsed.inviteCode).toBe(inviteCode);
+    expect(parsed.payload.conversationToken).toBe(
+      'AWLrS1CHzoD4_1K51Cq5ic5SsHD-75bDpbltqWcDguFazSv1v3cVVdnTaqqLUoZmYr4ymaqFvdlJ2rjt40yc',
+    );
+    expect(parsed.payload.creatorInboxId).toBe(
+      '43d3a46468232988e941b51764ff4d060fe279299f00f97e9047104722af18fc',
+    );
+    expect(parsed.payload.tag).toBe('dhi6C5ihXp');
   });
 
   it('upserts member profile by normalized inbox id', () => {
