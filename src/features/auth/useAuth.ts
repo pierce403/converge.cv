@@ -800,7 +800,7 @@ export function useAuth() {
       chainId: number | undefined,
       signMessage: (message: string) => Promise<string>,
       options?: { walletType?: 'EOA' | 'SCW'; label?: string }
-    ): Promise<{ inboxId: string; previousInboxId?: string }> => {
+    ): Promise<{ inboxId: string; previousInboxId?: string; installationId?: string }> => {
       const currentIdentity = useAuthStore.getState().identity;
       if (!currentIdentity) {
         throw new Error('No local app identity is loaded.');
@@ -810,11 +810,33 @@ export function useAuth() {
       }
 
       const xmtp = getXmtpClient();
+      const previousInboxId = normalizeInboxId(currentIdentity.inboxId) ?? undefined;
+
+      console.info('[Auth] Existing inbox connection: preparing target probe', {
+        localAppKeyAddress: currentIdentity.address,
+        localAppKeyInboxId: previousInboxId ?? null,
+        targetWalletAddress,
+        targetWalletChainId: chainId ?? null,
+        targetWalletType: options?.walletType ?? 'EOA',
+        label: options?.label ?? null,
+      });
+
       const probe = await xmtp.probeIdentity({
         address: targetWalletAddress,
         chainId,
         walletType: options?.walletType,
         signMessage,
+      });
+
+      console.info('[Auth] Existing inbox connection: target probe result', {
+        localAppKeyAddress: currentIdentity.address,
+        localAppKeyInboxId: previousInboxId ?? null,
+        targetWalletAddress,
+        targetWalletChainId: chainId ?? null,
+        targetWalletType: options?.walletType ?? 'EOA',
+        targetInboxId: probe.inboxId ?? null,
+        targetInstallationCount: probe.installationCount,
+        hasTargetInboxState: Boolean(probe.inboxState),
       });
 
       if (!probe.inboxId) {
@@ -829,20 +851,42 @@ export function useAuth() {
         throw new Error('XMTP returned an invalid inbox ID for that wallet.');
       }
 
-      const previousInboxId = normalizeInboxId(currentIdentity.inboxId) ?? undefined;
-
-      await xmtp.reassignAccountToInbox({
-        targetIdentity: {
-          address: targetWalletAddress,
-          chainId,
-          walletType: options?.walletType,
-          signMessage,
-        },
-        accountIdentity: {
-          address: currentIdentity.address,
-          privateKey: currentIdentity.privateKey,
-        },
+      console.info('[Auth] Existing inbox connection: requesting account reassignment', {
+        localAppKeyAddress: currentIdentity.address,
+        localAppKeyInboxId: previousInboxId ?? null,
+        targetWalletAddress,
+        targetWalletChainId: chainId ?? null,
+        targetWalletType: options?.walletType ?? 'EOA',
+        targetInboxId,
+        sameInboxAsCurrent: previousInboxId ? inboxIdsMatch(previousInboxId, targetInboxId) : false,
       });
+
+      let reassignment: Awaited<ReturnType<typeof xmtp.reassignAccountToInbox>>;
+      try {
+        reassignment = await xmtp.reassignAccountToInbox({
+          targetIdentity: {
+            address: targetWalletAddress,
+            chainId,
+            walletType: options?.walletType,
+            signMessage,
+          },
+          accountIdentity: {
+            address: currentIdentity.address,
+            privateKey: currentIdentity.privateKey,
+          },
+        });
+      } catch (error) {
+        console.warn('[Auth] Existing inbox connection: account reassignment failed', {
+          localAppKeyAddress: currentIdentity.address,
+          localAppKeyInboxId: previousInboxId ?? null,
+          targetWalletAddress,
+          targetWalletChainId: chainId ?? null,
+          targetWalletType: options?.walletType ?? 'EOA',
+          targetInboxId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
 
       const updatedIdentity: Identity = {
         ...currentIdentity,
@@ -888,7 +932,16 @@ export function useAuth() {
         }
       );
 
-      return { inboxId: targetInboxId, previousInboxId };
+      console.info('[Auth] Existing inbox connection: local identity updated and reconnected', {
+        localAppKeyAddress: updatedIdentity.address,
+        previousInboxId: previousInboxId ?? null,
+        currentInboxId: targetInboxId,
+        linkedWalletAddress: targetWalletAddress,
+        linkedWalletChainId: chainId ?? null,
+        reassignmentInstallationId: reassignment.installationId ?? null,
+      });
+
+      return { inboxId: targetInboxId, previousInboxId, installationId: reassignment.installationId };
     },
     [connectXmtpSafely, setAuthenticated, setIdentity, setVaultUnlocked]
   );

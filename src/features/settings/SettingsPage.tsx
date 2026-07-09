@@ -394,15 +394,38 @@ export function SettingsPage() {
     const target = await resolveWalletInboxTarget(addressList);
 
     if (!target) {
+      console.warn('[Settings] Existing inbox connection: no wallet target resolved', {
+        connectedAccounts: addressList,
+        localAppKeyAddress: identity.address,
+        localAppKeyInboxId: identity.inboxId ?? null,
+      });
       throw new Error('No wallet address was returned. Try connecting your wallet again.');
     }
+
+    console.info('[Settings] Existing inbox connection: target resolved', {
+      connectedAccounts: addressList,
+      localAppKeyAddress: identity.address,
+      localAppKeyInboxId: identity.inboxId ?? null,
+      targetAddress: target.address,
+      targetWalletType: target.walletType,
+      targetChainId: target.chainId ?? null,
+      targetIsCurrentAppKey: target.address.toLowerCase() === identity.address.toLowerCase(),
+    });
 
     if (target.address.toLowerCase() === identity.address.toLowerCase()) {
       throw new Error('That wallet address is already this app key.');
     }
 
-    const connectWithTarget = async (targetChainId = target.chainId) =>
-      await connectLocalIdentityToWalletInbox(
+    const connectWithTarget = async (targetChainId = target.chainId) => {
+      console.info('[Settings] Existing inbox connection: starting reassignment attempt', {
+        localAppKeyAddress: identity.address,
+        localAppKeyInboxId: identity.inboxId ?? null,
+        targetAddress: target.address,
+        targetWalletType: target.walletType,
+        targetChainId: targetChainId ?? null,
+      });
+
+      return await connectLocalIdentityToWalletInbox(
         target.address,
         targetChainId,
         async (message: string) => {
@@ -416,11 +439,20 @@ export function SettingsPage() {
           label: `Wallet ${target.address.slice(0, 6)}…${target.address.slice(-4)}`,
         }
       );
+    };
 
     let result: Awaited<ReturnType<typeof connectWithTarget>>;
     try {
       result = await connectWithTarget();
     } catch (error) {
+      console.warn('[Settings] Existing inbox connection: reassignment attempt failed', {
+        localAppKeyAddress: identity.address,
+        localAppKeyInboxId: identity.inboxId ?? null,
+        targetAddress: target.address,
+        targetWalletType: target.walletType,
+        targetChainId: target.chainId ?? null,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       const mismatch = extractWrongChainIdDetails(error instanceof Error ? error.message : String(error));
       if (
         mismatch &&
@@ -444,12 +476,28 @@ export function SettingsPage() {
               `XMTP could not validate the smart-wallet reassignment signature on chain ${mismatch.initiallyAddedWith}. Revoke an installation from an already-connected Convos/XMTP device, then retry Converge.`
             );
           }
+          console.warn('[Settings] Existing inbox connection: retry with XMTP-registered SCW chain id failed', {
+            localAppKeyAddress: identity.address,
+            localAppKeyInboxId: identity.inboxId ?? null,
+            targetAddress: target.address,
+            originallyDetectedChainId: target.chainId,
+            retryChainId: mismatch.initiallyAddedWith,
+            errorMessage: retryMessage,
+          });
           throw retryError;
         }
       } else {
         throw error;
       }
     }
+
+    console.info('[Settings] Existing inbox connection: completed', {
+      localAppKeyAddress: identity.address,
+      previousInboxId: identity.inboxId ?? null,
+      targetAddress: target.address,
+      connectedInboxId: result.inboxId,
+      reassignmentInstallationId: result.installationId ?? null,
+    });
 
     alert(
       `Connected this app key to inbox ${result.inboxId}.\n\nThe generated inbox is abandoned; future messages will sync from the existing wallet inbox.`

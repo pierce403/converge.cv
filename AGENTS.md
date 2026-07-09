@@ -493,11 +493,21 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.5 + legacy SCW chain-zero blocker)
+**Last Updated**: 2026-07-09 (app version 0.3.6 + existing inbox reassignment diagnostics)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Existing Inbox Reassignment Diagnostics
+- Bumped Converge from `0.3.5` to `0.3.6` after investigating `Account already associated with inbox ...` during Settings → Connect Existing Inbox.
+- Added verbose browser/debug-console logs at the Settings, auth, and XMTP client layers so future debugging can distinguish:
+  - the connected wallet / target inbox owner,
+  - the generated local app key being added,
+  - the local app key's current XMTP inbox before reassignment,
+  - the temporary manager client's inbox,
+  - and the exact SDK preflight state before `unsafe_addAccount(..., true)`.
+- Do not log private keys. Full addresses and inbox IDs are intentionally logged in this diagnostic path because they are needed to verify whether the SDK error refers to the target wallet inbox or the local app-key inbox.
 
 ### Legacy SCW Chain-Zero Recovery Blocker
 - Bumped Converge from `0.3.4` to `0.3.5` after real recovery attempts showed `Wrong chain id. Initially added with 0 but now signing from 8453` followed by `Signature validation failed`.

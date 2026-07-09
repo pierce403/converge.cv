@@ -3784,13 +3784,31 @@ export class XmtpClient {
     }
 
     if (this.client) {
+      console.info('[XMTP] Existing inbox reassignment: disconnecting active client before manager flow', {
+        activeAddress: this.identity?.address ?? null,
+        activeInboxId: this.client.inboxId ?? null,
+        targetWalletAddress: targetIdentity.address,
+        localAppKeyAddress: accountIdentity.address,
+      });
       await this.disconnect();
     }
 
     const targetSigner = await this.createSigner(targetIdentity);
     const accountSigner = await this.createSigner(accountIdentity);
+    const targetIdentifier = await targetSigner.getIdentifier();
+    const accountIdentifier = await accountSigner.getIdentifier();
     const randomSuffix = Math.random().toString(36).substring(2, 10);
     const dbPath = `xmtp-link-inbox-temp-${randomSuffix}.db3`;
+
+    console.info('[XMTP] Existing inbox reassignment: signer roles prepared', {
+      targetWalletAddress: targetIdentity.address,
+      targetWalletType: targetIdentity.walletType ?? 'EOA',
+      targetWalletChainId: targetIdentity.chainId ?? null,
+      targetIdentifier,
+      localAppKeyAddress: accountIdentity.address,
+      localAppKeyIdentifier: accountIdentifier,
+      temporaryDbPath: dbPath,
+    });
 
     logNetworkEvent({
       direction: 'outbound',
@@ -3810,11 +3828,80 @@ export class XmtpClient {
 
     try {
       const inboxId = manager.inboxId;
+      console.info('[XMTP] Existing inbox reassignment: temporary manager client created', {
+        targetWalletAddress: targetIdentity.address,
+        targetWalletType: targetIdentity.walletType ?? 'EOA',
+        targetWalletChainId: targetIdentity.chainId ?? null,
+        targetIdentifier,
+        managerInboxId: inboxId ?? null,
+        managerInstallationId: manager.installationId ?? null,
+        temporaryDbPath: dbPath,
+      });
       if (!inboxId) {
         throw new Error('No existing XMTP inbox was found for that wallet.');
       }
 
-      await manager.unsafe_addAccount(accountSigner, true);
+      let targetIdentifierInboxId: string | null = null;
+      try {
+        targetIdentifierInboxId = (await manager.fetchInboxIdByIdentifier(targetIdentifier)) ?? null;
+      } catch (error) {
+        console.warn('[XMTP] Existing inbox reassignment: failed to resolve target wallet identifier inbox', {
+          targetWalletAddress: targetIdentity.address,
+          targetIdentifier,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      let localAppKeyExistingInboxId: string | null = null;
+      try {
+        localAppKeyExistingInboxId = (await manager.fetchInboxIdByIdentifier(accountIdentifier)) ?? null;
+      } catch (error) {
+        console.warn('[XMTP] Existing inbox reassignment: failed to resolve local app key identifier inbox', {
+          localAppKeyAddress: accountIdentity.address,
+          localAppKeyIdentifier: accountIdentifier,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      const localAppKeyAlreadyInTargetInbox = Boolean(
+        localAppKeyExistingInboxId &&
+        localAppKeyExistingInboxId.toLowerCase() === inboxId.toLowerCase()
+      );
+
+      console.info('[XMTP] Existing inbox reassignment: preflight before unsafe_addAccount', {
+        targetWalletAddress: targetIdentity.address,
+        targetInboxId: inboxId,
+        targetIdentifierInboxId,
+        localAppKeyAddress: accountIdentity.address,
+        localAppKeyExistingInboxId,
+        localAppKeyAlreadyInTargetInbox,
+        allowInboxReassign: true,
+      });
+
+      if (localAppKeyExistingInboxId && !localAppKeyAlreadyInTargetInbox) {
+        console.warn('[XMTP] Existing inbox reassignment: local app key is already associated with a different inbox before reassignment', {
+          localAppKeyAddress: accountIdentity.address,
+          localAppKeyExistingInboxId,
+          targetInboxId: inboxId,
+          expectedSdkError: `Account already associated with inbox ${localAppKeyExistingInboxId}`,
+        });
+      }
+
+      try {
+        await manager.unsafe_addAccount(accountSigner, true);
+      } catch (error) {
+        console.warn('[XMTP] Existing inbox reassignment: unsafe_addAccount failed', {
+          targetWalletAddress: targetIdentity.address,
+          targetInboxId: inboxId,
+          targetIdentifierInboxId,
+          localAppKeyAddress: accountIdentity.address,
+          localAppKeyExistingInboxId,
+          localAppKeyAlreadyInTargetInbox,
+          allowInboxReassign: true,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
 
       let confirmedInboxId = inboxId;
       try {
@@ -3825,6 +3912,13 @@ export class XmtpClient {
       } catch (error) {
         console.warn('[XMTP] Failed to refresh inbox state after account reassignment:', error);
       }
+
+      console.info('[XMTP] Existing inbox reassignment: confirmed', {
+        targetWalletAddress: targetIdentity.address,
+        localAppKeyAddress: accountIdentity.address,
+        confirmedInboxId,
+        managerInstallationId: manager.installationId ?? null,
+      });
 
       logNetworkEvent({
         direction: 'status',
