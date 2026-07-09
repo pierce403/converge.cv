@@ -5,6 +5,7 @@ import {
   fetchNeynarUserProfile,
   fetchNeynarUsersBulk,
   mapNeynarUser,
+  resetNeynarHealthForTest,
 } from './neynar';
 
 const mockFetch = vi.fn();
@@ -13,6 +14,7 @@ vi.stubGlobal('fetch', mockFetch as unknown as typeof fetch);
 
 afterEach(() => {
   mockFetch.mockReset();
+  resetNeynarHealthForTest();
 });
 
 describe('neynar helpers', () => {
@@ -73,6 +75,30 @@ describe('neynar helpers', () => {
     expect(user?.fid).toBe(5);
     expect(user?.score).toBe(7);
     expect(user?.power_badge).toBe(true);
+  });
+
+  it('caches verification 404s without trying the legacy fallback endpoint', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+
+    const first = await fetchNeynarUserByVerification('0x1111111111111111111111111111111111111111', 'key');
+    const second = await fetchNeynarUserByVerification('0x1111111111111111111111111111111111111111', 'key');
+
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain('/v2/farcaster/user/bulk-by-address');
+    expect(String(mockFetch.mock.calls[0]?.[0])).not.toContain('api.neynar.com/farcaster/user');
+  });
+
+  it('opens a cooldown after network failures and skips later Neynar requests', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const user = await fetchNeynarUserByVerification('0x1111111111111111111111111111111111111111', 'key');
+    const profile = await fetchNeynarUserProfile('alice', 'key');
+
+    expect(user).toBeNull();
+    expect(profile).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it('fetches users in bulk and maps score/power badge', async () => {

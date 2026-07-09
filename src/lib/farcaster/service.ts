@@ -36,6 +36,9 @@ export interface FarcasterFollow {
   power_badge?: boolean;
 }
 
+const hasConfiguredFarcasterApiBase = (): boolean =>
+  Boolean(import.meta.env?.VITE_FARCASTER_API_BASE?.trim());
+
 /**
  * Fetches a Farcaster user's profile by their FID or username from the backend API.
  * @param identifier FID (number) or username (string)
@@ -147,6 +150,11 @@ export async function resolveFidFromAddress(address: string, neynarApiKey?: stri
       } catch (error) {
         console.warn('[Farcaster] Neynar verification lookup failed', error);
       }
+    }
+
+    if (!hasConfiguredFarcasterApiBase()) {
+      console.log('[Farcaster] Skipping ENS/API fallback because VITE_FARCASTER_API_BASE is not configured');
+      return null;
     }
 
     // Step 1: Reverse lookup ENS name from Ethereum address

@@ -70,6 +70,23 @@ describe('farcaster service helpers', () => {
     expect(fid).toBe(555);
   });
 
+  it('does not run ENS/API fallback when no Farcaster API base is configured', async () => {
+    vi.stubEnv('VITE_FARCASTER_API_BASE', '');
+    const neynar = await import('./neynar');
+    vi.spyOn(neynar, 'fetchNeynarUserByVerification').mockResolvedValueOnce(null);
+    const resolveENSFromAddress = vi.fn(async () => 'alice.eth');
+    vi.doMock('@/lib/utils/ens', () => ({
+      resolveENSFromAddress,
+      resolveFcastId: vi.fn(async () => null),
+      resolveBaseEthName: vi.fn(async () => null),
+    }));
+
+    const fid = await resolveFidFromAddress('0xabc', 'key');
+
+    expect(fid).toBeNull();
+    expect(resolveENSFromAddress).not.toHaveBeenCalled();
+  });
+
   it('resolves contact name with ENS, fcast.id, and base.eth priority', async () => {
     const user = { display_name: 'Display', username: 'user' } as any;
     const mockEns = {

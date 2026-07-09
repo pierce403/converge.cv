@@ -485,17 +485,13 @@ export function Layout() {
         return;
       }
 
-      const needsName = isAutoLabel(identity.displayName);
-      const needsAvatar = !identity.avatar?.trim();
-      const bypassCooldown = needsName || needsAvatar || !identity.farcasterFid;
-
       const cooldownKey = `self-farcaster:last-check:${identity.address.toLowerCase()}`;
       try {
         const lastRaw = typeof window !== 'undefined' ? window.localStorage?.getItem(cooldownKey) : null;
         const last = lastRaw ? Number(lastRaw) : 0;
         if (Number.isFinite(last) && last > 0) {
           const oneHour = 60 * 60 * 1000;
-          if (!bypassCooldown && Date.now() - last < oneHour) {
+          if (Date.now() - last < oneHour) {
             return;
           }
         }

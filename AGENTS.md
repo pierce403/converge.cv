@@ -493,11 +493,19 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.7 + XMTP address resolver and local-chat fallback fix)
+**Last Updated**: 2026-07-09 (app version 0.3.8 + Neynar cooldown and Farcaster fallback gating)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Neynar Cooldown and Farcaster Fallback Gating
+- Bumped Converge from `0.3.7` to `0.3.8` after live browser logs showed repeated Neynar CORS/network failures during automatic self-profile refresh.
+- Browser Neynar calls now open a temporary cooldown after CORS/network failures, auth failures, rate limits, or server errors; requests during cooldown are skipped instead of repeatedly hitting the API.
+- Neynar verification 404s are cached per address for 24 hours, so app-generated local wallet addresses that have no Farcaster account are not queried repeatedly.
+- The static PWA no longer calls Neynar's legacy fallback host after a v2 404, because the fallback host does not reliably provide browser CORS headers and caused repeated preflight failures.
+- `Layout` self-profile Farcaster refresh now honors its hourly cooldown even when display name/avatar/FID are missing.
+- `resolveFidFromAddress` now skips ENS and Farcaster API fallback work unless `VITE_FARCASTER_API_BASE` is configured; without that backend, ENS lookup cannot complete the FID resolution path and only adds browser RPC/CORS noise.
 
 ### XMTP Address Resolver and Local Chat Fallback Fix
 - Bumped Converge from `0.3.6` to `0.3.7` after live logs showed sends going to `local-conversation-*` with peer IDs like `0x7ab...` and then failing because the SDK could not find that fake conversation after sync.

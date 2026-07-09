@@ -120,6 +120,8 @@
 - Contact cards surface Farcaster links alongside Neynar scores, follower/following counts, and power badge badges when available.
 - A Farcaster settings panel allows saving the user’s FID and configuring Neynar score/follower/power-badge thresholds that hide incoming messages failing those criteria; filters apply globally across conversations.
 - The contacts list highlights Farcaster-derived entries and shows their Neynar score so users can gauge trust at a glance.
+- Browser Neynar lookups use a failure cooldown: CORS/network failures temporarily disable further Neynar calls, verification 404s are cached per address, and Converge no longer retries the legacy Neynar fallback URL from the static PWA.
+- Automatic self-profile Farcaster refresh honors its hourly cooldown even when the profile is incomplete, and skips ENS/API fallbacks entirely unless `VITE_FARCASTER_API_BASE` is configured.
 
 ## Unified Contact Card
 - **Identity Fusion**: The contact card serves as the central hub for merging a user's fragmentation across web3. It resolves and displays:

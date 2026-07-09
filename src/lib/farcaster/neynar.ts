@@ -1,13 +1,38 @@
 import type { FarcasterFollow, FarcasterUser } from './service';
 
 const NEYNAR_BASE = 'https://api.neynar.com/v2/farcaster';
-const NEYNAR_FALLBACK_BASE = 'https://api.neynar.com/farcaster';
+const NEYNAR_COOLDOWN_STORAGE_KEY = 'converge:neynar:cooldown-until';
+const NEYNAR_VERIFICATION_MISS_PREFIX = 'converge:neynar:verification-miss:';
+const NEYNAR_NETWORK_COOLDOWN_MS = 60 * 60 * 1000;
+const NEYNAR_AUTH_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const NEYNAR_RATE_LIMIT_COOLDOWN_MS = 15 * 60 * 1000;
+const NEYNAR_SERVER_COOLDOWN_MS = 5 * 60 * 1000;
+const NEYNAR_VERIFICATION_MISS_TTL_MS = 24 * 60 * 60 * 1000;
+
+class NeynarTemporarilyDisabledError extends Error {
+  constructor(readonly retryAt: number) {
+    super(`Neynar calls are temporarily disabled until ${new Date(retryAt).toISOString()}`);
+    this.name = 'NeynarTemporarilyDisabledError';
+  }
+}
+
+let neynarCooldownUntil = 0;
+let lastCooldownLogAt = 0;
+const verificationMissCache = new Map<string, number>();
+
+const getBrowserStorage = (): Storage | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
 
 const getHeaders = (apiKey?: string) => {
   const key = apiKey?.trim();
   return {
     accept: 'application/json',
-    'content-type': 'application/json',
     ...(key ? { api_key: key, 'X-API-KEY': key } : {}),
   };
 };
@@ -29,6 +54,109 @@ const isVitest = () =>
   typeof process !== 'undefined' &&
   Boolean((process.env as Record<string, string | undefined>)?.VITEST);
 
+const nowMs = (): number => Date.now();
+
+const readStoredTimestamp = (key: string): number => {
+  const raw = getBrowserStorage()?.getItem(key);
+  if (!raw) return 0;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const writeStoredTimestamp = (key: string, value: number): void => {
+  try {
+    getBrowserStorage()?.setItem(key, String(value));
+  } catch {
+    // Ignore storage failures; the in-memory cooldown still protects this tab.
+  }
+};
+
+const readNeynarCooldownUntil = (): number => {
+  neynarCooldownUntil = Math.max(neynarCooldownUntil, readStoredTimestamp(NEYNAR_COOLDOWN_STORAGE_KEY));
+  return neynarCooldownUntil;
+};
+
+const rememberNeynarCooldown = (durationMs: number, reason: string): void => {
+  const retryAt = nowMs() + Math.max(1_000, durationMs);
+  if (retryAt <= readNeynarCooldownUntil()) {
+    return;
+  }
+  neynarCooldownUntil = retryAt;
+  writeStoredTimestamp(NEYNAR_COOLDOWN_STORAGE_KEY, retryAt);
+  console.warn(`[Neynar] Temporarily disabling browser Neynar calls for ${Math.ceil(durationMs / 60000)}m after ${reason}.`);
+};
+
+const assertNeynarAvailable = (): void => {
+  const retryAt = readNeynarCooldownUntil();
+  if (retryAt <= nowMs()) {
+    return;
+  }
+
+  const now = nowMs();
+  if (now - lastCooldownLogAt > 60_000) {
+    lastCooldownLogAt = now;
+    console.log(`[Neynar] Skipping request during cooldown until ${new Date(retryAt).toISOString()}`);
+  }
+  throw new NeynarTemporarilyDisabledError(retryAt);
+};
+
+const isNeynarTemporarilyDisabled = (error: unknown): boolean =>
+  error instanceof NeynarTemporarilyDisabledError;
+
+const isNetworkFetchError = (error: unknown): boolean =>
+  error instanceof TypeError || (error instanceof Error && /failed to fetch|networkerror|load failed/i.test(error.message));
+
+const shouldSilentlySkipNeynarError = (error: unknown): boolean =>
+  isNeynarTemporarilyDisabled(error) || isNetworkFetchError(error);
+
+const verificationMissKey = (address: string): string => `${NEYNAR_VERIFICATION_MISS_PREFIX}${address.toLowerCase()}`;
+
+const hasCachedVerificationMiss = (address: string): boolean => {
+  const normalized = address.toLowerCase();
+  const stored = Math.max(
+    verificationMissCache.get(normalized) ?? 0,
+    readStoredTimestamp(verificationMissKey(normalized))
+  );
+  if (stored > nowMs()) {
+    verificationMissCache.set(normalized, stored);
+    return true;
+  }
+  verificationMissCache.delete(normalized);
+  try {
+    getBrowserStorage()?.removeItem(verificationMissKey(normalized));
+  } catch {
+    // ignore
+  }
+  return false;
+};
+
+const rememberVerificationMiss = (address: string): void => {
+  const normalized = address.toLowerCase();
+  const expiresAt = nowMs() + NEYNAR_VERIFICATION_MISS_TTL_MS;
+  verificationMissCache.set(normalized, expiresAt);
+  writeStoredTimestamp(verificationMissKey(normalized), expiresAt);
+};
+
+export const resetNeynarHealthForTest = (): void => {
+  neynarCooldownUntil = 0;
+  lastCooldownLogAt = 0;
+  verificationMissCache.clear();
+  try {
+    const storage = getBrowserStorage();
+    storage?.removeItem(NEYNAR_COOLDOWN_STORAGE_KEY);
+    if (storage) {
+      for (let i = storage.length - 1; i >= 0; i -= 1) {
+        const key = storage.key(i);
+        if (key?.startsWith(NEYNAR_VERIFICATION_MISS_PREFIX)) {
+          storage.removeItem(key);
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+};
+
 const sleep = async (ms: number): Promise<void> => {
   if (ms <= 0) return;
   if (isVitest()) return;
@@ -40,6 +168,8 @@ const fetchWithRetry = async (
   init: RequestInit,
   options?: { maxAttempts?: number }
 ): Promise<Response> => {
+  assertNeynarAvailable();
+
   const maxAttempts = Math.max(1, options?.maxAttempts ?? 4);
   let attempt = 0;
   let backoffMs = 400;
@@ -52,12 +182,27 @@ const fetchWithRetry = async (
         throw new Error('Fetch returned an empty response');
       }
       if (!shouldRetryStatus(response.status) || attempt >= maxAttempts) {
+        const retryAfter = parseRetryAfterMs(response);
+        if (response.status === 401 || response.status === 403) {
+          rememberNeynarCooldown(NEYNAR_AUTH_COOLDOWN_MS, `auth failure (${response.status})`);
+        } else if (response.status === 429) {
+          rememberNeynarCooldown(retryAfter ?? NEYNAR_RATE_LIMIT_COOLDOWN_MS, 'rate limiting');
+        } else if (response.status >= 500) {
+          rememberNeynarCooldown(retryAfter ?? NEYNAR_SERVER_COOLDOWN_MS, `server error (${response.status})`);
+        }
         return response;
       }
       const retryAfter = parseRetryAfterMs(response);
       const delay = retryAfter ?? Math.min(5000, backoffMs);
       await sleep(delay);
     } catch (error) {
+      if (isNeynarTemporarilyDisabled(error)) {
+        throw error;
+      }
+      if (isNetworkFetchError(error)) {
+        rememberNeynarCooldown(NEYNAR_NETWORK_COOLDOWN_MS, 'network/CORS fetch failure');
+        throw error;
+      }
       if (attempt >= maxAttempts) {
         throw error;
       }
@@ -70,11 +215,9 @@ const fetchWithRetry = async (
   return fetch(url, init);
 };
 
-const fetchWithFallback = async (path: string, apiKey?: string): Promise<Response> => {
+const fetchNeynar = async (path: string, apiKey?: string): Promise<Response> => {
   const headers = getHeaders(apiKey);
-  const primary = await fetchWithRetry(`${NEYNAR_BASE}${path}`, { headers });
-  if (primary.status !== 404) return primary;
-  return fetchWithRetry(`${NEYNAR_FALLBACK_BASE}${path}`, { headers });
+  return fetchWithRetry(`${NEYNAR_BASE}${path}`, { headers });
 };
 
 export interface NeynarUserResult {
@@ -143,7 +286,7 @@ export async function fetchNeynarUserProfile(
       ? `/user/bulk?fids=${identifier}`
       : `/user/by_username?username=${encodeURIComponent(String(identifier))}`;
 
-    const response = await fetchWithFallback(path, apiKey);
+    const response = await fetchNeynar(path, apiKey);
 
     if (!response.ok) {
       console.warn('[Neynar] Failed to fetch user profile', response.status);
@@ -158,6 +301,7 @@ export async function fetchNeynarUserProfile(
     if (!user) return null;
     return { ...user, score: extractScoreValue((user as { score?: unknown }).score) };
   } catch (error) {
+    if (shouldSilentlySkipNeynarError(error)) return null;
     console.warn('[Neynar] Error fetching user profile', error);
     return null;
   }
@@ -186,7 +330,7 @@ export async function fetchNeynarUsersBulk(
   for (let i = 0; i < unique.length; i += chunkSize) {
     const chunk = unique.slice(i, i + chunkSize);
     try {
-      const response = await fetchWithFallback(`/user/bulk?fids=${chunk.join(',')}`, apiKey);
+      const response = await fetchNeynar(`/user/bulk?fids=${chunk.join(',')}`, apiKey);
       if (!response.ok) {
         console.warn('[Neynar] Failed to fetch bulk users', response.status);
         continue;
@@ -198,6 +342,7 @@ export async function fetchNeynarUsersBulk(
       const users = data.result?.users || (data as any).users || [];
       results.push(...users.map(mapNeynarUser));
     } catch (error) {
+      if (shouldSilentlySkipNeynarError(error)) break;
       console.warn('[Neynar] Error fetching bulk users', error);
     }
   }
@@ -212,18 +357,20 @@ export async function fetchNeynarUserByVerification(
   if (!apiKey) return null;
   const trimmed = address?.trim();
   if (!trimmed) return null;
+  const normalized = trimmed.toLowerCase();
+  if (hasCachedVerificationMiss(normalized)) {
+    return null;
+  }
   try {
-    // Correct V2 endpoint is bulk-by-address
-    const url = new URL(`https://api.neynar.com/v2/farcaster/user/bulk-by-address`);
-    url.searchParams.set('addresses', trimmed.toLowerCase());
+    const relativePath = `/user/bulk-by-address?addresses=${encodeURIComponent(normalized)}`;
 
-    // We can't easily use fetchWithFallback cleanly with full URLs, but since we know the endpoint...
-    // Let's manually construct the path to use fetchWithFallback which expects a relative path
-    const relativePath = `/user/bulk-by-address?addresses=${encodeURIComponent(trimmed.toLowerCase())}`;
-
-    const response = await fetchWithFallback(relativePath, apiKey);
+    const response = await fetchNeynar(relativePath, apiKey);
     if (!response.ok) {
-      console.warn('[Neynar] Failed to fetch user by verification', response.status);
+      if (response.status === 404) {
+        rememberVerificationMiss(normalized);
+      } else {
+        console.warn('[Neynar] Failed to fetch user by verification', response.status);
+      }
       return null;
     }
 
@@ -263,8 +410,12 @@ export async function fetchNeynarUserByVerification(
     };
 
     const user = pickFirstUser(data);
+    if (!user) {
+      rememberVerificationMiss(normalized);
+    }
     return user ? mapNeynarUser(user) : null;
   } catch (error) {
+    if (shouldSilentlySkipNeynarError(error)) return null;
     console.warn('[Neynar] Error fetching user by verification', error);
     return null;
   }
@@ -286,7 +437,7 @@ export async function fetchNeynarUserByIdentifier(
   }
 
   try {
-    const response = await fetchWithFallback(`/user/by_username?username=${encodeURIComponent(trimmed)}`, apiKey);
+    const response = await fetchNeynar(`/user/by_username?username=${encodeURIComponent(trimmed)}`, apiKey);
     if (!response.ok) {
       if (response.status !== 404) {
         console.warn('[Neynar] Failed to fetch user by identifier', response.status);
@@ -297,6 +448,7 @@ export async function fetchNeynarUserByIdentifier(
     const user = data.result?.user || (data as { user?: FarcasterUser }).user;
     return user ? mapNeynarUser(user) : null;
   } catch (error) {
+    if (shouldSilentlySkipNeynarError(error)) return null;
     console.warn('[Neynar] Error fetching user by identifier', error);
     return null;
   }
@@ -319,7 +471,7 @@ export async function fetchFarcasterFollowingWithNeynar(
       url.searchParams.set('limit', '100');
       if (cursor) url.searchParams.set('cursor', cursor);
 
-      const response = await fetchWithFallback(url.pathname + url.search, apiKey);
+      const response = await fetchNeynar(url.pathname + url.search, apiKey);
       if (!response.ok) {
         let body: string | undefined;
         try {
@@ -341,6 +493,9 @@ export async function fetchFarcasterFollowingWithNeynar(
 
     return users;
   } catch (error) {
+    if (isNeynarTemporarilyDisabled(error)) {
+      throw error;
+    }
     console.warn('[Neynar] Error fetching following', error);
     throw error;
   }
