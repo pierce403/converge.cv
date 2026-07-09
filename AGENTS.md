@@ -493,11 +493,18 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.6 + existing inbox reassignment diagnostics)
+**Last Updated**: 2026-07-09 (app version 0.3.7 + XMTP address resolver and local-chat fallback fix)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### XMTP Address Resolver and Local Chat Fallback Fix
+- Bumped Converge from `0.3.6` to `0.3.7` after live logs showed sends going to `local-conversation-*` with peer IDs like `0x7ab...` and then failing because the SDK could not find that fake conversation after sync.
+- Root cause: Converge's address resolver stripped `0x` before calling XMTP identifier lookup APIs, while current `@xmtp/browser-sdk` signers identify Ethereum accounts with `0x`-prefixed lowercase addresses. Known wallet inboxes could therefore resolve as `null`.
+- Fixed all local XMTP Ethereum identifier construction paths to preserve the `0x` prefix.
+- Connected XMTP conversation creation now throws on network creation failure instead of returning a local-only placeholder conversation that cannot send.
+- Existing local-only `local-conversation-*` threads now refuse sends before creating pending messages and show a toast telling the user to start a fresh network chat with that address.
 
 ### Existing Inbox Reassignment Diagnostics
 - Bumped Converge from `0.3.5` to `0.3.6` after investigating `Account already associated with inbox ...` during Settings → Connect Existing Inbox.

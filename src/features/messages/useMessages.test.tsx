@@ -119,6 +119,46 @@ describe('useMessages resolver usage', () => {
     );
   });
 
+  it('refuses to send from local-only fallback conversations', async () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    useConversationStore.setState({
+      conversations: [
+        {
+          id: 'local-conversation-1',
+          peerId: '0x1111111111111111111111111111111111111111',
+          lastMessageAt: 0,
+          unreadCount: 0,
+          pinned: false,
+          archived: false,
+          createdAt: 0,
+          isGroup: false,
+          isLocalOnly: true,
+        } as Conversation,
+      ],
+      activeConversationId: null,
+      isLoading: false,
+    });
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.sendMessage('local-conversation-1', 'hello');
+    });
+
+    expect(xmtpMock.resolveInboxIdForAddress).not.toHaveBeenCalled();
+    expect(xmtpMock.sendMessage).not.toHaveBeenCalled();
+    expect(mockStorage.putMessage).not.toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'ui:toast',
+      }),
+    );
+    dispatchSpy.mockRestore();
+  });
+
   it('does not send read receipts for self DMs', async () => {
     useConversationStore.setState({
       conversations: [

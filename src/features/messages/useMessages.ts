@@ -382,6 +382,20 @@ export function useMessages() {
           setSending(false);
           return;
         }
+
+        if (conversation.isLocalOnly || conversation.id.startsWith('local-conversation')) {
+          const message =
+            'This chat was created locally before XMTP conversation creation succeeded. Start a new chat with this address again so Converge can create a real XMTP conversation.';
+          console.warn('[useMessages] Refusing to send from local-only conversation', {
+            conversationId: conversation.id,
+            peerId: conversation.peerId,
+            isLocalOnly: conversation.isLocalOnly ?? false,
+          });
+          window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
+          setSending(false);
+          return;
+        }
+
         await ensureContactForConversation(conversation);
 
         const parsedInvite = isLikelyConvosInviteCode(content) ? tryParseConvosInvite(content) : null;

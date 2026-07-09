@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { IdentifierKind } from '@xmtp/browser-sdk';
 import { XmtpClient } from './client';
 
 describe('XmtpClient address resolver cache', () => {
@@ -26,6 +27,10 @@ describe('XmtpClient address resolver cache', () => {
     expect(two).toBe(inboxId);
     expect(three).toBe(inboxId);
     expect(fetchInboxIdByIdentifier).toHaveBeenCalledTimes(1);
+    expect(fetchInboxIdByIdentifier).toHaveBeenCalledWith({
+      identifier: address,
+      identifierKind: IdentifierKind.Ethereum,
+    });
   });
 
   it('caches negative lookups with a short TTL', async () => {
@@ -66,5 +71,21 @@ describe('XmtpClient address resolver cache', () => {
 
     expect(resolved).toBeNull();
     expect(fetchInboxIdByIdentifier).not.toHaveBeenCalled();
+  });
+
+  it('does not create a local fallback conversation when connected creation fails', async () => {
+    const xmtp = new XmtpClient();
+    const createGroup = vi.fn(async () => {
+      throw new Error('network create failed');
+    });
+
+    (xmtp as unknown as { client: unknown }).client = {
+      conversations: {
+        createGroup,
+      },
+    };
+
+    await expect(xmtp.createConversation(inboxId)).rejects.toThrow('network create failed');
+    expect(createGroup).toHaveBeenCalledWith([inboxId]);
   });
 });

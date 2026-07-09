@@ -290,8 +290,10 @@ const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
 const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(value);
 
-const toIdentifierHex = (address: string): string =>
-  address.startsWith('0x') || address.startsWith('0X') ? address.slice(2) : address;
+const toEthereumIdentifier = (address: string): string => {
+  const normalized = address.trim().toLowerCase();
+  return normalized.startsWith('0x') ? normalized : `0x${normalized}`;
+};
 
 const EMPTY_ETHEREUM_IDENTIFIER = { identifier: '', identifierKind: IdentifierKind.Ethereum } as const;
 
@@ -1868,7 +1870,7 @@ export class XmtpClient {
     });
 
     const identifier = {
-      identifier: toIdentifierHex(normalizedAddress).toLowerCase(),
+      identifier: toEthereumIdentifier(normalizedAddress),
       identifierKind: IdentifierKind.Ethereum,
     };
 
@@ -2172,7 +2174,7 @@ export class XmtpClient {
   private identifierFromAddress(address: string): Identifier {
     const normalized = this.normalizeEthereumAddress(address);
     return {
-      identifier: toIdentifierHex(normalized).toLowerCase(),
+      identifier: toEthereumIdentifier(normalized),
       identifierKind: IdentifierKind.Ethereum,
     };
   }
@@ -3153,9 +3155,9 @@ export class XmtpClient {
               inboxIds.push(resolvedInbox);
             } else if (lookupErrored) {
               // Fall back to identifiers only when lookup failed (network/cors/etc).
-              const rawHex = toIdentifierHex(normalized).toLowerCase();
+              const rawIdentifier = toEthereumIdentifier(normalized);
               const identifier: Identifier = {
-                identifier: rawHex,
+                identifier: rawIdentifier,
                 identifierKind: IdentifierKind.Ethereum,
               };
               identifierPayloads.push(identifier);
@@ -4083,7 +4085,7 @@ export class XmtpClient {
         if (!inboxId) {
           try {
             const identifier = {
-              identifier: toIdentifierHex(identity.address).toLowerCase(),
+              identifier: toEthereumIdentifier(identity.address),
               identifierKind: IdentifierKind.Ethereum,
             };
             const resolvedInboxId = await client.fetchInboxIdByIdentifier(
@@ -6094,7 +6096,7 @@ export class XmtpClient {
     const isE2E = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_E2E_TEST === 'true');
     const fallbackIdentifier: Identifier | undefined = this.identity?.address
       ? {
-        identifier: toIdentifierHex(this.identity.address).toLowerCase(),
+        identifier: toEthereumIdentifier(this.identity.address),
         identifierKind: IdentifierKind.Ethereum,
       }
       : undefined;
@@ -6140,7 +6142,7 @@ export class XmtpClient {
     }
 
     const identifier = fallbackIdentifier ?? {
-      identifier: toIdentifierHex(this.identity.address).toLowerCase(),
+      identifier: toEthereumIdentifier(this.identity.address),
       identifierKind: IdentifierKind.Ethereum,
     };
 
@@ -6291,17 +6293,13 @@ export class XmtpClient {
    */
   async createConversation(peerAddressOrInboxId: string): Promise<Conversation> {
     if (!this.client) {
-      console.warn('[XMTP] Client not connected; creating local conversation fallback for', peerAddressOrInboxId);
-      const conversation = this.createLocalConversation(peerAddressOrInboxId);
-
+      console.warn('[XMTP] Client not connected; refusing to create local-only conversation for', peerAddressOrInboxId);
       logNetworkEvent({
         direction: 'status',
-        event: 'conversations:create:offline',
-        details: `Created local conversation stub for ${peerAddressOrInboxId}`,
-        payload: this.formatPayload(conversation),
+        event: 'conversations:create:offline_blocked',
+        details: `Refused local-only conversation stub for ${peerAddressOrInboxId}`,
       });
-
-      return conversation;
+      throw new Error('XMTP is not connected. Wait for Converge to finish connecting, then start the chat again.');
     }
 
     console.log('[XMTP] Creating conversation with:', peerAddressOrInboxId);
@@ -6333,7 +6331,7 @@ export class XmtpClient {
           console.log('[XMTP] No inbox ID resolved, falling back to createGroupWithIdentifiers...');
           const normalizedAddress = this.normalizeEthereumAddress(peerAddressOrInboxId).toLowerCase();
           const identifier = {
-            identifier: toIdentifierHex(normalizedAddress),
+            identifier: toEthereumIdentifier(normalizedAddress),
             identifierKind: IdentifierKind.Ethereum,
           };
           xmtpConversation = await this.client.conversations.createGroupWithIdentifiers([identifier as Identifier]);
@@ -6463,23 +6461,22 @@ export class XmtpClient {
 
       return conversation;
     } catch (error) {
-      console.warn('[XMTP] ❌ Failed to create conversation via XMTP, using local fallback:', error);
+      console.warn('[XMTP] ❌ Failed to create conversation via XMTP:', error);
       if (error instanceof Error) {
         console.warn('[XMTP] Error details:', {
           message: error.message,
           stack: error.stack,
         });
       }
-      const fallbackConversation = this.createLocalConversation(peerAddressOrInboxId);
 
       logNetworkEvent({
         direction: 'status',
-        event: 'conversations:create:offline',
-        details: `Created fallback conversation for ${peerAddressOrInboxId}`,
-        payload: this.formatPayload(fallbackConversation),
+        event: 'conversations:create:failed',
+        details: `Failed to create XMTP conversation for ${peerAddressOrInboxId}`,
+        payload: this.formatPayload(error instanceof Error ? error.message : String(error)),
       });
 
-      return fallbackConversation;
+      throw error;
     }
   }
 
