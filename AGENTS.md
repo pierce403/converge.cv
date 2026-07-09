@@ -475,11 +475,17 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.0 + local app key startup)
+**Last Updated**: 2026-07-09 (app version 0.3.1 + inbox connector narrowing)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Existing Inbox Connector Narrowing
+- Bumped Converge from `0.3.0` to `0.3.1` after narrowing the Settings → Connect Existing Inbox wallet choices.
+- Settings → Connect Existing Inbox now wraps its modal in a native wallet connection provider even when the app-wide wallet provider is Thirdweb or Privy.
+- That modal filters wallet choices to only WalletConnect and Browser Wallet (`injected`) so users approve XMTP reassignment from external wallets such as Rainbow or MetaMask.
+- Thirdweb and embedded-wallet options remain available for their broader provider flows, but they should not be shown in the existing-inbox reassignment modal unless this architecture decision is deliberately changed in `FEATURES.md` and `ARCHITECTURE.md`.
 
 ### Local App Key Startup + Existing Inbox Connection
 - Bumped Converge from `0.2.0` to `0.3.0` for the identity startup/reassignment behavior change.

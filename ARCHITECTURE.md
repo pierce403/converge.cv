@@ -22,7 +22,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 - On startup, if no local identity exists, Converge generates a secp256k1 local app key, stores it in IndexedDB, registers it with XMTP, and opens the app without a passphrase or wallet prompt.
 - The local app key is exportable through the existing keyfile path and remains the signer Converge uses after setup.
-- Wallet providers (Native/MetaMask/WalletConnect/Coinbase, Thirdweb, Privy) are used to connect the local app key to an existing wallet-owned XMTP inbox, not as the default persistent Converge identity.
+- Settings → Connect Existing Inbox uses only WalletConnect and injected Browser Wallet connectors for the wallet approval, so the user signs from a normal external wallet such as Rainbow or MetaMask. Thirdweb and embedded-wallet providers remain available elsewhere but are not part of this reassignment flow.
 - The connection flow probes the wallet for an existing XMTP inbox, asks the wallet to sign XMTP's account reassignment approval, then uses `unsafe_addAccount(..., true)` through a temporary manager client to move the local app key into that inbox.
 - After reassignment, Converge switches storage to the target inbox, reconnects XMTP with the local app key, and history sync runs from the existing inbox. The generated inbox is removed from the visible registry and treated as abandoned.
 

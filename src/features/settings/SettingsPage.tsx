@@ -9,17 +9,19 @@ import { getStorage } from '@/lib/storage';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { getXmtpClient } from '@/lib/xmtp';
 import { InstallationsSettings } from './InstallationsSettings';
-import { useWalletConnection } from '@/lib/wagmi';
-import { usePublicClient } from 'wagmi';
+import { useWalletConnection, WalletConnectionProvider, wagmiConfigNative } from '@/lib/wagmi';
+import { WagmiProvider, usePublicClient } from 'wagmi';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { enablePushForCurrentUser, disablePush, isPushEnabled, getPushPermissionStatus } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 import { FarcasterSettings } from './FarcasterSettings';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
+import { getInboxConnectionWalletOptions } from '@/lib/wagmi/inbox-connection-options';
 import buildInfo from '@/build-info.json';
 
 const BASE_CHAIN_ID = 8453;
+type WalletSignMessage = (message: string, accountAddress?: string) => Promise<string>;
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -351,7 +353,10 @@ export function SettingsPage() {
     return { address, walletType: 'EOA' };
   };
 
-  const connectExistingWalletInbox = async (accounts: readonly string[] | undefined) => {
+  const connectExistingWalletInbox = async (
+    accounts: readonly string[] | undefined,
+    walletSignMessage = signMessage
+  ) => {
     if (!identity) {
       throw new Error('No identity is currently loaded.');
     }
@@ -374,10 +379,10 @@ export function SettingsPage() {
       target.address,
       target.chainId,
       async (message: string) => {
-        if (!signMessage) {
+        if (!walletSignMessage) {
           throw new Error('Wallet signing is not available. Connect your wallet and try again.');
         }
-        return await signMessage(message, target.address);
+        return await walletSignMessage(message, target.address);
       },
       {
         walletType: target.walletType,
@@ -1259,129 +1264,157 @@ export function SettingsPage() {
         <QRCodeOverlay address={identity.address} onClose={() => setShowQR(false)} />
       )}
 
-      {/* Connect Existing Inbox Modal */}
       {showAddIdentityModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-primary-800/60 bg-primary-950 shadow-2xl">
-            <div className="p-4 border-b border-primary-800/60 flex items-center justify-between">
-              <div>
-                <div className="text-lg font-semibold text-primary-50">Connect Existing Inbox</div>
-                <div className="text-sm text-primary-200">Use a wallet signature to move this app key into an existing XMTP inbox.</div>
-              </div>
-              <button
-                onClick={() => {
-                  if (isAddingIdentity) return;
-                  setShowAddIdentityModal(false);
-                }}
-                className="text-primary-300 hover:text-primary-100 transition-colors"
-                aria-label="Close"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+        <WagmiProvider config={wagmiConfigNative}>
+          <WalletConnectionProvider providerOverride="native">
+            <ConnectExistingInboxModal
+              error={addIdentityError}
+              isWorking={isAddingIdentity}
+              onClose={() => setShowAddIdentityModal(false)}
+              onError={setAddIdentityError}
+              onWorkingChange={setIsAddingIdentity}
+              onConnect={connectExistingWalletInbox}
+            />
+          </WalletConnectionProvider>
+        </WagmiProvider>
+      )}
+    </div>
+  );
+}
+
+interface ConnectExistingInboxModalProps {
+  error: string | null;
+  isWorking: boolean;
+  onClose: () => void;
+  onError: (message: string | null) => void;
+  onWorkingChange: (value: boolean) => void;
+  onConnect: (accounts: readonly string[] | undefined, signMessage?: WalletSignMessage) => Promise<void>;
+}
+
+function ConnectExistingInboxModal({
+  error,
+  isWorking,
+  onClose,
+  onError,
+  onWorkingChange,
+  onConnect,
+}: ConnectExistingInboxModalProps) {
+  const {
+    connectWallet,
+    walletOptions,
+    isConnected,
+    isConnecting,
+    address,
+    signMessage,
+  } = useWalletConnection();
+  const inboxWalletOptions = getInboxConnectionWalletOptions(walletOptions);
+
+  const runConnect = async (getAccounts: () => Promise<readonly string[] | undefined>) => {
+    if (isWorking) return;
+    onWorkingChange(true);
+    onError(null);
+    try {
+      if (!signMessage) {
+        throw new Error('Wallet signing is not available. Connect your wallet and try again.');
+      }
+      const accounts = await getAccounts();
+      await onConnect(accounts, signMessage);
+      onClose();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to connect wallet');
+    } finally {
+      onWorkingChange(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-lg rounded-xl border border-primary-800/60 bg-primary-950 shadow-2xl">
+        <div className="p-4 border-b border-primary-800/60 flex items-center justify-between">
+          <div>
+            <div className="text-lg font-semibold text-primary-50">Connect Existing Inbox</div>
+            <div className="text-sm text-primary-200">
+              Use WalletConnect or a browser wallet to move this app key into an existing XMTP inbox.
             </div>
+          </div>
+          <button
+            onClick={() => {
+              if (isWorking) return;
+              onClose();
+            }}
+            className="text-primary-300 hover:text-primary-100 transition-colors"
+            aria-label="Close"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
 
-            <div className="p-4 space-y-3">
-              <p className="text-sm text-primary-200">
-                You&apos;ll be asked to sign with the wallet that owns the existing inbox. Converge keeps using this exportable local app key after XMTP reassigns it to that inbox.
-              </p>
+        <div className="p-4 space-y-3">
+          <p className="text-sm text-primary-200">
+            You&apos;ll be asked to sign with the wallet that owns the existing inbox. Converge keeps using this
+            exportable local app key after XMTP reassigns it to that inbox.
+          </p>
 
-              {addIdentityError && (
-                <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
-                  {addIdentityError}
-                </div>
-              )}
+          {error && (
+            <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
+              {error}
+            </div>
+          )}
 
-              {isWalletConnected && walletAddress && (
-                <div className="rounded-lg border border-primary-800/60 bg-primary-900/50 p-3">
-                  <div className="text-xs text-primary-300 mb-1">Connected wallet</div>
-                  <div className="font-mono text-xs text-primary-100 break-all">{walletAddress}</div>
-                  <div className="mt-2">
-                    <button
-                      onClick={async () => {
-                        if (isAddingIdentity) return;
-                        setIsAddingIdentity(true);
-                        setAddIdentityError(null);
-                        try {
-                          await connectExistingWalletInbox([walletAddress]);
-                          setShowAddIdentityModal(false);
-                        } catch (err) {
-                          setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect inbox');
-                        } finally {
-                          setIsAddingIdentity(false);
-                        }
-                      }}
-                      disabled={isAddingIdentity}
-                      className="btn-primary text-sm px-3 py-2 disabled:opacity-50"
-                    >
-                      {isAddingIdentity ? 'Connecting…' : 'Use Connected Wallet'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="text-sm text-primary-200">Or connect a wallet:</div>
-              {walletProvider === 'thirdweb' ? (
-                <ThirdwebConnectButton
-                  label={isAddingIdentity ? 'Working…' : 'Connect with Thirdweb'}
-                  className="w-full"
-                  onConnected={async (addr) => {
-                    if (isAddingIdentity) return;
-                    setIsAddingIdentity(true);
-                    setAddIdentityError(null);
-                    try {
-                      await connectExistingWalletInbox([addr]);
-                      setShowAddIdentityModal(false);
-                    } catch (err) {
-                      setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect wallet');
-                    } finally {
-                      setIsAddingIdentity(false);
-                    }
-                  }}
-                />
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {walletOptions.map((option) => (
-                    <button
-                      key={option.id}
-                      onClick={async () => {
-                        if (isAddingIdentity) return;
-                        setIsAddingIdentity(true);
-                        setAddIdentityError(null);
-                        try {
-                          const result = await connectWallet(option);
-                          const accounts = (result as { accounts?: readonly string[] } | undefined)?.accounts;
-                          await connectExistingWalletInbox(accounts);
-                          setShowAddIdentityModal(false);
-                        } catch (err) {
-                          setAddIdentityError(err instanceof Error ? err.message : 'Failed to connect wallet');
-                        } finally {
-                          setIsAddingIdentity(false);
-                        }
-                      }}
-                      disabled={isAddingIdentity || option.disabled}
-                      className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
-                    >
-                      {isAddingIdentity ? 'Working…' : option.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-2">
+          {isConnected && address && (
+            <div className="rounded-lg border border-primary-800/60 bg-primary-900/50 p-3">
+              <div className="text-xs text-primary-300 mb-1">Connected wallet</div>
+              <div className="font-mono text-xs text-primary-100 break-all">{address}</div>
+              <div className="mt-2">
                 <button
-                  onClick={() => setShowAddIdentityModal(false)}
-                  disabled={isAddingIdentity}
-                  className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+                  onClick={() => runConnect(async () => [address])}
+                  disabled={isWorking}
+                  className="btn-primary text-sm px-3 py-2 disabled:opacity-50"
                 >
-                  Cancel
+                  {isWorking ? 'Connecting...' : 'Use Connected Wallet'}
                 </button>
               </div>
             </div>
+          )}
+
+          <div className="text-sm text-primary-200">Connect with:</div>
+          <div className="flex flex-wrap gap-2">
+            {inboxWalletOptions.map((option) => (
+              <button
+                key={option.id}
+                onClick={() =>
+                  runConnect(async () => {
+                    const result = await connectWallet(option);
+                    return (result as { accounts?: readonly string[] } | undefined)?.accounts;
+                  })
+                }
+                disabled={isWorking || isConnecting || option.disabled}
+                className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+              >
+                {isWorking || isConnecting ? 'Working...' : option.name}
+              </button>
+            ))}
+          </div>
+
+          {inboxWalletOptions.length === 0 && (
+            <div className="text-xs text-primary-300 rounded p-2 bg-primary-900/50 border border-primary-800/60">
+              No WalletConnect or browser wallet connectors are available in this browser.
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              onClick={onClose}
+              disabled={isWorking}
+              className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+            >
+              Cancel
+            </button>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
