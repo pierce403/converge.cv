@@ -2,6 +2,7 @@
 
 ## One-Click Onboarding and Inbox Switching
 - Startup auto-creates an exportable local app key when no identity exists, stores it in IndexedDB, registers it with XMTP, and opens the app without passphrases or wallet prompts.
+- Generated local app keys receive the same deterministic Color Animal display-name suggestion used by personalization onboarding, while legacy `App key ...` labels are treated as unset so they can be upgraded.
 - Wallet connection is now an inbox-connection flow, not the default app identity: Settings → Connect Existing Inbox asks the wallet that owns an existing XMTP inbox to approve moving the local app key into that inbox via XMTP account reassignment.
 - Settings → Connect Existing Inbox intentionally offers only WalletConnect and Browser Wallet connectors, so the approval comes from a normal external wallet such as Rainbow or MetaMask; it does not surface Thirdweb or embedded-wallet choices.
 - If the target wallet inbox is already at XMTP's 10-installation limit, the connect modal extracts the blocked InboxID, shows recovery progress, and offers a wallet-approved "Revoke Oldest Installation" action that frees one slot before retrying the connection.

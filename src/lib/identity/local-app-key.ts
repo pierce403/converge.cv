@@ -1,10 +1,9 @@
 import { bytesToHex } from 'viem';
 import { english, generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 import type { Identity } from '@/types';
+import { suggestAnimalDisplayName } from './profile-suggestions';
 
 export const LOCAL_APP_IDENTITY_KIND = 'local-app' as const;
-
-const shortAddress = (value: string) => `${value.slice(0, 6)}...${value.slice(-4)}`;
 
 export interface GeneratedLocalAppIdentity {
   identity: Identity;
@@ -28,7 +27,7 @@ export function generateLocalAppIdentity(now = Date.now()): GeneratedLocalAppIde
     mnemonic,
     createdAt: now,
     identityKind: LOCAL_APP_IDENTITY_KIND,
-    displayName: `App key ${shortAddress(account.address)}`,
+    displayName: suggestAnimalDisplayName(account.address).displayName,
   };
 
   return { identity, privateKey, mnemonic };

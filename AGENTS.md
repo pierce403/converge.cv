@@ -493,11 +493,17 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.8 + Neynar cooldown and Farcaster fallback gating)
+**Last Updated**: 2026-07-09 (app version 0.3.9 + generated-key animal onboarding)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Generated-Key Animal Onboarding
+- Bumped Converge from `0.3.8` to `0.3.9` after restoring the friendly Color Animal display-name path for generated local app keys.
+- `generateLocalAppIdentity()` now assigns the deterministic Color Animal suggestion immediately instead of `App key 0x...`, so startup-created ephemeral/local app keys keep the same low-friction onboarding identity style.
+- Added shared `src/lib/identity/profile-suggestions.ts` so Settings, the personalization reminder, inbox switching, Farcaster self-profile fill, and local app-key generation use one display-name suggestion and auto-label detection rule.
+- Legacy labels like `App key 0x1234...abcd` are now treated as generated placeholders alongside `Identity ...`, `Wallet ...`, and raw `0x...` labels, allowing profile prompts and hydration to replace them.
 
 ### Neynar Cooldown and Farcaster Fallback Gating
 - Bumped Converge from `0.3.7` to `0.3.8` after live browser logs showed repeated Neynar CORS/network failures during automatic self-profile refresh.

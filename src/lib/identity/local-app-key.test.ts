@@ -13,6 +13,7 @@ describe('generateLocalAppIdentity', () => {
     expect(generated.identity.createdAt).toBe(1_700_000_000_000);
     expect(generated.identity.address).toBe(account.address);
     expect(generated.identity.publicKey).toBe(account.publicKey);
-    expect(generated.identity.displayName).toMatch(/^App key 0x/i);
+    expect(generated.identity.displayName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    expect(generated.identity.displayName).not.toMatch(/^App key 0x/i);
   });
 });
