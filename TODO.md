@@ -1,6 +1,6 @@
 # converge.cv — TODO
 
-**Last updated**: 2026-01-25
+**Last updated**: 2026-07-09
 
 This is the live backlog. Keep it short and current. Completed work should move to `AGENTS.md` or stay in git history.
 
@@ -42,7 +42,7 @@ This is the live backlog. Keep it short and current. Completed work should move 
 ## Documentation
 
 - Update root `README.md` with:
-  - XMTP v5 upgrade notes + installation management UX.
+  - current XMTP v6.1.2 notes + installation management UX.
   - Push notifications (vapid.party).
   - Docs index (`docs/`).
 - Keep `FEATURES.md` aligned with shipped UX changes.

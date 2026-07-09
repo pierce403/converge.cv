@@ -5,11 +5,11 @@ This folder contains Converge.cv developer documentation and pointers to the can
 ## Start Here
 
 - **Project overview**: [`../README.md`](../README.md)
-- **Architecture & context**: [`architecture.md`](architecture.md) and [`../PROJECT_SUMMARY.md`](../PROJECT_SUMMARY.md)
+- **Architecture & context**: [`architecture.md`](architecture.md), [`../ARCHITECTURE.md`](../ARCHITECTURE.md), and [`../AGENTS.md`](../AGENTS.md)
 - **Feature spec (keep up to date)**: [`../FEATURES.md`](../FEATURES.md)
 - **Roadmap / tasks**: [`../TODO.md`](../TODO.md)
 - **Deployment**: [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
-- **XMTP notes**: [`../XMTP_BASICS.md`](../XMTP_BASICS.md)
+- **XMTP reference**: official XMTP docs plus the current integration notes in [`../AGENTS.md`](../AGENTS.md)
 
 ## Guides
 

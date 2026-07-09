@@ -22,5 +22,5 @@ Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP prot
 
 - **Deep dive / current decisions**: [`../AGENTS.md`](../AGENTS.md)
 - **Canonical architecture tracker**: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
-- **Technical overview**: [`../PROJECT_SUMMARY.md`](../PROJECT_SUMMARY.md)
+- **Technical context**: [`../AGENTS.md`](../AGENTS.md) and [`README.md`](README.md)
 - **User-facing behavior**: [`../FEATURES.md`](../FEATURES.md)

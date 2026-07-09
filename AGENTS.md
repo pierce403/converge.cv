@@ -2,7 +2,19 @@
 
 **⚠️ IMPORTANT: Future agents working on this project should READ THIS FILE FIRST and UPDATE IT whenever they learn something new about the project or user preferences.**
 
+`AGENTS.md` is the canonical instruction file for this repository. `CLAUDE.md`
+and `GEMINI.md` are compatibility symlinks that point here so other harnesses
+read the same source of truth.
+
 ---
+
+## Agent Responsibilities
+
+- Keep Converge static and local-first unless the user explicitly changes the architecture.
+- Preserve the low-friction identity flow: no passphrases, no lock screen, no wallet prompts by default.
+- Use repo-local indexes before important work: `AGENTS.md`, `MEMORY.md`, and `SKILLS.md`.
+- Record durable project learnings where future agents will look: `AGENTS.md` for canonical rules, `MEMORY.md`/`memory/` for searchable context, and `SKILLS.md`/`skills/` for reusable procedures.
+- Work in focused steps, verify real behavior when practical, then commit and push completed changes.
 
 ## Project Overview
 
@@ -394,15 +406,16 @@ if (!isRegistered) {
 
 ### Before Starting Work
 1. **Read this file completely**
-2. **Check for time gaps**: If the last update timestamp seems old or there's been time since the last session:
+2. Check `MEMORY.md` and `SKILLS.md` for relevant repo-local context and reusable procedures.
+3. **Check for time gaps**: If the last update timestamp seems old or there's been time since the last session:
    ```bash
    cd /home/pierce/projects/converge.cv && git pull
    git log --oneline --no-merges HEAD~20..HEAD  # Review recent commits
    ```
-3. Check `TODO.md` for planned features
-4. Review `PROJECT_SUMMARY.md` for technical overview
-5. Look at recent git history to understand latest changes
-6. Load XMTP LLM + content-type docs into context for reference:
+4. Check `TODO.md` for planned features
+5. Review root `ARCHITECTURE.md`, `FEATURES.md`, and `docs/README.md` for current technical/product context
+6. Look at recent git history to understand latest changes
+7. Load XMTP LLM + content-type docs into context for reference:
    - https://docs.xmtp.org/chat-apps/intro/build-with-llms
    - https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
    These links help with content-type handling and message classification; prefer using them when extending system-message support.
@@ -423,8 +436,10 @@ if (!isRegistered) {
 3. Document new architectural decisions
 4. Update the "Current State" section
 5. Note any new dependencies or tools added
-6. Always run the full CI-equivalent checks before handing work back: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build` (matches the GitHub Pages workflow order: typecheck → lint → build/deploy).
-7. **ALWAYS COMMIT AND PUSH ALL CHANGES** - This is mandatory after completing any work:
+6. Update `MEMORY.md`/`memory/` when durable context is useful but too detailed for this file.
+7. Update `SKILLS.md`/`skills/` when a reusable procedure changes.
+8. Always run the full CI-equivalent checks before handing work back: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build` (matches the GitHub Pages workflow order: typecheck → lint → build/deploy).
+9. **ALWAYS COMMIT AND PUSH ALL CHANGES** - This is mandatory after completing any work:
    ```bash
    git add -A
    git commit -m "feat: description of changes made"
@@ -474,12 +489,23 @@ Guidance:
 
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
+### Operating Practice References
+- Agent etiquette/advice review source: https://recurse.bot
+
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.2 + inbox installation recovery)
+**Last Updated**: 2026-07-09 (recurse.bot operating practice adoption)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Recurse.bot Operating Practice Adoption
+- Checked https://recurse.bot and adapted its useful repository-etiquette suggestions to Converge.
+- Kept `AGENTS.md` canonical and added `CLAUDE.md` / `GEMINI.md` symlinks back to it for harness compatibility.
+- Added root `MEMORY.md` plus `memory/notes/`, `memory/people/`, and `memory/logs/` so durable context can be searched without bloating this file.
+- Added root `SKILLS.md` plus focused repo-local skills for curation, memory search, release checklist, collaborator notes, and future recurse.bot advice checks.
+- Removed obsolete root Markdown plans/summaries that were superseded by `ARCHITECTURE.md`, `FEATURES.md`, `AGENTS.md`, and `docs/`.
+- Future operating-practice reviews should adopt only changes that fit Converge; do not copy external guidance wholesale over existing project conventions.
 
 ### Existing Inbox Installation Recovery
 - Bumped Converge from `0.3.1` to `0.3.2` after adding a recovery action for wallet inboxes that hit XMTP's 10/10 installation limit.
