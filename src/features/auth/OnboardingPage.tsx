@@ -11,10 +11,14 @@ import { useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
 import type { IdentityProbeResult } from '@/lib/xmtp/client';
 import type { InboxRegistryEntry } from '@/types';
 import { resetXmtpClient } from '@/lib/xmtp/client';
-import { deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
+import { assertKeyfileInboxMatch, deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
 import type { KeyfileIdentity } from '@/lib/keyfile';
 import { useWalletConnection } from '@/lib/wagmi';
 import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
+import { getXmtpClient } from '@/lib/xmtp';
+import { usePublicClient } from 'wagmi';
+
+const BASE_CHAIN_ID = 8453;
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
@@ -108,6 +112,7 @@ const getPreferredLabel = (identifiers: Identifier[] | undefined, address: strin
 interface WalletIdentityCandidate {
   address: string;
   chainId?: number;
+  walletType: 'EOA' | 'SCW';
   signMessage: (message: string) => Promise<string>;
 }
 
@@ -140,7 +145,7 @@ const renderRegistryEntry = (
           )}
           {!entry.hasLocalDB && (
             <div className="mt-2 text-xs text-amber-300">
-              No local XMTP database yet — history sync will run on first open.
+              No local XMTP database yet. Full history may require an older device to be online.
             </div>
           )}
         </div>
@@ -162,6 +167,7 @@ export function OnboardingPage() {
   const navigate = useNavigate();
   const auth = useAuth();
   const { disconnectWallet, signMessage } = useWalletConnection();
+  const basePublicClient = usePublicClient({ chainId: BASE_CHAIN_ID });
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
@@ -172,7 +178,10 @@ export function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [walletCandidate, setWalletCandidate] = useState<WalletIdentityCandidate | null>(null);
   const [probeResult, setProbeResult] = useState<IdentityProbeResult | null>(null);
+  const [isRecoveringInstallation, setIsRecoveringInstallation] = useState(false);
   const [keyfileCandidate, setKeyfileCandidate] = useState<KeyfileIdentity | null>(null);
+  const [keyfileProbeResult, setKeyfileProbeResult] = useState<IdentityProbeResult | null>(null);
+  const [isRecoveringKeyfileInstallation, setIsRecoveringKeyfileInstallation] = useState(false);
   const [keyfileError, setKeyfileError] = useState<string | null>(null);
   const [keyfileName, setKeyfileName] = useState<string | null>(null);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
@@ -200,6 +209,7 @@ export function OnboardingPage() {
 
   const resetKeyfileFlow = () => {
     setKeyfileCandidate(null);
+    setKeyfileProbeResult(null);
     setKeyfileError(null);
     setKeyfileName(null);
     if (keyfileInputRef.current) {
@@ -250,11 +260,13 @@ export function OnboardingPage() {
       const parsed = parseKeyfile(content);
       const derived = deriveIdentityFromKeyfile(parsed);
       setKeyfileCandidate(derived);
+      setKeyfileProbeResult(null);
       setKeyfileError(null);
       setKeyfileName(file.name);
     } catch (err) {
       console.error('[Onboarding] Failed to parse keyfile:', err);
       setKeyfileCandidate(null);
+      setKeyfileProbeResult(null);
       setKeyfileName(file.name);
       setKeyfileError(
         err instanceof Error ? err.message : 'Unable to read that keyfile. Please double-check the file.'
@@ -312,6 +324,8 @@ export function OnboardingPage() {
         label: generated.identity.displayName,
         mnemonic: generated.mnemonic,
         identityKind: generated.identity.identityKind,
+        provisioningMode: 'new-inbox',
+        xmtpDbPathMode: 'inbox-default',
       });
 
       if (!success) {
@@ -341,6 +355,20 @@ export function OnboardingPage() {
     setView('processing');
 
     try {
+      const keyProbe = await auth.probeIdentity(
+        keyfileCandidate.address,
+        keyfileCandidate.privateKey
+      );
+      assertKeyfileInboxMatch(keyfileCandidate.expectedInboxId, keyProbe.inboxId);
+      setKeyfileProbeResult(keyProbe);
+      if (keyProbe.installationCount >= 10) {
+        setKeyfileError(
+          'Installation limit reached (10/10). Revoke the oldest installation before restoring this key on a new browser.'
+        );
+        setView('keyfile');
+        return;
+      }
+
       // Don't use label from keyfile - will fetch from XMTP after connection
       const success = await auth.createIdentity(
         keyfileCandidate.address,
@@ -348,10 +376,15 @@ export function OnboardingPage() {
         undefined,
         undefined,
         {
-          register: true,
-          enableHistorySync: false,
+          register: false,
+          enableHistorySync: true,
           // Don't pass label - will fetch from XMTP
           mnemonic: keyfileCandidate.mnemonic,
+          identityKind: 'imported',
+          provisioningMode: 'keyfile-restore',
+          xmtpDbPathMode: 'inbox-default',
+          expectedInboxId: keyfileCandidate.expectedInboxId ?? keyProbe.inboxId ?? undefined,
+          requestHistorySync: keyProbe.isRegistered,
         }
       );
 
@@ -396,7 +429,9 @@ export function OnboardingPage() {
       }
     } catch (err) {
       console.error('[Onboarding] Failed to import keyfile identity:', err);
-      setKeyfileError('Failed to import that keyfile. Please try again.');
+      setKeyfileError(
+        err instanceof Error ? err.message : 'Failed to import that keyfile. Please try again.'
+      );
       setView('keyfile');
     }
   };
@@ -407,9 +442,23 @@ export function OnboardingPage() {
   };
 
   const handleWalletConnected = async (address: string, chainId?: number) => {
+    let walletType: WalletIdentityCandidate['walletType'] = 'EOA';
+    if (basePublicClient) {
+      try {
+        const bytecode = await basePublicClient.getBytecode({ address: address as `0x${string}` });
+        if (bytecode && bytecode !== '0x') {
+          walletType = 'SCW';
+          chainId = BASE_CHAIN_ID;
+        }
+      } catch (error) {
+        console.warn('[Onboarding] Could not inspect wallet bytecode; using EOA signer:', error);
+      }
+    }
+
     const candidate: WalletIdentityCandidate = {
       address,
       chainId,
+      walletType,
       signMessage: async (message: string) => {
         if (!signMessage) {
           throw new Error('Wallet signing is not available. Please reconnect your wallet.');
@@ -423,7 +472,13 @@ export function OnboardingPage() {
     setView('probing');
 
     try {
-      const result = await auth.probeIdentity(address, undefined, chainId, candidate.signMessage);
+      const result = await auth.probeIdentity(
+        address,
+        undefined,
+        chainId,
+        candidate.signMessage,
+        candidate.walletType
+      );
       setProbeResult(result);
       setError(null);
       setView('results');
@@ -450,16 +505,17 @@ export function OnboardingPage() {
       return;
     }
 
-    setStatusMessage('Moving this app key into your existing inbox…');
+    setStatusMessage('Adding this device to your existing inbox…');
     setView('processing');
 
     try {
       const label = getPreferredLabel(probeResult?.inboxState?.accountIdentifiers, walletCandidate.address);
-      await auth.connectLocalIdentityToWalletInbox(
+      await auth.addDeviceToExistingWalletInbox(
         walletCandidate.address,
         walletCandidate.chainId,
         walletCandidate.signMessage,
         {
+          walletType: walletCandidate.walletType,
           label,
         }
       );
@@ -474,6 +530,113 @@ export function OnboardingPage() {
     }
   };
 
+  const recoverOldestInstallation = async () => {
+    if (!walletCandidate || !probeResult?.inboxId || isRecoveringInstallation) {
+      return;
+    }
+    if (
+      !window.confirm(
+        'Revoke the oldest installation to make room for this browser? Creation time does not prove that device is inactive.'
+      )
+    ) {
+      return;
+    }
+
+    setIsRecoveringInstallation(true);
+    setError(null);
+    setStatusMessage('Revoking one old installation…');
+    setView('processing');
+
+    try {
+      const xmtp = getXmtpClient();
+      await xmtp.revokeOldestInstallationsForIdentity(
+        {
+          address: walletCandidate.address,
+          chainId: walletCandidate.chainId,
+          walletType: walletCandidate.walletType,
+          signMessage: walletCandidate.signMessage,
+        },
+        1,
+        {
+          inboxId: probeResult.inboxId,
+          inboxState: probeResult.inboxState,
+          requireAtLimit: true,
+          onStatus: setStatusMessage,
+        }
+      );
+
+      const refreshed = await auth.probeIdentity(
+        walletCandidate.address,
+        undefined,
+        walletCandidate.chainId,
+        walletCandidate.signMessage,
+        walletCandidate.walletType
+      );
+      setProbeResult(refreshed);
+      setView('results');
+    } catch (err) {
+      console.error('[Onboarding] Installation recovery failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to revoke an installation.');
+      setView('results');
+    } finally {
+      setIsRecoveringInstallation(false);
+    }
+  };
+
+  const recoverOldestKeyfileInstallation = async () => {
+    if (
+      !keyfileCandidate ||
+      !keyfileProbeResult?.inboxId ||
+      isRecoveringKeyfileInstallation
+    ) {
+      return;
+    }
+    if (
+      !window.confirm(
+        'Revoke the oldest installation to make room for this keyfile on this browser? Creation time does not prove that device is inactive.'
+      )
+    ) {
+      return;
+    }
+
+    setIsRecoveringKeyfileInstallation(true);
+    setKeyfileError(null);
+    try {
+      const xmtp = getXmtpClient();
+      await xmtp.revokeOldestInstallationsForIdentity(
+        {
+          address: keyfileCandidate.address,
+          privateKey: keyfileCandidate.privateKey,
+        },
+        1,
+        {
+          inboxId: keyfileProbeResult.inboxId,
+          inboxState: keyfileProbeResult.inboxState,
+          requireAtLimit: true,
+        }
+      );
+      const refreshed = await auth.probeIdentity(
+        keyfileCandidate.address,
+        keyfileCandidate.privateKey
+      );
+      setKeyfileProbeResult(refreshed);
+      setKeyfileError(
+        refreshed.installationCount >= 10
+          ? 'XMTP still reports 10 installations. Wait a moment and retry the recovery check.'
+          : null
+      );
+    } catch (err) {
+      console.error('[Onboarding] Keyfile installation recovery failed:', err);
+      setKeyfileError(
+        err instanceof Error
+          ? err.message
+          : 'This key could not authorize installation recovery for the inbox.'
+      );
+    } finally {
+      setIsRecoveringKeyfileInstallation(false);
+    }
+  };
+
   const handleOpenLocalInbox = async (entry: InboxRegistryEntry) => {
     setStatusMessage('Opening local inbox…');
     setView('processing');
@@ -482,9 +645,6 @@ export function OnboardingPage() {
     try {
       setCurrentInbox(entry.inboxId);
       const success = await auth.checkExistingIdentity();
-      if (!success) {
-        throw new Error('Unable to rehydrate identity');
-      }
       if (!success) {
         throw new Error('Unable to rehydrate identity');
       }
@@ -547,9 +707,9 @@ export function OnboardingPage() {
             className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
           >
             <div className="text-3xl">🔐</div>
-            <div className="mt-2 text-xl font-semibold text-primary-50">Connect existing inbox</div>
+            <div className="mt-2 text-xl font-semibold text-primary-50">Add this device to existing inbox</div>
             <div className="mt-1 text-sm text-primary-200">
-              Use WalletConnect, MetaMask, Coinbase Wallet, and more to approve this app key for an existing XMTP inbox.
+              Use a wallet that already controls the inbox to approve a new private key for this browser.
             </div>
           </button>
           <button
@@ -557,12 +717,24 @@ export function OnboardingPage() {
             className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
           >
             <div className="text-3xl">✨</div>
-            <div className="mt-2 text-xl font-semibold text-primary-50">Create local app key</div>
+            <div className="mt-2 text-xl font-semibold text-primary-50">Create new Converge inbox</div>
             <div className="mt-1 text-sm text-primary-200">
-              We&rsquo;ll generate everything for you instantly — no passphrases or extra steps.
+              Generate a local key and register a brand-new XMTP inbox in one step.
             </div>
           </button>
-          {/* Import keyfile option moved into WalletSelector as another connection method */}
+          <button
+            onClick={() => {
+              setError(null);
+              resetKeyfileFlow();
+              setView('keyfile');
+            }}
+            className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
+          >
+            <div className="text-xl font-semibold text-primary-50">Restore from keyfile</div>
+            <div className="mt-1 text-sm text-primary-200">
+              Reuse the exact private key or recovery phrase. On a new browser, XMTP creates a new installation for the same inbox.
+            </div>
+          </button>
         </div>
 
         {sortedRegistry.length > 0 && renderLocalRegistry(null)}
@@ -579,11 +751,6 @@ export function OnboardingPage() {
           setView('landing');
         }}
         backLabel="← Back"
-        onImportKeyfile={() => {
-          setError(null);
-          resetKeyfileFlow();
-          setView('keyfile');
-        }}
       />
     </div>
   );
@@ -593,9 +760,9 @@ export function OnboardingPage() {
       <div className="w-full max-w-2xl space-y-6 rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-semibold text-primary-50">Import keyfile</h2>
+            <h2 className="text-2xl font-semibold text-primary-50">Restore from keyfile</h2>
             <p className="mt-1 text-sm text-primary-200">
-              Select the JSON file you downloaded from Converge settings. We&rsquo;ll restore the identity using its recovery phrase.
+              This reuses the same private key or recovery phrase. It does not create a separate per-device account key.
             </p>
           </div>
           <button
@@ -620,7 +787,7 @@ export function OnboardingPage() {
               className="mt-2 w-full cursor-pointer rounded-md border border-dashed border-primary-700 bg-primary-950/60 p-4 text-sm text-primary-100 file:hidden"
             />
             <div className="mt-2 text-xs text-primary-300">
-              Keyfiles stay on this device. If you imported from another device, delete it safely when you&rsquo;re done.
+              The imported private key and recovery phrase are stored unencrypted in this browser&rsquo;s IndexedDB. Protect the source file and this browser profile.
             </div>
           </div>
 
@@ -636,6 +803,19 @@ export function OnboardingPage() {
             </div>
           )}
 
+          {keyfileProbeResult && keyfileProbeResult.installationCount >= 10 && (
+            <button
+              type="button"
+              onClick={recoverOldestKeyfileInstallation}
+              disabled={isRecoveringKeyfileInstallation}
+              className="w-full rounded-md border border-amber-500/60 bg-amber-950/50 px-4 py-3 text-sm font-semibold text-amber-100 transition hover:bg-amber-900/50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRecoveringKeyfileInstallation
+                ? 'Revoking installation...'
+                : 'Revoke oldest installation'}
+            </button>
+          )}
+
           {keyfileCandidate && (
             <div className="space-y-3 rounded-lg border border-primary-800/60 bg-primary-900/60 p-4">
               <div>
@@ -649,7 +829,7 @@ export function OnboardingPage() {
                 </div>
               )}
               <div className="text-xs text-primary-300">
-                We&rsquo;ll register this device with XMTP and sync history once connected.
+                A fresh browser gets a new XMTP installation for the same inbox. Keep an older device online while encrypted history sync runs.
               </div>
             </div>
           )}
@@ -661,10 +841,14 @@ export function OnboardingPage() {
           </div>
           <button
             onClick={handleImportKeyfileIdentity}
-            disabled={!keyfileCandidate}
+            disabled={
+              !keyfileCandidate ||
+              isRecoveringKeyfileInstallation ||
+              Boolean(keyfileProbeResult && keyfileProbeResult.installationCount >= 10)
+            }
             className="rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:border-primary-700 disabled:bg-primary-900 disabled:text-primary-400"
           >
-            Import identity
+            Restore identity
           </button>
         </div>
       </div>
@@ -680,7 +864,7 @@ export function OnboardingPage() {
         <h2 className="text-2xl font-semibold text-primary-50">{message}</h2>
         <p className="text-sm text-primary-300">
           {view === 'probing'
-            ? 'We probe with disableAutoRegister so nothing is created without your approval.'
+            ? 'We check the XMTP identity ledger without registering anything.'
             : 'Hold tight while we finish setting up this device.'}
         </p>
       </div>
@@ -757,7 +941,8 @@ export function OnboardingPage() {
                             walletCandidate.address,
                             undefined,
                             walletCandidate.chainId,
-                            walletCandidate.signMessage
+                            walletCandidate.signMessage,
+                            walletCandidate.walletType
                           );
                           setProbeResult(result);
                           setView('results');
@@ -859,16 +1044,25 @@ export function OnboardingPage() {
 
               <div className="pt-2">
                 {hasInbox ? (
-                  <button
-                    onClick={() => finalizeWalletIdentity()}
-                    disabled={installationBlocked}
-                    className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:border-primary-700 disabled:bg-primary-900 disabled:text-primary-400"
-                  >
-                    Move app key to this inbox
-                  </button>
+                  installationBlocked ? (
+                    <button
+                      onClick={recoverOldestInstallation}
+                      disabled={isRecoveringInstallation}
+                      className="w-full rounded-md border border-amber-500/60 bg-amber-700 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isRecoveringInstallation ? 'Revoking…' : 'Revoke oldest installation'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => finalizeWalletIdentity()}
+                      className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500"
+                    >
+                      Add this device
+                    </button>
+                  )
                 ) : (
                   <div className="rounded-md border border-primary-800/60 bg-primary-900/50 px-4 py-3 text-sm text-primary-200">
-                    This wallet does not have an existing XMTP inbox. Keep using the generated app key.
+                    This wallet does not control an existing XMTP inbox. Go back and choose Create new Converge inbox instead.
                   </div>
                 )}
               </div>
@@ -878,8 +1072,7 @@ export function OnboardingPage() {
           </div>
 
           <div className="rounded-xl border border-primary-800/40 bg-primary-950/40 p-4 text-xs text-primary-300">
-            Moving this app key reassigns it to the selected wallet inbox. The generated inbox is abandoned and future messages
-            sync from the existing inbox.
+            Converge generates a fresh key only after approval. It does not create or abandon a temporary inbox. Matching the inbox ID does not restore old messages by itself; an older installation may need to be online.
           </div>
         </div>
       </div>

@@ -16,8 +16,10 @@ import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { ConversationDetailsModal } from '@/features/conversations/ConversationDetailsModal';
 import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
+import { useAuth } from '@/features/auth';
 
 export function ChatList() {
+  const { reconnectCurrentIdentity } = useAuth();
   const { conversations, isLoading } = useConversations();
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [detailsConvId, setDetailsConvId] = useState<string | null>(null);
@@ -391,7 +393,11 @@ export function ChatList() {
               // 4) Clear XMTP OPFS database to remove corrupted MLS state
               console.log('[Resync] Clearing XMTP database...');
               try {
-                const opfsAddresses = currentIdentity?.address ? [currentIdentity.address] : [];
+                const opfsAddresses = currentIdentity
+                  ? [currentIdentity.address, currentIdentity.inboxId].filter(
+                      (value): value is string => Boolean(value)
+                    )
+                  : [];
                 await storage.clearAllData({ opfsAddresses });
               } catch (e) {
                 console.warn('[Resync] Failed to clear XMTP database:', e);
@@ -401,12 +407,7 @@ export function ChatList() {
               console.log('[Resync] Reconnecting to XMTP...');
               if (currentIdentity) {
                 try {
-                  await xmtp.connect(currentIdentity, { enableHistorySync: true });
-                  try {
-                    await xmtp.sendSyncRequest();
-                  } catch (e) {
-                    console.warn('[Resync] XMTP sendSyncRequest failed:', e);
-                  }
+                  await reconnectCurrentIdentity();
                 } catch (e) {
                   console.warn('[Resync] XMTP reconnect failed:', e);
                 }

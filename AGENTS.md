@@ -35,22 +35,23 @@ read the same source of truth.
 ### 🚫 NO PASSPHRASES BY DEFAULT
 - **User strongly prefers**: Zero friction authentication
 - **Never require passphrases** for onboarding or regular use
-- Passphrase functions exist (`createIdentityWithPassphrase`) but are NOT in the default flow
-- Auto-generate wallets in the background - users should never manually enter Ethereum addresses
-- **Exception**: Could add passphrase as an advanced/optional security feature if explicitly requested
+- Incomplete passphrase and passkey paths are hidden; do not expose or document them until encryption and recovery are implemented end to end.
+- "Create new Converge inbox" generates a local key only after the user explicitly chooses that action.
+- **Exception**: A passphrase may return as an advanced feature only if explicitly requested and fully implemented.
 
 ### 🔓 NO VAULT LOCKING BY DEFAULT
 - App should stay unlocked by default after initial setup
-- Users can manually lock from Settings if they want
-- Don't force lock screen on every app reload
-- `checkExistingIdentity()` sets `isVaultUnlocked: true` automatically
+- The former lock-screen control is hidden because current private material is not encrypted at rest.
+- Don't imply that a UI lock encrypts IndexedDB or the XMTP database.
+- `checkExistingIdentity()` restores an existing identity but does not create one on an empty browser.
 
 ### ⚡ ONE-CLICK ONBOARDING
-- Current flow: app startup → `checkExistingIdentity()` → auto-generate a local app key if none exists → register/connect XMTP → ready to use
+- Empty browsers show three explicit choices before any XMTP registration: create a new inbox, add this device to an existing wallet inbox, or restore the same key from a keyfile.
+- "Create new Converge inbox" remains a one-click generated-key flow after the user chooses it.
 - **No manual wallet address entry**
 - **No passphrase setup**
-- **No multi-step wizard** unless absolutely necessary
-- Wallets are for optional existing-inbox connection/reassignment, not default identity creation.
+- **No multi-step wizard** except where wallet approval or installation-limit recovery requires it.
+- Wallets are authority for an existing inbox. They must not silently create an unrelated local-key inbox first.
 
 ### 🚫 NO FAKE/MOCK DATA OR IDs
 - **NEVER use placeholder, fake, or mock API keys, project IDs, or credentials**
@@ -66,31 +67,37 @@ read the same source of truth.
 ### Identity & Storage
 - **Identities stored in IndexedDB** (via Dexie), NOT localStorage
 - Local app keys are generated with secp256k1 wallet primitives and stored as exportable identity records.
-- Private keys stored in identity record (would be device-encrypted in production)
-- No vault secrets required for default flow
+- Private keys and mnemonics are currently stored unencrypted in IndexedDB. Decrypted messages and attachment bytes are also local plaintext; the XMTP OPFS database is not encrypted by Converge.
+- A local app key is an XMTP account identity. An XMTP installation is a separate SDK-generated device key stored in the inbox-aware XMTP database.
+- New identities use the SDK's inbox-aware default database path. Existing identities without a path marker retain the legacy address-based path to avoid installation churn.
 
 ### Authentication Flow
 ```
 App start → checkExistingIdentity() →
-  If no identity exists, generate local app key →
-  createIdentity(address, privateKey) →
-  Store in IndexedDB →
-  Connect/register XMTP →
-  Open main app
+  Existing identity: reopen its persisted XMTP database → verify inbox and installation
+  No identity: show onboarding without generating or registering a key
 
-Optional existing inbox connection →
+Create new Converge inbox →
+  Generate a fresh local key → explicitly register one inbox/installation → verify and store IDs
+
+Restore from keyfile →
+  Reuse the same private key/mnemonic → resolve the same inbox → register only a new installation if needed
+
+Add this device to existing inbox →
   Connect wallet that owns existing inbox →
-  Probe wallet inbox →
-  Wallet signs XMTP account reassignment →
-  Move local app key into target inbox →
-  Reconnect with local app key
+  Probe target inbox and installation limit without creating a client for the new key →
+  Generate a fresh local device account key →
+  Register/reuse this browser installation under wallet authority →
+  Associate the fresh key only after proving it is unassociated →
+  Reopen the same inbox database with the fresh key → verify inbox and installation IDs → request history
 ```
 
 ### Key Functions
-- `createIdentity(address, privateKey)` - Simple, no passphrase
-- `createIdentityWithPassphrase(passphrase, address)` - Advanced option (not in default flow)
-- `checkExistingIdentity()` - Auto-unlocks vault and generates/connects a local app key on first app load
-- `connectLocalIdentityToWalletInbox()` - Uses a wallet signature to move the local app key into an existing XMTP inbox
+- `createIdentity(address, privateKey, options)` - Creates a new inbox or restores a key, then persists verified runtime IDs.
+- `checkExistingIdentity()` - Reconnects a stored identity; returns to onboarding when none exists.
+- `addDeviceToExistingWalletInbox()` - Generates a fresh key, provisions it into the wallet's existing inbox, reconnects with that key, and verifies both IDs.
+- `provisionDeviceKeyForInbox()` - Low-level wallet-authorized association path with ledger and 10/10 preflight checks.
+- `reassignAccountToInbox()` - Refuses cross-inbox reassignment. Any future destructive reassignment needs a separate explicit confirmation flow and stranding warning.
 
 ---
 
@@ -138,9 +145,8 @@ src/
 │   └── Providers.tsx       # Context providers
 ├── features/
 │   ├── auth/
-│   │   ├── OnboardingPage.tsx    # Simplified 1-click onboarding
+│   │   ├── OnboardingPage.tsx    # Explicit new/join/restore onboarding
 │   │   ├── useAuth.ts            # Auth hook with createIdentity()
-│   │   └── LockScreen.tsx        # Optional manual lock
 │   ├── conversations/
 │   ├── messages/
 │   ├── settings/
@@ -198,7 +204,11 @@ pnpm typecheck        # TypeScript type checking
 ## Current State (as of this session)
 
 ### ✅ Completed
-- Simplified onboarding (no passphrases, auto wallet generation with proper secp256k1 key derivation)
+- Explicit onboarding model for new inbox creation, same-key keyfile restore, and fresh-device-key association with an existing wallet inbox
+- Wallet-approved device provisioning verifies the target inbox, prevents accidental reassignment, reuses one inbox-aware browser database, and persists the final installation ID
+- New installations request XMTP device history and explain that an older installation may need to be online
+- `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
+- Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
 - Wallet provider switching (Native / Thirdweb / Privy) with Thirdweb as default; provider selector is available in onboarding + Settings
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
@@ -493,11 +503,23 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.9 + generated-key animal onboarding)
+**Last Updated**: 2026-07-09 (app version 0.4.0 + XMTP device provisioning)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### XMTP Device Provisioning and Honest Key Model
+- Bumped Converge from `0.3.9` to `0.4.0` after separating XMTP account identities, inboxes, and installations in onboarding and reconnect behavior.
+- Empty browsers no longer auto-register a generated standalone inbox. Users explicitly choose a new inbox, same-key keyfile restore, or a fresh per-device key joined to an existing wallet-controlled inbox.
+- Wallet-approved joins statically resolve the target and fresh identifiers, enforce the 10-installation limit before mutation, register/reuse one inbox-aware browser database, add only a proven-unassociated key, then reconnect and verify the target `inboxId` and exact `installationId`.
+- Pending keys are stored before ledger mutation and resumed after interruption. Failed Settings/switcher provisioning restores the previous active identity and namespace instead of leaving an authenticated half-transition.
+- Wallet and keyfile 10/10 recovery refetch current inbox state immediately before the recovery signature and stop without revocation if capacity is already available.
+- Cross-inbox reassignment is refused rather than silently using `unsafe_addAccount(..., true)`; a future destructive flow must explicitly warn that the old inbox is stranded.
+- New installations explicitly request device-history sync and surface that an older installation may need to be online. Matching an inbox ID is not presented as proof that history has arrived.
+- `Client.create` now includes `appVersion`, always disables auto-registration, and uses full signer fingerprints. Legacy address-based XMTP databases remain pinned while new identities use the SDK inbox-aware default.
+- Settings now verifies the live installation against inbox state before enabling revocation. Conversation ordering and legacy-DM deduplication regressions are covered by tests.
+- README, architecture, feature, and Settings copy now state that private keys, mnemonics, decrypted messages, attachment caches, and the local XMTP database are not encrypted at rest by Converge. Incomplete passphrase/passkey/lock paths are hidden.
 
 ### Generated-Key Animal Onboarding
 - Bumped Converge from `0.3.8` to `0.3.9` after restoring the friendly Color Animal display-name path for generated local app keys.
@@ -569,6 +591,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Thirdweb and embedded-wallet options remain available for their broader provider flows, but they should not be shown in the existing-inbox reassignment modal unless this architecture decision is deliberately changed in `FEATURES.md` and `ARCHITECTURE.md`.
 
 ### Local App Key Startup + Existing Inbox Connection
+- **Historical only:** this `0.3.0` behavior was replaced by the explicit `0.4.0` provisioning model above. Do not restore it.
 - Bumped Converge from `0.2.0` to `0.3.0` for the identity startup/reassignment behavior change.
 - Startup now auto-generates an exportable local app key when no identity exists, stores it in IndexedDB, registers it with XMTP, and opens the app without passphrases or wallet prompts.
 - Wallet providers are no longer the default persistent identity path. Settings → Connect Existing Inbox uses the wallet only to approve moving the local app key into an already-existing wallet-owned XMTP inbox.

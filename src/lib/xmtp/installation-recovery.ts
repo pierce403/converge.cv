@@ -21,7 +21,7 @@ type InstallationLike = Partial<Installation> & {
 
 export function extractInstallationLimitInboxId(message: string | null | undefined): string | null {
   if (!message) return null;
-  const match = message.match(/\bInboxID\s+([a-f0-9]{64})\b/i);
+  const match = message.match(/\b(?:InboxID|inbox)\s+([a-f0-9]{64})\b/i);
   return match?.[1]?.toLowerCase() ?? null;
 }
 
@@ -93,4 +93,12 @@ export function selectOldestRevocableInstallations(
 export function shortInboxId(inboxId: string | null | undefined): string {
   if (!inboxId) return 'unknown inbox';
   return `${inboxId.slice(0, 8)}...${inboxId.slice(-6)}`;
+}
+
+export function ensureInstallationRecoveryNeeded(installationCount: number): void {
+  if (installationCount < 10) {
+    throw new Error(
+      `Installation recovery stopped because the inbox now has ${installationCount}/10 installations; no revocation is needed.`
+    );
+  }
 }

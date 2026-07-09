@@ -66,6 +66,7 @@ import {
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
 import {
+  ensureInstallationRecoveryNeeded,
   extractWrongChainIdDetails,
   isLegacyScwChainZeroMismatch,
   isSignatureValidationFailure,
@@ -73,6 +74,15 @@ import {
   selectOldestRevocableInstallations,
   shortInboxId,
 } from './installation-recovery';
+import {
+  getClientDbPath,
+  planClientInstallation,
+  provisionFreshDeviceKey,
+  shouldRequestHistorySync,
+  signerIdentityKey,
+  type XmtpDbPathMode,
+  type ProvisionDeviceResult,
+} from './device-provisioning';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
 import {
   ConvosJoinRequestCodec,
@@ -111,6 +121,7 @@ const XMTP_CONTENT_CODECS = [
   CONVOS_JOIN_REQUEST_CODEC,
 ];
 const XMTP_SDK_LOG_LEVEL_STORAGE_KEY = 'converge.xmtpSdkLogLevel.v1';
+const XMTP_APP_VERSION = `converge-app/${buildInfo.version}`;
 
 function getXmtpSdkLogLevel(): LogLevel {
   // NOTE: In @xmtp/browser-sdk@6.1.2, ANY loggingLevel other than `Off` enables extremely verbose
@@ -150,6 +161,7 @@ export interface XmtpIdentity {
   privateKey?: string;
   inboxId?: string;
   installationId?: string;
+  xmtpDbPathMode?: XmtpDbPathMode;
   chainId?: number; // For smart contract wallets
   walletType?: 'EOA' | 'SCW'; // Optional hint for wallet-based identities
   signMessage?: (message: string) => Promise<string>; // For wallet-based signing via wagmi
@@ -170,6 +182,7 @@ export interface IdentityProbeResult {
 export interface AccountReassignmentOptions {
   targetIdentity: XmtpIdentity;
   accountIdentity: XmtpIdentity;
+  confirmReassignment: true;
 }
 
 export interface AccountReassignmentResult {
@@ -177,15 +190,38 @@ export interface AccountReassignmentResult {
   installationId?: string;
 }
 
+export interface DeviceProvisioningOptions {
+  targetIdentity: XmtpIdentity;
+  deviceIdentity: XmtpIdentity;
+  expectedInboxId: string;
+}
+
 export interface RevokeOldestInstallationsOptions {
   inboxId?: string;
   inboxState?: InboxState;
   onStatus?: (message: string) => void;
+  requireAtLimit?: boolean;
 }
 
 interface ConnectOptions {
   register?: boolean;
   enableHistorySync?: boolean;
+  expectedInboxId?: string;
+  expectedInstallationId?: string;
+  requestHistorySync?: boolean;
+  onInstallationReady?: (result: {
+    inboxId: string;
+    installationId: string;
+    installationRegistered: boolean;
+  }) => Promise<void> | void;
+}
+
+export interface ConnectResult {
+  inboxId: string;
+  installationId: string;
+  installationRegistered: boolean;
+  historySyncRequested: boolean;
+  historySyncRequired: boolean;
 }
 
 
@@ -315,7 +351,7 @@ function createStubInboxState({
 }
 
 /**
- * XMTP Client wrapper for v5 SDK
+ * XMTP Client wrapper for the pinned browser SDK.
  */
 export class XmtpClient {
   private client: Client<unknown> | null = null;
@@ -1040,102 +1076,6 @@ export class XmtpClient {
     return null;
   }
 
-  private hexToBytes(hex: string): Uint8Array | null {
-    try {
-      const clean = hex.startsWith('0x') || hex.startsWith('0X') ? hex.slice(2) : hex;
-      if (clean.length % 2 !== 0) return null;
-      const out = new Uint8Array(clean.length / 2);
-      for (let i = 0; i < clean.length; i += 2) {
-        out[i / 2] = parseInt(clean.slice(i, i + 2), 16);
-      }
-      return out;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Force revoke oldest installations without registering a new one.
-   * Attempts a temporary management client (disableAutoRegister) to avoid hitting the 10/10 ceiling.
-   * Keeps the most recent `keepLatest` installations (default 1) and revokes the rest.
-   */
-  async forceRevokeOldestInstallations(keepLatest = 1): Promise<{ revoked: string[] }> {
-    if (!this.identity) throw new Error('No identity available');
-
-    const performRevocation = async (client: Client<unknown>) => {
-      const state = await client.preferences.fetchInboxState();
-      const list = (state.installations || []) as unknown as Array<{
-        id?: string;
-        clientTimestampNs?: bigint;
-        [k: string]: unknown;
-      }>;
-      if (!list.length) return { revoked: [] };
-
-      // Newest first
-      list.sort((a, b) => (a.clientTimestampNs && b.clientTimestampNs && a.clientTimestampNs > b.clientTimestampNs ? -1 : 1));
-      const toRevoke = list.slice(Math.max(keepLatest, 0));
-
-      const bytes: Uint8Array[] = [];
-      const revokedIds: string[] = [];
-
-      for (const inst of toRevoke) {
-        const rawBytes = (inst as unknown as { bytes?: Uint8Array; installationId?: Uint8Array; idBytes?: Uint8Array }).bytes
-          || (inst as unknown as { installationId?: Uint8Array }).installationId
-          || (inst as unknown as { idBytes?: Uint8Array }).idBytes
-          || (typeof inst.id === 'string' ? this.hexToBytes(inst.id) : null);
-
-        if (rawBytes) {
-          bytes.push(rawBytes);
-          if (typeof inst.id === 'string') revokedIds.push(inst.id);
-        }
-      }
-
-      if (!bytes.length) return { revoked: [] };
-      await client.revokeInstallations(bytes);
-      return { revoked: revokedIds };
-    };
-
-    // 1. Try using existing client if available
-    if (this.client) {
-      try {
-        console.log('[XMTP] forceRevokeOldestInstallations: Attempting with existing client');
-        return await performRevocation(this.client);
-      } catch (err) {
-        console.warn('[XMTP] forceRevokeOldestInstallations: Existing client failed, trying temp client:', err);
-        // Fall through to temp client
-      }
-    }
-
-    // 2. Create a temporary client
-    // NOTE: When 10/10 limit is reached, we CANNOT use the existing DB path because if that DB
-    // corresponds to a new/unregistered installation, the network will reject it immediately.
-    // Instead, we create a fresh ephemeral DB with disableAutoRegister: true.
-    // This allows us to authenticate (sign the key bundle) and act as a "manager" client
-    // without actually registering this new ephemeral installation on the network.
-    const randomSuffix = Math.random().toString(36).substring(2, 10);
-    const dbPath = `xmtp-revoke-temp-${randomSuffix}.db3`;
-
-    const signer = await this.createSigner(this.identity);
-
-    console.log('[XMTP] forceRevokeOldestInstallations: Creating ephemeral temp client (new DB) with disableAutoRegister');
-    // Create a temporary client without auto-registering a new installation
-    // so we can manage preferences/installations even when 10/10 is reached.
-    const temp = await Client.create(signer, {
-      env: 'production',
-      dbPath,
-      loggingLevel: getXmtpSdkLogLevel(),
-      structuredLogging: false,
-      performanceLogging: false,
-      disableAutoRegister: true,
-    });
-
-    try {
-      return await performRevocation(temp);
-    } finally {
-      try { await temp.close(); } catch { /* ignore */ }
-    }
-  }
-
   /**
    * Revoke the oldest installation(s) for an arbitrary signer-owned inbox without
    * registering a new installation. Used when connecting the local app key to a
@@ -1171,7 +1111,7 @@ export class XmtpClient {
       const identifier = await signer.getIdentifier();
       inboxId = await getInboxIdForIdentifier(identifier, 'production');
       if (!inboxId) {
-        throw new Error('No existing XMTP inbox was found for that wallet.');
+        throw new Error('No existing XMTP inbox was found for that identity.');
       }
       emitStatus(`Fetching installations for inbox ${shortInboxId(inboxId)}.`);
       const states = await Client.fetchInboxStates([inboxId], 'production');
@@ -1180,7 +1120,18 @@ export class XmtpClient {
 
     inboxId = inboxState?.inboxId ?? inboxId;
     if (!inboxId) {
-      throw new Error('XMTP did not return an inbox ID for that wallet.');
+      throw new Error('XMTP did not return an inbox ID for that identity.');
+    }
+
+    if (options.requireAtLimit) {
+      emitStatus(`Rechecking installation capacity for inbox ${shortInboxId(inboxId)}.`);
+      const currentStates = await Client.fetchInboxStates([inboxId], 'production');
+      const currentState = currentStates[0];
+      if (!currentState) {
+        throw new Error('XMTP did not return the current inbox state; recovery was stopped.');
+      }
+      inboxState = currentState;
+      ensureInstallationRecoveryNeeded(currentState.installations?.length ?? 0);
     }
 
     const installations = inboxState?.installations ?? [];
@@ -1193,7 +1144,7 @@ export class XmtpClient {
     }
 
     emitStatus(
-      `Requesting wallet signature to revoke ${bytes.length} oldest installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`
+      `Requesting recovery signature to revoke ${bytes.length} oldest installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`
     );
     try {
       await Client.revokeInstallations(signer, inboxId, bytes, 'production');
@@ -3394,24 +3345,68 @@ export class XmtpClient {
   /**
    * Connect to XMTP network with an identity
    */
-  async connect(identity: XmtpIdentity, options?: ConnectOptions): Promise<void> {
+  async connect(identity: XmtpIdentity, options?: ConnectOptions): Promise<ConnectResult> {
     const { setConnectionStatus, setLastConnected, setError, connectionStatus } = useXmtpStore.getState();
     this.stopBackgroundDiscoveryLoop();
 
-    // If already connected with the same identity, don't reconnect
-    if (this.client && this.identity?.address === identity.address) {
+    const nextSignerIdentity = signerIdentityKey(identity);
+    const currentSignerIdentity = this.identity ? signerIdentityKey(this.identity) : null;
+
+    // Reuse a ready client only when the complete signer identity matches.
+    if (this.client && currentSignerIdentity === nextSignerIdentity) {
       const isReady = Boolean(this.client.isReady);
       if (connectionStatus === 'connected' && isReady) {
-        console.log('[XMTP] Already connected with this identity, skipping reconnect');
-        return;
+        const inboxId = this.client.inboxId;
+        const installationId = this.client.installationId;
+        if (!inboxId || !installationId) {
+          throw new Error('The reused XMTP client is missing its inbox or installation ID.');
+        }
+        if (
+          options?.expectedInboxId &&
+          inboxId.toLowerCase() !== options.expectedInboxId.toLowerCase()
+        ) {
+          throw new Error(
+            `XMTP reused inbox ${inboxId} instead of expected inbox ${options.expectedInboxId}.`
+          );
+        }
+        if (
+          options?.expectedInstallationId &&
+          installationId !== options.expectedInstallationId
+        ) {
+          throw new Error(
+            'XMTP reused a different browser installation than the wallet-approved installation.'
+          );
+        }
+        await options?.onInstallationReady?.({
+          inboxId,
+          installationId,
+          installationRegistered: false,
+        });
+        let historySyncRequested = false;
+        const historySyncRequired = Boolean(options?.requestHistorySync);
+        if (historySyncRequired) {
+          try {
+            await this.client.sendSyncRequest();
+            historySyncRequested = true;
+          } catch (error) {
+            console.warn('[XMTP] Failed to request device history on reused client:', error);
+          }
+        }
+        console.log('[XMTP] Already connected with this signer identity, skipping reconnect');
+        return {
+          inboxId,
+          installationId,
+          installationRegistered: false,
+          historySyncRequested,
+          historySyncRequired,
+        };
       }
       console.warn('[XMTP] Existing client found but connection status is', connectionStatus, '- resetting before reconnect');
       await this.disconnect();
     }
 
-    // If connected with a different identity, disconnect first
-    if (this.client && this.identity?.address !== identity.address) {
-      console.log('[XMTP] Disconnecting from previous identity before connecting new one');
+    if (this.client && currentSignerIdentity !== nextSignerIdentity) {
+      console.log('[XMTP] Disconnecting from previous signer identity before connecting');
       await this.disconnect();
     }
 
@@ -3457,14 +3452,15 @@ export class XmtpClient {
       const signer = await this.createSigner(identity);
 
       console.log('[XMTP] Calling Client.create() with signer...');
-      // Explicitly set DB path to ensure persistence stability across reloads
-      // and prevent creating new installations (which hits the 10 limit).
-      const dbPath = `xmtp-production-${identity.address.toLowerCase()}.db3`;
+      // New identities use the SDK's inbox-aware default. Records created before
+      // this migration retain their address path so a reload does not churn an installation.
+      const dbPath = getClientDbPath(identity.address, identity.xmtpDbPathMode);
       const sdkLoggingLevel = getXmtpSdkLogLevel();
 
       console.log('[XMTP] Client.create options:', {
         env: 'production',
-        dbPath,
+        dbPath: dbPath ?? '(SDK inbox default)',
+        appVersion: XMTP_APP_VERSION,
         disableAutoRegister: true,
         loggingLevel: sdkLoggingLevel,
       });
@@ -3472,50 +3468,42 @@ export class XmtpClient {
       try {
         client = await Client.create(signer, {
           env: 'production',
-          dbPath,
+          ...(dbPath ? { dbPath } : {}),
+          appVersion: XMTP_APP_VERSION,
           codecs: XMTP_CONTENT_CODECS,
           loggingLevel: sdkLoggingLevel,
           structuredLogging: false,
           performanceLogging: false,
           disableAutoRegister: true,
         });
-      } catch (e) {
-        if (this.isRateLimitError(e)) {
+      } catch (error) {
+        if (this.isRateLimitError(error)) {
           this.noteIdentityRateLimit('connect:client.create');
-          throw e;
         }
-        const msg = e instanceof Error ? e.message : String(e);
-        const looksLikeCors =
-          /cors/i.test(msg) ||
-          /access-control-allow-origin/i.test(msg) ||
-          /blocked by cors/i.test(msg);
-        if (looksLikeCors) {
-          console.warn('[XMTP] Client.create failed during identity probe (possibly CORS). Retrying without disableAutoRegister.');
-          try {
-            client = await Client.create(signer, {
-              env: 'production',
-              dbPath,
-              codecs: XMTP_CONTENT_CODECS,
-              loggingLevel: sdkLoggingLevel,
-              structuredLogging: false,
-              performanceLogging: false,
-              // Let SDK perform its default registration path; some identity probes are avoided
-              disableAutoRegister: false,
-            });
-          } catch (e2) {
-            if (this.isRateLimitError(e2)) {
-              this.noteIdentityRateLimit('connect:client.create:fallback');
-            }
-            console.warn('[XMTP] Fallback Client.create also failed:', e2);
-            throw e2;
-          }
-        } else {
-          throw e;
-        }
+        throw error;
+      }
+
+      if (
+        options?.expectedInboxId &&
+        client.inboxId?.toLowerCase() !== options.expectedInboxId.toLowerCase()
+      ) {
+        throw new Error(
+          `XMTP opened inbox ${client.inboxId ?? 'unknown'} instead of expected inbox ${options.expectedInboxId}.`
+        );
+      }
+      if (
+        options?.expectedInstallationId &&
+        client.installationId !== options.expectedInstallationId
+      ) {
+        throw new Error(
+          'XMTP did not reopen the wallet-approved browser installation. Registration was stopped to avoid creating another installation.'
+        );
       }
 
       // Decide whether we must register a new installation / initialize identity
       let mustRegister = shouldRegister;
+      let existingInstallationCount = 0;
+      let installationRegistered = false;
       if (!client.inboxId) {
         // If init could not resolve an inboxId, the identity is not usable until we register.
         mustRegister = true;
@@ -3529,21 +3517,18 @@ export class XmtpClient {
           return id && client && id === client.installationId;
         });
         const count = existing.length;
+        existingInstallationCount = count;
+
+        const installationPlan = planClientInstallation({
+          inboxId: client.inboxId ?? identity.inboxId ?? 'unknown',
+          hasCurrentInstallation: Boolean(hasOurInstallation),
+          existingInstallationCount: count,
+        });
+        mustRegister = installationPlan.registerInstallation;
 
         if (hasOurInstallation) {
-          // Our device is already registered; do not register again
-          mustRegister = false;
           console.log('[XMTP] Installation already present; skipping register()');
         } else {
-          // If our installation is missing from the inbox state, we must register it to initialize
-          // the identity locally. This can happen when the OPFS sqlite db was cleared/evicted,
-          // so we treat register=false as "don't re-register if already registered", not "never register".
-          if (count >= 10) {
-            // Cannot register a new installation when already at limit
-            throw new Error('⚠️ Installation limit reached (10/10). Please revoke old installations in Settings → XMTP Installations or use Force Recover.');
-          }
-
-          mustRegister = true;
           console.warn('[XMTP] Installation missing from inbox state; forcing register() to initialize identity');
         }
 
@@ -3553,12 +3538,15 @@ export class XmtpClient {
         }
       } catch (preCheckErr) {
         const msg = preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr ?? '');
+        if (/10\/10|installation limit|already registered 10/i.test(msg)) {
+          throw preCheckErr;
+        }
         // If identity isn't initialized yet, we must register before doing anything else.
         if (/uninitialized identity/i.test(msg)) {
           mustRegister = true;
           console.warn('[XMTP] Installation pre-check failed due to uninitialized identity; forcing register()');
         } else {
-          console.warn('[XMTP] Installation pre-check failed (continuing):', preCheckErr);
+          throw preCheckErr;
         }
       }
 
@@ -3571,6 +3559,7 @@ export class XmtpClient {
           onRateLimit: () => this.noteIdentityRateLimit('connect:client.register'),
         });
         this.reduceIdentityCooldown();
+        installationRegistered = true;
 
         if (!client.inboxId) {
           throw new Error('Client.register completed but inboxId is still missing');
@@ -3587,6 +3576,38 @@ export class XmtpClient {
       });
       this.client = client;
       this.clearXmtpCaches();
+
+      if (!client.inboxId || !client.installationId) {
+        throw new Error('XMTP created a client without a usable inbox or installation ID.');
+      }
+      await options?.onInstallationReady?.({
+        inboxId: client.inboxId,
+        installationId: client.installationId,
+        installationRegistered,
+      });
+
+      let historySyncRequested = false;
+      const historySyncRequired = shouldRequestHistorySync({
+        installationRegistered,
+        existingInstallationCount,
+        explicitlyRequested: options?.requestHistorySync,
+      });
+      if (historySyncRequired) {
+        try {
+          await client.sendSyncRequest();
+          historySyncRequested = true;
+          console.info(
+            '[XMTP] Requested encrypted device history. An older installation must be online to provide it.'
+          );
+          logNetworkEvent({
+            direction: 'outbound',
+            event: 'history:device_sync_request',
+            details: 'Requested history from another installation',
+          });
+        } catch (historyRequestError) {
+          console.warn('[XMTP] Device history request failed; normal network sync will continue:', historyRequestError);
+        }
+      }
 
       // Save the installation ID to the identity if it's new
       if (identity.installationId !== client.installationId) {
@@ -3625,19 +3646,7 @@ export class XmtpClient {
 
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
-      try {
-        await this.syncConversations({ soft: true, reason: 'connect' });
-      } catch (syncError) {
-        const msg = syncError instanceof Error ? syncError.message : String(syncError ?? '');
-        // Recovery: if the SDK reports an uninitialized identity, attempt a register() and retry.
-        if (/uninitialized identity/i.test(msg) && this.client) {
-          console.warn('[XMTP] syncConversations failed due to uninitialized identity; attempting register() and retry');
-          await this.client.register();
-          await this.syncConversations({ soft: true, reason: 'connect' });
-        } else {
-          throw syncError;
-        }
-      }
+      await this.syncConversations({ soft: true, reason: 'connect' });
 
       if (shouldSyncHistory) {
         console.log('[XMTP] History sync enabled – fetching past messages. This may take time if another device needs to provide history.');
@@ -3682,6 +3691,18 @@ export class XmtpClient {
         setSyncStatus('idle');
         setSyncProgress(0);
       }, 2000);
+
+      if (!client.inboxId || !client.installationId) {
+        throw new Error('XMTP connected without a usable inbox or installation ID.');
+      }
+
+      return {
+        inboxId: client.inboxId,
+        installationId: client.installationId,
+        installationRegistered,
+        historySyncRequested,
+        historySyncRequired,
+      };
     } catch (error) {
       this.stopBackgroundDiscoveryLoop();
       if (this.isRateLimitError(error)) {
@@ -3735,6 +3756,52 @@ export class XmtpClient {
   }
 
   /**
+   * Register or reuse this browser installation under wallet authority, then
+   * associate a fresh local account key with the same inbox and database.
+   */
+  async provisionDeviceKeyForInbox({
+    targetIdentity,
+    deviceIdentity,
+    expectedInboxId,
+  }: DeviceProvisioningOptions): Promise<ProvisionDeviceResult> {
+    if (!deviceIdentity.privateKey) {
+      throw new Error('A fresh local private key is required to add this device.');
+    }
+
+    if (this.client) {
+      await this.disconnect();
+    }
+
+    const targetSigner = await this.createSigner(targetIdentity);
+    const deviceSigner = await this.createSigner(deviceIdentity);
+    const sdkLoggingLevel = getXmtpSdkLogLevel();
+
+    return await provisionFreshDeviceKey(
+      targetSigner,
+      deviceSigner,
+      expectedInboxId,
+      {
+        resolveInboxId: async (identifier) =>
+          await getInboxIdForIdentifier(identifier, 'production'),
+        fetchInboxState: async (inboxId) => {
+          const states = await Client.fetchInboxStates([inboxId], 'production');
+          return states[0];
+        },
+        createManager: async (signer) =>
+          await Client.create(signer, {
+            env: 'production',
+            appVersion: XMTP_APP_VERSION,
+            codecs: XMTP_CONTENT_CODECS,
+            loggingLevel: sdkLoggingLevel,
+            structuredLogging: false,
+            performanceLogging: false,
+            disableAutoRegister: true,
+          }),
+      }
+    );
+  }
+
+  /**
    * Associate a new account (address) with the currently connected inbox.
    *
    * This is primarily used for linking smart contract wallets (e.g. Base App smart wallet)
@@ -3746,6 +3813,19 @@ export class XmtpClient {
     }
 
     const newSigner = await this.createSigner(identity);
+    const existingInboxId = await getInboxIdForIdentifier(
+      await newSigner.getIdentifier(),
+      'production'
+    );
+
+    if (existingInboxId) {
+      if (existingInboxId.toLowerCase() === this.client.inboxId?.toLowerCase()) {
+        return;
+      }
+      throw new Error(
+        `Account already belongs to inbox ${existingInboxId}. Converge will not reassign it automatically.`
+      );
+    }
 
     if (typeof this.client.unsafe_addAccount !== 'function') {
       throw new Error('XMTP SDK does not support account association');
@@ -3757,7 +3837,8 @@ export class XmtpClient {
       details: `Associating ${identity.address} with inbox ${this.client.inboxId}`,
     });
 
-    // XMTP SDK requires allowInboxReassign=true as an explicit acknowledgement.
+    // The SDK requires true even for a fresh key; the ledger preflight above
+    // guarantees that this is an association rather than a reassignment.
     await this.client.unsafe_addAccount(newSigner, true);
 
     logNetworkEvent({
@@ -3768,247 +3849,49 @@ export class XmtpClient {
   }
 
   /**
-   * Move an account signer into another already-registered inbox.
-   *
-   * Used by Converge's local-app-key flow:
-   * - targetIdentity is the wallet that owns the existing inbox and approves the move.
-   * - accountIdentity is the generated local key that Converge will keep using.
-   *
-   * XMTP names this API `unsafe_addAccount` because the moved account loses access to
-   * its previous inbox. Converge passes allowInboxReassign=true deliberately here.
+   * Validate an explicit reassignment request without performing it. The pinned
+   * high-level SDK refuses already-associated accounts, and moving one would
+   * strand its previous inbox. Normal device provisioning never calls this path.
    */
   async reassignAccountToInbox({
     targetIdentity,
     accountIdentity,
+    confirmReassignment,
   }: AccountReassignmentOptions): Promise<AccountReassignmentResult> {
-    if (!accountIdentity.privateKey && !accountIdentity.signMessage) {
-      throw new Error('Account identity must be signable before it can be reassigned.');
-    }
-
-    if (this.client) {
-      console.info('[XMTP] Existing inbox reassignment: disconnecting active client before manager flow', {
-        activeAddress: this.identity?.address ?? null,
-        activeInboxId: this.client.inboxId ?? null,
-        targetWalletAddress: targetIdentity.address,
-        localAppKeyAddress: accountIdentity.address,
-      });
-      await this.disconnect();
+    if (confirmReassignment !== true) {
+      throw new Error('Identity reassignment requires explicit confirmation.');
     }
 
     const targetSigner = await this.createSigner(targetIdentity);
     const accountSigner = await this.createSigner(accountIdentity);
-    const targetIdentifier = await targetSigner.getIdentifier();
-    const accountIdentifier = await accountSigner.getIdentifier();
-    const randomSuffix = Math.random().toString(36).substring(2, 10);
-    const dbPath = `xmtp-link-inbox-temp-${randomSuffix}.db3`;
+    const targetInboxId = await getInboxIdForIdentifier(
+      await targetSigner.getIdentifier(),
+      'production'
+    );
+    const existingInboxId = await getInboxIdForIdentifier(
+      await accountSigner.getIdentifier(),
+      'production'
+    );
 
-    console.info('[XMTP] Existing inbox reassignment: signer roles prepared', {
-      targetWalletAddress: targetIdentity.address,
-      targetWalletType: targetIdentity.walletType ?? 'EOA',
-      targetWalletChainId: targetIdentity.chainId ?? null,
-      targetIdentifier,
-      localAppKeyAddress: accountIdentity.address,
-      localAppKeyIdentifier: accountIdentifier,
-      temporaryDbPath: dbPath,
-    });
-
-    logNetworkEvent({
-      direction: 'outbound',
-      event: 'identity:reassign_account',
-      details: `Moving ${accountIdentity.address} into wallet inbox for ${targetIdentity.address}`,
-    });
-
-    const manager = await Client.create(targetSigner, {
-      env: 'production',
-      dbPath,
-      codecs: XMTP_CONTENT_CODECS,
-      loggingLevel: getXmtpSdkLogLevel(),
-      structuredLogging: false,
-      performanceLogging: false,
-      disableAutoRegister: true,
-    });
-
-    try {
-      const inboxId = manager.inboxId;
-      console.info('[XMTP] Existing inbox reassignment: temporary manager client created', {
-        targetWalletAddress: targetIdentity.address,
-        targetWalletType: targetIdentity.walletType ?? 'EOA',
-        targetWalletChainId: targetIdentity.chainId ?? null,
-        targetIdentifier,
-        managerInboxId: inboxId ?? null,
-        managerInstallationId: manager.installationId ?? null,
-        temporaryDbPath: dbPath,
-      });
-      if (!inboxId) {
-        throw new Error('No existing XMTP inbox was found for that wallet.');
-      }
-
-      let targetIdentifierInboxId: string | null = null;
-      try {
-        targetIdentifierInboxId = (await manager.fetchInboxIdByIdentifier(targetIdentifier)) ?? null;
-      } catch (error) {
-        console.warn('[XMTP] Existing inbox reassignment: failed to resolve target wallet identifier inbox', {
-          targetWalletAddress: targetIdentity.address,
-          targetIdentifier,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      let localAppKeyExistingInboxId: string | null = null;
-      try {
-        localAppKeyExistingInboxId = (await manager.fetchInboxIdByIdentifier(accountIdentifier)) ?? null;
-      } catch (error) {
-        console.warn('[XMTP] Existing inbox reassignment: failed to resolve local app key identifier inbox', {
-          localAppKeyAddress: accountIdentity.address,
-          localAppKeyIdentifier: accountIdentifier,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      const localAppKeyAlreadyInTargetInbox = Boolean(
-        localAppKeyExistingInboxId &&
-        localAppKeyExistingInboxId.toLowerCase() === inboxId.toLowerCase()
-      );
-
-      console.info('[XMTP] Existing inbox reassignment: preflight before unsafe_addAccount', {
-        targetWalletAddress: targetIdentity.address,
-        targetInboxId: inboxId,
-        targetIdentifierInboxId,
-        localAppKeyAddress: accountIdentity.address,
-        localAppKeyExistingInboxId,
-        localAppKeyAlreadyInTargetInbox,
-        allowInboxReassign: true,
-      });
-
-      if (localAppKeyExistingInboxId && !localAppKeyAlreadyInTargetInbox) {
-        console.warn('[XMTP] Existing inbox reassignment: local app key is already associated with a different inbox before reassignment', {
-          localAppKeyAddress: accountIdentity.address,
-          localAppKeyExistingInboxId,
-          targetInboxId: inboxId,
-          expectedSdkError: `Account already associated with inbox ${localAppKeyExistingInboxId}`,
-        });
-      }
-
-      try {
-        await manager.unsafe_addAccount(accountSigner, true);
-      } catch (error) {
-        console.warn('[XMTP] Existing inbox reassignment: unsafe_addAccount failed', {
-          targetWalletAddress: targetIdentity.address,
-          targetInboxId: inboxId,
-          targetIdentifierInboxId,
-          localAppKeyAddress: accountIdentity.address,
-          localAppKeyExistingInboxId,
-          localAppKeyAlreadyInTargetInbox,
-          allowInboxReassign: true,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-
-      let confirmedInboxId = inboxId;
-      try {
-        const state = await manager.preferences.fetchInboxState();
-        if (state?.inboxId) {
-          confirmedInboxId = state.inboxId;
-        }
-      } catch (error) {
-        console.warn('[XMTP] Failed to refresh inbox state after account reassignment:', error);
-      }
-
-      console.info('[XMTP] Existing inbox reassignment: confirmed', {
-        targetWalletAddress: targetIdentity.address,
-        localAppKeyAddress: accountIdentity.address,
-        confirmedInboxId,
-        managerInstallationId: manager.installationId ?? null,
-      });
-
-      logNetworkEvent({
-        direction: 'status',
-        event: 'identity:reassign_account:success',
-        details: `Moved ${accountIdentity.address} into inbox ${confirmedInboxId}`,
-      });
-
-      return {
-        inboxId: confirmedInboxId,
-        installationId: manager.installationId,
-      };
-    } finally {
-      try {
-        await manager.close();
-      } catch {
-        // ignore
-      }
+    if (!targetInboxId) {
+      throw new Error('No existing XMTP inbox was found for the target wallet.');
     }
+    if (!existingInboxId) {
+      throw new Error(
+        'This key is not registered. Use the fresh-device association flow instead of reassignment.'
+      );
+    }
+    if (existingInboxId.toLowerCase() === targetInboxId.toLowerCase()) {
+      return { inboxId: targetInboxId };
+    }
+
+    throw new Error(
+      `Reassignment was not performed. Moving this key would strand its previous inbox ${existingInboxId}, and the pinned browser SDK high-level API refuses already-associated accounts.`
+    );
   }
 
   async probeIdentity(identity: XmtpIdentity): Promise<IdentityProbeResult> {
-    const identityAddress = identity.address.toLowerCase();
-
-    // If we already have a client connected for this identity, use it instead of creating a new one
-    // This avoids OPFS file handle conflicts
-    if (this.client && this.identity?.address.toLowerCase() === identityAddress) {
-      console.log('[XMTP] probeIdentity: Using existing connected client for same identity');
-
-      try {
-        // Use client.inboxId as source of truth (authoritative from client.init)
-        let inboxId: string | null = this.client.inboxId || null;
-        let isRegistered = false;
-        let inboxState: InboxState | undefined;
-
-        if (inboxId) {
-          console.log('[XMTP] probeIdentity: ✅ Found inboxId from existing client:', inboxId);
-          isRegistered = true; // inboxId presence is authoritative
-
-          try {
-            inboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => this.client!.preferences.fetchInboxState());
-            console.log('[XMTP] probeIdentity: Fetched inboxState from existing client:', {
-              inboxId: inboxState?.inboxId,
-              installationCount: inboxState?.installations?.length ?? 0,
-            });
-
-            // Use inbox ID from inboxState if available (most reliable)
-            if (inboxState?.inboxId) {
-              inboxId = inboxState.inboxId;
-            }
-          } catch (error) {
-            console.warn('[XMTP] probeIdentity: Failed to fetch inbox state from existing client:', error);
-            // Still use inboxId from client even if inboxState fetch fails
-          }
-        } else {
-          // Fallback: only check isRegistered() if no inboxId found
-          try {
-            isRegistered = await this.client.isRegistered();
-            console.log('[XMTP] probeIdentity: isRegistered() fallback =', isRegistered);
-          } catch (error) {
-            console.warn('[XMTP] probeIdentity: isRegistered() check failed:', error);
-          }
-        }
-
-        return {
-          isRegistered,
-          inboxId,
-          installationCount: inboxState?.installations?.length ?? 0,
-          inboxState,
-        };
-      } catch (error) {
-        console.warn('[XMTP] probeIdentity: Failed to probe using existing client, will create new one:', error);
-        // Fall through to create a new client
-      }
-    }
-
-    // If we have a client for a different identity, disconnect it first
-    if (this.client && this.identity?.address.toLowerCase() !== identityAddress) {
-      console.log('[XMTP] probeIdentity: Disconnecting client for different identity to avoid OPFS conflict');
-      try {
-        await this.disconnect();
-        // Longer delay to ensure OPFS locks are fully released
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.warn('[XMTP] probeIdentity: Error disconnecting existing client:', error);
-      }
-    }
-
-    if (this.shouldSkipIdentityCalls('probeIdentity:client.create')) {
+    if (this.shouldSkipIdentityCalls('probeIdentity:ledger')) {
       const cooldownMs = this.getIdentityCooldownMs();
       throw new Error(
         `XMTP identity endpoint is cooling down after rate limits. Retry in ~${Math.max(1, Math.ceil(cooldownMs / 1000))}s.`
@@ -4016,130 +3899,45 @@ export class XmtpClient {
     }
 
     const signer = await this.createSigner(identity);
-    let client: Client<unknown> | null = null;
+    const identifier = await signer.getIdentifier();
 
     try {
-      console.log('[XMTP] probeIdentity: Creating probe client...');
-      try {
-        client = await Client.create(signer, {
-          env: 'production',
-          loggingLevel: getXmtpSdkLogLevel(),
-          structuredLogging: false,
-          performanceLogging: false,
-          disableAutoRegister: true,
-        });
-      } catch (error) {
-        if (this.isRateLimitError(error)) {
-          this.noteIdentityRateLimit('probeIdentity:client.create');
-        }
-        throw error;
-      }
-      console.log('[XMTP] probeIdentity: Probe client created successfully');
-      console.log('[XMTP] probeIdentity: Client inboxId from init:', client.inboxId);
+      const inboxId =
+        (await this.retryWithBackoff('inbox.getInboxIdForIdentifier', () =>
+          getInboxIdForIdentifier(identifier, 'production')
+        )) ?? null;
 
-      // Check inbox ID first - client.inboxId from client.init is authoritative
-      // If it exists, the user has a registered inbox (regardless of isRegistered() result)
-      let inboxId: string | null = client.inboxId || null;
-      let isRegistered = false;
-
-      if (inboxId) {
-        console.log('[XMTP] probeIdentity: ✅ Found inboxId from client.init:', inboxId);
-        isRegistered = true; // inboxId presence is authoritative
-      } else {
-        // Only check isRegistered() as fallback if no inboxId from client.init
-        try {
-          isRegistered = await client.isRegistered();
-          console.log('[XMTP] probeIdentity: isRegistered() fallback =', isRegistered);
-        } catch (error) {
-          console.warn('[XMTP] probeIdentity: isRegistered() check failed:', error);
-        }
+      if (!inboxId) {
+        return {
+          isRegistered: false,
+          inboxId: null,
+          installationCount: 0,
+        };
       }
 
-      let inboxState: InboxState | undefined;
-
-      // Use inboxId as source of truth - if we have it, fetch inbox state
-      if (inboxId) {
-        try {
-          // Force refresh from network to get full inbox state
-          inboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => client!.preferences.fetchInboxState());
-          console.log('[XMTP] probeIdentity: fetched inboxState:', {
-            inboxId: inboxState?.inboxId,
-            hasInstallations: Boolean(inboxState?.installations),
-            installationCount: inboxState?.installations?.length ?? 0,
-          });
-
-          // Use inbox ID from inboxState if available (most reliable)
-          if (inboxState?.inboxId) {
-            inboxId = inboxState.inboxId;
-            console.log('[XMTP] probeIdentity: ✅ Confirmed inboxId from inboxState:', inboxId);
-          }
-        } catch (error) {
-          console.warn('[XMTP] probeIdentity: failed to fetch inbox state:', error);
-          // If inboxState fetch fails but we have inboxId from client, still consider registered
-          if (inboxId) {
-            console.log('[XMTP] probeIdentity: Using inboxId from client.init despite inboxState fetch failure');
-          }
-        }
-
-        // Fallback: if we still don't have inboxId, try fetchInboxIdByIdentifier
-        if (!inboxId) {
-          try {
-            const identifier = {
-              identifier: toEthereumIdentifier(identity.address),
-              identifierKind: IdentifierKind.Ethereum,
-            };
-            const resolvedInboxId = await client.fetchInboxIdByIdentifier(
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              identifier as any
-            );
-            if (resolvedInboxId) {
-              inboxId = resolvedInboxId;
-              isRegistered = true;
-              console.log('[XMTP] probeIdentity: ✅ Got inboxId via fetchInboxIdByIdentifier:', resolvedInboxId);
-            } else {
-              console.warn('[XMTP] probeIdentity: ⚠️  No inboxId found via fetchInboxIdByIdentifier');
-            }
-          } catch (error) {
-            console.warn('[XMTP] probeIdentity: fetchInboxIdByIdentifier failed:', error);
-          }
-        }
-      } else if (!isRegistered) {
-        // No inboxId found and isRegistered() returned false
-        console.log('[XMTP] probeIdentity: User is not registered on XMTP (no inbox ID found)');
+      const states = await this.retryWithBackoff('client.fetchInboxStates', () =>
+        Client.fetchInboxStates([inboxId], 'production')
+      );
+      const inboxState = states[0];
+      if (!inboxState) {
+        throw new Error(
+          `XMTP did not return inbox state for ${inboxId}; installation capacity could not be verified.`
+        );
       }
-
-      const installationCount = inboxState?.installations?.length ?? 0;
-
-      console.log('[XMTP] probeIdentity: Final result:', {
-        isRegistered,
-        inboxId,
-        installationCount,
-        hasInboxState: Boolean(inboxState),
-      });
 
       return {
-        isRegistered,
-        inboxId,
-        installationCount,
+        isRegistered: true,
+        inboxId: inboxState.inboxId || inboxId,
+        installationCount: inboxState.installations?.length ?? 0,
         inboxState,
       };
-    } finally {
-      if (client) {
-        try {
-          console.log('[XMTP] probeIdentity: Closing probe client...');
-          await client.close();
-          console.log('[XMTP] probeIdentity: ✅ Probe client closed');
-          // Longer delay to ensure OPFS locks are fully released before next operation
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (error) {
-          console.warn('[XMTP] probeIdentity: failed to close probe client:', error);
-          // Even if close fails, wait a bit to let OPFS clean up
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+    } catch (error) {
+      if (this.isRateLimitError(error)) {
+        this.noteIdentityRateLimit('probeIdentity:ledger');
       }
+      throw error;
     }
   }
-
   /**
    * Disconnect from XMTP network
    */

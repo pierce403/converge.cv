@@ -37,6 +37,29 @@ export function Layout() {
   const connectionStatus = useXmtpStore((state) => state.connectionStatus);
   const [isChecking, setIsChecking] = useState(false);
   const [inviteQueue, setInviteQueue] = useState<InviteRequest[]>([]);
+  const [showHistorySyncNotice, setShowHistorySyncNotice] = useState(false);
+
+  useEffect(() => {
+    if (
+      (!identity?.needsHistorySync && !identity?.historySyncRequestedAt) ||
+      !identity.installationId
+    ) {
+      setShowHistorySyncNotice(false);
+      return;
+    }
+    const key = `converge.historySyncNotice.${identity.installationId}`;
+    setShowHistorySyncNotice(window.localStorage.getItem(key) !== 'dismissed');
+  }, [identity?.historySyncRequestedAt, identity?.installationId, identity?.needsHistorySync]);
+
+  const dismissHistorySyncNotice = () => {
+    if (identity?.installationId) {
+      window.localStorage.setItem(
+        `converge.historySyncNotice.${identity.installationId}`,
+        'dismissed'
+      );
+    }
+    setShowHistorySyncNotice(false);
+  };
 
   const activeInvite = inviteQueue[0] ?? null;
   const inviteApprovalState = useMemo(() => {
@@ -1052,6 +1075,26 @@ export function Layout() {
           </Link>
         </div>
       </header>
+
+      {showHistorySyncNotice && (
+        <div className="border-b border-amber-500/40 bg-amber-950 px-4 py-3 text-sm text-amber-100">
+          <div className="mx-auto flex max-w-5xl items-start justify-between gap-4">
+            <p>
+              {identity?.needsHistorySync
+                ? 'Device history sync is pending and Converge will retry. Keep an older XMTP device online; using the same inbox ID alone does not restore decrypted history.'
+                : 'History was requested from your other XMTP installations. Keep an older device online until messages appear; using the same inbox ID alone does not restore decrypted history.'}
+            </p>
+            <button
+              type="button"
+              onClick={dismissHistorySyncNotice}
+              className="shrink-0 text-amber-200 hover:text-white"
+              aria-label="Dismiss history sync notice"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <main className="flex-1 overflow-y-auto bg-primary-950/20">

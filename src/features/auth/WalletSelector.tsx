@@ -69,9 +69,9 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6 bg-primary-900/60 border border-primary-800/60 rounded-2xl shadow-lg backdrop-blur">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-primary-50">Connect an Identity</h2>
+        <h2 className="text-2xl font-bold text-primary-50">Approve with wallet</h2>
         <p className="text-primary-200">
-          Choose a wallet or connector to continue
+          Choose a wallet that already controls the XMTP inbox
         </p>
       </div>
 
@@ -119,20 +119,14 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
           ))
         )}
 
-        {/* Import Keyfile option styled identically for consistent spacing */}
-        <button
-          onClick={() => onImportKeyfile?.()}
-          className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
-        >
-          <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-3">
-              <span className="text-3xl">📁</span>
-              <div className="text-left">
-                <div className="font-medium text-primary-50">Import Keyfile</div>
-              </div>
-            </div>
-          </div>
-        </button>
+        {onImportKeyfile && (
+          <button
+            onClick={onImportKeyfile}
+            className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+          >
+            <div className="font-medium text-primary-50">Restore from keyfile</div>
+          </button>
+        )}
       </div>
 
       <button

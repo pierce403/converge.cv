@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ensureInstallationRecoveryNeeded,
   extractInstallationLimitInboxId,
   extractWrongChainIdDetails,
   isLegacyScwChainZeroMismatch,
@@ -10,11 +11,21 @@ import {
 } from './installation-recovery';
 
 describe('installation recovery helpers', () => {
+  it('does not revoke from a stale snapshot after capacity is already available', () => {
+    expect(() => ensureInstallationRecoveryNeeded(10)).not.toThrow();
+    expect(() => ensureInstallationRecoveryNeeded(9)).toThrow(/no revocation is needed/);
+  });
+
   it('extracts the full inbox ID from the XMTP installation-limit error', () => {
     const inboxId = '8352dd2ff13766a6d7aa18ed8795c2771f10c1f57d292aeb09a7cdebb88db0f4';
     expect(
       extractInstallationLimitInboxId(
         `Cannot register a new installation because the InboxID ${inboxId} has already registered 10/10 installations.`
+      )
+    ).toBe(inboxId);
+    expect(
+      extractInstallationLimitInboxId(
+        `Installation limit reached (10/10) for inbox ${inboxId}.`
       )
     ).toBe(inboxId);
   });

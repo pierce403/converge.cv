@@ -10,6 +10,7 @@ type GroupDetailsLike = Parameters<typeof groupDetailsToConversationUpdates>[0];
 let conversationRecord: Conversation;
 const xmtpMock = {
   addMembersToGroup: vi.fn(),
+  createConversation: vi.fn(),
   removeMembersFromGroup: vi.fn(),
   resolveInboxIdForAddress: vi.fn(),
   isConnected: vi.fn(() => false),
@@ -74,6 +75,7 @@ describe('useConversations controls', () => {
       vaultSecrets: null,
     });
     xmtpMock.addMembersToGroup.mockReset();
+    xmtpMock.createConversation.mockReset();
     xmtpMock.removeMembersFromGroup.mockReset();
     xmtpMock.resolveInboxIdForAddress.mockReset();
     xmtpMock.isConnected.mockReset();
@@ -123,6 +125,76 @@ describe('useConversations controls', () => {
     );
     expect(mockStorage.deleteConversation).toHaveBeenCalledWith('c1');
     expect(useConversationStore.getState().conversations).toHaveLength(0);
+  });
+});
+
+describe('createConversation existing-peer reuse', () => {
+  const peerAddress = '0x1111111111111111111111111111111111111111';
+  const peerInboxId = 'f'.repeat(64);
+
+  const conversation = (
+    id: string,
+    isGroup: boolean,
+    peerId = peerInboxId
+  ): Conversation => ({
+    id,
+    peerId,
+    lastMessageAt: 1,
+    unreadCount: 0,
+    pinned: false,
+    archived: false,
+    createdAt: 1,
+    lastMessagePreview: '',
+    lastMessageSender: '',
+    isGroup,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({
+      isAuthenticated: false,
+      isVaultUnlocked: false,
+      identity: null,
+      vaultSecrets: null,
+    });
+    xmtpMock.resolveInboxIdForAddress.mockResolvedValue(peerInboxId);
+  });
+
+  it('prefers an existing Convos single-peer group over a legacy DM', async () => {
+    const legacyDm = conversation('legacy-dm', false);
+    const convosGroup = conversation('convos-group', true);
+    mockStorage.listConversations.mockResolvedValue([legacyDm, convosGroup]);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let result: Conversation | null = null;
+    await act(async () => {
+      result = await api!.createConversation(peerAddress);
+    });
+
+    expect(result).toBe(convosGroup);
+    expect(xmtpMock.createConversation).not.toHaveBeenCalled();
+  });
+
+  it('reuses a legacy DM when no Convos single-peer group exists', async () => {
+    const legacyDm = conversation('legacy-dm', false, peerAddress);
+    mockStorage.listConversations.mockResolvedValue([legacyDm]);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let result: Conversation | null = null;
+    await act(async () => {
+      result = await api!.createConversation(peerAddress);
+    });
+
+    expect(result).toBe(legacyDm);
+    expect(xmtpMock.createConversation).not.toHaveBeenCalled();
   });
 });
 

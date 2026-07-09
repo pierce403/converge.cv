@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { Layout } from './Layout';
-import { OnboardingPage, LockScreen, useAuth } from '@/features/auth';
+import { OnboardingPage, useAuth } from '@/features/auth';
 import { ChatWorkspace } from '@/features/conversations/ChatWorkspace';
 import { NewChatPage } from '@/features/conversations/NewChatPage';
 import { SettingsPage } from '@/features/settings';
@@ -20,7 +20,7 @@ import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { resetXmtpClient } from '@/lib/xmtp/client';
 
 export function AppRouter() {
-  const { isAuthenticated, isVaultUnlocked, checkExistingIdentity } = useAuth();
+  const { isAuthenticated, checkExistingIdentity } = useAuth();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const clearAllRef = useRef(false);
   const authRestoreInFlightRef = useRef(false);
@@ -212,17 +212,7 @@ export function AppRouter() {
     );
   }
 
-  // Authenticated but vault locked - show lock screen
-  if (!isVaultUnlocked) {
-    return (
-      <Routes>
-        <Route path="/lock" element={<LockScreen />} />
-        <Route path="*" element={<Navigate to="/lock" replace />} />
-      </Routes>
-    );
-  }
-
-  // Authenticated and unlocked - show app
+  // Default identities have no passphrase/passkey lock flow.
   return (
     <Routes>
       <Route path="/" element={<Layout />}>

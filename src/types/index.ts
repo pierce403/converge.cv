@@ -144,8 +144,13 @@ export interface GroupMember {
 export interface Identity {
   address: string;
   publicKey: string;
-  privateKey?: string; // Should be encrypted in storage
+  privateKey?: string; // Stored unencrypted in IndexedDB until encryption-at-rest is implemented
   identityKind?: 'local-app' | 'wallet' | 'imported';
+  walletType?: 'EOA' | 'SCW';
+  walletChainId?: number;
+  provisioningMode?: 'new-inbox' | 'keyfile-restore' | 'device-join';
+  provisioningPending?: boolean;
+  xmtpDbPathMode?: 'legacy-address' | 'inbox-default';
   linkedWalletAddress?: string;
   linkedWalletChainId?: number;
   linkedAt?: number;
@@ -162,8 +167,11 @@ export interface Identity {
   displayName?: string; // Optional display name
   inboxId?: string; // XMTP inbox ID
   installationId?: string; // XMTP installation ID for this device
+  needsHistorySync?: boolean;
+  historySyncRequestedAt?: number;
+  expectedInboxId?: string;
   farcasterFid?: number; // Farcaster FID for contact syncing
-  mnemonic?: string; // Optional BIP39 phrase for local identities
+  mnemonic?: string; // Optional BIP39 phrase; currently stored unencrypted in IndexedDB
 }
 
 export interface InboxRegistryEntry {

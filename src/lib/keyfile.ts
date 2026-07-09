@@ -36,6 +36,24 @@ export interface KeyfileIdentity {
   mnemonic?: string;
   derivationPath?: string;
   label?: string | null;
+  expectedInboxId?: string;
+}
+
+export function assertKeyfileInboxMatch(
+  expectedInboxId: string | undefined,
+  resolvedInboxId: string | null | undefined
+): void {
+  if (!expectedInboxId) {
+    return;
+  }
+  if (
+    !resolvedInboxId ||
+    expectedInboxId.trim().toLowerCase() !== resolvedInboxId.trim().toLowerCase()
+  ) {
+    throw new Error(
+      `This keyfile expects XMTP inbox ${expectedInboxId}, but its key now resolves to ${resolvedInboxId ?? 'no inbox'}. Recovery was stopped.`
+    );
+  }
 }
 
 export function exportIdentityToKeyfile(identity: Identity): ConvergeKeyfile {
@@ -89,7 +107,7 @@ export function parseKeyfile(raw: string): ConvergeKeyfile {
 }
 
 export function deriveIdentityFromKeyfile(keyfile: ConvergeKeyfile): KeyfileIdentity {
-  const { mnemonic, privateKey, derivationPath, address, label } = keyfile.identity;
+  const { mnemonic, privateKey, derivationPath, address, label, inboxId } = keyfile.identity;
 
   let resolvedPrivateKey: `0x${string}`;
   let resolvedAddress: string;
@@ -129,5 +147,6 @@ export function deriveIdentityFromKeyfile(keyfile: ConvergeKeyfile): KeyfileIden
     mnemonic: mnemonic ?? undefined,
     derivationPath: derivationPath ?? undefined,
     label: label ?? null,
+    expectedInboxId: inboxId ?? undefined,
   };
 }

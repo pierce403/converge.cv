@@ -16,7 +16,7 @@ Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP prot
 
 - **Friction-free onboarding** (no passphrase by default, no manual wallet entry)
 - **Local-first** (data persists on-device via IndexedDB)
-- **Optional security** (lock/vault features exist but should not block onboarding by default)
+- **Honest local security** (browser data is unencrypted at rest; incomplete lock/passphrase/passkey controls stay hidden)
 
 ## Where to look
 

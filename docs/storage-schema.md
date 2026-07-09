@@ -12,7 +12,7 @@ If you only want the source-of-truth schema definition in code, start here:
 Converge uses **two IndexedDB databases** (both created through the same `ConvergeDB` schema class):
 
 1) **Global DB**: `ConvergeDB`  
-   Used for **device identity + vault secrets** (data that should not change when you switch inbox namespaces).
+   Used for **device identity + legacy vault-secret records** (data that should not change when you switch inbox namespaces).
 
 2) **Namespaced data DB**: `ConvergeDB:${namespace}`  
    Used for **conversations, messages, contacts, attachments, and deletion markers** (data that should be scoped to the
@@ -25,6 +25,11 @@ The DB names are created here:
 The current `namespace` is persisted in localStorage under `converge.storageNamespace.v1`:
 
 - Namespace storage: `src/lib/storage/index.ts#L15`
+
+These databases are not encrypted at rest by Converge. Identity private keys,
+mnemonics, decrypted messages, contacts, and attachment bytes should be treated
+as plaintext browser-profile data. The `vaultSecrets` table remains in the
+schema for compatibility but no current UI claims that it protects these stores.
 
 ## Dexie schema syntax (quick reference)
 
@@ -171,7 +176,10 @@ Driver entry points:
 - TypeScript type: `src/types/index.ts#L96`
 - Stored in: **global DB**
 
-Purpose: store the vault’s wrapped key material + parameters (passkey/passphrase).
+Purpose: legacy storage for wrapped-key parameters from the incomplete
+passkey/passphrase experiment. Current onboarding and Settings do not expose a
+vault workflow, and this table does not encrypt the identity or namespaced data
+stores.
 
 Driver entry points:
 

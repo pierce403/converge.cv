@@ -2,9 +2,10 @@
  * XMTP Installations Management
  */
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
+import { getStorage } from '@/lib/storage';
 
 interface KeyPackageStatus {
   lifetime?: {
@@ -28,11 +29,12 @@ export function InstallationsSettings() {
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [isFetchingStatuses, setIsFetchingStatuses] = useState(false);
-  const [isForceRecovering, setIsForceRecovering] = useState(false);
+  const [verifiedCurrentInstallationId, setVerifiedCurrentInstallationId] = useState<string | null>(null);
 
-  const loadInstallations = async () => {
+  const loadInstallations = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setVerifiedCurrentInstallationId(null);
     try {
       const xmtp = getXmtpClient();
       
@@ -54,6 +56,25 @@ export function InstallationsSettings() {
       });
 
       console.log('[Installations] Found', sortedInstallations.length, 'installations');
+
+      const liveInstallationId = xmtp.getInstallationId();
+      const verifiedLiveInstallationId =
+        liveInstallationId &&
+          sortedInstallations.some((installation) => installation.id === liveInstallationId)
+          ? liveInstallationId
+          : null;
+      setVerifiedCurrentInstallationId(verifiedLiveInstallationId);
+
+      if (
+        verifiedLiveInstallationId &&
+        identity &&
+        identity.installationId !== verifiedLiveInstallationId
+      ) {
+        const updatedIdentity = { ...identity, installationId: verifiedLiveInstallationId };
+        const storage = await getStorage();
+        await storage.putIdentity(updatedIdentity);
+        useAuthStore.getState().setIdentity(updatedIdentity);
+      }
 
       // Fetch key package statuses for all installations (requires connection)
       if (xmtp.isConnected() && sortedInstallations.length > 0) {
@@ -91,7 +112,7 @@ export function InstallationsSettings() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [identity]);
 
   const refreshStatuses = async () => {
     setIsFetchingStatuses(true);
@@ -118,34 +139,16 @@ export function InstallationsSettings() {
     }
   };
 
-  const forceRecover = async () => {
-    if (!confirm('Force recover will delete older installations from the XMTP network to make room for this device. Continue?')) {
-      return;
-    }
-    setIsForceRecovering(true);
-    setError(null);
-    try {
-      const xmtp = getXmtpClient();
-      // Try to keep the newest 1 installation by default
-      const result = await xmtp.forceRevokeOldestInstallations(1);
-      await loadInstallations();
-      const msg = result.revoked.length > 0 ? `Revoked ${result.revoked.length} installation(s)` : 'No installations revoked';
-      try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg })); } catch { /* ignore */ }
-    } catch (err) {
-      console.error('[Installations] Force recover failed:', err);
-      setError(err instanceof Error ? err.message : 'Force recover failed');
-    } finally {
-      setIsForceRecovering(false);
-    }
-  };
-
   useEffect(() => {
-    loadInstallations();
-  }, []);
+    void loadInstallations();
+  }, [loadInstallations]);
 
   const handleRevoke = async (installationBytes: Uint8Array, installationId: string) => {
-    const identity = useAuthStore.getState().identity;
-    const isCurrentDevice = installationId === identity?.installationId;
+    if (!verifiedCurrentInstallationId) {
+      setError('Reconnect XMTP and refresh installations before revoking a device.');
+      return;
+    }
+    const isCurrentDevice = installationId === verifiedCurrentInstallationId;
     
     const confirmMessage = isCurrentDevice
       ? 'Are you sure you want to revoke THIS device? You will be logged out and need to reconnect.'
@@ -235,7 +238,7 @@ export function InstallationsSettings() {
     }
   };
 
-  const currentInstallationId = identity?.installationId;
+  const currentInstallationId = verifiedCurrentInstallationId;
 
   return (
     <section>
@@ -262,14 +265,6 @@ export function InstallationsSettings() {
           </h3>
           <div className="flex items-center gap-3">
             <button
-              onClick={forceRecover}
-              disabled={isForceRecovering}
-              className="text-sm text-yellow-300 hover:text-yellow-200 disabled:opacity-50"
-              title="Delete older installations to recover from 10/10 limit"
-            >
-              {isForceRecovering ? 'Force Recover…' : 'Force Recover'}
-            </button>
-            <button
               onClick={loadInstallations}
               disabled={isLoading}
               className="text-sm text-accent-300 hover:text-accent-200 disabled:opacity-50"
@@ -291,6 +286,12 @@ export function InstallationsSettings() {
         {error && (
           <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
             {error}
+          </div>
+        )}
+
+        {!isLoading && installations.length > 0 && !verifiedCurrentInstallationId && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded text-sm text-amber-200">
+            This browser installation could not be verified against the live inbox state. Revocation is disabled until XMTP reconnects and the list is refreshed.
           </div>
         )}
 
@@ -366,7 +367,7 @@ export function InstallationsSettings() {
                     {!isCurrentDevice && (
                       <button
                         onClick={() => handleRevoke(installation.bytes, installation.id)}
-                        disabled={isRevoking}
+                        disabled={isRevoking || !verifiedCurrentInstallationId}
                         className="px-3 py-1 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded border border-red-500/30 disabled:opacity-50 transition-colors"
                       >
                         {isRevoking ? 'Revoking...' : 'Revoke'}

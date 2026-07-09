@@ -373,9 +373,12 @@ export function useConversations() {
           }
         }
         const candidatePeerIds = new Set<string>([inboxKey, normalizedInput]);
-        const found = existing.find(
-          (c) => c.isGroup && candidatePeerIds.has(c.peerId.toLowerCase())
+        const matchingConversations = existing.filter(
+          (conversation) => candidatePeerIds.has(conversation.peerId.toLowerCase())
         );
+        const found =
+          matchingConversations.find((conversation) => conversation.isGroup) ??
+          matchingConversations.find((conversation) => !conversation.isGroup);
 
         if (found) {
           return found;

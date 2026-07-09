@@ -403,8 +403,7 @@ export class DexieDriver implements StorageDriver {
       );
     }
 
-    const messages = await collection.toArray();
-    return messages.reverse();
+    return await collection.toArray();
   }
 
   async deleteConversation(id: string): Promise<void> {
@@ -667,7 +666,7 @@ export class DexieDriver implements StorageDriver {
         .filter((addr) => addr && addr.length > 0) as string[];
 
       const opfsRoot = await navigator.storage.getDirectory();
-      // XMTP stores databases with names like "xmtp-production-{address}.db3"
+      // Legacy databases use an address; new SDK-default databases use an inbox ID.
       // @ts-expect-error - OPFS API types
       for await (const [name] of opfsRoot.entries()) {
         if (name.startsWith('xmtp-') && name.endsWith('.db3')) {

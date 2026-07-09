@@ -1,33 +1,28 @@
 # Features and Specifications
 
-## One-Click Onboarding and Inbox Switching
-- Startup auto-creates an exportable local app key when no identity exists, stores it in IndexedDB, registers it with XMTP, and opens the app without passphrases or wallet prompts.
-- Generated local app keys receive the same deterministic Color Animal display-name suggestion used by personalization onboarding, while legacy `App key ...` labels are treated as unset so they can be upgraded.
-- Wallet connection is now an inbox-connection flow, not the default app identity: Settings → Connect Existing Inbox asks the wallet that owns an existing XMTP inbox to approve moving the local app key into that inbox via XMTP account reassignment.
-- Settings → Connect Existing Inbox intentionally offers only WalletConnect and Browser Wallet connectors, so the approval comes from a normal external wallet such as Rainbow or MetaMask; it does not surface Thirdweb or embedded-wallet choices.
-- If the target wallet inbox is already at XMTP's 10-installation limit, the connect modal extracts the blocked InboxID, shows recovery progress, and offers a wallet-approved "Revoke Oldest Installation" action that frees one slot before retrying the connection.
-- Smart-wallet inbox recovery/reassignment retries with XMTP's originally registered nonzero SCW chain ID when XMTP reports a chain mismatch.
-- Legacy smart-wallet inboxes registered in XMTP with SCW chain ID `0` are treated as a blocker for WalletConnect/browser-wallet recovery: Converge stops after XMTP reports the mismatch and tells the user to use an already-connected Convos/XMTP device to revoke devices or pair/export the inbox.
-- After a wallet-approved reassignment, Converge keeps signing with the local app key, switches storage to the existing inbox, removes the generated inbox from the visible registry, and syncs history from the wallet-owned inbox.
-- The old generated inbox is abandoned by design when the local app key is moved; message history remains with the destination XMTP inbox.
-- Registry hydration runs on load so previously used inboxes are listed with last-opened timestamps and buttons to reopen them without re-onboarding.
-- Wallet connect, probing, and keyfile import are unified under a single `view` state machine (`'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'`) so all entry points share status messaging and error handling.
-- Wallet-based XMTP signing requests are deduplicated and cached per challenge, with expiry-aware refresh so reconnect flows avoid repeated wallet signature popups.
-- While waiting on an external wallet signature, a blocking modal clearly indicates the app is waiting, shows the wallet provider, request preview, and elapsed wait time until approval/rejection.
-- Switching inboxes surfaces step-by-step status banners (closing current inbox, preparing storage, loading the target inbox, reloading) so users see progress while the app swaps namespaces.
-- Existing-inbox connection now logs the full diagnostic handoff in the browser/debug console: connected-wallet target, target inbox probe result, local app-key inbox, temporary manager inbox, and the SDK preflight result before `unsafe_addAccount(..., true)`. Private keys are never logged.
-- Ethereum address lookups now preserve the `0x`-prefixed XMTP identifier format used by SDK signers, so known wallet inboxes resolve before chat creation instead of falling into local-only placeholder threads.
-- Converge no longer silently creates local-only chat fallbacks when connected XMTP conversation creation fails, and existing `local-conversation-*` threads refuse sends with a toast telling the user to start a fresh network chat.
-- The identity switcher includes a profile card that previews display name and avatar, lets users update and publish changes to XMTP, resync profile details from the network, and surface a QR code for sharing the current address without leaving the modal.
-- Deep links like `/u/:userId` (ENS/address) and `/i/:inboxId` open a DM composer when already signed in, or route through onboarding and then return to the target.
-- Wallet connections are provider-aware: users can switch between Native (MetaMask/Coinbase/WalletConnect), Thirdweb (standard Thirdweb Connect modal), and Privy (embedded/external wallets) from onboarding or Settings, with the choice persisted locally.
-- Privy and Thirdweb fall back to baked-in app/client IDs when env vars are missing (`VITE_PRIVY_APP_ID`, `VITE_THIRDWEB_CLIENT_ID`).
-- Settings reconnect for native wallets mirrors onboarding by showing explicit wallet choices instead of auto-connecting a default.
+## Onboarding, Device Keys, and Inbox Switching
+- Empty-browser startup now opens an explicit choice instead of auto-registering a generated key.
+- Create new Converge inbox remains one click: Converge generates a secp256k1 local account key, uses the SDK's inbox-aware database path, registers a new XMTP inbox/installation, and opens the app without a passphrase.
+- Generated local keys receive the deterministic Color Animal display-name suggestion used by personalization; legacy generated labels remain replaceable.
+- Restore from keyfile reuses the exact private key or mnemonic. It does not create a separate per-device account key. On a browser without the XMTP database, the same account resolves to the same inbox and registers a new installation.
+- Add this device to existing inbox generates a fresh local account key only after the user chooses a wallet-controlled inbox. It never registers that fresh key as a temporary standalone inbox.
+- Wallet probing uses the XMTP identity ledger rather than treating the prospective `Client.inboxId` as proof of registration.
+- The wallet signer registers or reuses one inbox-aware browser installation, the fresh unregistered key is associated with `unsafe_addAccount(..., true)`, and the final local-key client must reopen the same inbox and installation before onboarding succeeds.
+- Converge statically verifies that the fresh key has no existing inbox. A registered key is never moved by the normal UI; reassignment would strand its prior inbox and is refused.
+- If the target is at the 10-installation limit, onboarding and Settings block before association and offer signer-authorized one-installation recovery. The destructive step refetches live state and stops if another device already freed capacity.
+- Smart-wallet provisioning and recovery retry XMTP's originally registered nonzero SCW chain ID when reported. Legacy chain ID `0` remains blocked with instructions to use an already-connected XMTP device.
+- A newly registered installation sends `sendSyncRequest()`. The UI explains that an older device must be online and that sharing an inbox ID does not guarantee restored decrypted history.
+- New identities use the SDK default `xmtp-production-<inbox-id>.db3` path. Existing records without a migration marker keep their legacy address path so a normal reload does not create an extra installation.
+- Every successful connection persists the live final installation ID. Installation revocation stays disabled unless that ID is present in a refreshed inbox state.
+- Pending provisioning keys are persisted before identity-ledger mutation and resumed after interruption; failed Settings/switcher attempts restore the previously active identity and namespace.
+- Registry hydration lists previously used inboxes with last-opened timestamps. Switching inboxes tears down the client, swaps the app-data namespace, and reopens the selected local identity.
+- Wallet providers remain selectable between Native, Thirdweb, and Privy. Wallet approval is authority for an existing inbox, not the default long-term message signer.
+- Deep links return through the chosen onboarding flow and then resume the target route.
 
 ### Inbox Switcher Isolation
 - Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, drafts, and keys never leak across inboxes.
 - Switching inboxes triggers a full teardown of the current client/session, rehydrates the registry list, and reopens the selected identity with its own cached message history.
-- The switcher UI lists available inboxes with their last-opened time, displays connection status per entry, and provides explicit paths to create another local app key or connect the current key to an existing wallet-owned inbox.
+- The switcher UI lists available inboxes with their last-opened time, displays connection status per entry, and provides explicit paths to create another inbox or add a fresh browser key to an existing wallet-controlled inbox.
 - Inbox IDs are normalized when stored and matched so namespace switches persist across reloads instead of snapping back to the previous identity.
 - A destructive burn action lives inside the inbox switcher, wiping the current identity’s keys plus its local messages and contacts on this device.
 
@@ -83,12 +78,13 @@
 ## Local-First Operation
 - Conversation lists, messages, profiles, and inbox registry entries are persisted in IndexedDB (via Dexie) so reopening the app immediately restores history without waiting for the network.
 - Incoming streams apply updates to the local store first, then reconcile with the network by explicitly syncing conversations; resync tools clear and repopulate local caches when needed.
-- Identity keys are stored on-device and reused via deterministic XMTP client paths, enabling consistent installs without server-side custody or cloud backups.
+- Private keys, mnemonics, decrypted app data, and the Browser SDK database are stored locally without encryption at rest. Keyfile exports are plaintext sensitive material.
+- New identities use inbox-aware XMTP database paths; legacy identities retain their existing address-based path to avoid installation churn during migration.
 - Recent history backfill deduplicates stored messages, preserves read state for existing threads, and narrows sync windows using per-conversation timestamps to avoid replaying old messages as unread.
 
 ## Static Hosting and PWA Polish
-- The app is delivered as static HTML/CSS/JS through GitHub Pages and uses Workbox-powered vite-plugin-pwa to precache the shell for quick reloads.
-- Mobile-friendly styles, responsive layout primitives, and install prompts keep the experience "app-like" on phones, with viewport-safe spacing and touch-target sizing to match PWA expectations.
+- The app is delivered as static HTML/CSS/JS through GitHub Pages. The current minimal service worker handles push/isolation behavior; offline app-shell precaching and install/update prompts remain disabled while XMTP stability work continues.
+- Mobile-friendly styles and responsive layout primitives keep the experience app-like on phones, with viewport-safe spacing and touch-target sizing.
 - Keyboard-open behavior in mobile PWA mode now uses VisualViewport-driven app height and fully removes the bottom nav from layout while typing, with a focused-input viewport-baseline fallback so iOS/PWA keyboard states still hide nav even when `innerHeight` tracks `visualViewport.height`.
 
 ## Debug and Diagnostics

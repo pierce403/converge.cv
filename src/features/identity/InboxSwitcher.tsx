@@ -210,6 +210,8 @@ export function InboxSwitcher() {
         label: generated.identity.displayName,
         mnemonic: generated.mnemonic,
         identityKind: generated.identity.identityKind,
+        provisioningMode: 'new-inbox',
+        xmtpDbPathMode: 'inbox-default',
       });
       if (!ok) throw new Error('createIdentity returned false');
       navigate('/');

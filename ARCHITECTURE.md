@@ -12,36 +12,57 @@ This root file is the canonical architecture and decision tracker for Converge. 
 ## Product Principles
 
 - One-click onboarding: no passphrase or manual wallet entry by default.
-- Local-first and encrypted: message sync/decryption stays in the browser with local XMTP keys.
+- Local-first app state with XMTP end-to-end transport encryption; browser data is not encrypted at rest today.
 - Static deployability: GitHub Pages remains sufficient for the Converge app shell.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
 
-## Local App Key And Existing Inbox Connection
+## XMTP Identity, Inbox, And Installation Model
 
-### Implemented Now In Converge
+### Product Terms
 
-- On startup, if no local identity exists, Converge generates a secp256k1 local app key, stores it in IndexedDB, registers it with XMTP, and opens the app without a passphrase or wallet prompt.
-- The local app key is exportable through the existing keyfile path and remains the signer Converge uses after setup.
-- Settings → Connect Existing Inbox uses only WalletConnect and injected Browser Wallet connectors for the wallet approval, so the user signs from a normal external wallet such as Rainbow or MetaMask. Thirdweb and embedded-wallet providers remain available elsewhere but are not part of this reassignment flow.
-- The connection flow probes the wallet for an existing XMTP inbox, asks the wallet to sign XMTP's account reassignment approval, then uses `unsafe_addAccount(..., true)` through a temporary manager client to move the local app key into that inbox.
-- If the target wallet inbox is full at 10/10 XMTP installations, Converge extracts the blocked InboxID from XMTP's error, fetches that inbox state with the browser SDK's static network helpers, and revokes the oldest target installation through `Client.revokeInstallations(...)` after explicit wallet confirmation, freeing one slot for the local app key reassignment without creating another temporary XMTP client.
-- If XMTP rejects a smart-wallet recovery or reassignment signature with a wrong-chain-id error and the originally registered SCW chain ID is a nonzero chain, Converge retries that XMTP identity update with the chain ID from the error.
-- Some existing smart-wallet inboxes were originally registered with XMTP SCW chain ID `0` even when the wallet address has Base bytecode. Browser wallets sign those accounts on the real chain, so Converge treats legacy chain `0` as a blocker instead of asking for a second doomed signature. The user must use an already-connected Convos/XMTP device to revoke devices or pair/export that inbox.
-- After reassignment, Converge switches storage to the target inbox, reconnects XMTP with the local app key, and history sync runs from the existing inbox. The generated inbox is removed from the visible registry and treated as abandoned.
+- A Converge local app key is an XMTP account identity backed by a secp256k1 private key.
+- An XMTP inbox ID is the stable messaging destination. Multiple account identities can resolve to one inbox.
+- An XMTP installation is the device/app-instance key stored in the Browser SDK SQLite database. It is not the local app key.
+- Create new Converge inbox means a new local account key, a new XMTP inbox, and this browser's first installation.
+- Restore from keyfile means reuse the exact private key or mnemonic. A new browser resolves that account to its existing inbox and registers a distinct installation.
+- Add this device to existing inbox means create a fresh local account key, associate it with the target inbox, and reuse one browser installation authorized by a wallet that already controls that inbox.
 
-### Privacy And Safety Notes
+### Wallet-Approved Device Bootstrap
 
-- Private keys and mnemonics remain local to the browser's IndexedDB identity store; they are not placed in `localStorage` and are not sent to wallet providers.
-- Wallet signatures authorize XMTP identity/account management only. Wallets do not decrypt messages and are not required for normal sends after the local app key has been moved.
-- Reassignment is intentionally one-way for the generated inbox: moving the local app key to an existing inbox routes future XMTP resolution to the destination inbox.
+1. Resolve the wallet identifier through the XMTP identity ledger. A prospective `Client.inboxId` is not proof that a ledger inbox exists.
+2. Check the target inbox installation count before any registration. At 10/10, stop and offer the existing static recovery flow.
+3. Generate the fresh local device account key without creating a client for it.
+4. Confirm through the ledger that the fresh key has no inbox. If it already resolves anywhere, block; the normal flow never reassigns it.
+5. Open the wallet signer with the SDK's inbox-aware default database path and `disableAutoRegister: true`.
+6. Register that browser installation with the wallet if the installation is not already in the target inbox.
+7. Call `unsafe_addAccount(freshSigner, true)`. The pinned SDK requires `true` even for an unregistered key, so Converge's ledger preflight is the invariant that makes this an association rather than a reassignment.
+8. Wait until the fresh identifier resolves to the target inbox.
+9. Close the wallet manager and reopen the same default inbox database with the fresh signer.
+10. Require both the target `inboxId` and the wallet-approved `installationId` to match before marking onboarding complete.
+11. Call `sendSyncRequest()` for the joined device and explain that an older installation must be online to provide decrypted history. Persist failed requests for retry.
 
-### Current Limitations
+The manager and final local-key client intentionally share the SDK default path, `xmtp-production-<inbox-id>.db3`. Existing identities without a path-mode marker retain the previous address-based path so upgrading does not create an installation on the next reload.
 
-- The browser SDK exposes the required API as `unsafe_addAccount` because account reassignment can strand the previous inbox. Converge uses it deliberately only after the user chooses the connect-existing-inbox flow.
-- If the target inbox is at XMTP's installation limit, Converge blocks the move until an old installation is revoked.
-- The installation-limit recovery revokes only the oldest target-wallet installation by default. Creation time is not the same as activity, so this can disable an active older device.
-- SCW chain-id retry depends on XMTP returning the original chain ID in the error. If that detail is absent, or if the original chain ID is the legacy `0` value, Converge surfaces an actionable error rather than guessing another chain.
-- The old generated inbox is removed from Converge's visible registry after reassignment, but this pass does not aggressively delete every old namespace/OPFS artifact for that abandoned inbox.
+### Reassignment Policy
+
+- The default UI never moves an already-registered account key.
+- The browser SDK high-level `unsafe_addAccount` implementation rejects an account that already resolves to an inbox, despite the API's reassignment acknowledgement flag.
+- Explicit reassignment would strand that identity's previous inbox and requires a separate lower-level, strongly confirmed workflow. Converge currently refuses it instead of pretending two inboxes can be merged.
+- Settings creates a new device key and leaves the current Converge inbox in the registry.
+
+### Limits And Recovery
+
+- XMTP allows 10 active installations and 256 cumulative inbox updates.
+- Static installation recovery uses the target inbox recovery signer, refetches live inbox state, and revokes one explicitly confirmed installation only while the inbox is still at 10/10. Wallet joins use the wallet signer; keyfile restores can use the restored signer.
+- Creation time is not activity time; the UI warns that the oldest installation may still be active.
+- Nonzero SCW chain mismatches retry with XMTP's originally registered chain ID. Legacy SCW chain ID `0` remains blocked because a browser wallet cannot produce the expected chain-zero smart-wallet signature.
+
+### Local Security
+
+- Local private keys, mnemonics, decrypted messages, contacts, attachment caches, and Browser SDK SQLite data are unencrypted at rest.
+- Keyfiles contain plaintext private-key or mnemonic material.
+- Wallet signatures authorize XMTP identity and installation changes. The wallet is not required for normal sends after the fresh local key is associated.
+- Passphrase, passkey, and vault-lock controls are hidden until Converge implements real encryption-at-rest and recoverable unlock behavior.
 
 ## Convos XMTP Interop
 
@@ -61,7 +82,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 ### Current Limitations
 
-- Existing local DM rows are not automatically migrated into Convos-style groups. Starting a new chat with the same peer creates or reuses a Converge-known single-peer group; old DM history stays separate.
+- Existing local DM rows are not migrated into Convos-style groups. Starting a chat prefers an existing single-peer group but reuses a matching legacy DM when no group exists, avoiding duplicate threads.
 - Converge does not decrypt Convos encrypted profile images yet. It preserves encrypted refs in appData but only uses plaintext display names and legacy plaintext avatar URLs for rendering.
 - No live Converge-to-Convos end-to-end regression was run in this implementation pass. The changes are covered by local protocol codec and appData tests, but real cross-client delivery still needs manual verification with Convos.
 

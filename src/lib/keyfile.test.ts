@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertKeyfileInboxMatch,
   DEFAULT_DERIVATION_PATH,
   KEYFILE_TYPE,
   KEYFILE_VERSION,
@@ -41,6 +42,7 @@ describe('keyfile helpers', () => {
       publicKey: '0xpub',
       privateKey: undefined,
       mnemonic: 'test test test test test test test test test test test junk',
+      inboxId: 'a'.repeat(64),
       createdAt: 1,
     };
 
@@ -48,6 +50,7 @@ describe('keyfile helpers', () => {
     expect(keyfile.type).toBe(KEYFILE_TYPE);
     expect(keyfile.version).toBe(KEYFILE_VERSION);
     expect(keyfile.identity.derivationPath).toBe(DEFAULT_DERIVATION_PATH);
+    expect(keyfile.identity.inboxId).toBe(identity.inboxId);
 
     const serialized = serializeKeyfile(keyfile);
     expect(serialized).toContain('"type": "converge-keyfile"');
@@ -62,6 +65,7 @@ describe('keyfile helpers', () => {
         address: '0x3f8cbcf9c3e5cfcffe1234567890abcdeffedcba',
         mnemonic: 'test test test test test test test test test test test junk',
         derivationPath: DEFAULT_DERIVATION_PATH,
+        inboxId: 'b'.repeat(64),
       },
       meta: { app: 'Converge', exportedAt: new Date().toISOString() },
     });
@@ -74,6 +78,7 @@ describe('keyfile helpers', () => {
     expect(derived.privateKey).toMatch(/^0x/);
     expect(derived.mnemonic).toBe(parsed.identity.mnemonic);
     expect(derived.derivationPath).toBe(DEFAULT_DERIVATION_PATH);
+    expect(derived.expectedInboxId).toBe(parsed.identity.inboxId);
   });
 
   it('derives from private key and validates address mismatch', () => {
@@ -103,5 +108,13 @@ describe('keyfile helpers', () => {
   it('throws on invalid keyfile shape', () => {
     expect(() => parseKeyfile('{"type":"wrong"}')).toThrow(/unexpected type/);
     expect(() => parseKeyfile('not json')).toThrow();
+  });
+
+  it('blocks a keyfile whose recorded inbox does not match the live key', () => {
+    expect(() => assertKeyfileInboxMatch('a'.repeat(64), 'b'.repeat(64))).toThrow(
+      /Recovery was stopped/
+    );
+    expect(() => assertKeyfileInboxMatch('a'.repeat(64), undefined)).toThrow(/no inbox/);
+    expect(() => assertKeyfileInboxMatch('A'.repeat(64), 'a'.repeat(64))).not.toThrow();
   });
 });

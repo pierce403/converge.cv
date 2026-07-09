@@ -1,248 +1,111 @@
-# Converge.cv - XMTP protocol v3 PWA
+# Converge.cv
 
-A Signal-like, local-first messaging Progressive Web App built on XMTP protocol v3 (powered by the XMTP SDK v5.0.1).
+Converge is a static, local-first messaging PWA for XMTP protocol v3. It uses React 18, TypeScript, Vite, Dexie, and `@xmtp/browser-sdk` 6.1.2 on the XMTP production network.
 
-**🚀 Live Demo**: [converge.cv](https://converge.cv) (coming soon)  
-**📦 Repository**: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
+- Live app: [converge.cv](https://converge.cv)
+- Repository: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
+- Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
+- Shipped behavior: [FEATURES.md](./FEATURES.md)
+- Developer docs: [docs/README.md](./docs/README.md)
 
-## ✨ Features
+## Identity Model
 
-### Core Features
-- **Local-First Architecture**: All data encrypted and stored locally on your device
-- **Installable PWA shell**: Add to home screen on iOS, Android, and desktop; offline caching is currently disabled while XMTP stability is prioritized
-- **XMTP protocol v3**: Decentralized messaging via the XMTP SDK (currently @xmtp/browser-sdk v5.0.1 on production network)
-- **End-to-End Encrypted**: Military-grade AES-GCM 256-bit encryption with WebCrypto
-- **Passkey Support**: WebAuthn PRF integration prepared for passwordless authentication
-- **Signal-like UX**: Clean, intuitive interface with familiar messaging patterns
+Converge treats XMTP accounts, inboxes, and installations as separate things:
 
-### Messaging
-- Send and receive encrypted text messages
-- Real-time message status indicators (pending → sent → delivered)
-- Message reactions support
-- Conversation management (pin, archive, search)
-- Unread message badges
-- Full-text search across conversations
+- **Create new Converge inbox** generates a local secp256k1 account key, creates a new XMTP inbox, and registers this browser installation.
+- **Restore from keyfile** reuses the exact private key or mnemonic from the file. On a browser without its XMTP database, that same account resolves to the same inbox and registers a new installation.
+- **Add this device to existing inbox** generates a fresh local account key for this browser. A wallet that already controls the target inbox registers or reuses one browser installation, approves the fresh account, and Converge reopens the same inbox database with the fresh key.
+- **Wallet approval** is authority for an existing inbox. It does not silently create a wallet inbox or move an already-registered Converge key.
 
-### Security & Privacy
-- Vault key encryption with passphrase (PBKDF2 600k iterations)
-- Local message encryption at rest
-- No server-side storage of messages
-- Lock screen with vault protection
-- Secure key management in memory
+An XMTP inbox can have up to 10 active installations. Converge checks the target inbox before registration and offers signer-authorized static recovery when the inbox is full, using either the connected wallet or the restored keyfile identity as appropriate. It rechecks the live count immediately before revocation.
 
-### PWA Features
-- Installable manifest + minimal service worker (push-only)
-- Offline app shell caching is currently disabled
-- Push notification support (with VAPID setup)
-- Badge API for unread counts (future)
-- Background sync (future)
+New installations explicitly request XMTP device history. A pre-existing installation must be online to produce the encrypted archive. Matching the same `inboxId` does not by itself restore decrypted historical messages.
 
-## 🛠️ Tech Stack
+## Features
 
-- **Framework**: React 18 + TypeScript + Vite
-- **Routing**: react-router-dom
-- **State Management**: Zustand
-- **Styling**: Tailwind CSS
-- **PWA**: Installable manifest + minimal push service worker (vite-plugin-pwa/Workbox dependencies are present but currently disabled)
-- **Messaging**: XMTP protocol v3 via XMTP SDK v5.0.1 (production network)
-- **Storage**: Dexie (IndexedDB) with SQLite WASM migration path
-- **Crypto**: WebCrypto API + WebAuthn
-- **Testing**: Vitest + Playwright
-- **CI/CD**: GitHub Actions
+- End-to-end encrypted XMTP text messaging on the production network
+- Convos-compatible single-peer groups, group messaging, profiles, typing, invites, and metadata
+- Real-time message streams plus local IndexedDB conversation and message caches
+- Image attachments encrypted before IPFS upload
+- Multiple local inboxes with isolated app-data namespaces
+- Wallet providers through Native/Wagmi, Thirdweb, and Privy
+- Farcaster profile enrichment through Neynar
+- Installable static PWA shell
+- Debug, installation-management, and recovery tools
 
-## 📦 Quick Start
+See [FEATURES.md](./FEATURES.md) for the detailed shipped specification.
+
+## Security Reality
+
+XMTP encrypts messages end to end before ciphertext is sent to the XMTP network. Converge does **not** currently encrypt its browser data at rest:
+
+- Local private keys and mnemonics are stored directly in IndexedDB.
+- Decrypted messages, contacts, attachment caches, and profile data are stored directly in IndexedDB.
+- The Browser SDK's local XMTP SQLite database is not encrypted.
+- Downloaded Converge keyfiles contain an unencrypted private key or mnemonic.
+
+A keyfile or browser profile containing this data must be protected as sensitive account material. Converge does not currently expose passphrase, passkey, or vault-lock controls; those incomplete paths were removed from the UI until real key encryption and recovery semantics exist.
+
+## Push Status
+
+Web Push support is experimental. Converge can register a browser `PushSubscription` and send inbox, installation, and locally available conversation HMAC metadata to the configured vapid.party XMTP relay contract. Live end-to-end delivery and welcome/new-conversation topic coverage have not been verified. The app must not claim that push delivery is complete until a real relay test passes.
+
+## Development
 
 ### Prerequisites
-- Node.js 18+ or 20+
-- pnpm (recommended) or npm
 
-### Installation
+- Node.js 20 or newer
+- pnpm 10
+
+### Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/pierce403/converge.cv.git
 cd converge.cv
-
-# Install dependencies
 pnpm install
-
-# Start development server
 pnpm dev
-
-# Open http://localhost:3000
 ```
 
-### Development Commands
+The development server listens on [http://localhost:3000](http://localhost:3000).
+
+### Commands
 
 ```bash
-# Development
-pnpm dev              # Start dev server with HMR
-pnpm build            # Build for production
-pnpm preview          # Preview production build
-pnpm typecheck        # Run TypeScript checks
-
-# Code Quality
-pnpm lint             # Run ESLint
-pnpm format           # Format code with Prettier
-
-# Testing
-pnpm test             # Run unit tests
-pnpm test:e2e         # Run E2E tests (Playwright)
-```
-
-## 🏗️ Project Structure
-
-```
-src/
-├── app/              # App shell, router, providers
-├── features/         # Feature modules
-│   ├── auth/         # Authentication & vault
-│   ├── conversations/
-│   ├── messages/
-│   ├── settings/
-│   └── search/
-├── lib/              # Core libraries
-│   ├── xmtp/         # XMTP client wrapper
-│   ├── storage/      # Storage drivers (Dexie/SQLite)
-│   ├── crypto/       # Encryption & key management
-│   ├── push/         # Web Push notifications
-│   └── sw-bridge/    # Service worker communication
-├── components/       # Shared UI components
-└── types/            # TypeScript types
-```
-
-## 🔐 Security
-
-- Messages encrypted at rest with AES-GCM
-- Vault key derived from passkey (WebAuthn PRF) or passphrase (PBKDF2)
-- No plaintext message storage
-- Optional disappearing messages
-
-## 📱 PWA Features
-
-- Installable manifest
-- Minimal push service worker (offline/app shell caching currently disabled)
-- Web Push notifications (with VAPID)
-- Background sync (planned)
-- App shell caching (planned)
-
-## 🤝 Contributing
-
-See [TODO.md](./TODO.md) for development roadmap and tasks.
-
-**For AI Agents**: Read [AGENTS.md](./AGENTS.md) first! It contains critical context about user preferences, architectural decisions, and project conventions. Update it whenever you learn something new.
-
-**Docs index**: See [`docs/README.md`](./docs/README.md).
-
-## 🏗️ Architecture
-
-```
-src/
-├── app/              # App shell, router, providers, layout
-├── features/         # Feature modules
-│   ├── auth/         # Authentication, onboarding, lock screen
-│   ├── conversations/# Chat list, new chat
-│   ├── messages/     # Conversation view, message bubbles, composer
-│   ├── settings/     # Settings page
-│   └── search/       # Search functionality
-├── lib/              # Core libraries
-│   ├── xmtp/         # XMTP client wrapper
-│   ├── storage/      # Storage driver (Dexie)
-│   ├── crypto/       # Vault, encryption, key management
-│   ├── stores/       # Zustand state stores
-│   ├── push/         # Push notification utilities
-│   └── sw-bridge/    # Service worker communication
-├── components/       # Shared UI components
-└── types/            # TypeScript type definitions
-```
-
-## 🚢 Deployment
-
-### Automatic Deployment (GitHub Actions)
-
-Every push to `master` automatically:
-1. Runs type checking and linting
-2. Builds the production bundle
-3. Deploys to GitHub Pages
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
-
-### Manual Deployment
-
-```bash
+pnpm dev
+pnpm typecheck
+pnpm lint
+pnpm test --run
 pnpm build
-# Deploy the dist/ folder to your hosting provider
+pnpm preview
+pnpm test:e2e
 ```
 
-## 🧪 Testing
+Use `pnpm test --run` for a one-shot Vitest run. Plain `pnpm test` starts watch mode.
 
-### Unit Tests (Vitest)
-```bash
-pnpm test                    # Run all tests
-pnpm test -- --coverage      # Run with coverage
-pnpm test -- --watch         # Watch mode
+## Deployment
+
+Pushes to `main` run the GitHub Pages workflow in CI: typecheck, lint, build, and deploy. The static app is served at [https://converge.cv](https://converge.cv). See [DEPLOYMENT.md](./DEPLOYMENT.md) for details.
+
+## Project Layout
+
+```text
+src/
+|-- app/             App shell, routing, and providers
+|-- components/      Shared UI
+|-- features/        Auth, conversations, messages, settings, search
+|-- lib/
+|   |-- identity/    Local account-key generation and profile suggestions
+|   |-- storage/     Dexie/IndexedDB persistence
+|   |-- xmtp/        Browser SDK wrapper and provisioning logic
+|   |-- push/        Experimental Web Push registration
+|   `-- stores/      Zustand state
+`-- types/           Shared TypeScript types
 ```
 
-### E2E Tests (Playwright)
-```bash
-pnpm test:e2e                # Run E2E tests
-```
+## Contributing
 
-## 🔒 Security
+Read [AGENTS.md](./AGENTS.md) before repository work. It is the canonical project instruction file; `CLAUDE.md` and `GEMINI.md` point to it for harness compatibility.
 
-- **Client-Side Encryption**: All encryption happens in the browser
-- **Vault Key Protection**: Keys derived from passphrase with PBKDF2 (600k iterations)
-- **No Server Storage**: Messages never leave your device unencrypted
-- **Local Storage Only**: IndexedDB with encrypted data at rest
-- **WebAuthn Ready**: Passkey integration prepared for production
+## License
 
-## 🛣️ Roadmap
-
-### Current Status (MVP v0.1.0)
-- ✅ Complete authentication flow
-- ✅ Message sending and receiving (local pipeline while XMTP integration matures)
-- ✅ Encrypted local storage
-- ✅ Search functionality
-- ✅ Settings and vault management
-- ✅ Installable PWA shell; offline caching currently disabled
-- ✅ Push notification infrastructure
-
-### Next Steps
-- [ ] Complete end-to-end XMTP protocol v3 messaging flows
-- [ ] Implement attachment support
-- [ ] Add message reactions (interactive)
-- [ ] Disappearing messages
-- [ ] SQLite WASM migration for FTS
-- [ ] Group chat support
-- [ ] Voice messages
-- [ ] Link previews
-- [ ] Multi-device sync
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-MIT License - see [LICENSE](./LICENSE) for details
-
-## 🔗 Links
-
-- **Live App**: [converge.cv](https://converge.cv)
-- **Repository**: [github.com/pierce403/converge.cv](https://github.com/pierce403/converge.cv)
-- **Issues**: [GitHub Issues](https://github.com/pierce403/converge.cv/issues)
-- **XMTP Protocol**: [xmtp.org](https://xmtp.org)
-
-## 📧 Contact
-
-Dean Pierce - [@pierce403](https://github.com/pierce403)
-
----
-
-Built with ❤️ using React, TypeScript, and XMTP
+MIT. See [LICENSE](./LICENSE).

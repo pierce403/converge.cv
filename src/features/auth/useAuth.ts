@@ -7,22 +7,25 @@ import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { closeStorage, getStorage, getStorageNamespace, setStorageNamespace } from '@/lib/storage';
 import { ensureInboxStorageNamespace } from '@/lib/storage/namespacing';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
-import {
-  generateVaultKey,
-  deriveKeyFromPassphrase,
-  wrapVaultKey,
-  unwrapVaultKey,
-  setVaultKey,
-  lockVault,
-  generateSalt,
-} from '@/lib/crypto';
+import { lockVault } from '@/lib/crypto';
 import { getXmtpClient } from '@/lib/xmtp';
+import type { ConnectResult } from '@/lib/xmtp/client';
 import { privateKeyToAccount } from 'viem/accounts';
-import type { VaultSecrets, Identity } from '@/types';
+import type { Identity } from '@/types';
 import { useWalletConnection } from '@/lib/wagmi';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
 import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
 import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
+import {
+  extractWrongChainIdDetails,
+  isLegacyScwChainZeroMismatch,
+  legacyScwChainZeroRecoveryMessage,
+} from '@/lib/xmtp/installation-recovery';
+import {
+  completeProvisioning,
+  getScwRetryChainId,
+  recordInstallationReady,
+} from '@/lib/xmtp/device-provisioning';
 
 export function useAuth() {
   const authStore = useAuthStore();
@@ -41,16 +44,25 @@ export function useAuth() {
         enableHistorySync?: boolean;
         labelOverride?: string;
         skipRegistryUpdate?: boolean;
+        required?: boolean;
+        expectedInboxId?: string;
+        expectedInstallationId?: string;
+        requestHistorySync?: boolean;
+        walletType?: 'EOA' | 'SCW';
       }
-    ) => {
+    ): Promise<ConnectResult | null> => {
       try {
         if (isE2E) {
           // Skip live XMTP connection during E2E.
           const storage = await getStorage();
           const identity = await storage.getIdentityByAddress(address);
           if (identity && identity.address === address) {
-            const stubInboxId = `local-${address.slice(2, 8)}-${Date.now().toString(36)}`;
+            const stubInboxId = identity.inboxId || `local-${address.slice(2, 10)}`;
+            const stubInstallationId =
+              identity.installationId || `local-installation-${address.slice(2, 10)}`;
             identity.inboxId = stubInboxId;
+            identity.installationId = stubInstallationId;
+            identity.provisioningPending = false;
             await storage.putIdentity(identity);
             setIdentity(identity);
 
@@ -72,9 +84,16 @@ export function useAuth() {
             }
 
             await ensureInboxStorageNamespace(stubInboxId, identity);
+            return {
+              inboxId: stubInboxId,
+              installationId: stubInstallationId,
+              installationRegistered: true,
+              historySyncRequested: false,
+              historySyncRequired: false,
+            };
           }
-          return;
-      }
+          return null;
+        }
 
       const xmtp = getXmtpClient();
       const shouldRegister = options?.register === true;
@@ -83,9 +102,10 @@ export function useAuth() {
 
       // Pull the persisted identity so the XMTP client can throttle redundant syncs across reloads.
       let lastSyncedAt: number | undefined;
+      let storedIdentity: Identity | undefined;
       try {
         const storage = await getStorage();
-        const storedIdentity = await storage.getIdentityByAddress(address);
+        storedIdentity = await storage.getIdentityByAddress(address);
         if (storedIdentity && typeof storedIdentity.lastSyncedAt === 'number') {
           lastSyncedAt = storedIdentity.lastSyncedAt;
         }
@@ -93,18 +113,43 @@ export function useAuth() {
         // ignore
       }
 
-      await xmtp.connect(
+      if (options?.requestHistorySync && storedIdentity && !storedIdentity.needsHistorySync) {
+        storedIdentity.needsHistorySync = true;
+        const storage = await getStorage();
+        await storage.putIdentity(storedIdentity);
+        setIdentity(storedIdentity);
+      }
+
+      const result = await xmtp.connect(
         {
           address,
           privateKey,
           chainId,
+          walletType: options?.walletType ?? storedIdentity?.walletType,
           signMessage,
           displayName: options?.labelOverride,
           lastSyncedAt,
+          inboxId: storedIdentity?.inboxId,
+          installationId: storedIdentity?.installationId,
+          xmtpDbPathMode: storedIdentity?.xmtpDbPathMode,
         },
         {
           register: shouldRegister,
           enableHistorySync: shouldSyncHistory,
+          expectedInboxId: options?.expectedInboxId,
+          expectedInstallationId: options?.expectedInstallationId,
+          requestHistorySync: options?.requestHistorySync,
+          onInstallationReady: async (ready) => {
+            const storage = await getStorage();
+            const identity = await storage.getIdentityByAddress(address);
+            if (!identity) {
+              return;
+            }
+            const updated = recordInstallationReady(identity, ready);
+            await storage.putIdentity(updated);
+            setIdentity(updated);
+            await ensureInboxStorageNamespace(updated.inboxId, updated);
+          },
         }
       );
 
@@ -116,30 +161,37 @@ export function useAuth() {
           const storage = await getStorage();
           const identity = await storage.getIdentityByAddress(address);
           if (identity && identity.address === address) {
-            identity.inboxId = inboxId;
-            identity.installationId = installationId;
-            await storage.putIdentity(identity);
+            const completedIdentity = completeProvisioning(
+              {
+                ...identity,
+                needsHistorySync:
+                  identity.needsHistorySync ||
+                  (result.historySyncRequired && !result.historySyncRequested),
+              },
+              result
+            );
+            await storage.putIdentity(completedIdentity);
 
-            setIdentity(identity);
+            setIdentity(completedIdentity);
 
             if (!options?.skipRegistryUpdate) {
               const registry = useInboxRegistryStore.getState();
               const label =
                 options?.labelOverride ||
-                identity.displayName ||
-                `${identity.address.slice(0, 6)}…${identity.address.slice(-4)}`;
+                completedIdentity.displayName ||
+                `${completedIdentity.address.slice(0, 6)}…${completedIdentity.address.slice(-4)}`;
 
               registry.upsertEntry({
                 inboxId,
                 displayLabel: label,
-                primaryDisplayIdentity: identity.displayName || identity.address,
+                primaryDisplayIdentity: completedIdentity.displayName || completedIdentity.address,
                 lastOpenedAt: Date.now(),
                 hasLocalDB: true,
               });
               registry.markOpened(inboxId, true);
             }
 
-            await ensureInboxStorageNamespace(inboxId, identity);
+            await ensureInboxStorageNamespace(inboxId, completedIdentity);
 
             console.log('[Auth] Saved XMTP info to identity:', {
               inboxId,
@@ -150,7 +202,7 @@ export function useAuth() {
             try {
               const profile = await xmtp.loadOwnProfile();
               if (profile && (profile.displayName || profile.avatarUrl)) {
-                const updated = { ...identity } as Identity;
+                const updated = { ...completedIdentity } as Identity;
                 if (profile.displayName) updated.displayName = profile.displayName;
                 if (profile.avatarUrl) (updated as Identity & { avatar?: string }).avatar = profile.avatarUrl;
                 await storage.putIdentity(updated);
@@ -162,8 +214,13 @@ export function useAuth() {
             }
           }
         }
+        return result;
       } catch (error) {
+        if (options?.required) {
+          throw error;
+        }
         console.warn('XMTP connection failed (non-blocking):', error);
+        return null;
       }
     },
     [setIdentity, isE2E]
@@ -189,50 +246,80 @@ export function useAuth() {
         linkedWalletChainId?: number;
         linkedAt?: number;
         previousInboxId?: string;
+        provisioningMode?: Identity['provisioningMode'];
+        xmtpDbPathMode?: Identity['xmtpDbPathMode'];
+        expectedInboxId?: string;
+        expectedInstallationId?: string;
+        requestHistorySync?: boolean;
       }
     ) => {
+      const previousSession = useAuthStore.getState();
+      const previousNamespace = getStorageNamespace();
+      let attemptedAddress = walletAddress;
       try {
         const storage = await getStorage();
+
+        let pendingIdentity: Identity | undefined;
+        if (options?.provisioningMode === 'new-inbox') {
+          pendingIdentity = (await storage.listIdentities()).find(
+            (candidate) =>
+              candidate.provisioningMode === 'new-inbox' &&
+              candidate.provisioningPending === true &&
+              Boolean(candidate.privateKey)
+          );
+        }
+
+        const effectiveAddress = pendingIdentity?.address ?? walletAddress;
+        const effectivePrivateKey = pendingIdentity?.privateKey ?? privateKey;
+        const effectiveMnemonic = pendingIdentity?.mnemonic ?? options?.mnemonic;
 
         let publicKeyHex = '';
         
         // Only derive public key if we have a valid private key (generated wallets)
         // For connected wallets, we don't have the private key (wallet keeps it secure)
-        if (privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          const account = privateKeyToAccount(privateKey as `0x${string}`);
+        if (effectivePrivateKey && effectivePrivateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+          const account = privateKeyToAccount(effectivePrivateKey as `0x${string}`);
           publicKeyHex = account.publicKey;
         }
         
         // Create identity
         const identity: Identity = {
-          address: walletAddress,
+          ...pendingIdentity,
+          address: effectiveAddress,
           publicKey: publicKeyHex,
-          privateKey: privateKey, // Store encrypted in production (or undefined for connected wallets)
-          createdAt: Date.now(),
-          displayName: options?.label,
-          identityKind: options?.identityKind,
+          privateKey: effectivePrivateKey, // Stored as plaintext in browser IndexedDB today.
+          createdAt: pendingIdentity?.createdAt ?? Date.now(),
+          displayName: pendingIdentity?.displayName ?? options?.label,
+          identityKind: pendingIdentity?.identityKind ?? options?.identityKind,
+          walletType: effectivePrivateKey ? 'EOA' : undefined,
+          walletChainId: effectivePrivateKey ? undefined : chainId,
           linkedWalletAddress: options?.linkedWalletAddress,
           linkedWalletChainId: options?.linkedWalletChainId,
           linkedAt: options?.linkedAt,
           previousInboxId: options?.previousInboxId,
+          provisioningMode: options?.provisioningMode,
+          provisioningPending: true,
+          xmtpDbPathMode: options?.xmtpDbPathMode ?? 'inbox-default',
+          expectedInboxId: pendingIdentity?.expectedInboxId ?? options?.expectedInboxId,
+          installationId: pendingIdentity?.installationId,
+          inboxId: pendingIdentity?.inboxId,
+          needsHistorySync:
+            pendingIdentity?.needsHistorySync ?? options?.requestHistorySync ?? false,
         };
-        if (options?.mnemonic) {
-          identity.mnemonic = options.mnemonic;
+        attemptedAddress = identity.address;
+        if (effectiveMnemonic) {
+          identity.mnemonic = effectiveMnemonic;
         }
         await storage.putIdentity(identity);
 
-        // For now, skip vault secrets - no passphrase needed
-        // In production, we'd encrypt the private key with device-based keys
-
-        // Update state
+        // Keep the key available while XMTP provisions, but do not mark onboarding
+        // complete until the live inbox and installation have been verified.
         setIdentity(identity);
-        setAuthenticated(true);
-        setVaultUnlocked(true);
 
         // Connect XMTP with appropriate signer
-        await connectXmtpSafely(
+        const connection = await connectXmtpSafely(
           identity.address,
-          privateKey && privateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? privateKey : undefined,
+          effectivePrivateKey && effectivePrivateKey !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? effectivePrivateKey : undefined,
           chainId,
           signMessage,
           {
@@ -241,8 +328,21 @@ export function useAuth() {
               options?.enableHistorySync !== undefined ? options.enableHistorySync : false,
             labelOverride: options?.label,
             skipRegistryUpdate: options?.skipRegistryUpdate,
+            required: true,
+            expectedInboxId: identity.expectedInboxId,
+            expectedInstallationId:
+              options?.expectedInstallationId ??
+              (identity.provisioningPending ? identity.installationId : undefined),
+            requestHistorySync: options?.requestHistorySync || identity.needsHistorySync,
           }
         );
+
+        if (!connection) {
+          throw new Error('XMTP did not return a verified inbox installation.');
+        }
+
+        setAuthenticated(true);
+        setVaultUnlocked(true);
 
         return true;
       } catch (error) {
@@ -251,222 +351,42 @@ export function useAuth() {
           console.error('Error message:', error.message);
           console.error('Error stack:', error.stack);
         }
-        return false;
+        if (
+          previousSession.isAuthenticated &&
+          previousSession.identity &&
+          previousSession.identity.address.toLowerCase() !== attemptedAddress.toLowerCase()
+        ) {
+          try {
+            await setStorageNamespace(previousNamespace);
+            setIdentity(previousSession.identity);
+            setAuthenticated(true);
+            setVaultUnlocked(previousSession.isVaultUnlocked);
+            if (previousSession.identity.privateKey) {
+              await connectXmtpSafely(
+                previousSession.identity.address,
+                previousSession.identity.privateKey,
+                undefined,
+                undefined,
+                {
+                  register: false,
+                  enableHistorySync: false,
+                  labelOverride: previousSession.identity.displayName,
+                  skipRegistryUpdate: true,
+                  expectedInboxId:
+                    previousSession.identity.expectedInboxId ?? previousSession.identity.inboxId,
+                }
+              );
+            }
+          } catch (restoreError) {
+            console.warn('[Auth] Failed to restore the previous session after provisioning:', restoreError);
+          }
+        }
+        throw error;
       }
     },
     [setIdentity, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
   );
 
-  /**
-   * Create a new identity with passphrase protection (advanced option)
-   */
-  const createIdentityWithPassphrase = useCallback(
-    async (passphrase: string, walletAddress: string) => {
-      try {
-        const storage = await getStorage();
-
-        // Generate vault key
-        const vaultKey = await generateVaultKey();
-
-        // Derive wrapper key from passphrase
-        const salt = generateSalt();
-        const wrapperKey = await deriveKeyFromPassphrase(passphrase, salt, 600000);
-
-        // Wrap the vault key
-        const wrappedKey = await wrapVaultKey(vaultKey, wrapperKey);
-
-        // Store vault secrets
-        const secrets: VaultSecrets = {
-          wrappedVaultKey: wrappedKey,
-          method: 'passphrase',
-          salt: btoa(String.fromCharCode(...salt)),
-          iterations: 600000,
-        };
-        await storage.putVaultSecrets(secrets);
-
-        // Note: publicKey not derivable without private key in passphrase flow
-        const identity: Identity = {
-          address: walletAddress,
-          publicKey: '', // Will be set when private key is available
-          createdAt: Date.now(),
-        };
-        await storage.putIdentity(identity);
-
-        // Set vault key in memory
-        setVaultKey(vaultKey);
-
-        // Update state
-        setIdentity(identity);
-        setVaultSecrets(secrets);
-        setAuthenticated(true);
-        setVaultUnlocked(true);
-
-        // Connect XMTP
-        await connectXmtpSafely(identity.address, undefined, undefined, undefined, { register: true });
-
-        return true;
-      } catch (error) {
-        console.error('Failed to create identity:', error);
-        return false;
-      }
-    },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
-  );
-
-  /**
-   * Import an existing identity with wallet
-   */
-  const importIdentityWithWallet = useCallback(
-    async (passphrase: string, walletAddress: string) => {
-      try {
-        const storage = await getStorage();
-
-        // Check if identity already exists for this address
-        const existingIdentity = await storage.getIdentityByAddress(walletAddress);
-        if (existingIdentity && existingIdentity.address === walletAddress) {
-          console.log('Identity already exists for this address, re-importing');
-        }
-
-        // Generate vault key
-        const vaultKey = await generateVaultKey();
-
-        // Derive wrapper key from passphrase
-        const salt = generateSalt();
-        const wrapperKey = await deriveKeyFromPassphrase(passphrase, salt, 600000);
-
-        // Wrap the vault key
-        const wrappedKey = await wrapVaultKey(vaultKey, wrapperKey);
-
-        // Store vault secrets
-        const secrets: VaultSecrets = {
-          wrappedVaultKey: wrappedKey,
-          method: 'passphrase',
-          salt: btoa(String.fromCharCode(...salt)),
-          iterations: 600000,
-        };
-        await storage.putVaultSecrets(secrets);
-
-        // Import/create identity with existing wallet
-        // Note: For wallet-imported identities, we don't have the private key
-        const identity: Identity = {
-          address: walletAddress,
-          publicKey: '', // Not available for wallet-imported identities
-          createdAt: Date.now(),
-        };
-        await storage.putIdentity(identity);
-
-        // Set vault key in memory
-        setVaultKey(vaultKey);
-
-        // Update state
-        setIdentity(identity);
-        setVaultSecrets(secrets);
-        setAuthenticated(true);
-        setVaultUnlocked(true);
-
-        // Connect XMTP
-        await connectXmtpSafely(identity.address, undefined, undefined, undefined, { register: true });
-
-        return true;
-      } catch (error) {
-        console.error('Failed to import identity:', error);
-        return false;
-      }
-    },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely]
-  );
-
-  /**
-   * Create identity with passkey protection
-   */
-  const createIdentityWithPasskey = useCallback(
-    async (_walletAddress: string) => {
-      try {
-        // TODO: Implement passkey creation with PRF
-        // For now, fall back to passphrase
-        console.warn('Passkey not yet implemented, use passphrase');
-        return false;
-      } catch (error) {
-        console.error('Failed to create identity with passkey:', error);
-        return false;
-      }
-    },
-    []
-  );
-
-  /**
-   * Unlock vault with passphrase
-   */
-  const unlockWithPassphrase = useCallback(
-    async (passphrase: string): Promise<boolean> => {
-      try {
-        const storage = await getStorage();
-
-        // Get vault secrets
-        const secrets = await storage.getVaultSecrets();
-        if (!secrets || secrets.method !== 'passphrase') {
-          return false;
-        }
-
-        // Derive wrapper key
-        const salt = Uint8Array.from(atob(secrets.salt), (c) => c.charCodeAt(0));
-        const wrapperKey = await deriveKeyFromPassphrase(
-          passphrase,
-          salt,
-          secrets.iterations || 600000
-        );
-
-        // Unwrap vault key
-        const vaultKey = await unwrapVaultKey(secrets.wrappedVaultKey, wrapperKey);
-
-        // Set in memory
-        setVaultKey(vaultKey);
-
-        // Get identity
-        const identity = walletAddress ? await storage.getIdentityByAddress(walletAddress) : undefined;
-        if (!identity) {
-          return false;
-        }
-
-        // Update state
-        setIdentity(identity);
-        setVaultSecrets(secrets);
-        setAuthenticated(true);
-        setVaultUnlocked(true);
-
-        // Connect XMTP
-        await connectXmtpSafely(identity.address);
-
-        return true;
-      } catch (error) {
-        console.error('Failed to unlock with passphrase:', error);
-        return false;
-      }
-    },
-    [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress]
-  );
-
-  /**
-   * Unlock vault with passkey
-   */
-  const unlockWithPasskey = useCallback(async (): Promise<boolean> => {
-    try {
-      // TODO: Implement passkey unlock
-      console.warn('Passkey unlock not yet implemented');
-      return false;
-    } catch (error) {
-      console.error('Failed to unlock with passkey:', error);
-      return false;
-    }
-  }, []);
-
-  /**
-   * Lock vault
-   */
-  const lock = useCallback(() => {
-    lockVault();
-    setVaultUnlocked(false);
-  }, [setVaultUnlocked]);
 
   /**
    * Logout completely
@@ -543,7 +463,13 @@ export function useAuth() {
         await setStorageNamespace(targetInboxId);
         const targetStorage = await getStorage();
 
-        await targetStorage.clearAllData({ opfsAddresses: targetIdentity?.address ? [targetIdentity.address] : undefined });
+        await targetStorage.clearAllData({
+          opfsAddresses: targetIdentity
+            ? [targetIdentity.address, targetIdentity.inboxId].filter(
+                (value): value is string => Boolean(value)
+              )
+            : undefined,
+        });
         if (targetIdentity?.address) {
           await targetStorage.deleteIdentityByAddress(targetIdentity.address);
         }
@@ -635,20 +561,9 @@ export function useAuth() {
           // ignore; storage may already be on the default namespace
         }
 
-        const generated = generateLocalAppIdentity();
-        return await createIdentity(
-          generated.identity.address,
-          generated.privateKey,
-          undefined,
-          undefined,
-          {
-            register: true,
-            enableHistorySync: false,
-            label: generated.identity.displayName,
-            mnemonic: generated.mnemonic,
-            identityKind: generated.identity.identityKind,
-          }
-        );
+        // Onboarding owns identity creation. In particular, a user choosing to
+        // join an existing inbox must not get a standalone inbox first.
+        return false;
       }
 
       let identity: Identity | undefined;
@@ -720,8 +635,34 @@ export function useAuth() {
 
       setIdentity(identity);
       setVaultSecrets(secrets ?? null);
-      setAuthenticated(true);
-      setVaultUnlocked(true);
+      const isPendingProvisioning = identity.provisioningPending === true || !identity.inboxId;
+      if (!isPendingProvisioning) {
+        setAuthenticated(true);
+        setVaultUnlocked(true);
+      }
+
+      if (
+        isPendingProvisioning &&
+        identity.provisioningMode === 'device-join' &&
+        identity.privateKey
+      ) {
+        const pendingProbe = await getXmtpClient().probeIdentity({
+          address: identity.address,
+          privateKey: identity.privateKey,
+        });
+        if (
+          !pendingProbe.inboxId ||
+          !inboxIdsMatch(
+            pendingProbe.inboxId,
+            identity.expectedInboxId ?? identity.inboxId
+          )
+        ) {
+          console.info(
+            '[Auth] Pending device key is not associated with its target inbox yet; returning to wallet approval.'
+          );
+          return false;
+        }
+      }
 
       if (typeof identity.lastSyncedAt === 'number') {
         useXmtpStore.getState().setLastSyncedAt(identity.lastSyncedAt);
@@ -731,13 +672,25 @@ export function useAuth() {
         ? registry.entries.find((entry) => inboxIdsMatch(entry.inboxId, identity!.inboxId))
         : undefined;
       const shouldSyncHistory = registryEntry ? !registryEntry.hasLocalDB : true;
+      const shouldRequestDeviceHistory = Boolean(
+        identity.needsHistorySync ||
+          (shouldSyncHistory && identity.provisioningMode !== 'new-inbox')
+      );
 
       if (identity.privateKey) {
-        await connectXmtpSafely(identity.address, identity.privateKey, undefined, undefined, {
+        const connection = await connectXmtpSafely(identity.address, identity.privateKey, undefined, undefined, {
           register: false,
           enableHistorySync: shouldSyncHistory,
+          requestHistorySync: shouldRequestDeviceHistory,
           labelOverride: identity.displayName,
+          required: isPendingProvisioning,
+          expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
+          expectedInstallationId: isPendingProvisioning ? identity.installationId : undefined,
         });
+        if (isPendingProvisioning && connection) {
+          setAuthenticated(true);
+          setVaultUnlocked(true);
+        }
       } else if (walletAddress && walletAddress.toLowerCase() === identity.address.toLowerCase()) {
         console.log('[Auth] Reconnecting wallet-based identity with wallet signer');
         const signMessage = async (message: string) => {
@@ -746,11 +699,20 @@ export function useAuth() {
           }
           return await walletSignMessage(message);
         };
-        await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
+        const connection = await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
           register: false,
           enableHistorySync: shouldSyncHistory,
+          requestHistorySync: shouldRequestDeviceHistory,
+          walletType: identity.walletType,
           labelOverride: identity.displayName,
+          required: isPendingProvisioning,
+          expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
+          expectedInstallationId: isPendingProvisioning ? identity.installationId : undefined,
         });
+        if (isPendingProvisioning && connection) {
+          setAuthenticated(true);
+          setVaultUnlocked(true);
+        }
       } else {
         console.log('[Auth] Wallet-based identity found but wallet not connected - skipping XMTP connection');
       }
@@ -770,7 +732,6 @@ export function useAuth() {
     setAuthenticated,
     setVaultUnlocked,
     connectXmtpSafely,
-    createIdentity,
     walletAddress,
     walletChainId,
     walletSignMessage,
@@ -781,7 +742,8 @@ export function useAuth() {
       walletAddress: string,
       privateKey?: string,
       chainId?: number,
-      signMessage?: (message: string) => Promise<string>
+      signMessage?: (message: string) => Promise<string>,
+      walletType?: 'EOA' | 'SCW'
     ) => {
       const xmtp = getXmtpClient();
       return await xmtp.probeIdentity({
@@ -789,61 +751,72 @@ export function useAuth() {
         privateKey,
         chainId,
         signMessage,
+        walletType,
       });
     },
     []
   );
 
-  const connectLocalIdentityToWalletInbox = useCallback(
+  const reconnectCurrentIdentity = useCallback(
+    async (options?: {
+      chainId?: number;
+      signMessage?: (message: string) => Promise<string>;
+      walletType?: 'EOA' | 'SCW';
+    }): Promise<ConnectResult> => {
+      const identity = useAuthStore.getState().identity;
+      if (!identity) {
+        throw new Error('No identity is currently loaded.');
+      }
+
+      const result = await connectXmtpSafely(
+        identity.address,
+        identity.privateKey,
+        options?.chainId,
+        options?.signMessage,
+        {
+          register: false,
+          enableHistorySync: false,
+          labelOverride: identity.displayName,
+          required: true,
+          requestHistorySync: identity.needsHistorySync,
+          walletType: options?.walletType ?? identity.walletType,
+          expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
+        }
+      );
+
+      if (!result) {
+        throw new Error('XMTP did not reconnect the current identity.');
+      }
+      return result;
+    },
+    [connectXmtpSafely]
+  );
+
+  const addDeviceToExistingWalletInbox = useCallback(
     async (
       targetWalletAddress: string,
       chainId: number | undefined,
       signMessage: (message: string) => Promise<string>,
       options?: { walletType?: 'EOA' | 'SCW'; label?: string }
-    ): Promise<{ inboxId: string; previousInboxId?: string; installationId?: string }> => {
-      const currentIdentity = useAuthStore.getState().identity;
-      if (!currentIdentity) {
-        throw new Error('No local app identity is loaded.');
-      }
-      if (!currentIdentity.privateKey) {
-        throw new Error('The current identity does not have an exportable local key.');
-      }
-
+    ): Promise<{ inboxId: string; installationId: string; deviceKeyAddress: string }> => {
+      const previousSession = useAuthStore.getState();
+      const previousNamespace = getStorageNamespace();
       const xmtp = getXmtpClient();
-      const previousInboxId = normalizeInboxId(currentIdentity.inboxId) ?? undefined;
-
-      console.info('[Auth] Existing inbox connection: preparing target probe', {
-        localAppKeyAddress: currentIdentity.address,
-        localAppKeyInboxId: previousInboxId ?? null,
-        targetWalletAddress,
-        targetWalletChainId: chainId ?? null,
-        targetWalletType: options?.walletType ?? 'EOA',
-        label: options?.label ?? null,
-      });
-
+      const walletType = options?.walletType ?? 'EOA';
       const probe = await xmtp.probeIdentity({
         address: targetWalletAddress,
         chainId,
-        walletType: options?.walletType,
+        walletType,
         signMessage,
-      });
-
-      console.info('[Auth] Existing inbox connection: target probe result', {
-        localAppKeyAddress: currentIdentity.address,
-        localAppKeyInboxId: previousInboxId ?? null,
-        targetWalletAddress,
-        targetWalletChainId: chainId ?? null,
-        targetWalletType: options?.walletType ?? 'EOA',
-        targetInboxId: probe.inboxId ?? null,
-        targetInstallationCount: probe.installationCount,
-        hasTargetInboxState: Boolean(probe.inboxState),
       });
 
       if (!probe.inboxId) {
         throw new Error('No existing XMTP inbox was found for that wallet.');
       }
       if (probe.installationCount >= 10) {
-        throw new Error('Installation limit reached (10/10). Revoke an old installation before connecting this app key.');
+        throw new Error(
+          'Installation limit reached (10/10). Revoke an old installation before adding this device.'
+        );
       }
 
       const targetInboxId = normalizeInboxId(probe.inboxId);
@@ -851,97 +824,163 @@ export function useAuth() {
         throw new Error('XMTP returned an invalid inbox ID for that wallet.');
       }
 
-      console.info('[Auth] Existing inbox connection: requesting account reassignment', {
-        localAppKeyAddress: currentIdentity.address,
-        localAppKeyInboxId: previousInboxId ?? null,
-        targetWalletAddress,
-        targetWalletChainId: chainId ?? null,
-        targetWalletType: options?.walletType ?? 'EOA',
-        targetInboxId,
-        sameInboxAsCurrent: previousInboxId ? inboxIdsMatch(previousInboxId, targetInboxId) : false,
-      });
-
-      let reassignment: Awaited<ReturnType<typeof xmtp.reassignAccountToInbox>>;
-      try {
-        reassignment = await xmtp.reassignAccountToInbox({
-          targetIdentity: {
-            address: targetWalletAddress,
-            chainId,
-            walletType: options?.walletType,
-            signMessage,
-          },
-          accountIdentity: {
-            address: currentIdentity.address,
-            privateKey: currentIdentity.privateKey,
-          },
-        });
-      } catch (error) {
-        console.warn('[Auth] Existing inbox connection: account reassignment failed', {
-          localAppKeyAddress: currentIdentity.address,
-          localAppKeyInboxId: previousInboxId ?? null,
-          targetWalletAddress,
-          targetWalletChainId: chainId ?? null,
-          targetWalletType: options?.walletType ?? 'EOA',
-          targetInboxId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-
-      const updatedIdentity: Identity = {
-        ...currentIdentity,
+      const currentStorage = await getStorage();
+      const pendingIdentity = (await currentStorage.listIdentities()).find(
+        (candidate) =>
+          candidate.provisioningMode === 'device-join' &&
+          candidate.provisioningPending === true &&
+          Boolean(candidate.privateKey) &&
+          inboxIdsMatch(candidate.expectedInboxId, targetInboxId)
+      );
+      const generated = pendingIdentity
+        ? {
+            identity: pendingIdentity,
+            privateKey: pendingIdentity.privateKey as `0x${string}`,
+            mnemonic: pendingIdentity.mnemonic ?? '',
+          }
+        : generateLocalAppIdentity();
+      const stagedIdentity: Identity = {
+        ...generated.identity,
         inboxId: targetInboxId,
-        installationId: undefined,
         identityKind: 'local-app',
+        provisioningMode: 'device-join',
+        provisioningPending: true,
+        xmtpDbPathMode: 'inbox-default',
         linkedWalletAddress: targetWalletAddress,
         linkedWalletChainId: chainId,
-        linkedAt: Date.now(),
-        previousInboxId,
-        displayName: currentIdentity.displayName || options?.label,
+        linkedAt: pendingIdentity?.linkedAt ?? Date.now(),
+        displayName: options?.label || generated.identity.displayName,
+        needsHistorySync: true,
+        expectedInboxId: targetInboxId,
       };
 
-      await setStorageNamespace(targetInboxId);
-      const storage = await getStorage();
-      await storage.putIdentity(updatedIdentity);
-      setIdentity(updatedIdentity);
-      setAuthenticated(true);
-      setVaultUnlocked(true);
+      // Persist the fresh key before the first ledger mutation. If association
+      // succeeds but a later verification is interrupted, startup can safely
+      // resume this exact key without registering it as a standalone inbox.
+      await currentStorage.putIdentity(stagedIdentity);
 
-      const registry = useInboxRegistryStore.getState();
-      if (previousInboxId && !inboxIdsMatch(previousInboxId, targetInboxId)) {
-        registry.removeEntry(previousInboxId);
-      }
-      registry.upsertEntry({
-        inboxId: targetInboxId,
-        displayLabel: options?.label || updatedIdentity.displayName || targetWalletAddress,
-        primaryDisplayIdentity: targetWalletAddress,
-        lastOpenedAt: Date.now(),
-        hasLocalDB: false,
-      });
-      registry.setCurrentInbox(targetInboxId);
+      const provision = async (provisioningChainId = chainId) =>
+        await xmtp.provisionDeviceKeyForInbox({
+          targetIdentity: {
+            address: targetWalletAddress,
+            chainId: provisioningChainId,
+            walletType,
+            signMessage,
+          },
+          deviceIdentity: {
+            address: stagedIdentity.address,
+            privateKey: generated.privateKey,
+            xmtpDbPathMode: 'inbox-default',
+          },
+          expectedInboxId: targetInboxId,
+        });
 
-      await connectXmtpSafely(
-        updatedIdentity.address,
-        updatedIdentity.privateKey,
-        undefined,
-        undefined,
-        {
-          register: false,
-          enableHistorySync: true,
-          labelOverride: updatedIdentity.displayName,
+      try {
+        let provisioned: Awaited<ReturnType<typeof provision>>;
+        try {
+          provisioned = await provision();
+        } catch (error) {
+          const mismatch = extractWrongChainIdDetails(
+            error instanceof Error ? error.message : String(error)
+          );
+          const retryChainId = mismatch
+            ? getScwRetryChainId(walletType, chainId, mismatch.initiallyAddedWith)
+            : null;
+          if (mismatch && isLegacyScwChainZeroMismatch(mismatch)) {
+            throw new Error(legacyScwChainZeroRecoveryMessage());
+          }
+          if (retryChainId !== null) {
+            provisioned = await provision(retryChainId);
+          } else {
+            throw error;
+          }
         }
-      );
 
-      console.info('[Auth] Existing inbox connection: local identity updated and reconnected', {
-        localAppKeyAddress: updatedIdentity.address,
-        previousInboxId: previousInboxId ?? null,
-        currentInboxId: targetInboxId,
-        linkedWalletAddress: targetWalletAddress,
-        linkedWalletChainId: chainId ?? null,
-        reassignmentInstallationId: reassignment.installationId ?? null,
-      });
+        const deviceIdentity: Identity = {
+          ...stagedIdentity,
+          inboxId: targetInboxId,
+          installationId: provisioned.installationId,
+          needsHistorySync: true,
+        };
 
-      return { inboxId: targetInboxId, previousInboxId, installationId: reassignment.installationId };
+        await setStorageNamespace(targetInboxId);
+        const storage = await getStorage();
+        await storage.putIdentity(deviceIdentity);
+        setIdentity(deviceIdentity);
+
+        const connection = await connectXmtpSafely(
+          deviceIdentity.address,
+          deviceIdentity.privateKey,
+          undefined,
+          undefined,
+          {
+            register: false,
+            enableHistorySync: true,
+            labelOverride: deviceIdentity.displayName,
+            required: true,
+            expectedInboxId: targetInboxId,
+            expectedInstallationId: provisioned.installationId,
+            requestHistorySync: true,
+          }
+        );
+
+        if (
+          !connection ||
+          !inboxIdsMatch(connection.inboxId, targetInboxId) ||
+          connection.installationId !== provisioned.installationId
+        ) {
+          throw new Error(
+            'The local device key did not reopen the wallet-approved XMTP installation.'
+          );
+        }
+
+        setAuthenticated(true);
+        setVaultUnlocked(true);
+
+        const registry = useInboxRegistryStore.getState();
+        registry.upsertEntry({
+          inboxId: targetInboxId,
+          displayLabel: deviceIdentity.displayName || targetWalletAddress,
+          primaryDisplayIdentity: targetWalletAddress,
+          lastOpenedAt: Date.now(),
+          hasLocalDB: true,
+        });
+        registry.setCurrentInbox(targetInboxId);
+
+        return {
+          inboxId: targetInboxId,
+          installationId: connection.installationId,
+          deviceKeyAddress: deviceIdentity.address,
+        };
+      } catch (error) {
+        if (previousSession.isAuthenticated && previousSession.identity) {
+          try {
+            await setStorageNamespace(previousNamespace);
+            setIdentity(previousSession.identity);
+            setAuthenticated(true);
+            setVaultUnlocked(previousSession.isVaultUnlocked);
+            if (previousSession.identity.privateKey) {
+              await connectXmtpSafely(
+                previousSession.identity.address,
+                previousSession.identity.privateKey,
+                undefined,
+                undefined,
+                {
+                  register: false,
+                  enableHistorySync: false,
+                  labelOverride: previousSession.identity.displayName,
+                  skipRegistryUpdate: true,
+                  expectedInboxId:
+                    previousSession.identity.expectedInboxId ?? previousSession.identity.inboxId,
+                }
+              );
+            }
+          } catch (restoreError) {
+            console.warn('[Auth] Failed to restore the prior inbox after device setup:', restoreError);
+          }
+        }
+        throw error;
+      }
     },
     [connectXmtpSafely, setAuthenticated, setIdentity, setVaultUnlocked]
   );
@@ -949,16 +988,11 @@ export function useAuth() {
   return {
     ...authStore,
     createIdentity,
-    createIdentityWithPassphrase,
-    importIdentityWithWallet,
-    createIdentityWithPasskey,
-    unlockWithPassphrase,
-    unlockWithPasskey,
-    lock,
     logout,
     burnIdentity,
     checkExistingIdentity,
     probeIdentity,
-    connectLocalIdentityToWalletInbox,
+    reconnectCurrentIdentity,
+    addDeviceToExistingWalletInbox,
   };
 }
