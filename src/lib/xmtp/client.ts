@@ -65,6 +65,7 @@ import {
   type ConvosGroupProfile,
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
+import { selectOldestRevocableInstallations, shortInboxId } from './installation-recovery';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
 import {
   ConvosJoinRequestCodec,
@@ -167,6 +168,12 @@ export interface AccountReassignmentOptions {
 export interface AccountReassignmentResult {
   inboxId: string;
   installationId?: string;
+}
+
+export interface RevokeOldestInstallationsOptions {
+  inboxId?: string;
+  inboxState?: InboxState;
+  onStatus?: (message: string) => void;
 }
 
 interface ConnectOptions {
@@ -1127,89 +1134,72 @@ export class XmtpClient {
    */
   async revokeOldestInstallationsForIdentity(
     identity: XmtpIdentity,
-    revokeCount = 1
+    revokeCount = 1,
+    options: RevokeOldestInstallationsOptions = {}
   ): Promise<{ revoked: string[]; inboxId?: string; installationCount: number }> {
     const signer = await this.createSigner(identity);
-    const randomSuffix = Math.random().toString(36).substring(2, 10);
-    const dbPath = `xmtp-revoke-target-temp-${randomSuffix}.db3`;
+    let inboxId = options.inboxId;
+    let inboxState = options.inboxState;
+
+    const emitStatus = (message: string) => {
+      console.info(`[XMTP] Existing inbox recovery: ${message}`);
+      options.onStatus?.(message);
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'installations:target_revoke_oldest',
+        details: message,
+      });
+    };
+
+    if (!inboxState && inboxId) {
+      emitStatus(`Fetching installations for inbox ${shortInboxId(inboxId)}.`);
+      const states = await Client.fetchInboxStates([inboxId], 'production');
+      inboxState = states[0];
+    }
+
+    if (!inboxState) {
+      emitStatus(`Resolving XMTP inbox for wallet ${identity.address}.`);
+      const identifier = await signer.getIdentifier();
+      inboxId = await getInboxIdForIdentifier(identifier, 'production');
+      if (!inboxId) {
+        throw new Error('No existing XMTP inbox was found for that wallet.');
+      }
+      emitStatus(`Fetching installations for inbox ${shortInboxId(inboxId)}.`);
+      const states = await Client.fetchInboxStates([inboxId], 'production');
+      inboxState = states[0];
+    }
+
+    inboxId = inboxState?.inboxId ?? inboxId;
+    if (!inboxId) {
+      throw new Error('XMTP did not return an inbox ID for that wallet.');
+    }
+
+    const installations = inboxState?.installations ?? [];
+    const installationCount = installations.length;
+    const selectedInstallations = selectOldestRevocableInstallations(installations, revokeCount);
+    const bytes = selectedInstallations.map((installation) => installation.bytes);
+
+    if (!bytes.length) {
+      throw new Error('No revocable installation bytes were available for that inbox.');
+    }
+
+    emitStatus(
+      `Requesting wallet signature to revoke ${bytes.length} oldest installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`
+    );
+    await Client.revokeInstallations(signer, inboxId, bytes, 'production');
 
     logNetworkEvent({
       direction: 'outbound',
-      event: 'installations:target_revoke_oldest',
-      details: `Creating temp manager for ${identity.address}`,
+      event: 'installations:target_revoke_oldest:success',
+      details: `Revoked ${bytes.length} installation(s) for inbox ${inboxId}`,
     });
+    emitStatus(`Revoked ${bytes.length} installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`);
 
-    const manager = await Client.create(signer, {
-      env: 'production',
-      dbPath,
-      codecs: XMTP_CONTENT_CODECS,
-      loggingLevel: getXmtpSdkLogLevel(),
-      structuredLogging: false,
-      performanceLogging: false,
-      disableAutoRegister: true,
-    });
-
-    try {
-      const state = await manager.preferences.fetchInboxState();
-      const rawInstallations = (state.installations || []) as unknown as Array<{
-        id?: string;
-        clientTimestampNs?: bigint;
-        bytes?: Uint8Array;
-        installationId?: Uint8Array;
-        idBytes?: Uint8Array;
-      }>;
-      const installations = [...rawInstallations];
-      const installationCount = installations.length;
-
-      installations.sort((a, b) => {
-        const aTime = a.clientTimestampNs ?? 0n;
-        const bTime = b.clientTimestampNs ?? 0n;
-        return aTime < bTime ? -1 : aTime > bTime ? 1 : 0;
-      });
-
-      const toRevoke = installations.slice(0, Math.max(1, revokeCount));
-      const revokedIds: string[] = [];
-      const bytes: Uint8Array[] = [];
-
-      for (const installation of toRevoke) {
-        const rawBytes =
-          installation.bytes ||
-          installation.installationId ||
-          installation.idBytes ||
-          (typeof installation.id === 'string' ? this.hexToBytes(installation.id) : null);
-
-        if (rawBytes) {
-          bytes.push(rawBytes);
-          if (typeof installation.id === 'string') {
-            revokedIds.push(installation.id);
-          }
-        }
-      }
-
-      if (!bytes.length) {
-        throw new Error('No revocable installation bytes were available for that inbox.');
-      }
-
-      await manager.revokeInstallations(bytes);
-
-      logNetworkEvent({
-        direction: 'outbound',
-        event: 'installations:target_revoke_oldest:success',
-        details: `Revoked ${revokedIds.length || bytes.length} installation(s) for inbox ${state.inboxId ?? manager.inboxId}`,
-      });
-
-      return {
-        revoked: revokedIds,
-        inboxId: state.inboxId ?? manager.inboxId,
-        installationCount,
-      };
-    } finally {
-      try {
-        await manager.close();
-      } catch {
-        // ignore
-      }
-    }
+    return {
+      revoked: selectedInstallations.map((installation) => installation.id).filter((id): id is string => Boolean(id)),
+      inboxId,
+      installationCount,
+    };
   }
 
   private static coerceContentTypeId(value: unknown): ContentTypeId | undefined {

@@ -493,11 +493,17 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (recurse.bot operating practice adoption)
+**Last Updated**: 2026-07-09 (app version 0.3.3 + static inbox installation recovery)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Static Existing Inbox Installation Recovery
+- Bumped Converge from `0.3.2` to `0.3.3` after hardening the Settings → Connect Existing Inbox 10/10 recovery flow.
+- The connect modal now extracts the blocked InboxID from XMTP's raw installation-limit error, displays that InboxID and step-by-step recovery status, and logs recovery start/completion to the console.
+- The recovery action now fetches the target inbox state with SDK static helpers and calls `Client.revokeInstallations(...)` with the wallet signer, instead of creating another temporary XMTP manager client just to revoke an installation.
+- Added `src/lib/xmtp/installation-recovery.ts` plus regression coverage for InboxID extraction and oldest-installation selection.
 
 ### Recurse.bot Operating Practice Adoption
 - Checked https://recurse.bot and adapted its useful repository-etiquette suggestions to Converge.
@@ -510,7 +516,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Existing Inbox Installation Recovery
 - Bumped Converge from `0.3.1` to `0.3.2` after adding a recovery action for wallet inboxes that hit XMTP's 10/10 installation limit.
 - Settings → Connect Existing Inbox now detects installation-limit errors and offers "Revoke Oldest Installation" directly in the modal.
-- The recovery action signs with the target WalletConnect/Browser Wallet account, creates a temporary XMTP manager client with `disableAutoRegister: true`, revokes only the oldest target-wallet installation, then asks the user to retry "Use Connected Wallet".
+- The original recovery action signed with the target WalletConnect/Browser Wallet account and used a temporary XMTP manager client with `disableAutoRegister: true`; version `0.3.3` replaced this with the static revoke path above.
 - This intentionally frees one slot rather than deleting most installations. Warn users that the oldest installation may still be an active device because creation time is not activity time.
 
 ### Existing Inbox Connector Narrowing

@@ -24,7 +24,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 - The local app key is exportable through the existing keyfile path and remains the signer Converge uses after setup.
 - Settings → Connect Existing Inbox uses only WalletConnect and injected Browser Wallet connectors for the wallet approval, so the user signs from a normal external wallet such as Rainbow or MetaMask. Thirdweb and embedded-wallet providers remain available elsewhere but are not part of this reassignment flow.
 - The connection flow probes the wallet for an existing XMTP inbox, asks the wallet to sign XMTP's account reassignment approval, then uses `unsafe_addAccount(..., true)` through a temporary manager client to move the local app key into that inbox.
-- If the target wallet inbox is full at 10/10 XMTP installations, Converge can create a temporary non-registering manager client for that wallet and revoke the oldest target installation after explicit user confirmation, freeing one slot for the local app key reassignment.
+- If the target wallet inbox is full at 10/10 XMTP installations, Converge extracts the blocked InboxID from XMTP's error, fetches that inbox state with the browser SDK's static network helpers, and revokes the oldest target installation through `Client.revokeInstallations(...)` after explicit wallet confirmation, freeing one slot for the local app key reassignment without creating another temporary XMTP client.
 - After reassignment, Converge switches storage to the target inbox, reconnects XMTP with the local app key, and history sync runs from the existing inbox. The generated inbox is removed from the visible registry and treated as abandoned.
 
 ### Privacy And Safety Notes

@@ -18,6 +18,7 @@ import { FarcasterSettings } from './FarcasterSettings';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 import { getInboxConnectionWalletOptions } from '@/lib/wagmi/inbox-connection-options';
+import { extractInstallationLimitInboxId, shortInboxId } from '@/lib/xmtp/installation-recovery';
 import buildInfo from '@/build-info.json';
 
 const BASE_CHAIN_ID = 8453;
@@ -26,6 +27,10 @@ interface InstallationRecoveryResult {
   revoked: string[];
   inboxId?: string;
   installationCount?: number;
+}
+interface InstallationRecoveryOptions {
+  inboxId?: string;
+  onStatus?: (message: string) => void;
 }
 
 function isInstallationLimitError(message: string | null | undefined): boolean {
@@ -407,7 +412,8 @@ export function SettingsPage() {
 
   const revokeOldInstallationsForExistingWalletInbox = async (
     accounts: readonly string[] | undefined,
-    walletSignMessage = signMessage
+    walletSignMessage = signMessage,
+    options: InstallationRecoveryOptions = {}
   ): Promise<InstallationRecoveryResult> => {
     const addressList = Array.from(new Set((accounts ?? []).filter(Boolean)));
     const target = await resolveWalletInboxTarget(addressList);
@@ -419,6 +425,14 @@ export function SettingsPage() {
       throw new Error('Wallet signing is not available. Connect your wallet and try again.');
     }
 
+    console.info('[Settings] Starting existing inbox installation recovery', {
+      targetAddress: target.address,
+      walletType: target.walletType,
+      chainId: target.chainId,
+      inboxId: options.inboxId,
+    });
+    options.onStatus?.(`Preparing recovery for wallet ${target.address.slice(0, 6)}...${target.address.slice(-4)}.`);
+
     const xmtp = getXmtpClient();
     return await xmtp.revokeOldestInstallationsForIdentity(
       {
@@ -427,7 +441,11 @@ export function SettingsPage() {
         walletType: target.walletType,
         signMessage: async (message: string) => await walletSignMessage(message, target.address),
       },
-      1
+      1,
+      {
+        inboxId: options.inboxId,
+        onStatus: options.onStatus,
+      }
     );
   };
 
@@ -1328,7 +1346,8 @@ interface ConnectExistingInboxModalProps {
   onConnect: (accounts: readonly string[] | undefined, signMessage?: WalletSignMessage) => Promise<void>;
   onRecoverInstallations: (
     accounts: readonly string[] | undefined,
-    signMessage?: WalletSignMessage
+    signMessage?: WalletSignMessage,
+    options?: InstallationRecoveryOptions
   ) => Promise<InstallationRecoveryResult>;
 }
 
@@ -1350,15 +1369,24 @@ function ConnectExistingInboxModal({
     signMessage,
   } = useWalletConnection();
   const [lastAccounts, setLastAccounts] = useState<readonly string[] | undefined>();
+  const [blockedInboxId, setBlockedInboxId] = useState<string | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [recoveryStep, setRecoveryStep] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<'connect' | 'recover' | null>(null);
   const inboxWalletOptions = getInboxConnectionWalletOptions(walletOptions);
-  const showInstallationRecovery = isInstallationLimitError(error);
+  const errorInboxId = extractInstallationLimitInboxId(error);
+  const recoveryInboxId = blockedInboxId ?? errorInboxId;
+  const isRecovering = activeAction === 'recover';
+  const isConnectingExistingInbox = activeAction === 'connect';
+  const showInstallationRecovery = isInstallationLimitError(error) || Boolean(recoveryInboxId) || isRecovering;
 
   const runConnect = async (getAccounts: () => Promise<readonly string[] | undefined>) => {
     if (isWorking) return;
+    setActiveAction('connect');
     onWorkingChange(true);
     onError(null);
     setRecoveryNotice(null);
+    setRecoveryStep(null);
     try {
       if (!signMessage) {
         throw new Error('Wallet signing is not available. Connect your wallet and try again.');
@@ -1370,8 +1398,15 @@ function ConnectExistingInboxModal({
       await onConnect(accounts, signMessage);
       onClose();
     } catch (err) {
-      onError(err instanceof Error ? err.message : 'Failed to connect wallet');
+      const message = err instanceof Error ? err.message : 'Failed to connect wallet';
+      const inboxId = extractInstallationLimitInboxId(message);
+      if (inboxId) {
+        setBlockedInboxId(inboxId);
+        setRecoveryStep(`Inbox ${shortInboxId(inboxId)} is full. Use recovery before retrying.`);
+      }
+      onError(message);
     } finally {
+      setActiveAction(null);
       onWorkingChange(false);
     }
   };
@@ -1395,18 +1430,33 @@ function ConnectExistingInboxModal({
       return;
     }
 
+    setActiveAction('recover');
     onWorkingChange(true);
     onError(null);
     setRecoveryNotice(null);
+    setRecoveryStep(recoveryInboxId ? `Fetching installations for inbox ${shortInboxId(recoveryInboxId)}...` : 'Resolving wallet inbox...');
     try {
-      const result = await onRecoverInstallations(accounts, signMessage);
+      console.info('[Settings] User started existing inbox installation recovery', {
+        accounts,
+        inboxId: recoveryInboxId,
+      });
+      const result = await onRecoverInstallations(accounts, signMessage, {
+        inboxId: recoveryInboxId ?? undefined,
+        onStatus: setRecoveryStep,
+      });
       const count = result.revoked.length || 1;
+      const recoveredInboxId = result.inboxId ?? recoveryInboxId;
       setRecoveryNotice(
-        `Revoked ${count} old installation${count === 1 ? '' : 's'}. Try "Use Connected Wallet" again.`
+        `Revoked ${count} old installation${count === 1 ? '' : 's'}${recoveredInboxId ? ` from inbox ${shortInboxId(recoveredInboxId)}` : ''}. Try "Use Connected Wallet" again.`
       );
+      setRecoveryStep(null);
+      setBlockedInboxId(null);
+      console.info('[Settings] Existing inbox installation recovery completed', result);
     } catch (err) {
+      setRecoveryStep(null);
       onError(err instanceof Error ? err.message : 'Failed to revoke old installations');
     } finally {
+      setActiveAction(null);
       onWorkingChange(false);
     }
   };
@@ -1456,15 +1506,25 @@ function ConnectExistingInboxModal({
           {showInstallationRecovery && (
             <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100 space-y-2">
               <div>
-                This inbox is full. Revoke the oldest wallet installation to free one XMTP slot, then retry the
-                connection.
+                This inbox is full. Click recovery first, approve the wallet signature, then retry the connection.
               </div>
+              {recoveryInboxId && (
+                <div className="font-mono text-xs text-yellow-50/90 break-all">
+                  Inbox {recoveryInboxId}
+                </div>
+              )}
+              {recoveryStep && (
+                <div className="text-xs text-yellow-50/90">
+                  {recoveryStep}
+                </div>
+              )}
               <button
                 onClick={runRecoverInstallations}
                 disabled={isWorking || !signMessage}
                 className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+                title={!signMessage ? 'Wallet signing is not available yet.' : undefined}
               >
-                {isWorking ? 'Revoking...' : 'Revoke Oldest Installation'}
+                {isRecovering ? 'Revoking...' : 'Revoke Oldest Installation'}
               </button>
             </div>
           )}
@@ -1479,7 +1539,7 @@ function ConnectExistingInboxModal({
                   disabled={isWorking}
                   className="btn-primary text-sm px-3 py-2 disabled:opacity-50"
                 >
-                  {isWorking ? 'Connecting...' : 'Use Connected Wallet'}
+                  {isConnectingExistingInbox ? 'Connecting...' : 'Use Connected Wallet'}
                 </button>
               </div>
             </div>
@@ -1499,7 +1559,7 @@ function ConnectExistingInboxModal({
                 disabled={isWorking || isConnecting || option.disabled}
                 className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
               >
-                {isWorking || isConnecting ? 'Working...' : option.name}
+                {isConnectingExistingInbox || isConnecting ? 'Connecting...' : option.name}
               </button>
             ))}
           </div>
