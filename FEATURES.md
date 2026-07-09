@@ -5,6 +5,7 @@
 - Wallet connection is now an inbox-connection flow, not the default app identity: Settings → Connect Existing Inbox asks the wallet that owns an existing XMTP inbox to approve moving the local app key into that inbox via XMTP account reassignment.
 - Settings → Connect Existing Inbox intentionally offers only WalletConnect and Browser Wallet connectors, so the approval comes from a normal external wallet such as Rainbow or MetaMask; it does not surface Thirdweb or embedded-wallet choices.
 - If the target wallet inbox is already at XMTP's 10-installation limit, the connect modal extracts the blocked InboxID, shows recovery progress, and offers a wallet-approved "Revoke Oldest Installation" action that frees one slot before retrying the connection.
+- Smart-wallet inbox recovery/reassignment retries with XMTP's originally registered SCW chain ID when XMTP reports a chain mismatch, including legacy Convos/Base smart-wallet inboxes registered with chain ID `0`.
 - After a wallet-approved reassignment, Converge keeps signing with the local app key, switches storage to the existing inbox, removes the generated inbox from the visible registry, and syncs history from the wallet-owned inbox.
 - The old generated inbox is abandoned by design when the local app key is moved; message history remains with the destination XMTP inbox.
 - Registry hydration runs on load so previously used inboxes are listed with last-opened timestamps and buttons to reopen them without re-onboarding.

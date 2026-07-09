@@ -6,6 +6,11 @@ export interface RevocableInstallation {
   clientTimestampNs?: bigint;
 }
 
+export interface WrongChainIdDetails {
+  initiallyAddedWith: number;
+  signingFrom: number;
+}
+
 type InstallationLike = Partial<Installation> & {
   installationId?: Uint8Array;
   idBytes?: Uint8Array;
@@ -15,6 +20,18 @@ export function extractInstallationLimitInboxId(message: string | null | undefin
   if (!message) return null;
   const match = message.match(/\bInboxID\s+([a-f0-9]{64})\b/i);
   return match?.[1]?.toLowerCase() ?? null;
+}
+
+export function extractWrongChainIdDetails(message: string | null | undefined): WrongChainIdDetails | null {
+  if (!message) return null;
+  const match = message.match(/Wrong chain id\.\s*Initially added with\s+(\d+)\s+but now signing from\s+(\d+)/i);
+  if (!match?.[1] || !match[2]) return null;
+  const initiallyAddedWith = Number(match[1]);
+  const signingFrom = Number(match[2]);
+  if (!Number.isFinite(initiallyAddedWith) || !Number.isFinite(signingFrom)) {
+    return null;
+  }
+  return { initiallyAddedWith, signingFrom };
 }
 
 function hexToBytes(hex: string | undefined): Uint8Array | null {

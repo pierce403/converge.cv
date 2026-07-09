@@ -493,11 +493,17 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.3 + static inbox installation recovery)
+**Last Updated**: 2026-07-09 (app version 0.3.4 + SCW chain-id retry)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### SCW Chain-ID Retry For Existing Inbox Recovery
+- Bumped Converge from `0.3.3` to `0.3.4` after fixing XMTP smart-wallet recovery errors like `Wrong chain id. Initially added with 0 but now signing from 8453`.
+- Added parsing for XMTP wrong-chain-id errors and retry recovery/reassignment with the SCW chain ID XMTP says was originally registered.
+- This matters for legacy Convos/Base smart-wallet inboxes where the address has Base bytecode but XMTP identity updates expect chain ID `0`.
+- The retry is used for both Settings → Connect Existing Inbox → "Revoke Oldest Installation" and the subsequent "Use Connected Wallet" reassignment attempt.
 
 ### Static Existing Inbox Installation Recovery
 - Bumped Converge from `0.3.2` to `0.3.3` after hardening the Settings → Connect Existing Inbox 10/10 recovery flow.

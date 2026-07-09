@@ -65,7 +65,7 @@ import {
   type ConvosGroupProfile,
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
-import { selectOldestRevocableInstallations, shortInboxId } from './installation-recovery';
+import { extractWrongChainIdDetails, selectOldestRevocableInstallations, shortInboxId } from './installation-recovery';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
 import {
   ConvosJoinRequestCodec,
@@ -1137,7 +1137,7 @@ export class XmtpClient {
     revokeCount = 1,
     options: RevokeOldestInstallationsOptions = {}
   ): Promise<{ revoked: string[]; inboxId?: string; installationCount: number }> {
-    const signer = await this.createSigner(identity);
+    let signer = await this.createSigner(identity);
     let inboxId = options.inboxId;
     let inboxState = options.inboxState;
 
@@ -1186,7 +1186,28 @@ export class XmtpClient {
     emitStatus(
       `Requesting wallet signature to revoke ${bytes.length} oldest installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`
     );
-    await Client.revokeInstallations(signer, inboxId, bytes, 'production');
+    try {
+      await Client.revokeInstallations(signer, inboxId, bytes, 'production');
+    } catch (error) {
+      const mismatch = extractWrongChainIdDetails(error instanceof Error ? error.message : String(error));
+      if (
+        mismatch &&
+        identity.walletType === 'SCW' &&
+        identity.chainId !== mismatch.initiallyAddedWith
+      ) {
+        emitStatus(
+          `XMTP expects this smart wallet on chain ${mismatch.initiallyAddedWith}; retrying revoke with that chain id.`
+        );
+        signer = await this.createSigner({
+          ...identity,
+          chainId: mismatch.initiallyAddedWith,
+          walletType: 'SCW',
+        });
+        await Client.revokeInstallations(signer, inboxId, bytes, 'production');
+      } else {
+        throw error;
+      }
+    }
 
     logNetworkEvent({
       direction: 'outbound',

@@ -18,7 +18,7 @@ import { FarcasterSettings } from './FarcasterSettings';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 import { getInboxConnectionWalletOptions } from '@/lib/wagmi/inbox-connection-options';
-import { extractInstallationLimitInboxId, shortInboxId } from '@/lib/xmtp/installation-recovery';
+import { extractInstallationLimitInboxId, extractWrongChainIdDetails, shortInboxId } from '@/lib/xmtp/installation-recovery';
 import buildInfo from '@/build-info.json';
 
 const BASE_CHAIN_ID = 8453;
@@ -390,20 +390,42 @@ export function SettingsPage() {
       throw new Error('That wallet address is already this app key.');
     }
 
-    const result = await connectLocalIdentityToWalletInbox(
-      target.address,
-      target.chainId,
-      async (message: string) => {
-        if (!walletSignMessage) {
-          throw new Error('Wallet signing is not available. Connect your wallet and try again.');
+    const connectWithTarget = async (targetChainId = target.chainId) =>
+      await connectLocalIdentityToWalletInbox(
+        target.address,
+        targetChainId,
+        async (message: string) => {
+          if (!walletSignMessage) {
+            throw new Error('Wallet signing is not available. Connect your wallet and try again.');
+          }
+          return await walletSignMessage(message, target.address);
+        },
+        {
+          walletType: target.walletType,
+          label: `Wallet ${target.address.slice(0, 6)}…${target.address.slice(-4)}`,
         }
-        return await walletSignMessage(message, target.address);
-      },
-      {
-        walletType: target.walletType,
-        label: `Wallet ${target.address.slice(0, 6)}…${target.address.slice(-4)}`,
+      );
+
+    let result: Awaited<ReturnType<typeof connectWithTarget>>;
+    try {
+      result = await connectWithTarget();
+    } catch (error) {
+      const mismatch = extractWrongChainIdDetails(error instanceof Error ? error.message : String(error));
+      if (
+        mismatch &&
+        target.walletType === 'SCW' &&
+        target.chainId !== mismatch.initiallyAddedWith
+      ) {
+        console.info('[Settings] Retrying existing inbox connection with XMTP-registered SCW chain id', {
+          address: target.address,
+          originallyDetectedChainId: target.chainId,
+          retryChainId: mismatch.initiallyAddedWith,
+        });
+        result = await connectWithTarget(mismatch.initiallyAddedWith);
+      } else {
+        throw error;
       }
-    );
+    }
 
     alert(
       `Connected this app key to inbox ${result.inboxId}.\n\nThe generated inbox is abandoned; future messages will sync from the existing wallet inbox.`

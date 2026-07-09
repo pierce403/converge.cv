@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractInstallationLimitInboxId,
+  extractWrongChainIdDetails,
   selectOldestRevocableInstallations,
   shortInboxId,
 } from './installation-recovery';
@@ -40,5 +41,16 @@ describe('installation recovery helpers', () => {
     expect(shortInboxId('8352dd2ff13766a6d7aa18ed8795c2771f10c1f57d292aeb09a7cdebb88db0f4')).toBe(
       '8352dd2f...8db0f4'
     );
+  });
+
+  it('extracts XMTP wrong-chain-id retry details', () => {
+    expect(
+      extractWrongChainIdDetails(
+        'Wrong chain id. Initially added with 0 but now signing from 8453'
+      )
+    ).toEqual({
+      initiallyAddedWith: 0,
+      signingFrom: 8453,
+    });
   });
 });
