@@ -465,11 +465,21 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-07-09 (Convos XMTP group/profile/typing/join-request interop)
+**Last Updated**: 2026-07-09 (app version 0.2.0 + Convos XMTP interop)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### App Version Bump
+- Bumped Converge from `0.1.0` to `0.2.0` after the Convos XMTP interop feature work.
+- Updated app version surfaces:
+  - `package.json`,
+  - `src/build-info.json`,
+  - Settings About version display.
+- `scripts/generate-build-info.mjs` now reads the version from `package.json` instead of carrying a duplicate hardcoded app version.
+- Settings About now reads the generated build-info version instead of carrying a duplicate hardcoded app version.
+- Settings About protocol copy now reports `@xmtp/browser-sdk` v6.1.2 instead of stale v5.0.1 copy.
 
 ### Convos XMTP Interop Refresh
 - Inspected `/home/pierce/src/convos-ios` messaging, appData, profile, typing, and invite flows.

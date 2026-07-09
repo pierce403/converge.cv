@@ -1,5 +1,5 @@
 /**
- * XMTP client wrapper (v5.0.1)
+ * XMTP client wrapper (browser SDK v6.1.2)
  * 
  * Production-ready implementation using @xmtp/browser-sdk.
  * Following xmtp.chat reference implementation.

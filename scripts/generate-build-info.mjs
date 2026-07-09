@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import { execSync } from 'child_process';
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const packageJsonPath = join(__dirname, '..', 'package.json');
+const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+const appVersion = typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
 
 try {
   const gitHash = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
@@ -16,7 +19,7 @@ try {
     gitHash,
     gitBranch,
     buildTime,
-    version: '0.1.0',
+    version: appVersion,
   };
 
   const outputPath = join(__dirname, '..', 'src', 'build-info.json');
@@ -30,9 +33,8 @@ try {
     gitHash: 'unknown',
     gitBranch: 'unknown',
     buildTime: new Date().toISOString(),
-    version: '0.1.0',
+    version: appVersion,
   };
   const outputPath = join(__dirname, '..', 'src', 'build-info.json');
   writeFileSync(outputPath, JSON.stringify(fallbackInfo, null, 2));
 }
-

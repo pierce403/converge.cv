@@ -17,6 +17,7 @@ import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 import { FarcasterSettings } from './FarcasterSettings';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
+import buildInfo from '@/build-info.json';
 
 const BASE_CHAIN_ID = 8453;
 
@@ -1192,13 +1193,13 @@ export function SettingsPage() {
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <span className="text-primary-200">Version</span>
-                  <span>0.1.0 MVP</span>
+                  <span>{buildInfo.version}</span>
                 </div>
               </div>
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <span className="text-primary-200">Protocol</span>
-                  <span>XMTP protocol v3 (SDK v5.0.1)</span>
+                  <span>XMTP protocol v3 (SDK v6.1.2)</span>
                 </div>
               </div>
               <div className="p-4">
