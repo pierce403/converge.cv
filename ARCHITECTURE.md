@@ -24,6 +24,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 - The local app key is exportable through the existing keyfile path and remains the signer Converge uses after setup.
 - Settings → Connect Existing Inbox uses only WalletConnect and injected Browser Wallet connectors for the wallet approval, so the user signs from a normal external wallet such as Rainbow or MetaMask. Thirdweb and embedded-wallet providers remain available elsewhere but are not part of this reassignment flow.
 - The connection flow probes the wallet for an existing XMTP inbox, asks the wallet to sign XMTP's account reassignment approval, then uses `unsafe_addAccount(..., true)` through a temporary manager client to move the local app key into that inbox.
+- If the target wallet inbox is full at 10/10 XMTP installations, Converge can create a temporary non-registering manager client for that wallet and revoke the oldest target installation after explicit user confirmation, freeing one slot for the local app key reassignment.
 - After reassignment, Converge switches storage to the target inbox, reconnects XMTP with the local app key, and history sync runs from the existing inbox. The generated inbox is removed from the visible registry and treated as abandoned.
 
 ### Privacy And Safety Notes
@@ -36,6 +37,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 - The browser SDK exposes the required API as `unsafe_addAccount` because account reassignment can strand the previous inbox. Converge uses it deliberately only after the user chooses the connect-existing-inbox flow.
 - If the target inbox is at XMTP's installation limit, Converge blocks the move until an old installation is revoked.
+- The installation-limit recovery revokes only the oldest target-wallet installation by default. Creation time is not the same as activity, so this can disable an active older device.
 - The old generated inbox is removed from Converge's visible registry after reassignment, but this pass does not aggressively delete every old namespace/OPFS artifact for that abandoned inbox.
 
 ## Convos XMTP Interop

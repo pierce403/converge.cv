@@ -22,6 +22,16 @@ import buildInfo from '@/build-info.json';
 
 const BASE_CHAIN_ID = 8453;
 type WalletSignMessage = (message: string, accountAddress?: string) => Promise<string>;
+interface InstallationRecoveryResult {
+  revoked: string[];
+  inboxId?: string;
+  installationCount?: number;
+}
+
+function isInstallationLimitError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return /10\/10|installation limit|already registered 10/i.test(message);
+}
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -392,6 +402,32 @@ export function SettingsPage() {
 
     alert(
       `Connected this app key to inbox ${result.inboxId}.\n\nThe generated inbox is abandoned; future messages will sync from the existing wallet inbox.`
+    );
+  };
+
+  const revokeOldInstallationsForExistingWalletInbox = async (
+    accounts: readonly string[] | undefined,
+    walletSignMessage = signMessage
+  ): Promise<InstallationRecoveryResult> => {
+    const addressList = Array.from(new Set((accounts ?? []).filter(Boolean)));
+    const target = await resolveWalletInboxTarget(addressList);
+
+    if (!target) {
+      throw new Error('No wallet address was returned. Try connecting your wallet again.');
+    }
+    if (!walletSignMessage) {
+      throw new Error('Wallet signing is not available. Connect your wallet and try again.');
+    }
+
+    const xmtp = getXmtpClient();
+    return await xmtp.revokeOldestInstallationsForIdentity(
+      {
+        address: target.address,
+        chainId: target.chainId,
+        walletType: target.walletType,
+        signMessage: async (message: string) => await walletSignMessage(message, target.address),
+      },
+      1
     );
   };
 
@@ -1274,6 +1310,7 @@ export function SettingsPage() {
               onError={setAddIdentityError}
               onWorkingChange={setIsAddingIdentity}
               onConnect={connectExistingWalletInbox}
+              onRecoverInstallations={revokeOldInstallationsForExistingWalletInbox}
             />
           </WalletConnectionProvider>
         </WagmiProvider>
@@ -1289,6 +1326,10 @@ interface ConnectExistingInboxModalProps {
   onError: (message: string | null) => void;
   onWorkingChange: (value: boolean) => void;
   onConnect: (accounts: readonly string[] | undefined, signMessage?: WalletSignMessage) => Promise<void>;
+  onRecoverInstallations: (
+    accounts: readonly string[] | undefined,
+    signMessage?: WalletSignMessage
+  ) => Promise<InstallationRecoveryResult>;
 }
 
 function ConnectExistingInboxModal({
@@ -1298,6 +1339,7 @@ function ConnectExistingInboxModal({
   onError,
   onWorkingChange,
   onConnect,
+  onRecoverInstallations,
 }: ConnectExistingInboxModalProps) {
   const {
     connectWallet,
@@ -1307,21 +1349,63 @@ function ConnectExistingInboxModal({
     address,
     signMessage,
   } = useWalletConnection();
+  const [lastAccounts, setLastAccounts] = useState<readonly string[] | undefined>();
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const inboxWalletOptions = getInboxConnectionWalletOptions(walletOptions);
+  const showInstallationRecovery = isInstallationLimitError(error);
 
   const runConnect = async (getAccounts: () => Promise<readonly string[] | undefined>) => {
     if (isWorking) return;
     onWorkingChange(true);
     onError(null);
+    setRecoveryNotice(null);
     try {
       if (!signMessage) {
         throw new Error('Wallet signing is not available. Connect your wallet and try again.');
       }
       const accounts = await getAccounts();
+      if (accounts?.length) {
+        setLastAccounts(accounts);
+      }
       await onConnect(accounts, signMessage);
       onClose();
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to connect wallet');
+    } finally {
+      onWorkingChange(false);
+    }
+  };
+
+  const runRecoverInstallations = async () => {
+    if (isWorking) return;
+    const accounts = lastAccounts?.length ? lastAccounts : address ? [address] : undefined;
+    if (!accounts?.length) {
+      onError('Connect the wallet that owns the full inbox before revoking installations.');
+      return;
+    }
+    if (!signMessage) {
+      onError('Wallet signing is not available. Connect your wallet and try again.');
+      return;
+    }
+    if (
+      !window.confirm(
+        'Revoke the oldest XMTP installation for this wallet inbox to free one slot for Converge? That device may stop receiving messages.'
+      )
+    ) {
+      return;
+    }
+
+    onWorkingChange(true);
+    onError(null);
+    setRecoveryNotice(null);
+    try {
+      const result = await onRecoverInstallations(accounts, signMessage);
+      const count = result.revoked.length || 1;
+      setRecoveryNotice(
+        `Revoked ${count} old installation${count === 1 ? '' : 's'}. Try "Use Connected Wallet" again.`
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to revoke old installations');
     } finally {
       onWorkingChange(false);
     }
@@ -1360,6 +1444,28 @@ function ConnectExistingInboxModal({
           {error && (
             <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
               {error}
+            </div>
+          )}
+
+          {recoveryNotice && (
+            <div className="text-xs text-emerald-200 bg-emerald-500/10 border border-emerald-500/30 rounded p-2">
+              {recoveryNotice}
+            </div>
+          )}
+
+          {showInstallationRecovery && (
+            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100 space-y-2">
+              <div>
+                This inbox is full. Revoke the oldest wallet installation to free one XMTP slot, then retry the
+                connection.
+              </div>
+              <button
+                onClick={runRecoverInstallations}
+                disabled={isWorking || !signMessage}
+                className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
+              >
+                {isWorking ? 'Revoking...' : 'Revoke Oldest Installation'}
+              </button>
             </div>
           )}
 

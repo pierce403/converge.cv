@@ -1120,6 +1120,98 @@ export class XmtpClient {
     }
   }
 
+  /**
+   * Revoke the oldest installation(s) for an arbitrary signer-owned inbox without
+   * registering a new installation. Used when connecting the local app key to a
+   * wallet inbox that is already at XMTP's 10-installation limit.
+   */
+  async revokeOldestInstallationsForIdentity(
+    identity: XmtpIdentity,
+    revokeCount = 1
+  ): Promise<{ revoked: string[]; inboxId?: string; installationCount: number }> {
+    const signer = await this.createSigner(identity);
+    const randomSuffix = Math.random().toString(36).substring(2, 10);
+    const dbPath = `xmtp-revoke-target-temp-${randomSuffix}.db3`;
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'installations:target_revoke_oldest',
+      details: `Creating temp manager for ${identity.address}`,
+    });
+
+    const manager = await Client.create(signer, {
+      env: 'production',
+      dbPath,
+      codecs: XMTP_CONTENT_CODECS,
+      loggingLevel: getXmtpSdkLogLevel(),
+      structuredLogging: false,
+      performanceLogging: false,
+      disableAutoRegister: true,
+    });
+
+    try {
+      const state = await manager.preferences.fetchInboxState();
+      const rawInstallations = (state.installations || []) as unknown as Array<{
+        id?: string;
+        clientTimestampNs?: bigint;
+        bytes?: Uint8Array;
+        installationId?: Uint8Array;
+        idBytes?: Uint8Array;
+      }>;
+      const installations = [...rawInstallations];
+      const installationCount = installations.length;
+
+      installations.sort((a, b) => {
+        const aTime = a.clientTimestampNs ?? 0n;
+        const bTime = b.clientTimestampNs ?? 0n;
+        return aTime < bTime ? -1 : aTime > bTime ? 1 : 0;
+      });
+
+      const toRevoke = installations.slice(0, Math.max(1, revokeCount));
+      const revokedIds: string[] = [];
+      const bytes: Uint8Array[] = [];
+
+      for (const installation of toRevoke) {
+        const rawBytes =
+          installation.bytes ||
+          installation.installationId ||
+          installation.idBytes ||
+          (typeof installation.id === 'string' ? this.hexToBytes(installation.id) : null);
+
+        if (rawBytes) {
+          bytes.push(rawBytes);
+          if (typeof installation.id === 'string') {
+            revokedIds.push(installation.id);
+          }
+        }
+      }
+
+      if (!bytes.length) {
+        throw new Error('No revocable installation bytes were available for that inbox.');
+      }
+
+      await manager.revokeInstallations(bytes);
+
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'installations:target_revoke_oldest:success',
+        details: `Revoked ${revokedIds.length || bytes.length} installation(s) for inbox ${state.inboxId ?? manager.inboxId}`,
+      });
+
+      return {
+        revoked: revokedIds,
+        inboxId: state.inboxId ?? manager.inboxId,
+        installationCount,
+      };
+    } finally {
+      try {
+        await manager.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   private static coerceContentTypeId(value: unknown): ContentTypeId | undefined {
     if (!value || typeof value !== 'object') return undefined;
     const ct = value as Record<string, unknown>;

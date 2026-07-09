@@ -475,11 +475,17 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.1 + inbox connector narrowing)
+**Last Updated**: 2026-07-09 (app version 0.3.2 + inbox installation recovery)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Existing Inbox Installation Recovery
+- Bumped Converge from `0.3.1` to `0.3.2` after adding a recovery action for wallet inboxes that hit XMTP's 10/10 installation limit.
+- Settings → Connect Existing Inbox now detects installation-limit errors and offers "Revoke Oldest Installation" directly in the modal.
+- The recovery action signs with the target WalletConnect/Browser Wallet account, creates a temporary XMTP manager client with `disableAutoRegister: true`, revokes only the oldest target-wallet installation, then asks the user to retry "Use Connected Wallet".
+- This intentionally frees one slot rather than deleting most installations. Warn users that the oldest installation may still be an active device because creation time is not activity time.
 
 ### Existing Inbox Connector Narrowing
 - Bumped Converge from `0.3.0` to `0.3.1` after narrowing the Settings → Connect Existing Inbox wallet choices.
