@@ -13,8 +13,14 @@ import { KeyExplorerModal } from './KeyExplorerModal';
 import { IgnoredConversationsModal } from './IgnoredConversationsModal';
 import { DatabaseExplorerPanel } from './DatabaseExplorerPanel';
 import buildInfo from '../../build-info.json'; // Import build info
-import { registerServiceWorkerForPush, enablePushForCurrentUser, disablePush, VAPID_PARTY_API_KEY, VAPID_PUBLIC_KEY } from '@/lib/push';
-import { VAPID_PARTY_API_BASE } from '@/lib/push/config';
+import {
+  registerServiceWorkerForPush,
+  enablePushForCurrentUser,
+  disablePush,
+  VAPID_PARTY_API_BASE,
+  VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
+  VAPID_PUBLIC_KEY,
+} from '@/lib/push';
 import { logNetworkEvent } from '@/lib/stores/debug-store';
 import {
   extractConvosInviteCode,
@@ -87,21 +93,15 @@ export function DebugPage() {
         setSwScope('');
         setSubscriptionEndpoint('');
       }
-      // Check vapid.party API health
-      if (VAPID_PARTY_API_KEY) {
-        try {
-          const res = await fetch(`${VAPID_PARTY_API_BASE}/vapid/public-key`, { 
-            method: 'GET',
-            headers: { 'X-API-Key': VAPID_PARTY_API_KEY }
-          });
-          setBackendReachable(`${res.status} ${res.ok ? 'OK' : 'ERR'}`);
-          logNetworkEvent({ direction: 'status', event: 'push:health', details: `GET vapid.party → ${res.status}` });
-        } catch (e) {
-          setBackendReachable('unreachable');
-          logNetworkEvent({ direction: 'status', event: 'push:health', details: 'vapid.party unreachable' });
-        }
-      } else {
-        setBackendReachable('API key not configured');
+      // Check vapid.party public health without using any client-side secret.
+      try {
+        const healthUrl = `${VAPID_PARTY_API_BASE}/health`;
+        const res = await fetch(healthUrl, { method: 'GET' });
+        setBackendReachable(`${res.status} ${res.ok ? 'OK' : 'ERR'}`);
+        logNetworkEvent({ direction: 'status', event: 'push:health', details: `GET vapid.party health -> ${res.status}` });
+      } catch (e) {
+        setBackendReachable('unreachable');
+        logNetworkEvent({ direction: 'status', event: 'push:health', details: 'vapid.party health unreachable' });
       }
     } catch (e) {
       // swallow – this is debug UI
@@ -388,11 +388,13 @@ export function DebugPage() {
           <div className="px-4 py-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 text-sm">
             <div className="rounded-lg bg-primary-900/40 p-3">
               <div className="text-primary-300">VAPID Public Key</div>
-              <div className="mt-1 text-primary-100 break-all text-xs">{VAPID_PUBLIC_KEY ? `${VAPID_PUBLIC_KEY.slice(0, 20)}...` : 'not set'}</div>
+              <div className="mt-1 text-primary-100 break-all text-xs">
+                {VAPID_PUBLIC_KEY ? `${VAPID_PUBLIC_KEY.slice(0, 20)}...` : `fetch ${VAPID_PARTY_XMTP_PUBLIC_KEY_PATH}`}
+              </div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">vapid.party API</div>
-              <div className="mt-1 text-primary-100 break-all">{VAPID_PARTY_API_KEY ? 'configured ✓' : 'not set'}</div>
+              <div className="text-primary-300">vapid.party API Base</div>
+              <div className="mt-1 text-primary-100 break-all text-xs">{VAPID_PARTY_API_BASE}</div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
               <div className="text-primary-300">Notification Permission</div>
@@ -429,9 +431,13 @@ export function DebugPage() {
               <button
                 type="button"
                 onClick={async () => {
-                  const userId = identity?.inboxId || identity?.address || 'unknown';
-                  const result = await enablePushForCurrentUser({ userId, channelId: 'default' });
-                  logNetworkEvent({ direction: 'outbound', event: 'push:enable', details: result.success ? 'subscribed' : result.error || 'failed', payload: result.endpoint ? JSON.stringify({ endpoint: result.endpoint }) : undefined });
+                  const result = await enablePushForCurrentUser();
+                  logNetworkEvent({
+                    direction: 'outbound',
+                    event: 'push:enable',
+                    details: result.success ? `registered ${result.topicCount ?? 0} topic(s)` : result.error || 'failed',
+                    payload: result.endpoint ? JSON.stringify({ endpoint: result.endpoint }) : undefined,
+                  });
                   await refreshPushStatus();
                 }}
                 className="btn-primary"
@@ -459,152 +465,6 @@ export function DebugPage() {
                 className="btn-secondary"
               >
                 Check Subscription
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  console.info('[Push] Test Push: sending a notification via vapid.party to this browser subscription.');
-                  if (!VAPID_PARTY_API_KEY) {
-                    console.warn('[Push] Test Push: missing VAPID_PARTY_API_KEY');
-                    logNetworkEvent({ direction: 'status', event: 'push:test', details: 'API key not configured' });
-                    return;
-                  }
-
-                  if (!identity) {
-                    console.warn('[Push] Test Push: no identity loaded; cannot determine userId. Sign in and enable push first.');
-                    logNetworkEvent({ direction: 'status', event: 'push:test', details: 'No identity loaded (missing userId)' });
-                    return;
-                  }
-
-                  try {
-                    const userIdCandidates = Array.from(
-                      new Set([identity.inboxId, identity.address].filter((value): value is string => Boolean(value))),
-                    );
-                    const absoluteUrl = (() => {
-                      try {
-                        return new URL('/', window.location.origin).toString();
-                      } catch {
-                        return 'https://converge.cv/';
-                      }
-                    })();
-
-                    // Log local prereqs (SW + subscription) so we can debug “no-op” reports.
-                    try {
-                      const reg = await navigator.serviceWorker.getRegistration();
-                      if (!reg) {
-                        console.warn('[Push] Test Push: no service worker registration found. Click “Register SW” or “Enable Push” first.');
-                        logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: 'No service worker registration' });
-                      } else {
-                        const sub = await reg.pushManager.getSubscription();
-                        const endpoint = sub?.endpoint ? `${sub.endpoint.slice(0, 48)}…` : '(none)';
-                        console.info('[Push] Test Push: SW ready', { scope: reg.scope, subscription: endpoint });
-                        logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: `SW scope=${reg.scope} subscription=${endpoint}` });
-                      }
-                    } catch (e) {
-                      console.warn('[Push] Test Push: failed to inspect SW/subscription', e);
-                      logNetworkEvent({ direction: 'status', event: 'push:test:prereq', details: 'Failed to inspect SW/subscription' });
-                    }
-
-                    let attempt = 0;
-                    for (const userId of userIdCandidates) {
-                      attempt += 1;
-                      const body = {
-                        payload: {
-                          title: 'Converge Test',
-                          body: 'This is a test notification from Debug console',
-                          // vapid.party validates this as a URL, so it must be absolute.
-                          url: absoluteUrl,
-                        },
-                        userId,
-                        channelId: 'default',
-                      };
-
-                      console.info('[Push] Test Push: POST /send', {
-                        base: VAPID_PARTY_API_BASE,
-                        userId,
-                        channelId: 'default',
-                        url: absoluteUrl,
-                        apiKey: `${VAPID_PARTY_API_KEY.slice(0, 6)}…`,
-                        attempt,
-                        attemptsTotal: userIdCandidates.length,
-                      });
-                      logNetworkEvent({
-                        direction: 'outbound',
-                        event: 'push:test:request',
-                        details: `POST vapid.party/send (attempt ${attempt}/${userIdCandidates.length})`,
-                        payload: JSON.stringify({ ...body, apiKey: '[redacted]' }),
-                      });
-
-                      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-                      const res = await fetch(`${VAPID_PARTY_API_BASE}/send`, {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                          'X-API-Key': VAPID_PARTY_API_KEY,
-                        },
-                        body: JSON.stringify(body),
-                      });
-                      const responseText = await res.text();
-                      const elapsedMs = Math.max(
-                        0,
-                        Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt),
-                      );
-
-                      if (!res.ok) {
-                        console.error('[Push] Test Push: non-OK response', { status: res.status, body: responseText, attempt });
-                      } else {
-                        console.info('[Push] Test Push: request accepted', { status: res.status, elapsedMs, attempt });
-                      }
-
-                      logNetworkEvent({
-                        direction: 'inbound',
-                        event: 'push:test:response',
-                        details: `POST vapid.party/send → ${res.status} (${elapsedMs}ms) (attempt ${attempt}/${userIdCandidates.length})`,
-                        payload: responseText,
-                      });
-
-                      // Best-effort parse for a friendlier log line and retry logic.
-                      let total = 0;
-                      try {
-                        const json = JSON.parse(responseText) as {
-                          success?: boolean;
-                          data?: { sent?: number; failed?: number; total?: number };
-                          error?: string;
-                          code?: string;
-                        };
-                        if (json?.success) {
-                          total = typeof json.data?.total === 'number' ? json.data.total : 0;
-                          console.info('[Push] Test Push: send result', { ...(json.data ?? {}), attempt, userId });
-                        } else if (json?.error) {
-                          console.warn('[Push] Test Push: send rejected', { code: json.code, error: json.error, attempt, userId });
-                        }
-                      } catch {
-                        // ignore
-                      }
-
-                      // If no subscriptions matched, try the next identifier (e.g., address vs inboxId).
-                      if (res.ok && total === 0 && attempt < userIdCandidates.length) {
-                        console.warn('[Push] Test Push: no subscriptions matched; retrying with alternate userId', { attempt, userId });
-                        continue;
-                      }
-
-                      break;
-                    }
-                  } catch (e) {
-                    console.error('[Push] Test Push: POST vapid.party/send failed', e);
-                    logNetworkEvent({
-                      direction: 'outbound',
-                      event: 'push:test:error',
-                      details: e instanceof Error ? e.message : 'POST vapid.party/send failed',
-                    });
-                  } finally {
-                    await refreshPushStatus();
-                  }
-                }}
-                className="btn-secondary"
-                disabled={!VAPID_PARTY_API_KEY || !identity}
-              >
-                Send Test Push
               </button>
             </div>
           </div>

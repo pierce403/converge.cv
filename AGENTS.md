@@ -6,13 +6,13 @@
 
 ## Project Overview
 
-**Converge.cv** - A Signal-like, local-first Progressive Web App for XMTP protocol v3 (currently running @xmtp/browser-sdk v5.0.1).
+**Converge.cv** - A Signal-like, local-first Progressive Web App for XMTP protocol v3 (currently running @xmtp/browser-sdk v6.1.2).
 
 - **Live URL**: https://converge.cv
 - **Tech Stack**: React 18 + TypeScript + Vite + Tailwind CSS
 - **State Management**: Zustand
 - **Storage**: Dexie (IndexedDB wrapper)
-- **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v5.0.1
+- **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v6.1.2
 - **PWA**: vite-plugin-pwa with Workbox
 - **Deployment**: GitHub Pages (auto-deploy on push to master)
 
@@ -198,6 +198,12 @@ pnpm typecheck        # TypeScript type checking
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
+- Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
+- Static PWA push registration is wired to the intended vapid.party XMTP relay contract without shipping any vapid.party API key:
+  - public config only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`;
+  - `Enable notifications` registers `/sw.js`, requests browser permission, creates/reuses a `PushSubscription`, gathers `inboxId`/`installationId`, gathers SDK-exposed conversation HMAC keys via `conversations.hmacKeys()`, and POSTs to `/xmtp/subscriptions`;
+  - service worker notification payloads stay generic and same-origin routed; plaintext XMTP message content is not sent through push.
+- Push delivery is not end-to-end verified yet because current public vapid.party docs/source still expose generic API-key endpoints; XMTP-aware public endpoints must ship before live delivery can be claimed.
   - **XMTP SDK v6.1.2 on protocol v3**: ✅ Fully working!
   - **Upgraded from v5.0.1 → v6.1.2** (January 25, 2026)
   - Following xmtp.chat reference implementation
@@ -213,7 +219,8 @@ pnpm typecheck        # TypeScript type checking
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
 - Group chat support (SDK supports it, UI not implemented)
 - Video + multi-file attachments (image attachments are now supported)
-- Re-enable PWA features (install prompt, update notifications, service worker)
+- Re-enable non-push PWA features (install prompt, update notifications/full app-shell service worker) when ready.
+- Push follow-up: implement/verify vapid.party XMTP public endpoints (`/xmtp/vapid-public-key`, `/xmtp/subscriptions`) and run a real push delivery test before claiming notifications are complete.
 - **Default Contacts/Bots**: `src/lib/default-contacts.ts` has placeholder addresses for suggested bots (Welcome Bot, Base Agent, ENS Resolver, etc.). Replace with actual XMTP-enabled addresses when available. Check:
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
@@ -456,10 +463,25 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-07-07 (Convos popup v2 invite claim parsing)
+**Last Updated**: 2026-07-09 (vapid.party XMTP-aware Web Push registration contract + static PWA client wiring)
 **Updated By**: AI Agent
 
 
+## Latest Changes (2026-07-09)
+
+### vapid.party XMTP-Aware Push Registration
+- Created root `ARCHITECTURE.md` as the canonical architecture/decision tracker and linked `docs/architecture.md` to it.
+- Documented the vapid.party XMTP Web Push contract:
+  - `GET /xmtp/vapid-public-key` for the public VAPID key,
+  - `POST /xmtp/subscriptions` for idempotent Web Push + XMTP topic/HMAC registration,
+  - `DELETE /xmtp/subscriptions` for best-effort unsubscribe,
+  - minimal generic push payload shape and privacy/non-goals.
+- Removed client-side vapid.party API-key usage from the Converge push path. Converge now only uses public `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`.
+- `Enable notifications` now registers/reuses `/sw.js`, requests notification permission, creates/reuses a browser `PushSubscription`, gathers the current XMTP `inboxId` and `installationId`, normalizes SDK-exposed `conversations.hmacKeys()` topic keys, and posts a versioned XMTP registration payload directly to vapid.party.
+- `public/sw.js` now treats push payloads as metadata only, shows generic "New encrypted message" fallback copy, preserves same-origin click URLs, and focuses/opens Converge for local XMTP sync/decryption.
+- The stale `src/lib/sw-bridge` push helper is now a compatibility shim over `@/lib/push` instead of carrying a placeholder VAPID key.
+- Debug push tooling no longer attempts client-side `/send`; real push tests must be initiated by the relay/backend side.
+- Limitation: no live end-to-end push delivery was claimed; current public vapid.party source still documents generic API-key endpoints, so the XMTP endpoints must be deployed before real delivery can pass.
 
 ## Latest Changes (2026-07-07)
 

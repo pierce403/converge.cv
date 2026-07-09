@@ -1,5 +1,7 @@
 # Converge Push Notifications – Plan and Implementation Notes
 
+> Current canonical push architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md). This file is historical planning context and may describe older generic relay endpoints.
+
 This document describes how we will implement push notifications for the Converge PWA, what services are involved, how messages flow end‑to‑end, and what is still unknown or out of scope. It also summarizes how the convos‑ios project handles push so that we can model our approach appropriately.
 
 ## Goals

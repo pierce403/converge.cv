@@ -2,6 +2,8 @@
  * Service Worker bridge for app ↔ SW communication
  */
 
+import { disablePush, enablePushForCurrentUser } from '@/lib/push';
+
 export interface SWMessage {
   type: string;
   payload?: unknown;
@@ -76,32 +78,20 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 /**
- * Subscribe to push notifications
+ * Subscribe to push notifications.
+ *
+ * @deprecated Use `enablePushForCurrentUser` from `@/lib/push` for new code.
+ * This compatibility shim delegates to the canonical vapid.party/XMTP flow.
  */
 export async function subscribeToPush(): Promise<PushSubscription | null> {
   try {
-    const permission = await requestNotificationPermission();
-    if (!permission) {
+    const result = await enablePushForCurrentUser();
+    if (!result.success) {
       return null;
     }
 
-    const registration = await navigator.serviceWorker.ready;
-
-    // Check for existing subscription
-    let subscription = await registration.pushManager.getSubscription();
-
-    if (!subscription) {
-      // Create new subscription
-      // In production, you'd use your VAPID public key here
-      const vapidPublicKey = 'REPLACE_WITH_YOUR_VAPID_PUBLIC_KEY';
-
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-      });
-    }
-
-    return subscription;
+    const registration = await navigator.serviceWorker.getRegistration();
+    return (await registration?.pushManager.getSubscription()) ?? null;
   } catch (error) {
     console.error('Failed to subscribe to push:', error);
     return null;
@@ -109,23 +99,12 @@ export async function subscribeToPush(): Promise<PushSubscription | null> {
 }
 
 /**
- * Unsubscribe from push notifications
+ * Unsubscribe from push notifications.
+ *
+ * @deprecated Use `disablePush` from `@/lib/push` for new code.
  */
 export async function unsubscribeFromPush(): Promise<boolean> {
-  try {
-    const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription();
-
-    if (subscription) {
-      await subscription.unsubscribe();
-      return true;
-    }
-
-    return false;
-  } catch (error) {
-    console.error('Failed to unsubscribe from push:', error);
-    return false;
-  }
+  return disablePush();
 }
 
 /**
@@ -147,19 +126,5 @@ export function getNotificationPermission(): NotificationPermission {
     return Notification.permission;
   }
   return 'denied';
-}
-
-// Helper to convert VAPID key
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
 }
 

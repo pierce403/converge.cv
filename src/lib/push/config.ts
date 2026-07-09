@@ -1,17 +1,18 @@
 /**
- * vapid.party Push Configuration
- * 
- * Push notifications are configured via vapid.party
+ * Public vapid.party Push Configuration
+ *
+ * Converge is a static PWA, so only public VITE_* config belongs here.
+ * Do not add vapid.party API keys or other server-side secrets to this file.
  */
 
-// vapid.party API key
-export const VAPID_PARTY_API_KEY = import.meta.env?.VITE_VAPID_PARTY_API_KEY as string | undefined
-  || 'vp_2e0db7d4671fae9d2901efa5ce8fec49619040d2339181ab';
+const rawApiBase = import.meta.env?.VITE_VAPID_PARTY_API_BASE as string | undefined;
 
-// VAPID public key from vapid.party
-export const VAPID_PUBLIC_KEY = import.meta.env?.VITE_VAPID_PUBLIC_KEY as string | undefined
-  || 'BKxwakdVoLv-wLAnJDQqazDTn-09EWYfe-k9ybOEZTIFCGd4cQFgyRcwkbLE3GKTWkS_pWnmVV5m7Tci1m3Jeik';
+// vapid.party API base URL. Defaults to the hosted public API root.
+export const VAPID_PARTY_API_BASE = (rawApiBase?.trim() || 'https://vapid.party/api').replace(/\/+$/, '');
 
-// vapid.party API base URL
-export const VAPID_PARTY_API_BASE = 'https://vapid.party/api';
+// Optional cached/fallback VAPID public key. If absent, Converge asks vapid.party's public XMTP key endpoint.
+export const VAPID_PUBLIC_KEY = (import.meta.env?.VITE_VAPID_PUBLIC_KEY as string | undefined)?.trim() || undefined;
 
+// Proposed XMTP-aware public contract. See ARCHITECTURE.md.
+export const VAPID_PARTY_XMTP_PUBLIC_KEY_PATH = '/xmtp/vapid-public-key';
+export const VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH = '/xmtp/subscriptions';

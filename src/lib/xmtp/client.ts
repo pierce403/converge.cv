@@ -5335,6 +5335,34 @@ export class XmtpClient {
   }
 
   /**
+   * Get XMTP conversation HMAC keys for Web Push relay registration.
+   *
+   * In @xmtp/browser-sdk@6.1.2 this is exposed as `client.conversations.hmacKeys()`.
+   * A separate documented welcome-topic helper is not exposed here, so callers should
+   * treat this as the locally verifiable conversation topic set only.
+   */
+  async getPushHmacKeys(): Promise<unknown> {
+    if (!this.client) {
+      return new Map<string, HmacKey[]>();
+    }
+
+    const conversations = this.client.conversations as unknown as {
+      hmacKeys?: () => Promise<Map<string, HmacKey[]>>;
+      getHmacKeys?: () => Promise<Map<string, HmacKey[]>>;
+    };
+
+    if (typeof conversations.hmacKeys === 'function') {
+      return await conversations.hmacKeys();
+    }
+
+    if (typeof conversations.getHmacKeys === 'function') {
+      return await conversations.getHmacKeys();
+    }
+
+    return new Map<string, HmacKey[]>();
+  }
+
+  /**
    * Get the inbox state including all installations.
    * - If connected, refresh from network via Preferences API.
    * - If not connected, use inbox resolver functions to fetch state without a client.

@@ -2,14 +2,26 @@
  * Push notification module using vapid.party
  */
 
-export { VAPID_PARTY_API_KEY, VAPID_PUBLIC_KEY } from './config';
+export {
+  VAPID_PARTY_API_BASE,
+  VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
+  VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH,
+  VAPID_PUBLIC_KEY,
+} from './config';
 
 export {
+  buildVapidPartyXmtpRegistrationPayload,
   enablePushForCurrentUser,
   isPushEnabled,
   disablePush,
   getPushPermissionStatus,
+  normalizeXmtpHmacKeys,
+  serializePushSubscription,
   type PushSubscriptionResult,
+  type SerializedPushSubscription,
+  type VapidPartyXmtpRegistrationPayload,
+  type XmtpPushIdentity,
+  type XmtpPushTopic,
 } from './subscribe';
 
 /**

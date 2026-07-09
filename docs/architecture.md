@@ -1,6 +1,8 @@
 # Architecture
 
-Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP protocol v3 (using `@xmtp/browser-sdk` v5.x).
+The canonical architecture and decision tracker now lives at [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP protocol v3 (using `@xmtp/browser-sdk` 6.1.2).
 
 ## High-level components
 
@@ -19,6 +21,6 @@ Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP prot
 ## Where to look
 
 - **Deep dive / current decisions**: [`../AGENTS.md`](../AGENTS.md)
+- **Canonical architecture tracker**: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
 - **Technical overview**: [`../PROJECT_SUMMARY.md`](../PROJECT_SUMMARY.md)
 - **User-facing behavior**: [`../FEATURES.md`](../FEATURES.md)
-

@@ -176,8 +176,7 @@ export function SettingsPage() {
     if (isPushLoading) return;
     setIsPushLoading(true);
     try {
-      const userId = identity?.inboxId || identity?.address || 'anon';
-      const result = await enablePushForCurrentUser({ userId, channelId: 'default' });
+      const result = await enablePushForCurrentUser();
 
       if (result.success) {
         setPushStatus('enabled');

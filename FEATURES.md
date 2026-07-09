@@ -58,7 +58,11 @@
 - Member diagnostics in group settings validate that all members have XMTP identity updates, highlighting invalid or unknown members that can break invite approvals.
 
 ## Web Push Notifications
-- Push enablement checks browser capabilities, requests Notification permission, registers the service worker, subscribes with PushManager using the VAPID public key, and sends the subscription to vapid.party with optional user/channel identifiers.
+- Push enablement checks browser capabilities, requests Notification permission, registers the service worker, subscribes with PushManager using the vapid.party VAPID public key, and sends a versioned XMTP registration payload directly to vapid.party.
+- The registration payload includes the Web Push subscription, current XMTP inbox ID, installation ID, and locally exposed conversation HMAC topic keys from `client.conversations.hmacKeys()`; it does not include plaintext message content or any client-side vapid.party API key.
+- Push config is public-only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`. Converge remains a static PWA with no backend.
+- The service worker shows generic visible notifications such as "New encrypted message", preserves same-origin click URLs, and focuses/opens the app so XMTP sync/decryption happens locally.
+- End-to-end push delivery still requires vapid.party to ship the XMTP-aware public endpoints documented in `ARCHITECTURE.md`; do not present live push delivery as complete until a real relay test passes.
 - Enabling push no longer forces a page reload (service worker takeover should not disconnect wallet-backed identities).
 - Helpers report errors for unsupported environments, allow permission status checks, and expose unsubscribe helpers to cleanly remove push subscriptions.
 
