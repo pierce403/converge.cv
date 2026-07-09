@@ -8,21 +8,32 @@ import {
   resolveContactName,
 } from '@/lib/farcaster/service';
 import { fetchFarcasterFollowingWithNeynar, fetchNeynarUsersBulk } from '@/lib/farcaster/neynar';
+import {
+  hasEthereumHexPrefix,
+  isEthereumAddress,
+  normalizeEthereumAddress,
+} from '@/lib/utils/ethereum';
 import { useFarcasterStore } from './farcaster-store';
 
-const normalizeInboxId = (inboxId: string): string => inboxId.toLowerCase();
+const normalizeInboxId = (inboxId: string): string =>
+  normalizeEthereumAddress(inboxId) ?? inboxId.trim().toLowerCase();
 
 const normalizeAddress = (address: string): string =>
-  address.startsWith('0x') ? address.toLowerCase() : address.toLowerCase();
+  normalizeEthereumAddress(address) ?? address.trim().toLowerCase();
 
 const isAddressLikeInboxId = (value: string): boolean => {
   const trimmed = value.trim();
-  return Boolean(trimmed && trimmed.toLowerCase().startsWith('0x'));
+  return Boolean(trimmed && (normalizeEthereumAddress(trimmed) || hasEthereumHexPrefix(trimmed)));
 };
 
-const isEthereumAddress = (value?: string | null): boolean => {
+const normalizeContactAddress = (value?: string | null): string | null => {
   const trimmed = typeof value === 'string' ? value.trim() : '';
-  return Boolean(trimmed && /^0x[a-f0-9]{40}$/i.test(trimmed));
+  if (!trimmed) return null;
+  const ethereumAddress = normalizeEthereumAddress(trimmed);
+  if (ethereumAddress) return ethereumAddress;
+  // Never retain malformed values that claim to be hexadecimal Ethereum addresses.
+  if (hasEthereumHexPrefix(trimmed)) return null;
+  return trimmed.toLowerCase();
 };
 
 const sanitizeDisplayLabel = (value?: string | null): string | undefined => {
@@ -41,6 +52,9 @@ const dedupe = (values: (string | undefined | null)[]): string[] => {
   }
   return Array.from(set);
 };
+
+const normalizeContactAddresses = (values: (string | undefined | null)[]): string[] =>
+  dedupe(values.map((value) => normalizeContactAddress(value)));
 
 export interface ContactIdentity {
   identifier: string;
@@ -73,6 +87,38 @@ export interface Contact {
   farcasterPowerBadge?: boolean;
   lastSyncedAt?: number;
 }
+
+const normalizeContactIdentity = (identity: ContactIdentity): ContactIdentity | null => {
+  const identifier = identity.identifier?.trim();
+  const kind = identity.kind?.trim();
+  if (!identifier || !kind) return null;
+
+  if (kind.toLowerCase() === 'ethereum') {
+    const ethereumAddress = normalizeEthereumAddress(identifier);
+    if (!ethereumAddress) return null;
+    return { ...identity, identifier: ethereumAddress, kind: 'Ethereum' };
+  }
+
+  return { ...identity, identifier, kind };
+};
+
+const normalizeContactIdentities = (identities: ContactIdentity[]): ContactIdentity[] => {
+  const normalized = new Map<string, ContactIdentity>();
+  for (const rawIdentity of identities) {
+    const identity = normalizeContactIdentity(rawIdentity);
+    if (!identity) continue;
+    const key = `${identity.kind.toLowerCase()}::${identity.identifier.toLowerCase()}`;
+    const existing = normalized.get(key);
+    normalized.set(key, existing ? { ...existing, ...identity } : identity);
+  }
+  return Array.from(normalized.values());
+};
+
+const ethereumIdentitiesFromAddresses = (addresses: string[]): ContactIdentity[] =>
+  addresses.flatMap((address) => {
+    const normalized = normalizeEthereumAddress(address);
+    return normalized ? [{ identifier: normalized, kind: 'Ethereum' }] : [];
+  }).map((identity, index) => ({ ...identity, isPrimary: index === 0 }));
 
 type ContactUpdates = Partial<Omit<Contact, 'inboxId' | 'identities' | 'addresses'>> & {
   identities?: ContactIdentity[];
@@ -124,7 +170,7 @@ export interface ContactProfileInput {
 }
 
 const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact => {
-  const addresses = dedupe([
+  const addresses = normalizeContactAddresses([
     ...(updates.addresses ?? []),
     ...(existing.addresses ?? []),
     existing.primaryAddress,
@@ -132,13 +178,13 @@ const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact =
   ]);
 
   const identities = (() => {
-    const merged = [...(existing.identities ?? [])];
-    const incoming = updates.identities ?? [];
+    const merged = normalizeContactIdentities(existing.identities ?? []);
+    const incoming = normalizeContactIdentities(updates.identities ?? []);
     for (const identity of incoming) {
       const idx = merged.findIndex(
         (entry) =>
           entry.identifier.toLowerCase() === identity.identifier.toLowerCase() &&
-          entry.kind === identity.kind
+          entry.kind.toLowerCase() === identity.kind.toLowerCase()
       );
       if (idx >= 0) {
         merged[idx] = { ...merged[idx], ...identity };
@@ -158,7 +204,10 @@ const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact =
     preferredAvatar: updates.preferredAvatar ?? existing.preferredAvatar,
     addresses,
     identities,
-    primaryAddress: updates.primaryAddress ?? existing.primaryAddress ?? addresses[0],
+    primaryAddress:
+      normalizeContactAddress(updates.primaryAddress) ??
+      normalizeContactAddress(existing.primaryAddress) ??
+      addresses[0],
     farcasterUsername: updates.farcasterUsername ?? existing.farcasterUsername,
     farcasterFid: updates.farcasterFid ?? existing.farcasterFid,
     farcasterScore: updates.farcasterScore ?? existing.farcasterScore,
@@ -201,13 +250,12 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
   }
 
   const normalizedInboxId = normalizeInboxId(effectiveInboxId);
-  const addresses = dedupe([
+  const addresses = normalizeContactAddresses([
     ...(contact.addresses ?? []),
     contact.primaryAddress,
     contact.address,
-  ])
-    .filter(Boolean)
-    .map((value) => normalizeAddress(value as string));
+  ]);
+  const normalizedIdentities = normalizeContactIdentities(contact.identities ?? []);
 
   const safePreferredName = sanitizeDisplayLabel(contact.preferredName);
   const safeName = sanitizeDisplayLabel(contact.name);
@@ -228,15 +276,11 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
     name: fallbackName,
     preferredName: safePreferredName,
     addresses,
-    primaryAddress: contact.primaryAddress ?? addresses[0],
+    primaryAddress: normalizeContactAddress(contact.primaryAddress) ?? addresses[0],
     identities:
-      contact.identities && contact.identities.length > 0
-        ? contact.identities
-        : addresses.map((address, index) => ({
-          identifier: address,
-          kind: 'Ethereum',
-          isPrimary: index === 0,
-        })),
+      normalizedIdentities.length > 0
+        ? normalizedIdentities
+        : ethereumIdentitiesFromAddresses(addresses),
     farcasterUsername: contact.farcasterUsername,
     farcasterFid: contact.farcasterFid,
     farcasterScore: contact.farcasterScore,
@@ -379,8 +423,14 @@ export const useContactStore = create<ContactState>()(
         set({ isLoading: true });
         try {
           const storage = await getStorage();
-          const loadedContacts = (await storage.listContacts()).map((contact) =>
-            normaliseContactInput(contact)
+          const storedContacts = await storage.listContacts();
+          const loadedContacts = storedContacts.map((contact) => normaliseContactInput(contact));
+          await Promise.all(
+            loadedContacts.map(async (contact, index) => {
+              if (JSON.stringify(contact) !== JSON.stringify(storedContacts[index])) {
+                await storage.putContact(contact);
+              }
+            })
           );
           set({ contacts: loadedContacts });
         } catch (error) {
@@ -411,11 +461,11 @@ export const useContactStore = create<ContactState>()(
         const storage = await getStorage();
         let normalizedInboxId = normalizeInboxId(profile.inboxId);
 
-        const computedAddresses = dedupe([
+        const computedAddresses = normalizeContactAddresses([
           ...(profile.addresses ?? []),
           profile.primaryAddress,
           profile.metadata?.primaryAddress,
-        ]).map(normalizeAddress);
+        ]);
         const addressSet = new Set(computedAddresses);
 
         const existing =
@@ -426,12 +476,10 @@ export const useContactStore = create<ContactState>()(
             if (normalizeInboxId(contact.inboxId) === normalizedInboxId) {
               return true;
             }
-            const contactAddresses = dedupe([
+            const contactAddresses = normalizeContactAddresses([
               contact.primaryAddress,
               ...(contact.addresses ?? []),
-            ])
-              .filter(Boolean)
-              .map((address) => normalizeAddress(address!));
+            ]);
             return contactAddresses.some((address) => addressSet.has(address));
           });
 
@@ -464,11 +512,7 @@ export const useContactStore = create<ContactState>()(
                 identities:
                   profile.identities && profile.identities.length > 0
                     ? profile.identities
-                    : computedAddresses.map((address, index) => ({
-                      identifier: address,
-                      kind: 'Ethereum',
-                      isPrimary: index === 0,
-                    })),
+                    : ethereumIdentitiesFromAddresses(computedAddresses),
                 lastSyncedAt: Date.now(),
               } as Contact);
             }
@@ -491,24 +535,17 @@ export const useContactStore = create<ContactState>()(
               identities:
                 profile.identities && profile.identities.length > 0
                   ? profile.identities
-                  : computedAddresses.map((address, index) => ({
-                    identifier: address,
-                    kind: 'Ethereum',
-                    isPrimary: index === 0,
-                  })),
+                  : ethereumIdentitiesFromAddresses(computedAddresses),
               lastSyncedAt: Date.now(),
             } as Contact);
           }
         }
 
+        const normalizedProfileIdentities = normalizeContactIdentities(profile.identities ?? []);
         const identities: ContactIdentity[] =
-          profile.identities && profile.identities.length > 0
-            ? profile.identities
-            : computedAddresses.map((address, index) => ({
-              identifier: address,
-              kind: 'Ethereum',
-              isPrimary: index === 0,
-            }));
+          normalizedProfileIdentities.length > 0
+            ? normalizedProfileIdentities
+            : ethereumIdentitiesFromAddresses(computedAddresses);
 
         const safeDisplayName = sanitizeDisplayLabel(profile.displayName);
         const safeMetadataPreferredName = sanitizeDisplayLabel(profile.metadata?.preferredName);

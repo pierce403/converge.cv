@@ -2,13 +2,17 @@
  * Wallet selector component for onboarding
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useWalletConnection, type WalletOption } from '@/lib/wagmi';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 
 interface WalletSelectorProps {
-  onWalletConnected: (address: string, chainId?: number) => void;
+  onWalletConnected: (
+    address: string,
+    chainId?: number,
+    signMessageOverride?: (message: string) => Promise<string>
+  ) => void | Promise<void>;
   onBack: () => void;
   backLabel?: string;
   onImportKeyfile?: () => void;
@@ -17,30 +21,36 @@ interface WalletSelectorProps {
 export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportKeyfile }: WalletSelectorProps) {
   const { connectWallet, address, chainId, isConnecting, walletOptions, provider } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
-  const hasTriggeredCallback = useRef(false);
+  const submittedConnectionRef = useRef<string | null>(null);
 
-  // Detect if we're on mobile
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  const emitConnected = useCallback(
+    async (
+      nextAddress: string,
+      nextChainId?: number,
+      signMessageOverride?: (message: string) => Promise<string>
+    ) => {
+      const connectionKey = `${provider}:${nextAddress.trim().toLowerCase()}`;
+      if (submittedConnectionRef.current === connectionKey) {
+        return;
+      }
+      submittedConnectionRef.current = connectionKey;
+      try {
+        await onWalletConnected(nextAddress, nextChainId, signMessageOverride);
+      } catch (error) {
+        submittedConnectionRef.current = null;
+        throw error;
+      }
+    },
+    [onWalletConnected, provider]
+  );
 
   const handleConnect = async (wallet: WalletOption) => {
     setError(null);
     try {
-      // On mobile, if connecting to Coinbase Wallet, try to deep link to Base app
-      if (isMobile && wallet.id === 'coinbase' && wallet.provider === 'native') {
-        console.log('[WalletSelector] Mobile detected, opening Base app...');
-        
-        // Try to open the Coinbase Wallet app
-        const deepLink = 'https://go.cb-w.com/dapp?cb_url=' + encodeURIComponent(window.location.href);
-        window.location.href = deepLink;
-        
-        // Give the deep link a moment to open the app
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      
+      // Let the connector own mobile deep links so its session can resume on return.
       const result = await connectWallet(wallet);
       if (result && result.accounts && result.accounts[0]) {
-        hasTriggeredCallback.current = true;
-        onWalletConnected(result.accounts[0], result.chainId);
+        await emitConnected(result.accounts[0], result.chainId);
       }
     } catch (err) {
       console.error('Failed to connect wallet:', err);
@@ -60,11 +70,13 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
 
   // If already connected when component mounts, proceed once
   useEffect(() => {
-    if (address && !hasTriggeredCallback.current) {
-      hasTriggeredCallback.current = true;
-      onWalletConnected(address, chainId);
+    if (address) {
+      void emitConnected(address, chainId).catch((err) => {
+        console.error('Failed to continue after wallet connection:', err);
+        setError(err instanceof Error ? err.message : 'Failed to continue with connected wallet');
+      });
     }
-  }, [address, chainId, onWalletConnected]);
+  }, [address, chainId, emitConnected]);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6 bg-primary-900/60 border border-primary-800/60 rounded-2xl shadow-lg backdrop-blur">
@@ -78,8 +90,26 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
       <WalletProviderSelector dense />
 
       {error && (
-        <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
-          {error}
+        <div className="space-y-3 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+          <div>{error}</div>
+          {address && (
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                void emitConnected(address, chainId).catch((retryError) => {
+                  setError(
+                    retryError instanceof Error
+                      ? retryError.message
+                      : 'Failed to continue with connected wallet'
+                  );
+                });
+              }}
+              className="rounded-md border border-red-400/50 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-900/50"
+            >
+              Retry wallet check
+            </button>
+          )}
         </div>
       )}
 
@@ -88,9 +118,17 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
           <ThirdwebConnectButton
             label="Continue with Thirdweb"
             className="w-full"
-            onConnected={(addr, nextChain) => {
-              hasTriggeredCallback.current = true;
-              onWalletConnected(addr, nextChain);
+            onConnected={async (addr, nextChain, signMessageOverride) => {
+              setError(null);
+              try {
+                await emitConnected(addr, nextChain, signMessageOverride);
+              } catch (error) {
+                setError(
+                  error instanceof Error
+                    ? error.message
+                    : 'Failed to continue with connected wallet'
+                );
+              }
             }}
           />
         ) : (

@@ -105,6 +105,21 @@ describe('keyfile helpers', () => {
     );
   });
 
+  it('canonicalizes an uppercase private-key prefix instead of adding a second prefix', () => {
+    const keyfile = {
+      type: KEYFILE_TYPE,
+      version: KEYFILE_VERSION,
+      createdAt: new Date().toISOString(),
+      identity: {
+        address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        privateKey: '0X1234',
+      },
+      meta: { app: 'Converge', exportedAt: new Date().toISOString() },
+    } as any;
+
+    expect(deriveIdentityFromKeyfile(keyfile).privateKey).toBe('0x1234');
+  });
+
   it('throws on invalid keyfile shape', () => {
     expect(() => parseKeyfile('{"type":"wrong"}')).toThrow(/unexpected type/);
     expect(() => parseKeyfile('not json')).toThrow();

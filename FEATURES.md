@@ -9,14 +9,18 @@
 - Wallet probing uses the XMTP identity ledger rather than treating the prospective `Client.inboxId` as proof of registration.
 - The wallet signer registers or reuses one inbox-aware browser installation, the fresh unregistered key is associated with `unsafe_addAccount(..., true)`, and the final local-key client must reopen the same inbox and installation before onboarding succeeds.
 - Converge statically verifies that the fresh key has no existing inbox. A registered key is never moved by the normal UI; reassignment would strand its prior inbox and is refused.
-- If the target is at the 10-installation limit, onboarding and Settings block before association and offer signer-authorized one-installation recovery. The destructive step refetches live state and stops if another device already freed capacity.
+- If the target is at the 10-installation limit, onboarding and Settings block before association. Static recovery is offered only to the inbox recovery identity, refetches live state, and revokes only enough confirmed installations to return to 9/10.
 - Smart-wallet provisioning and recovery retry XMTP's originally registered nonzero SCW chain ID when reported. Legacy chain ID `0` remains blocked with instructions to use an already-connected XMTP device.
 - A newly registered installation sends `sendSyncRequest()`. The UI explains that an older device must be online and that sharing an inbox ID does not guarantee restored decrypted history.
 - New identities use the SDK default `xmtp-production-<inbox-id>.db3` path. Existing records without a migration marker keep their legacy address path so a normal reload does not create an extra installation.
 - Every successful connection persists the live final installation ID. Installation revocation stays disabled unless that ID is present in a refreshed inbox state.
 - Pending provisioning keys are persisted before identity-ledger mutation and resumed after interruption; failed Settings/switcher attempts restore the previously active identity and namespace.
+- Provisioning exposes explicit registration, association, ledger-confirmation, and reopen phases. Interrupted responses resume once the exact mutation becomes visible, and an already-registered pending installation can finish even when the inbox has since reached 10/10.
+- If a pending installation remains on the XMTP ledger but its local database now opens a different installation, Converge blocks retry and asks the recovery identity to remove that exact stale installation before touching older devices.
+- Ethereum identifiers are normalized at signer, storage, contact, member-profile, and display boundaries. Repairable missing, uppercase, or repeated prefixes migrate to one lowercase `0x`; invalid 20-byte addresses are rejected.
 - Registry hydration lists previously used inboxes with last-opened timestamps. Switching inboxes tears down the client, swaps the app-data namespace, and reopens the selected local identity.
 - Wallet providers remain selectable between Native, Thirdweb, and Privy. Wallet approval is authority for an existing inbox, not the default long-term message signer.
+- Mobile wallet deep links are owned by the selected connector so its request can resume after returning to Converge. Approval signatures are bound to the exact selected account, and provider switches preserve the onboarding wallet-approval view.
 - Deep links return through the chosen onboarding flow and then resume the target route.
 
 ### Inbox Switcher Isolation

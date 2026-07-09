@@ -206,6 +206,9 @@ pnpm typecheck        # TypeScript type checking
 ### ✅ Completed
 - Explicit onboarding model for new inbox creation, same-key keyfile restore, and fresh-device-key association with an existing wallet inbox
 - Wallet-approved device provisioning verifies the target inbox, prevents accidental reassignment, reuses one inbox-aware browser database, and persists the final installation ID
+- Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
+- Mobile wallet connectors own their redirect/deep-link lifecycle, and every XMTP signature is bound to the selected wallet account
+- Existing-inbox and reload connections fail closed under explicit registration policies instead of falling back to standalone inbox creation
 - New installations request XMTP device history and explain that an older installation may need to be online
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
@@ -503,11 +506,20 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.4.0 + XMTP device provisioning)
+**Last Updated**: 2026-07-09 (app version 0.4.1 + XMTP wallet/onboarding hardening)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### XMTP Wallet and Onboarding Hardening
+- Bumped Converge from `0.4.0` to `0.4.1` after auditing the shipped provisioning flow against the pinned `@xmtp/browser-sdk` 6.1.2 implementation.
+- Added one strict Ethereum-address boundary used by XMTP signers, identity storage, contacts, member profiles, and UI formatting. Repairable missing/uppercase/repeated prefixes migrate to one lowercase `0x`; malformed values stop before XMTP.
+- Removed Converge's pre-connector mobile Coinbase/Base redirect. Wagmi/Thirdweb now own the wallet request and return lifecycle, provider changes preserve the onboarding step, callbacks dedupe, and signatures verify the active account.
+- EIP-7702 delegated EOAs are no longer misclassified as smart-contract wallets. If bytecode inspection fails on every relevant chain, provisioning stops instead of guessing a signer type.
+- Existing-inbox setup now shows explicit connection and approval steps plus phase status. It persists the manager installation before mutation, verifies registration and association in live inbox state, tolerates interrupted responses that already reached the ledger, and reopens only the exact approved installation under `resume-only` policy.
+- A remote pending installation whose local inbox database now opens a different ID is marked stale. Retry is blocked until the recovery identity explicitly removes that exact stale ID, including below the installation limit, so setup does not strand an extra slot or revoke an older device unnecessarily.
+- At 10/10, a previously registered pending installation may resume without creating another. Static recovery is limited to the inbox recovery identity and revokes only enough confirmed installations to return to 9/10.
 
 ### XMTP Device Provisioning and Honest Key Model
 - Bumped Converge from `0.3.9` to `0.4.0` after separating XMTP account identities, inboxes, and installations in onboarding and reconnect behavior.

@@ -17,7 +17,9 @@ Converge treats XMTP accounts, inboxes, and installations as separate things:
 - **Add this device to existing inbox** generates a fresh local account key for this browser. A wallet that already controls the target inbox registers or reuses one browser installation, approves the fresh account, and Converge reopens the same inbox database with the fresh key.
 - **Wallet approval** is authority for an existing inbox. It does not silently create a wallet inbox or move an already-registered Converge key.
 
-An XMTP inbox can have up to 10 active installations. Converge checks the target inbox before registration and offers signer-authorized static recovery when the inbox is full, using either the connected wallet or the restored keyfile identity as appropriate. It rechecks the live count immediately before revocation.
+An XMTP inbox can have up to 10 active installations. Converge checks the target inbox before registration and offers static recovery only when the connected signer is the inbox recovery identity. It rechecks the live count and revokes only enough explicitly confirmed installations to return to 9/10.
+
+Ethereum addresses are canonicalized to one lowercase `0x` prefix plus 40 hexadecimal characters before they reach XMTP or local identity storage. Existing repairable records such as `0X...`, prefixless addresses, and repeated `0x0x...` prefixes are migrated when read; malformed values are rejected.
 
 New installations explicitly request XMTP device history. A pre-existing installation must be online to produce the encrypted archive. Matching the same `inboxId` does not by itself restore decrypted historical messages.
 

@@ -1,8 +1,13 @@
 import { ConnectButton } from 'thirdweb/react';
 import { getThirdwebClient } from '@/lib/wallets/providers';
+import { runWithWalletSignatureStatus } from '@/lib/wagmi/signature-status';
 
 interface ThirdwebConnectButtonProps {
-  onConnected?: (address: string, chainId?: number) => void;
+  onConnected?: (
+    address: string,
+    chainId: number | undefined,
+    signMessage: (message: string) => Promise<string>
+  ) => void | Promise<void>;
   label?: string;
   className?: string;
 }
@@ -33,7 +38,20 @@ export function ThirdwebConnectButton({ onConnected, label, className }: Thirdwe
       onConnect={(wallet) => {
         const account = wallet.getAccount();
         if (account?.address) {
-          onConnected?.(account.address, wallet.getChain()?.id);
+          void Promise.resolve(
+            onConnected?.(
+              account.address,
+              wallet.getChain()?.id,
+              async (message) =>
+                await runWithWalletSignatureStatus({
+                  provider: 'thirdweb',
+                  message,
+                  run: async () => await account.signMessage({ message }),
+                })
+            )
+          ).catch((error) => {
+            console.error('[Thirdweb] Connected wallet could not continue onboarding:', error);
+          });
         }
       }}
     />

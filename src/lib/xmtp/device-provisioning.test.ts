@@ -16,8 +16,14 @@ import {
 
 const targetInbox = 'a'.repeat(64);
 const otherInbox = 'b'.repeat(64);
-const targetIdentifier = { identifier: '0x1111', identifierKind: 0 } as Identifier;
-const deviceIdentifier = { identifier: '0x2222', identifierKind: 0 } as Identifier;
+const targetIdentifier = {
+  identifier: `0x${'11'.repeat(20)}`,
+  identifierKind: 0,
+} as Identifier;
+const deviceIdentifier = {
+  identifier: `0x${'22'.repeat(20)}`,
+  identifierKind: 0,
+} as Identifier;
 
 const signer = (identifier: Identifier): Signer => ({
   type: 'EOA',
@@ -29,11 +35,26 @@ function setup(options?: {
   deviceInbox?: string;
   installationIds?: string[];
   omitInboxState?: boolean;
+  registerThrowsAfterMutation?: boolean;
+  addAccountThrowsAfterMutation?: boolean;
 }) {
   let associatedDeviceInbox = options?.deviceInbox;
-  const register = vi.fn(async () => undefined);
-  const addAccount = vi.fn(async () => {
+  let associatedIdentifier = deviceIdentifier;
+  const installationIds = [...(options?.installationIds ?? [])];
+  const register = vi.fn(async () => {
+    if (!installationIds.includes(manager.installationId!)) {
+      installationIds.push(manager.installationId!);
+    }
+    if (options?.registerThrowsAfterMutation) {
+      throw new Error('registration response was interrupted');
+    }
+  });
+  const addAccount = vi.fn(async (newSigner: Signer) => {
+    associatedIdentifier = await newSigner.getIdentifier();
     associatedDeviceInbox = targetInbox;
+    if (options?.addAccountThrowsAfterMutation) {
+      throw new Error('association response was interrupted');
+    }
   });
   const close = vi.fn(async () => undefined);
   const manager: DeviceProvisioningClient = {
@@ -45,24 +66,31 @@ function setup(options?: {
     close,
   };
   const resolveInboxId = vi.fn(async (identifier: Identifier) =>
-    identifier === targetIdentifier ? targetInbox : associatedDeviceInbox
+    identifier.identifier.toLowerCase() === targetIdentifier.identifier.toLowerCase()
+      ? targetInbox
+      : associatedDeviceInbox
   );
   const fetchInboxState = vi.fn(async () =>
     options?.omitInboxState
       ? undefined
       : ({
           inboxId: targetInbox,
-          installations: (options?.installationIds ?? []).map((id) => ({ id })),
+          installations: installationIds.map((id) => ({ id })),
+          accountIdentifiers: [
+            targetIdentifier,
+            ...(associatedDeviceInbox === targetInbox ? [associatedIdentifier] : []),
+          ],
         } as InboxState)
   );
   const createManager = vi.fn(async () => manager);
+  const sleep = vi.fn(async () => undefined);
 
   return {
     manager,
     register,
     addAccount,
     close,
-    dependencies: { resolveInboxId, fetchInboxState, createManager },
+    dependencies: { resolveInboxId, fetchInboxState, createManager, sleep },
   };
 }
 
@@ -89,6 +117,38 @@ describe('fresh device provisioning', () => {
       harness.addAccount.mock.invocationCallOrder[0]
     );
     expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports lifecycle phases and persists the manager installation before mutation', async () => {
+    const harness = setup();
+    const phases: string[] = [];
+    const onInstallationReady = vi.fn(async () => undefined);
+
+    await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      {
+        ...harness.dependencies,
+        onInstallationReady,
+        onPhase: async (phase) => {
+          phases.push(phase);
+        },
+      }
+    );
+
+    expect(onInstallationReady).toHaveBeenCalledWith('installation-new');
+    expect(phases).toEqual([
+      'preflight',
+      'opening-manager',
+      'manager-ready',
+      'registering-installation',
+      'installation-registered',
+      'associating-key',
+      'association-submitted',
+      'verifying-association',
+      'complete',
+    ]);
   });
 
   it('reuses the same installation and association after reload', async () => {
@@ -125,7 +185,7 @@ describe('fresh device provisioning', () => {
       ),
       provisionFreshDeviceKey(
         signer(targetIdentifier),
-        signer({ identifier: '0x3333', identifierKind: 0 } as Identifier),
+        signer({ identifier: `0x${'33'.repeat(20)}`, identifierKind: 0 } as Identifier),
         targetInbox,
         second.dependencies
       ),
@@ -155,6 +215,28 @@ describe('fresh device provisioning', () => {
     expect(fetchAssociation.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('waits beyond the old eight-attempt window for network association visibility', async () => {
+    const harness = setup();
+    let deviceNetworkLookups = 0;
+    harness.dependencies.resolveInboxId = vi.fn(async (identifier: Identifier) => {
+      if (identifier.identifier.toLowerCase() === targetIdentifier.identifier.toLowerCase()) {
+        return targetInbox;
+      }
+      deviceNetworkLookups += 1;
+      return deviceNetworkLookups >= 11 ? targetInbox : undefined;
+    });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      harness.dependencies
+    );
+
+    expect(result.accountAdded).toBe(true);
+    expect(deviceNetworkLookups).toBeGreaterThan(8);
+  });
+
   it('blocks at 10 installations before registration or association', async () => {
     const harness = setup({ installationIds: Array.from({ length: 10 }, (_, i) => `i-${i}`) });
 
@@ -169,6 +251,74 @@ describe('fresh device provisioning', () => {
 
     expect(harness.register).not.toHaveBeenCalled();
     expect(harness.addAccount).not.toHaveBeenCalled();
+    expect(harness.dependencies.createManager).not.toHaveBeenCalled();
+  });
+
+  it('resumes its already-registered installation when the inbox is otherwise full', async () => {
+    const installationIds = [
+      'installation-new',
+      ...Array.from({ length: 9 }, (_, index) => `other-${index}`),
+    ];
+    const harness = setup({ deviceInbox: targetInbox, installationIds });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      {
+        ...harness.dependencies,
+        knownInstallationId: '0xinstallation-new',
+      }
+    );
+
+    expect(result.installationRegistered).toBe(false);
+    expect(harness.register).not.toHaveBeenCalled();
+  });
+
+  it('maps SDK installation-limit failures during manager creation to the recoverable error', async () => {
+    const harness = setup({
+      installationIds: Array.from({ length: 9 }, (_, index) => `existing-${index}`),
+    });
+    harness.dependencies.createManager = vi.fn(async () => {
+      throw new Error('TooManyInstallations');
+    });
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        harness.dependencies
+      )
+    ).rejects.toBeInstanceOf(InstallationLimitError);
+  });
+
+  it('resumes when register throws after the installation reaches the ledger', async () => {
+    const harness = setup({ registerThrowsAfterMutation: true });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      harness.dependencies
+    );
+
+    expect(result.installationRegistered).toBe(true);
+    expect(result.accountAdded).toBe(true);
+  });
+
+  it('resumes verification when add-account throws after the association reaches the ledger', async () => {
+    const harness = setup({ addAccountThrowsAfterMutation: true });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      harness.dependencies
+    );
+
+    expect(result.inboxId).toBe(targetInbox);
+    expect(result.accountAdded).toBe(false);
   });
 
   it('fails closed when target inbox capacity cannot be fetched', async () => {

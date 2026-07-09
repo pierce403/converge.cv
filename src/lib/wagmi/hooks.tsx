@@ -210,8 +210,14 @@ function WagmiWalletConnectionProvider({
   }, [disconnectAsync]);
 
   const signMessage = useCallback(
-    async (message: string, accountAddress?: string) =>
-      await runWithWalletSignatureStatus({
+    async (message: string, accountAddress?: string) => {
+      if (
+        accountAddress &&
+        (!account.address || account.address.toLowerCase() !== accountAddress.toLowerCase())
+      ) {
+        throw new Error('The selected wallet account is no longer active. Reconnect it and retry.');
+      }
+      return await runWithWalletSignatureStatus({
         provider,
         message,
         run: async () =>
@@ -219,8 +225,9 @@ function WagmiWalletConnectionProvider({
             message,
             account: accountAddress as `0x${string}` | undefined,
           }),
-      }),
-    [provider, signMessageAsync]
+      });
+    },
+    [provider, signMessageAsync, account.address]
   );
 
   const value = useMemo<WalletConnectionValue>(
@@ -349,8 +356,14 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
   }, [authenticated, logout, disconnectAsync]);
 
   const signMessage = useCallback(
-    async (message: string, accountAddress?: string) =>
-      await runWithWalletSignatureStatus({
+    async (message: string, accountAddress?: string) => {
+      if (
+        accountAddress &&
+        (!account.address || account.address.toLowerCase() !== accountAddress.toLowerCase())
+      ) {
+        throw new Error('The selected Privy wallet account is no longer active. Reconnect it and retry.');
+      }
+      return await runWithWalletSignatureStatus({
         provider: 'privy',
         message,
         run: async () =>
@@ -358,8 +371,9 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
             message,
             account: accountAddress as `0x${string}` | undefined,
           }),
-      }),
-    [signMessageAsync]
+      });
+    },
+    [signMessageAsync, account.address]
   );
 
   const value = useMemo<WalletConnectionValue>(
@@ -406,6 +420,11 @@ function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode })
   const { disconnect } = useThirdwebDisconnect();
   const { connect, isConnecting } = useConnectModal();
   const { setProvider } = useWalletProviderStore();
+  const activeAccountRef = useRef(activeAccount);
+
+  useEffect(() => {
+    activeAccountRef.current = activeAccount;
+  }, [activeAccount]);
 
   const connectViaModal = useCallback(async () => {
     const client = getThirdwebClient();
@@ -435,17 +454,24 @@ function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode })
   }, [activeWallet, disconnect]);
 
   const signMessage = useCallback(
-    async (message: string) => {
-      if (!activeAccount) {
+    async (message: string, accountAddress?: string) => {
+      const currentAccount = activeAccountRef.current;
+      if (!currentAccount) {
         throw new Error('No Thirdweb account is connected.');
+      }
+      if (
+        accountAddress &&
+        currentAccount.address.toLowerCase() !== accountAddress.toLowerCase()
+      ) {
+        throw new Error('The selected Thirdweb account is no longer active. Reconnect it and retry.');
       }
       return await runWithWalletSignatureStatus({
         provider: 'thirdweb',
         message,
-        run: async () => await activeAccount.signMessage({ message }),
+        run: async () => await currentAccount.signMessage({ message }),
       });
     },
-    [activeAccount]
+    []
   );
 
   const value = useMemo<WalletConnectionValue>(

@@ -1,4 +1,5 @@
 import type { Installation } from '@xmtp/browser-sdk';
+import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
 
 export interface RevocableInstallation {
   id?: string;
@@ -68,14 +69,24 @@ function getInstallationBytes(installation: InstallationLike): Uint8Array | null
 
 export function selectOldestRevocableInstallations(
   installations: InstallationLike[],
-  revokeCount = 1
+  revokeCount = 1,
+  preferredInstallationId?: string
 ): RevocableInstallation[] {
   const selected: RevocableInstallation[] = [];
-  for (const installation of [...installations].sort((a, b) => {
+  const normalizedPreferred = preferredInstallationId?.replace(/^0x/i, '').toLowerCase();
+  const ordered = [...installations].sort((a, b) => {
+    const aPreferred =
+      Boolean(normalizedPreferred) &&
+      a.id?.replace(/^0x/i, '').toLowerCase() === normalizedPreferred;
+    const bPreferred =
+      Boolean(normalizedPreferred) &&
+      b.id?.replace(/^0x/i, '').toLowerCase() === normalizedPreferred;
+    if (aPreferred !== bPreferred) return aPreferred ? -1 : 1;
     const aTime = a.clientTimestampNs ?? 0n;
     const bTime = b.clientTimestampNs ?? 0n;
     return aTime < bTime ? -1 : aTime > bTime ? 1 : 0;
-  })) {
+  });
+  for (const installation of ordered) {
     const bytes = getInstallationBytes(installation);
     if (!bytes) continue;
     selected.push({
@@ -101,4 +112,18 @@ export function ensureInstallationRecoveryNeeded(installationCount: number): voi
       `Installation recovery stopped because the inbox now has ${installationCount}/10 installations; no revocation is needed.`
     );
   }
+}
+
+export function assertRecoveryAddress(
+  signerAddress: string | null | undefined,
+  recoveryAddress: string | null | undefined
+): string {
+  const normalizedSigner = normalizeEthereumAddress(signerAddress);
+  const normalizedRecovery = normalizeEthereumAddress(recoveryAddress);
+  if (!normalizedSigner || !normalizedRecovery || normalizedSigner !== normalizedRecovery) {
+    throw new Error(
+      `Static recovery requires the inbox recovery wallet${normalizedRecovery ? ` (${normalizedRecovery})` : ''}. Connect that wallet or revoke an installation from an existing device.`
+    );
+  }
+  return normalizedRecovery;
 }

@@ -94,8 +94,8 @@ describe('contact store', () => {
       inboxId: 'inbox-abcdef',
       displayName: 'Inline Name',
       avatarUrl: 'https://example.com/avatar.png',
-      primaryAddress: '0xABCDEF0000000000000000000000000000000000',
-      addresses: ['0xABCDEF0000000000000000000000000000000000', '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'],
+      primaryAddress: '0X0xABCDEF0000000000000000000000000000000000',
+      addresses: ['0x0XABCDEF0000000000000000000000000000000000', '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'],
       metadata: {
         preferredName: 'Legacy Name',
         farcasterFollowerCount: 10,
@@ -164,6 +164,60 @@ describe('contact store', () => {
 
     const bob = store.getContactByInboxId('inbox-bob');
     expect(bob?.name).toBe('bob');
+  });
+
+  it('repairs repeated Ethereum prefixes and drops malformed address-like contact data', async () => {
+    const body = 'ABCDEFabcdef1234567890abcdefABCDEF123456';
+    const canonical = '0xabcdefabcdef1234567890abcdefabcdef123456';
+    const store = useContactStore.getState();
+
+    await store.addContact({
+      inboxId: 'inbox-repaired-address',
+      name: 'Repaired',
+      createdAt: Date.now(),
+      primaryAddress: `0X0x${body}`,
+      addresses: [`0x0X${body}`, '0x0x1234'],
+      identities: [
+        { identifier: `0x0x${body}`, kind: 'ethereum', isPrimary: true },
+        { identifier: '0x0x1234', kind: 'Ethereum' },
+      ],
+      source: 'manual',
+    });
+
+    const repaired = store.getContactByInboxId('inbox-repaired-address');
+    expect(repaired?.primaryAddress).toBe(canonical);
+    expect(repaired?.addresses).toEqual([canonical]);
+    expect(repaired?.identities).toEqual([
+      expect.objectContaining({ identifier: canonical, kind: 'Ethereum', isPrimary: true }),
+    ]);
+    expect(mockStorage.putContact).toHaveBeenCalledWith(
+      expect.objectContaining({ primaryAddress: canonical, addresses: [canonical] })
+    );
+  });
+
+  it('repairs contaminated persisted contacts when loading them', async () => {
+    const body = '1111111111111111111111111111111111111111';
+    mockStorage.listContacts.mockResolvedValueOnce([
+      {
+        inboxId: 'inbox-persisted-repair',
+        name: 'Persisted',
+        createdAt: 1,
+        primaryAddress: `0x0x${body}`,
+        addresses: [`0X0x${body}`],
+        identities: [{ identifier: `0x0X${body}`, kind: 'Ethereum', isPrimary: true }],
+      },
+    ] as never);
+
+    await useContactStore.getState().loadContacts();
+
+    const canonical = `0x${body}`;
+    const repaired = useContactStore.getState().getContactByInboxId('inbox-persisted-repair');
+    expect(repaired?.primaryAddress).toBe(canonical);
+    expect(repaired?.addresses).toEqual([canonical]);
+    expect(repaired?.identities?.[0]?.identifier).toBe(canonical);
+    expect(mockStorage.putContact).toHaveBeenCalledWith(
+      expect.objectContaining({ inboxId: 'inbox-persisted-repair', primaryAddress: canonical })
+    );
   });
 
   it('syncFarcasterContacts enriches contacts with bulk Neynar profiles', async () => {

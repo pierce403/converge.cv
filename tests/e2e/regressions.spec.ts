@@ -33,8 +33,8 @@ test.describe('Regressions', () => {
         // Wait for initial auth check loading to finish
         await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 15000 });
 
-        // Handle "Create new identity" if we are on the landing page
-        const createIdentityButton = page.getByRole('button', { name: 'Create new identity' });
+        // Handle explicit new-inbox onboarding if we are on the landing page
+        const createIdentityButton = page.getByRole('button', { name: 'Create new Converge inbox' });
         if (await createIdentityButton.isVisible()) {
             console.log('Clicking Create new identity');
             await createIdentityButton.click();

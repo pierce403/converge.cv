@@ -48,6 +48,14 @@ import { getThirdwebClient } from '@/lib/wallets/providers';
 import { upload, resolveScheme } from 'thirdweb/storage';
 import { KeyedAsyncCache } from '@/lib/utils/keyed-async-cache';
 import {
+  normalizeEthereumAddress as normalizeEthereumAccountAddress,
+  requireEthereumAddress,
+} from '@/lib/utils/ethereum';
+import {
+  registrationCapabilities,
+  type ClientRegistrationPolicy,
+} from './registration-policy';
+import {
   createConvosInvite,
   decodeConversationToken,
   deriveInvitePrivateKeyFromSignature,
@@ -66,6 +74,7 @@ import {
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
 import {
+  assertRecoveryAddress,
   ensureInstallationRecoveryNeeded,
   extractWrongChainIdDetails,
   isLegacyScwChainZeroMismatch,
@@ -80,6 +89,7 @@ import {
   provisionFreshDeviceKey,
   shouldRequestHistorySync,
   signerIdentityKey,
+  type DeviceProvisioningPhase,
   type XmtpDbPathMode,
   type ProvisionDeviceResult,
 } from './device-provisioning';
@@ -194,6 +204,9 @@ export interface DeviceProvisioningOptions {
   targetIdentity: XmtpIdentity;
   deviceIdentity: XmtpIdentity;
   expectedInboxId: string;
+  knownInstallationId?: string;
+  onInstallationReady?: (installationId: string) => Promise<void> | void;
+  onPhase?: (phase: DeviceProvisioningPhase) => Promise<void> | void;
 }
 
 export interface RevokeOldestInstallationsOptions {
@@ -201,10 +214,12 @@ export interface RevokeOldestInstallationsOptions {
   inboxState?: InboxState;
   onStatus?: (message: string) => void;
   requireAtLimit?: boolean;
+  preferredInstallationId?: string;
 }
 
 interface ConnectOptions {
   register?: boolean;
+  registrationPolicy?: ClientRegistrationPolicy;
   enableHistorySync?: boolean;
   expectedInboxId?: string;
   expectedInstallationId?: string;
@@ -322,14 +337,11 @@ export interface GroupKeySummary {
   epochRange?: { min: number; max: number } | null;
 }
 
-const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+const isEthereumAddress = (value: string): boolean =>
+  normalizeEthereumAccountAddress(value) !== null;
 
-const isEthereumAddress = (value: string): boolean => ETH_ADDRESS_REGEX.test(value);
-
-const toEthereumIdentifier = (address: string): string => {
-  const normalized = address.trim().toLowerCase();
-  return normalized.startsWith('0x') ? normalized : `0x${normalized}`;
-};
+const toEthereumIdentifier = (address: string): string =>
+  requireEthereumAddress(address, 'XMTP Ethereum identifier');
 
 const EMPTY_ETHEREUM_IDENTIFIER = { identifier: '', identifierKind: IdentifierKind.Ethereum } as const;
 
@@ -370,8 +382,6 @@ export class XmtpClient {
     inboxState: { hit: 0, miss: 0 },
     addressInbox: { hit: 0, miss: 0, network: 0, cooldownSkip: 0 },
   };
-  private identityInitInFlight: Promise<void> | null = null;
-  private identityInitAttempts = 0;
   // Cache + in-flight dedupe to avoid spamming the worker bridge and identity/preferences endpoints.
   private dmByInboxCache = new KeyedAsyncCache<unknown | null>({
     ttlMs: 10 * 60 * 1000,
@@ -444,8 +454,6 @@ export class XmtpClient {
     this.syncCounters.dmSyncCalls = 0;
     this.syncCounters.groupSyncCalls = 0;
     this.syncCounters.backfillMessages = 0;
-    this.identityInitInFlight = null;
-    this.identityInitAttempts = 0;
   }
 
   private stopBackgroundDiscoveryLoop(): void {
@@ -649,6 +657,17 @@ export class XmtpClient {
     }
   }
 
+  private isDatabaseLockError(err: unknown): boolean {
+    try {
+      const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err ?? '');
+      return /database is locked|opfs.*lock|lock.*opfs|NoModificationAllowedError|InvalidStateError/i.test(
+        message
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private isPartialSyncSuccess(err: unknown): boolean {
     try {
       const msg = err instanceof Error ? err.message : String(err ?? '');
@@ -770,52 +789,6 @@ export class XmtpClient {
     }
   }
 
-  private async ensureIdentityInitialized(reason: string): Promise<void> {
-    if (!this.client) {
-      throw new Error('Client not connected');
-    }
-
-    if (this.identityInitInFlight) {
-      await this.identityInitInFlight;
-      return;
-    }
-
-    // Avoid infinite loops when the signer is unavailable (e.g., wallet disconnected).
-    if (this.identityInitAttempts >= 2) {
-      throw new Error('XMTP identity is uninitialized and could not be repaired automatically.');
-    }
-    this.identityInitAttempts += 1;
-
-    this.identityInitInFlight = (async () => {
-      logNetworkEvent({
-        direction: 'status',
-        event: 'identity:register',
-        details: `Registering identity (reason=${reason})`,
-      });
-
-      await this.retryWithDelay('client.register', () => this.client!.register(), {
-        attempts: 2,
-        initialDelayMs: 1000,
-        shouldRetry: (err) => this.isTransientNetworkError(err) || this.isRateLimitError(err),
-        onRateLimit: () => this.noteIdentityRateLimit('client.register'),
-      });
-
-      this.reduceIdentityCooldown();
-
-      logNetworkEvent({
-        direction: 'status',
-        event: 'identity:register',
-        details: `Identity registered (reason=${reason})`,
-      });
-    })();
-
-    try {
-      await this.identityInitInFlight;
-    } finally {
-      this.identityInitInFlight = null;
-    }
-  }
-
   private async conversationsSyncWithRecovery(reason: string): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
@@ -838,13 +811,12 @@ export class XmtpClient {
         throw error;
       }
 
-      console.warn(
-        `[XMTP] conversations.sync failed due to uninitialized identity; attempting client.register() (reason=${reason})`,
-        error
+      console.warn(`[XMTP] conversations.sync found an uninitialized identity (${reason})`, error);
+      const syncError = new Error(
+        'XMTP reports that this installation is not initialized. Converge stopped instead of registering it outside the approved onboarding flow.'
       );
-
-      await this.ensureIdentityInitialized(reason);
-      await runSync();
+      Object.assign(syncError, { cause: error });
+      throw syncError;
     }
   }
 
@@ -1134,17 +1106,45 @@ export class XmtpClient {
       ensureInstallationRecoveryNeeded(currentState.installations?.length ?? 0);
     }
 
+    const signerIdentifier = await signer.getIdentifier();
+    const recoveryIdentifier = inboxState?.recoveryIdentifier;
+    assertRecoveryAddress(
+      signerIdentifier.identifierKind === IdentifierKind.Ethereum
+        ? signerIdentifier.identifier
+        : null,
+      recoveryIdentifier?.identifierKind === IdentifierKind.Ethereum
+        ? recoveryIdentifier.identifier
+        : null
+    );
+
     const installations = inboxState?.installations ?? [];
     const installationCount = installations.length;
-    const selectedInstallations = selectOldestRevocableInstallations(installations, revokeCount);
+    const requiredRevokeCount = options.requireAtLimit
+      ? Math.max(revokeCount, installationCount - 9)
+      : revokeCount;
+    const selectedInstallations = selectOldestRevocableInstallations(
+      installations,
+      requiredRevokeCount,
+      options.preferredInstallationId
+    );
     const bytes = selectedInstallations.map((installation) => installation.bytes);
 
     if (!bytes.length) {
       throw new Error('No revocable installation bytes were available for that inbox.');
     }
 
+    const selectedPreferredInstallation = Boolean(
+      options.preferredInstallationId &&
+        selectedInstallations.some(
+          (installation) =>
+            installation.id?.replace(/^0x/i, '').toLowerCase() ===
+            options.preferredInstallationId?.replace(/^0x/i, '').toLowerCase()
+        )
+    );
     emitStatus(
-      `Requesting recovery signature to revoke ${bytes.length} oldest installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`
+      selectedPreferredInstallation
+        ? `Requesting recovery signature to remove the interrupted installation from inbox ${shortInboxId(inboxId)}.`
+        : `Requesting recovery signature to revoke ${bytes.length} oldest installation${bytes.length === 1 ? '' : 's'} from inbox ${shortInboxId(inboxId)}.`
     );
     try {
       await Client.revokeInstallations(signer, inboxId, bytes, 'production');
@@ -1718,7 +1718,7 @@ export class XmtpClient {
 
   private normalizeEthereumAddress(address: string): `0x${string}` {
     try {
-      return getAddress(address as `0x${string}`);
+      return requireEthereumAddress(address);
     } catch (error) {
       console.warn('[XMTP] Invalid Ethereum address supplied:', address, error);
       throw new Error(`Invalid Ethereum address: ${address}`);
@@ -2009,9 +2009,10 @@ export class XmtpClient {
     }
 
     const toIdentityRecord = (identifier: Identifier, index: number) => ({
-      identifier: identifier.identifier.startsWith('0x')
-        ? identifier.identifier.toLowerCase()
-        : identifier.identifier.toLowerCase(),
+      identifier:
+        identifier.identifierKind === IdentifierKind.Ethereum
+          ? normalizeEthereumAccountAddress(identifier.identifier) ?? identifier.identifier
+          : identifier.identifier,
       kind: IdentifierKind[identifier.identifierKind] ?? String(identifier.identifierKind),
       isPrimary: index === 0,
     });
@@ -2019,11 +2020,8 @@ export class XmtpClient {
     const addressesFromIdentifiers = (identifiers: Identifier[] = []): string[] => {
       return identifiers
         .filter((identifier) => identifier.identifierKind === IdentifierKind.Ethereum)
-        .map((identifier) =>
-          identifier.identifier.startsWith('0x')
-            ? identifier.identifier.toLowerCase()
-            : `0x${identifier.identifier.toLowerCase()}`
-        );
+        .map((identifier) => normalizeEthereumAccountAddress(identifier.identifier))
+        .filter((address): address is `0x${string}` => Boolean(address));
     };
 
     let overrides: { displayName?: string; avatarUrl?: string } | null = null;
@@ -2143,11 +2141,10 @@ export class XmtpClient {
       try {
         const segments = identifier.identifier.split(':');
         const raw = segments.length > 1 ? segments[segments.length - 1] : identifier.identifier;
-        const withPrefix = raw.startsWith('0x') || raw.startsWith('0X') ? raw : `0x${raw}`;
-        return getAddress(withPrefix as `0x${string}`);
+        return getAddress(requireEthereumAddress(raw, 'XMTP member address'));
       } catch (error) {
         console.warn('[XMTP] Failed to normalize member identifier:', identifier.identifier, error);
-        return identifier.identifier;
+        return null;
       }
     }
 
@@ -3418,7 +3415,11 @@ export class XmtpClient {
 
     this.identity = identity;
 
-    const shouldRegister = options?.register !== false;
+    const registrationPolicy: ClientRegistrationPolicy =
+      options?.registrationPolicy ??
+      (options?.register === false ? 'resume-only' : 'new-inbox');
+    const { allowInboxCreation, allowInstallationRegistration } =
+      registrationCapabilities(registrationPolicy);
     const shouldSyncHistory = options?.enableHistorySync === true;
 
     let client: Client<unknown> | null = null;
@@ -3466,16 +3467,25 @@ export class XmtpClient {
       });
 
       try {
-        client = await Client.create(signer, {
-          env: 'production',
-          ...(dbPath ? { dbPath } : {}),
-          appVersion: XMTP_APP_VERSION,
-          codecs: XMTP_CONTENT_CODECS,
-          loggingLevel: sdkLoggingLevel,
-          structuredLogging: false,
-          performanceLogging: false,
-          disableAutoRegister: true,
-        });
+        client = await this.retryWithDelay(
+          'client.create:opfs',
+          async () =>
+            await Client.create(signer, {
+              env: 'production',
+              ...(dbPath ? { dbPath } : {}),
+              appVersion: XMTP_APP_VERSION,
+              codecs: XMTP_CONTENT_CODECS,
+              loggingLevel: sdkLoggingLevel,
+              structuredLogging: false,
+              performanceLogging: false,
+              disableAutoRegister: true,
+            }),
+          {
+            attempts: 3,
+            initialDelayMs: 400,
+            shouldRetry: (error) => this.isDatabaseLockError(error),
+          }
+        );
       } catch (error) {
         if (this.isRateLimitError(error)) {
           this.noteIdentityRateLimit('connect:client.create');
@@ -3501,13 +3511,17 @@ export class XmtpClient {
       }
 
       // Decide whether we must register a new installation / initialize identity
-      let mustRegister = shouldRegister;
+      let mustRegister = false;
       let existingInstallationCount = 0;
       let installationRegistered = false;
       if (!client.inboxId) {
-        // If init could not resolve an inboxId, the identity is not usable until we register.
+        if (!allowInboxCreation) {
+          throw new Error(
+            'XMTP did not resolve this identity to the expected inbox. Registration was stopped to avoid creating an unrelated inbox.'
+          );
+        }
         mustRegister = true;
-        console.warn('[XMTP] Client.init did not return an inboxId; forcing register()');
+        console.warn('[XMTP] New identity has no inbox yet; registration is allowed by policy');
       }
       try {
         const preState: InboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => client!.preferences.fetchInboxState());
@@ -3519,17 +3533,22 @@ export class XmtpClient {
         const count = existing.length;
         existingInstallationCount = count;
 
-        const installationPlan = planClientInstallation({
-          inboxId: client.inboxId ?? identity.inboxId ?? 'unknown',
-          hasCurrentInstallation: Boolean(hasOurInstallation),
-          existingInstallationCount: count,
-        });
-        mustRegister = installationPlan.registerInstallation;
-
         if (hasOurInstallation) {
+          mustRegister = false;
           console.log('[XMTP] Installation already present; skipping register()');
         } else {
-          console.warn('[XMTP] Installation missing from inbox state; forcing register() to initialize identity');
+          if (!allowInstallationRegistration) {
+            throw new Error(
+              'This browser no longer has its registered XMTP installation. Reconnect the controlling wallet or restore the key on this device instead of creating one silently.'
+            );
+          }
+          const installationPlan = planClientInstallation({
+            inboxId: client.inboxId ?? identity.inboxId ?? 'unknown',
+            hasCurrentInstallation: false,
+            existingInstallationCount: count,
+          });
+          mustRegister = installationPlan.registerInstallation;
+          console.warn('[XMTP] Installation missing from inbox state; registration is allowed by policy');
         }
 
         if (count >= 8) {
@@ -3541,10 +3560,14 @@ export class XmtpClient {
         if (/10\/10|installation limit|already registered 10/i.test(msg)) {
           throw preCheckErr;
         }
-        // If identity isn't initialized yet, we must register before doing anything else.
         if (/uninitialized identity/i.test(msg)) {
+          if (!allowInboxCreation) {
+            throw new Error(
+              'XMTP reports an uninitialized identity, but this flow is only allowed to open an existing inbox. Registration was stopped.'
+            );
+          }
           mustRegister = true;
-          console.warn('[XMTP] Installation pre-check failed due to uninitialized identity; forcing register()');
+          console.warn('[XMTP] New identity is uninitialized; registration is allowed by policy');
         } else {
           throw preCheckErr;
         }
@@ -3623,7 +3646,7 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'status',
         event: 'connect:registration_check',
-        details: `Register step ${mustRegister ? 'completed' : 'skipped'} (requested=${shouldRegister}); inbox ID: ${client.inboxId}`,
+        details: `Register step ${mustRegister ? 'completed' : 'skipped'} (policy=${registrationPolicy}); inbox ID: ${client.inboxId}`,
       });
 
       setConnectionStatus('connected');
@@ -3763,6 +3786,9 @@ export class XmtpClient {
     targetIdentity,
     deviceIdentity,
     expectedInboxId,
+    knownInstallationId,
+    onInstallationReady,
+    onPhase,
   }: DeviceProvisioningOptions): Promise<ProvisionDeviceResult> {
     if (!deviceIdentity.privateKey) {
       throw new Error('A fresh local private key is required to add this device.');
@@ -3787,6 +3813,9 @@ export class XmtpClient {
           const states = await Client.fetchInboxStates([inboxId], 'production');
           return states[0];
         },
+        knownInstallationId,
+        onInstallationReady,
+        onPhase,
         createManager: async (signer) =>
           await Client.create(signer, {
             env: 'production',

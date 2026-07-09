@@ -127,7 +127,10 @@ export function deriveIdentityFromKeyfile(keyfile: ConvergeKeyfile): KeyfileIden
     resolvedPrivateKey = bytesToHex(privateKeyBytes);
     resolvedAddress = account.address;
   } else if (privateKey && privateKey.trim().length > 0) {
-    const normalised = privateKey.trim().startsWith('0x') ? privateKey.trim() : `0x${privateKey.trim()}`;
+    const trimmedPrivateKey = privateKey.trim();
+    const normalised = /^0x/i.test(trimmedPrivateKey)
+      ? `0x${trimmedPrivateKey.slice(2)}`
+      : `0x${trimmedPrivateKey}`;
     const account = privateKeyToAccount(normalised as `0x${string}`);
     resolvedPrivateKey = normalised as `0x${string}`;
     resolvedAddress = account.address;

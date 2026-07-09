@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { IdentifierKind, type Identifier, type InboxState, type Installation } from '@xmtp/browser-sdk';
 import { useAuthStore, useConversationStore } from '@/lib/stores';
 import { getXmtpClient, type GroupKeySummary } from '@/lib/xmtp';
+import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
 
 interface KeyExplorerModalProps {
   isOpen: boolean;
@@ -159,7 +160,7 @@ function normalizeIdentifier(identifier: Identifier): string {
   const raw = String(identifier?.identifier ?? '');
   if (!raw) return '';
   if (identifier?.identifierKind === IdentifierKind.Ethereum) {
-    return raw.startsWith('0x') ? raw : `0x${raw}`;
+    return normalizeEthereumAddress(raw) ?? raw;
   }
   return raw;
 }
@@ -366,6 +367,7 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
 
         const identityNodes: KeyExplorerNode[] = [];
         const seenIdentifiers = new Set<string>();
+        const activeAddress = normalizeEthereumAddress(identity?.address) ?? identity?.address ?? '';
         (inboxState?.accountIdentifiers ?? []).forEach((identifier, index) => {
           const normalized = normalizeIdentifier(identifier);
           const kindLabel = IdentifierKind[identifier.identifierKind] ?? 'Identifier';
@@ -396,27 +398,27 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
             ],
           };
 
-          if (identity?.address && normalized && normalized.toLowerCase() === identity.address.toLowerCase()) {
-            node.when = identity.createdAt ? `Created ${new Date(identity.createdAt).toLocaleString()}` : undefined;
+          if (activeAddress && normalized && normalized.toLowerCase() === activeAddress.toLowerCase()) {
+            node.when = identity?.createdAt ? `Created ${new Date(identity.createdAt).toLocaleString()}` : undefined;
           }
 
           identityNodes.push(node);
           if (normalized) seenIdentifiers.add(normalized.toLowerCase());
         });
 
-        if (identity?.address && !seenIdentifiers.has(identity.address.toLowerCase())) {
+        if (activeAddress && !seenIdentifiers.has(activeAddress.toLowerCase())) {
           identityNodes.push({
-            id: `identity-active-${identity.address}`,
-            title: `EOA ${shortId(identity.address)}`,
+            id: `identity-active-${activeAddress}`,
+            title: `EOA ${shortId(activeAddress)}`,
             icon: 'identity',
             description: 'Active wallet for this session.',
-            when: identity.createdAt ? `Created ${new Date(identity.createdAt).toLocaleString()}` : undefined,
+            when: identity?.createdAt ? `Created ${new Date(identity.createdAt).toLocaleString()}` : undefined,
             details: [
               {
                 label: 'Identifier',
-                value: identity.address,
+                value: activeAddress,
                 masked: true,
-                copyValue: identity.address,
+                copyValue: activeAddress,
                 monospaced: true,
               },
             ],

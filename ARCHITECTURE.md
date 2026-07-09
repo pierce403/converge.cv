@@ -36,12 +36,18 @@ This root file is the canonical architecture and decision tracker for Converge. 
 5. Open the wallet signer with the SDK's inbox-aware default database path and `disableAutoRegister: true`.
 6. Register that browser installation with the wallet if the installation is not already in the target inbox.
 7. Call `unsafe_addAccount(freshSigner, true)`. The pinned SDK requires `true` even for an unregistered key, so Converge's ledger preflight is the invariant that makes this an association rather than a reassignment.
-8. Wait until the fresh identifier resolves to the target inbox.
+8. Wait until the fresh identifier resolves to the target inbox and appears in the target inbox identity state.
 9. Close the wallet manager and reopen the same default inbox database with the fresh signer.
 10. Require both the target `inboxId` and the wallet-approved `installationId` to match before marking onboarding complete.
 11. Call `sendSyncRequest()` for the joined device and explain that an older installation must be online to provide decrypted history. Persist failed requests for retry.
 
 The manager and final local-key client intentionally share the SDK default path, `xmtp-production-<inbox-id>.db3`. Existing identities without a path-mode marker retain the previous address-based path so upgrading does not create an installation on the next reload.
+
+Provisioning persists the manager installation ID before registration or account association. Each network mutation is verified against fresh ledger state, so an interrupted response can resume the same key and installation instead of starting over. `Client.create` uses explicit `new-inbox`, `existing-inbox`, or `resume-only` registration policy; existing-inbox and reload paths fail closed rather than falling back to inbox creation.
+
+If the persisted pending installation is still registered remotely but the inbox database opens a different local installation, Converge marks the remote ID stale and blocks another registration. The recovery identity can explicitly remove that exact stale ID before retrying, even below 10/10, so an interrupted setup does not consume a permanent extra slot or sacrifice an older active device.
+
+Ethereum account identifiers have one canonical representation: lowercase `0x` plus exactly 40 hexadecimal characters. Boundary code repairs repeated/missing/case-variant prefixes only when the remaining payload is exactly 20 bytes, and rejects anything else before signer construction or persistence.
 
 ### Reassignment Policy
 
@@ -53,7 +59,7 @@ The manager and final local-key client intentionally share the SDK default path,
 ### Limits And Recovery
 
 - XMTP allows 10 active installations and 256 cumulative inbox updates.
-- Static installation recovery uses the target inbox recovery signer, refetches live inbox state, and revokes one explicitly confirmed installation only while the inbox is still at 10/10. Wallet joins use the wallet signer; keyfile restores can use the restored signer.
+- Static installation recovery requires the target inbox recovery signer, refetches live inbox state, and revokes only enough explicitly confirmed installations to return to 9/10. An associated wallet that is not the recovery identity cannot use static recovery.
 - Creation time is not activity time; the UI warns that the oldest installation may still be active.
 - Nonzero SCW chain mismatches retry with XMTP's originally registered chain ID. Legacy SCW chain ID `0` remains blocked because a browser wallet cannot produce the expected chain-zero smart-wallet signature.
 

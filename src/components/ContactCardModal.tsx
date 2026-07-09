@@ -9,7 +9,12 @@ import { useConversations } from '@/features/conversations/useConversations';
 import { useConversationStore } from '@/lib/stores';
 import { useFarcasterStore } from '@/lib/stores/farcaster-store';
 import { useNavigate } from 'react-router-dom';
-import { isEthereumAddress, resolveENS, resolveENSFromAddress } from '@/lib/utils/ens';
+import { resolveENS, resolveENSFromAddress } from '@/lib/utils/ens';
+import {
+  hasEthereumHexPrefix,
+  isEthereumAddress,
+  normalizeEthereumAddress,
+} from '@/lib/utils/ethereum';
 import { getStorage } from '@/lib/storage';
 import { fetchNeynarUserByVerification, fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
 import { pickFarcasterDisplayName } from '@/lib/farcaster/display-name';
@@ -27,14 +32,16 @@ interface InboxState {
 const formatIdentifier = (value?: string | null): string => {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw) return 'Unknown';
-  const lower = raw.toLowerCase();
+  const normalizedAddress = normalizeEthereumAddress(raw);
+  const displayValue = normalizedAddress ?? raw;
+  const lower = displayValue.toLowerCase();
   if (lower.startsWith('0x') && lower.length > 10) {
-    return `${raw.slice(0, 6)}…${raw.slice(-4)}`;
+    return `${displayValue.slice(0, 6)}…${displayValue.slice(-4)}`;
   }
-  if (raw.length > 18) {
-    return `${raw.slice(0, 10)}…${raw.slice(-4)}`;
+  if (displayValue.length > 18) {
+    return `${displayValue.slice(0, 10)}…${displayValue.slice(-4)}`;
   }
-  return raw;
+  return displayValue;
 };
 
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
@@ -68,12 +75,14 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const byInbox = contacts.find((c) => c.inboxId?.toLowerCase() === normalizedInboxId);
       if (byInbox) return byInbox;
     }
+    const normalizeLookupAddress = (value: string): string =>
+      normalizeEthereumAddress(value) ?? value.trim().toLowerCase();
     const candidateAddresses = [contact.primaryAddress, ...(contact.addresses ?? [])]
       .filter(Boolean)
-      .map((addr) => addr!.toLowerCase());
+      .map((addr) => normalizeLookupAddress(addr!));
     for (const addr of candidateAddresses) {
       const byAddress = contacts.find((c) =>
-        c.addresses?.some((known) => known.toLowerCase() === addr)
+        c.addresses?.some((known) => normalizeLookupAddress(known) === addr)
       );
       if (byAddress) return byAddress;
     }
@@ -119,10 +128,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                 : id.identifierKind;
             return (kind || '').toLowerCase() === 'ethereum';
           })
-          .map((id) => {
-            const identifier = id.identifier;
-            return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
-          });
+          .map((id) => normalizeEthereumAddress(id.identifier))
+          .filter((address): address is `0x${string}` => Boolean(address));
         setInboxState({
           inboxId: state.inboxId,
           accountAddresses,
@@ -161,13 +168,14 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
       const subject = liveContact;
       const normalize = (value: string) => value.trim().toLowerCase();
-      const looksLikeRawHex = (value: string) => /^[0-9a-f]{40}$/i.test(value);
 
       const myInboxId = identity?.inboxId ? normalize(identity.inboxId) : undefined;
-      const myAddress = identity?.address ? normalize(identity.address) : undefined;
+      const myAddress = normalizeEthereumAddress(identity?.address);
       const subjectInboxId = subject.inboxId ? normalize(subject.inboxId) : undefined;
-      const subjectPrimaryAddress = subject.primaryAddress ? normalize(subject.primaryAddress) : undefined;
-      const subjectAddresses = (subject.addresses ?? []).map((addr) => normalize(addr));
+      const subjectPrimaryAddress = normalizeEthereumAddress(subject.primaryAddress);
+      const subjectAddresses = (subject.addresses ?? []).map(
+        (addr) => normalizeEthereumAddress(addr) ?? normalize(addr)
+      );
       const isSelfContact = Boolean(
         (myInboxId && subjectInboxId && myInboxId === subjectInboxId) ||
           (myAddress &&
@@ -182,11 +190,10 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         if (!value) return;
         const trimmed = value.trim();
         if (!trimmed) return;
-        if (isEthereumAddress(trimmed)) {
-          ethereumAddresses.add(normalize(trimmed));
-        } else if (looksLikeRawHex(trimmed)) {
-          ethereumAddresses.add(`0x${normalize(trimmed)}`);
-        } else {
+        const normalizedAddress = normalizeEthereumAddress(trimmed);
+        if (normalizedAddress) {
+          ethereumAddresses.add(normalizedAddress);
+        } else if (!hasEthereumHexPrefix(trimmed)) {
           nonEthereumAddresses.add(normalize(trimmed));
         }
       };
@@ -347,8 +354,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       if (ensIdentity?.identifier) {
         try {
           ensResolvedAddress = await resolveENS(ensIdentity.identifier);
-          if (ensResolvedAddress && isEthereumAddress(ensResolvedAddress)) {
-            ethereumAddresses.add(normalize(ensResolvedAddress));
+          const normalizedEnsAddress = normalizeEthereumAddress(ensResolvedAddress);
+          if (normalizedEnsAddress) {
+            ethereumAddresses.add(normalizedEnsAddress);
           }
         } catch (ensLookupError) {
           console.warn('[ContactCardModal] ENS forward resolution failed:', ensLookupError);
@@ -356,8 +364,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       }
 
       let primaryEthereumAddress: string | undefined;
-      if (ensResolvedAddress && isEthereumAddress(ensResolvedAddress)) {
-        primaryEthereumAddress = normalize(ensResolvedAddress);
+      const normalizedEnsAddress = normalizeEthereumAddress(ensResolvedAddress);
+      if (normalizedEnsAddress) {
+        primaryEthereumAddress = normalizedEnsAddress;
       } else {
         const preferredSources = [
           subject.primaryAddress,
@@ -366,8 +375,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
           isSelfContact ? identity?.address : undefined,
         ];
         for (const source of preferredSources) {
-          if (source && isEthereumAddress(source)) {
-            primaryEthereumAddress = normalize(source);
+          const normalizedSource = normalizeEthereumAddress(source);
+          if (normalizedSource) {
+            primaryEthereumAddress = normalizedSource;
             break;
           }
         }
@@ -445,11 +455,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         ...Array.from(otherIdentities.values()),
       ];
 
-      const isHexAddress = (value?: string | null) =>
-        Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
-
       let updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier;
-      if (isHexAddress(updatedDisplayName) && subject.name && !isHexAddress(subject.name)) {
+      if (isEthereumAddress(updatedDisplayName) && subject.name && !isEthereumAddress(subject.name)) {
         updatedDisplayName = subject.preferredName ?? subject.name;
       }
       const updatedAvatar = latestProfileAvatar;
@@ -610,17 +617,13 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                     : id.identifierKind;
                 return (kind || '').toLowerCase() === 'ethereum';
               })
-              .map((id) => {
-                const identifier = id.identifier;
-                return identifier.startsWith('0x') ? identifier : `0x${identifier}`;
-              });
+              .map((id) => normalizeEthereumAddress(id.identifier))
+              .filter((address): address is `0x${string}` => Boolean(address));
             setInboxState({
               inboxId: state.inboxId,
               accountAddresses,
             });
-            const normalizedAccountAddresses = accountAddresses.map((addr) =>
-              addr.startsWith('0x') ? addr.toLowerCase() : `0x${addr.toLowerCase()}`
-            );
+            const normalizedAccountAddresses = accountAddresses;
             const refreshedIdentities: ContactIdentity[] = [
               ...normalizedAccountAddresses.map((addr, index) => ({
                 identifier: addr,

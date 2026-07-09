@@ -18,7 +18,22 @@ export interface ProvisionDeviceDependencies {
   resolveInboxId(identifier: Identifier): Promise<string | undefined>;
   fetchInboxState(inboxId: string): Promise<InboxState | undefined>;
   createManager(signer: Signer): Promise<DeviceProvisioningClient>;
+  knownInstallationId?: string;
+  onInstallationReady?: (installationId: string) => Promise<void> | void;
+  onPhase?: (phase: DeviceProvisioningPhase) => Promise<void> | void;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
+
+export type DeviceProvisioningPhase =
+  | 'preflight'
+  | 'opening-manager'
+  | 'manager-ready'
+  | 'registering-installation'
+  | 'installation-registered'
+  | 'associating-key'
+  | 'association-submitted'
+  | 'verifying-association'
+  | 'complete';
 
 export interface ProvisionDeviceResult {
   inboxId: string;
@@ -29,16 +44,78 @@ export interface ProvisionDeviceResult {
 
 const normalizeId = (value: string | null | undefined) => value?.trim().toLowerCase() || null;
 
+const normalizeInstallationId = (value: string | null | undefined) =>
+  value?.trim().toLowerCase().replace(/^0x/, '') || null;
+
+const installationIdsMatch = (left: string | null | undefined, right: string | null | undefined) =>
+  normalizeInstallationId(left) === normalizeInstallationId(right);
+
+const defaultSleep = async (milliseconds: number) =>
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+const isInstallationLimitLikeError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /too\s*many\s*installations|10\s*\/\s*10|installation limit|already registered 10/i.test(
+    message
+  );
+};
+
 async function waitForInboxAssociation(
   identifier: Identifier,
   expectedInboxId: string,
-  resolveInboxId: ProvisionDeviceDependencies['resolveInboxId']
+  resolveInboxId: ProvisionDeviceDependencies['resolveInboxId'],
+  sleep: (milliseconds: number) => Promise<void>
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 15; attempt += 1) {
     if (normalizeId(await resolveInboxId(identifier)) === expectedInboxId) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    await sleep(Math.min(3_000, 250 * 2 ** attempt));
+  }
+  return false;
+}
+
+async function waitForInstallation(
+  inboxId: string,
+  installationId: string,
+  fetchInboxState: ProvisionDeviceDependencies['fetchInboxState'],
+  sleep: (milliseconds: number) => Promise<void>
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const state = await fetchInboxState(inboxId);
+    if (
+      state?.installations?.some((installation) =>
+        installationIdsMatch(installation.id, installationId)
+      )
+    ) {
+      return true;
+    }
+    await sleep(Math.min(2_000, 250 * 2 ** attempt));
+  }
+  return false;
+}
+
+async function waitForAccountIdentifier(
+  inboxId: string,
+  identifier: Identifier,
+  fetchInboxState: ProvisionDeviceDependencies['fetchInboxState'],
+  sleep: (milliseconds: number) => Promise<void>
+): Promise<boolean> {
+  const expectedKind = identifier.identifierKind;
+  const expectedIdentifier = identifier.identifier.trim().toLowerCase().replace(/^(?:0x)+/i, '');
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const state = await fetchInboxState(inboxId);
+    if (
+      state?.accountIdentifiers?.some(
+        (candidate) =>
+          candidate.identifierKind === expectedKind &&
+          candidate.identifier.trim().toLowerCase().replace(/^(?:0x)+/i, '') ===
+            expectedIdentifier
+      )
+    ) {
+      return true;
+    }
+    await sleep(Math.min(2_000, 250 * 2 ** attempt));
   }
   return false;
 }
@@ -159,6 +236,20 @@ export class ReassignmentRequiredError extends Error {
   }
 }
 
+export class StaleInstallationError extends Error {
+  readonly inboxId: string;
+  readonly installationId: string;
+
+  constructor(inboxId: string, installationId: string) {
+    super(
+      `Interrupted browser installation ${installationId} is still registered for inbox ${inboxId}, but its local database now opens a different installation. Remove that interrupted installation before retrying.`
+    );
+    this.name = 'StaleInstallationError';
+    this.inboxId = inboxId;
+    this.installationId = installationId;
+  }
+}
+
 /**
  * Bootstrap one browser installation with wallet authority, then associate a fresh
  * local account key with the same inbox. The manager and final local-key client must
@@ -170,6 +261,12 @@ export async function provisionFreshDeviceKey(
   expectedInboxId: string,
   dependencies: ProvisionDeviceDependencies
 ): Promise<ProvisionDeviceResult> {
+  const sleep = dependencies.sleep ?? defaultSleep;
+  const notify = async (phase: DeviceProvisioningPhase) => {
+    await dependencies.onPhase?.(phase);
+  };
+
+  await notify('preflight');
   const targetIdentifier = await targetSigner.getIdentifier();
   const deviceIdentifier = await deviceSigner.getIdentifier();
   const expected = normalizeId(expectedInboxId);
@@ -184,7 +281,32 @@ export async function provisionFreshDeviceKey(
     throw new ReassignmentRequiredError(existingDeviceInbox, expected);
   }
 
-  const manager = await dependencies.createManager(targetSigner);
+  const preflightState = await dependencies.fetchInboxState(expected);
+  if (!preflightState) {
+    throw new Error(
+      'XMTP did not return the target inbox state, so Converge could not verify the installation limit.'
+    );
+  }
+  const knownInstallationPresent = preflightState.installations?.some((installation) =>
+    installationIdsMatch(installation.id, dependencies.knownInstallationId)
+  );
+  if (
+    (preflightState.installations?.length ?? 0) >= XMTP_INSTALLATION_LIMIT &&
+    !knownInstallationPresent
+  ) {
+    throw new InstallationLimitError(expected);
+  }
+
+  await notify('opening-manager');
+  let manager: DeviceProvisioningClient;
+  try {
+    manager = await dependencies.createManager(targetSigner);
+  } catch (error) {
+    if (isInstallationLimitLikeError(error)) {
+      throw new InstallationLimitError(expected);
+    }
+    throw error;
+  }
   try {
     if (normalizeId(manager.inboxId) !== expected) {
       throw new Error('The wallet management client opened a different XMTP inbox.');
@@ -192,6 +314,16 @@ export async function provisionFreshDeviceKey(
     if (!manager.installationId) {
       throw new Error('XMTP did not create a local installation for this browser.');
     }
+    if (
+      dependencies.knownInstallationId &&
+      !installationIdsMatch(manager.installationId, dependencies.knownInstallationId)
+    ) {
+      throw new Error(
+        'XMTP opened a different local installation while resuming device setup. Registration was stopped.'
+      );
+    }
+    await dependencies.onInstallationReady?.(manager.installationId);
+    await notify('manager-ready');
 
     const state = await dependencies.fetchInboxState(expected);
     if (!state) {
@@ -201,7 +333,7 @@ export async function provisionFreshDeviceKey(
     }
     const installations = state.installations ?? [];
     const hasManagerInstallation = installations.some(
-      (installation) => installation.id === manager.installationId
+      (installation) => installationIdsMatch(installation.id, manager.installationId)
     );
 
     let installationRegistered = false;
@@ -209,8 +341,31 @@ export async function provisionFreshDeviceKey(
       if (installations.length >= XMTP_INSTALLATION_LIMIT) {
         throw new InstallationLimitError(expected);
       }
-      await manager.register();
+      await notify('registering-installation');
+      try {
+        await manager.register();
+      } catch (error) {
+        if (isInstallationLimitLikeError(error)) {
+          throw new InstallationLimitError(expected);
+        }
+        const stateAfterError = await dependencies.fetchInboxState(expected);
+        const registrationSettled = stateAfterError?.installations?.some((installation) =>
+          installationIdsMatch(installation.id, manager.installationId)
+        );
+        if (!registrationSettled) {
+          throw error;
+        }
+        console.info(
+          '[XMTP] Browser installation became visible while register() was settling; resuming device setup.'
+        );
+      }
       installationRegistered = true;
+      if (!(await waitForInstallation(expected, manager.installationId, dependencies.fetchInboxState, sleep))) {
+        throw new Error(
+          'XMTP accepted the browser installation, but it is not visible on the identity ledger yet. Retry to resume this same installation.'
+        );
+      }
+      await notify('installation-registered');
     }
 
     let accountAdded = false;
@@ -225,26 +380,50 @@ export async function provisionFreshDeviceKey(
       } else {
         // The SDK requires this acknowledgement even for an unregistered key. The
         // two ledger checks above guarantee that this call is not a reassignment.
-        await manager.unsafe_addAccount(deviceSigner, true);
-        accountAdded = true;
+        await notify('associating-key');
+        try {
+          await manager.unsafe_addAccount(deviceSigner, true);
+          accountAdded = true;
+        } catch (error) {
+          const resolvedAfterError = normalizeId(
+            await manager.fetchInboxIdByIdentifier(deviceIdentifier)
+          );
+          if (resolvedAfterError !== expected) {
+            throw error;
+          }
+          console.info(
+            '[XMTP] Device key association became visible while the add-account request was settling; resuming verification.'
+          );
+        }
+        await notify('association-submitted');
       }
     }
 
+    await notify('verifying-association');
     const managerConfirmed = await waitForInboxAssociation(
       deviceIdentifier,
       expected,
-      (identifier) => manager.fetchInboxIdByIdentifier(identifier)
+      (identifier) => manager.fetchInboxIdByIdentifier(identifier),
+      sleep
     );
     if (!managerConfirmed) {
       throw new Error('XMTP did not associate the new device key with the target inbox.');
     }
     if (
       accountAdded &&
-      !(await waitForInboxAssociation(deviceIdentifier, expected, dependencies.resolveInboxId))
+      !(await waitForInboxAssociation(deviceIdentifier, expected, dependencies.resolveInboxId, sleep))
     ) {
-      throw new Error('The new device key association is not visible on the XMTP identity ledger yet.');
+      throw new Error(
+        'XMTP accepted the new device key, but the association is not visible everywhere yet. Retry to finish setup with this same key.'
+      );
+    }
+    if (!(await waitForAccountIdentifier(expected, deviceIdentifier, dependencies.fetchInboxState, sleep))) {
+      throw new Error(
+        'The device key resolves to the target inbox, but XMTP has not returned it in the inbox identity state yet. Retry to finish setup with this same key.'
+      );
     }
 
+    await notify('complete');
     return {
       inboxId: expected,
       installationId: manager.installationId,
@@ -253,5 +432,7 @@ export async function provisionFreshDeviceKey(
     };
   } finally {
     await manager.close();
+    // The Browser SDK worker releases its OPFS/SQLite lock asynchronously.
+    await sleep(350);
   }
 }

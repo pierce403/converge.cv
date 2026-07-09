@@ -16,7 +16,14 @@ import type { KeyfileIdentity } from '@/lib/keyfile';
 import { useWalletConnection } from '@/lib/wagmi';
 import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
 import { getXmtpClient } from '@/lib/xmtp';
-import { usePublicClient } from 'wagmi';
+import { getPublicClient } from '@wagmi/core';
+import { wagmiConfigNative } from '@/lib/wagmi';
+import { classifyWalletBytecode } from '@/lib/wagmi/wallet-account';
+import { consumeWalletApprovalIntent } from '@/lib/wagmi/wallet-approval-state';
+import { normalizeEthereumAddress, requireEthereumAddress } from '@/lib/utils/ethereum';
+import { getStorage } from '@/lib/storage';
+import { formatXmtpIdentifier } from '@/lib/xmtp/identifiers';
+import { StaleInstallationError } from '@/lib/xmtp/device-provisioning';
 
 const BASE_CHAIN_ID = 8453;
 
@@ -83,17 +90,8 @@ const formatInstallationTimestamp = (value?: bigint): { absolute: string; relati
   }
 };
 
-const ensure0xPrefix = (value: string): string =>
-  value.startsWith('0x') ? value : `0x${value}`;
-
 const formatIdentifier = (identifier: Identifier): string => {
-  const kind = identifier.identifierKind;
-
-  if (kind === IdentifierKind.Ethereum) {
-    return ensure0xPrefix(identifier.identifier);
-  }
-
-  return identifier.identifier;
+  return formatXmtpIdentifier(identifier);
 };
 
 const getPreferredLabel = (identifiers: Identifier[] | undefined, address: string): string => {
@@ -103,7 +101,7 @@ const getPreferredLabel = (identifiers: Identifier[] | undefined, address: strin
 
   const ethereumIdentifier = identifiers.find((item) => item.identifierKind === IdentifierKind.Ethereum);
   if (ethereumIdentifier) {
-    return ensure0xPrefix(ethereumIdentifier.identifier);
+    return normalizeEthereumAddress(ethereumIdentifier.identifier) ?? ethereumIdentifier.identifier;
   }
 
   return identifiers[0]?.identifier || `Wallet ${shortAddress(address)}`;
@@ -167,7 +165,7 @@ export function OnboardingPage() {
   const navigate = useNavigate();
   const auth = useAuth();
   const { disconnectWallet, signMessage } = useWalletConnection();
-  const basePublicClient = usePublicClient({ chainId: BASE_CHAIN_ID });
+  const signMessageRef = useRef(signMessage);
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
@@ -182,6 +180,8 @@ export function OnboardingPage() {
   const [keyfileCandidate, setKeyfileCandidate] = useState<KeyfileIdentity | null>(null);
   const [keyfileProbeResult, setKeyfileProbeResult] = useState<IdentityProbeResult | null>(null);
   const [isRecoveringKeyfileInstallation, setIsRecoveringKeyfileInstallation] = useState(false);
+  const [resumableInstallationId, setResumableInstallationId] = useState<string | null>(null);
+  const [staleInstallationId, setStaleInstallationId] = useState<string | null>(null);
   const [keyfileError, setKeyfileError] = useState<string | null>(null);
   const [keyfileName, setKeyfileName] = useState<string | null>(null);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
@@ -190,11 +190,16 @@ export function OnboardingPage() {
     hydrateRegistry();
   }, [hydrateRegistry]);
 
+  useEffect(() => {
+    signMessageRef.current = signMessage;
+  }, [signMessage]);
+
   // If navigated with ?connect=1 from a deep link or older route, jump straight into wallet selection.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('connect') === '1') {
+      const shouldResumeWalletApproval = consumeWalletApprovalIntent();
+      if (params.get('connect') === '1' || shouldResumeWalletApproval) {
         setView('wallet');
       }
     } catch {
@@ -202,9 +207,77 @@ export function OnboardingPage() {
     }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const findResumableInstallation = async () => {
+      const targetInboxId = probeResult?.inboxId?.trim().toLowerCase();
+      if (!targetInboxId) {
+        setResumableInstallationId(null);
+        setStaleInstallationId(null);
+        return;
+      }
+      try {
+        const storage = await getStorage();
+        const pending = (await storage.listIdentities()).find(
+          (identity) =>
+            identity.provisioningMode === 'device-join' &&
+            identity.provisioningPending === true &&
+            identity.expectedInboxId?.trim().toLowerCase() === targetInboxId
+        );
+        const normalizedPendingId = pending?.installationId?.replace(/^0x/i, '').toLowerCase();
+        const normalizedStaleId = pending?.staleInstallationId
+          ?.replace(/^0x/i, '')
+          .toLowerCase();
+        const isRegistered = Boolean(
+          normalizedPendingId &&
+            probeResult?.inboxState?.installations?.some(
+              (installation) =>
+                installation.id.replace(/^0x/i, '').toLowerCase() === normalizedPendingId
+            )
+        );
+        const staleIsRegistered = Boolean(
+          normalizedStaleId &&
+            probeResult?.inboxState?.installations?.some(
+              (installation) =>
+                installation.id.replace(/^0x/i, '').toLowerCase() === normalizedStaleId
+            )
+        );
+        if (pending?.staleInstallationId && !staleIsRegistered) {
+          await storage.putIdentity({ ...pending, staleInstallationId: undefined });
+        }
+        if (!cancelled) {
+          setResumableInstallationId(isRegistered ? pending?.installationId ?? null : null);
+          setStaleInstallationId(
+            staleIsRegistered ? pending?.staleInstallationId ?? null : null
+          );
+        }
+      } catch (error) {
+        console.warn('[Onboarding] Could not inspect pending device setup:', error);
+        if (!cancelled) {
+          setResumableInstallationId(null);
+          setStaleInstallationId(null);
+        }
+      }
+    };
+    void findResumableInstallation();
+    return () => {
+      cancelled = true;
+    };
+  }, [probeResult]);
+
   const sortedRegistry = useMemo(
     () => [...registryEntries].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),
     [registryEntries]
+  );
+  const keyfileRecoveryIdentifier = keyfileProbeResult?.inboxState?.recoveryIdentifier;
+  const keyfileRecoveryAddress =
+    keyfileRecoveryIdentifier?.identifierKind === IdentifierKind.Ethereum
+      ? normalizeEthereumAddress(keyfileRecoveryIdentifier.identifier)
+      : null;
+  const keyfileCanRecoverInstallations = Boolean(
+    keyfileCandidate &&
+      keyfileRecoveryAddress &&
+      keyfileRecoveryAddress === normalizeEthereumAddress(keyfileCandidate.address)
   );
 
   const resetKeyfileFlow = () => {
@@ -285,12 +358,8 @@ export function OnboardingPage() {
     try {
       await resetXmtpClient();
       console.log('[Onboarding] ✅ XMTP client disconnected');
-      // Wait for OPFS locks to be fully released
-      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
       console.warn('[Onboarding] Error disconnecting XMTP client:', error);
-      // Still wait even if disconnect failed
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     // Disconnect wallet
@@ -320,6 +389,7 @@ export function OnboardingPage() {
 
       const success = await auth.createIdentity(generated.identity.address, generated.privateKey, undefined, undefined, {
         register: true,
+        registrationPolicy: 'new-inbox',
         enableHistorySync: false,
         label: generated.identity.displayName,
         mnemonic: generated.mnemonic,
@@ -377,6 +447,7 @@ export function OnboardingPage() {
         undefined,
         {
           register: false,
+          registrationPolicy: keyProbe.isRegistered ? 'existing-inbox' : 'new-inbox',
           enableHistorySync: true,
           // Don't pass label - will fetch from XMTP
           mnemonic: keyfileCandidate.mnemonic,
@@ -441,41 +512,75 @@ export function OnboardingPage() {
     setView('wallet');
   };
 
-  const handleWalletConnected = async (address: string, chainId?: number) => {
-    let walletType: WalletIdentityCandidate['walletType'] = 'EOA';
-    if (basePublicClient) {
-      try {
-        const bytecode = await basePublicClient.getBytecode({ address: address as `0x${string}` });
-        if (bytecode && bytecode !== '0x') {
-          walletType = 'SCW';
-          chainId = BASE_CHAIN_ID;
-        }
-      } catch (error) {
-        console.warn('[Onboarding] Could not inspect wallet bytecode; using EOA signer:', error);
-      }
-    }
-
-    const candidate: WalletIdentityCandidate = {
-      address,
-      chainId,
-      walletType,
-      signMessage: async (message: string) => {
-        if (!signMessage) {
-          throw new Error('Wallet signing is not available. Please reconnect your wallet.');
-        }
-        return await signMessage(message);
-      },
-    };
-
-    setWalletCandidate(candidate);
-    setStatusMessage('Checking XMTP for inboxes…');
-    setView('probing');
-
+  const handleWalletConnected = async (
+    address: string,
+    chainId?: number,
+    signMessageOverride?: (message: string) => Promise<string>
+  ) => {
     try {
+      const canonicalAddress = requireEthereumAddress(address, 'Connected wallet address');
+      let walletType: WalletIdentityCandidate['walletType'] = 'EOA';
+      let signerChainId = chainId;
+      const supportedChainIds = new Set([1, BASE_CHAIN_ID, 84532]);
+      const inspectionChainIds = [
+        ...(chainId && supportedChainIds.has(chainId) ? [chainId] : []),
+        BASE_CHAIN_ID,
+      ].filter((value, index, values) => values.indexOf(value) === index);
+      let successfulInspections = 0;
+
+      for (const inspectionChainId of inspectionChainIds) {
+        try {
+          const publicClient = getPublicClient(wagmiConfigNative, {
+            chainId: inspectionChainId as 1 | 8453 | 84532,
+          });
+          if (!publicClient) {
+            continue;
+          }
+          const bytecode = await publicClient.getBytecode({ address: canonicalAddress });
+          successfulInspections += 1;
+          if (classifyWalletBytecode(bytecode) === 'SCW') {
+            walletType = 'SCW';
+            signerChainId = inspectionChainId;
+            break;
+          }
+        } catch (inspectionError) {
+          console.warn(
+            `[Onboarding] Could not inspect wallet bytecode on chain ${inspectionChainId}:`,
+            inspectionError
+          );
+        }
+      }
+
+      if (successfulInspections === 0) {
+        throw new Error(
+          'Converge could not verify whether this address is a wallet or smart account. Check the connection and retry.'
+        );
+      }
+
+      const candidate: WalletIdentityCandidate = {
+        address: canonicalAddress,
+        chainId: signerChainId,
+        walletType,
+        signMessage: async (message: string) => {
+          if (signMessageOverride) {
+            return await signMessageOverride(message);
+          }
+          const currentSignMessage = signMessageRef.current;
+          if (!currentSignMessage) {
+            throw new Error('Wallet signing is not available. Please reconnect your wallet.');
+          }
+          return await currentSignMessage(message, canonicalAddress);
+        },
+      };
+
+      setWalletCandidate(candidate);
+      setStatusMessage('Checking XMTP for inboxes…');
+      setView('probing');
+
       const result = await auth.probeIdentity(
-        address,
+        canonicalAddress,
         undefined,
-        chainId,
+        signerChainId,
         candidate.signMessage,
         candidate.walletType
       );
@@ -484,8 +589,9 @@ export function OnboardingPage() {
       setView('results');
     } catch (err) {
       console.error('[Onboarding] Wallet probe failed:', err);
-      setError('Unable to reach XMTP right now. Please try again.');
+      setError(err instanceof Error ? err.message : 'Unable to reach XMTP right now. Please try again.');
       setView('wallet');
+      throw err;
     }
   };
 
@@ -494,8 +600,14 @@ export function OnboardingPage() {
       return;
     }
 
-    if (probeResult && probeResult.installationCount >= 10) {
+    if (probeResult && probeResult.installationCount >= 10 && !resumableInstallationId) {
       setError('Installation limit reached (10/10). Revoke an old installation to continue.');
+      return;
+    }
+    if (staleInstallationId) {
+      setError(
+        'An interrupted browser installation is still registered but no longer exists locally. Remove it before retrying device setup.'
+      );
       return;
     }
 
@@ -517,6 +629,7 @@ export function OnboardingPage() {
         {
           walletType: walletCandidate.walletType,
           label,
+          onStatus: setStatusMessage,
         }
       );
 
@@ -525,6 +638,10 @@ export function OnboardingPage() {
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {
       console.error('[Onboarding] Failed to connect app key to wallet inbox:', err);
+      if (err instanceof StaleInstallationError) {
+        setResumableInstallationId(null);
+        setStaleInstallationId(err.installationId);
+      }
       setError(err instanceof Error ? err.message : 'Failed to connect this app key. Please try again.');
       setView('results');
     }
@@ -534,9 +651,22 @@ export function OnboardingPage() {
     if (!walletCandidate || !probeResult?.inboxId || isRecoveringInstallation) {
       return;
     }
+    const recoveryIdentifier = probeResult.inboxState?.recoveryIdentifier;
+    const recoveryAddress =
+      recoveryIdentifier?.identifierKind === IdentifierKind.Ethereum
+        ? normalizeEthereumAddress(recoveryIdentifier.identifier)
+        : null;
+    if (!recoveryAddress || recoveryAddress !== normalizeEthereumAddress(walletCandidate.address)) {
+      setError(
+        `Static recovery requires the inbox recovery wallet${recoveryAddress ? ` (${recoveryAddress})` : ''}. Connect that wallet or revoke an installation from an existing device.`
+      );
+      return;
+    }
     if (
       !window.confirm(
-        'Revoke the oldest installation to make room for this browser? Creation time does not prove that device is inactive.'
+        staleInstallationId
+          ? 'Remove the interrupted XMTP installation that no longer exists in this browser?'
+          : 'Revoke the oldest installation to make room for this browser? Creation time does not prove that device is inactive.'
       )
     ) {
       return;
@@ -544,26 +674,49 @@ export function OnboardingPage() {
 
     setIsRecoveringInstallation(true);
     setError(null);
-    setStatusMessage('Revoking one old installation…');
+    setStatusMessage(
+      staleInstallationId ? 'Removing interrupted installation…' : 'Revoking one old installation…'
+    );
     setView('processing');
 
     try {
       const xmtp = getXmtpClient();
-      await xmtp.revokeOldestInstallationsForIdentity(
+      const storage = await getStorage();
+      const pendingIdentity = (await storage.listIdentities()).find(
+        (identity) =>
+          identity.provisioningMode === 'device-join' &&
+          identity.provisioningPending === true &&
+          identity.expectedInboxId?.trim().toLowerCase() ===
+            probeResult.inboxId?.trim().toLowerCase()
+      );
+      const recoveryResult = await xmtp.revokeOldestInstallationsForIdentity(
         {
           address: walletCandidate.address,
           chainId: walletCandidate.chainId,
           walletType: walletCandidate.walletType,
           signMessage: walletCandidate.signMessage,
         },
-        1,
+        Math.max(1, probeResult.installationCount - 9),
         {
           inboxId: probeResult.inboxId,
           inboxState: probeResult.inboxState,
-          requireAtLimit: true,
+          requireAtLimit: !staleInstallationId,
+          preferredInstallationId: staleInstallationId ?? pendingIdentity?.staleInstallationId,
           onStatus: setStatusMessage,
         }
       );
+
+      if (
+        pendingIdentity?.staleInstallationId &&
+        recoveryResult.revoked.some(
+          (installationId) =>
+            installationId.replace(/^0x/i, '').toLowerCase() ===
+            pendingIdentity.staleInstallationId?.replace(/^0x/i, '').toLowerCase()
+        )
+      ) {
+        await storage.putIdentity({ ...pendingIdentity, staleInstallationId: undefined });
+      }
+      setStaleInstallationId(null);
 
       const refreshed = await auth.probeIdentity(
         walletCandidate.address,
@@ -591,6 +744,12 @@ export function OnboardingPage() {
     ) {
       return;
     }
+    if (!keyfileCanRecoverInstallations) {
+      setKeyfileError(
+        `Static recovery requires the inbox recovery identity${keyfileRecoveryAddress ? ` (${keyfileRecoveryAddress})` : ''}. Use an existing device to revoke an installation.`
+      );
+      return;
+    }
     if (
       !window.confirm(
         'Revoke the oldest installation to make room for this keyfile on this browser? Creation time does not prove that device is inactive.'
@@ -608,7 +767,7 @@ export function OnboardingPage() {
           address: keyfileCandidate.address,
           privateKey: keyfileCandidate.privateKey,
         },
-        1,
+        Math.max(1, keyfileProbeResult.installationCount - 9),
         {
           inboxId: keyfileProbeResult.inboxId,
           inboxState: keyfileProbeResult.inboxState,
@@ -746,8 +905,8 @@ export function OnboardingPage() {
     <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
       <WalletSelector
         onWalletConnected={handleWalletConnected}
-        onBack={() => {
-          resetWalletFlow();
+        onBack={async () => {
+          await resetWalletFlow();
           setView('landing');
         }}
         backLabel="← Back"
@@ -803,7 +962,9 @@ export function OnboardingPage() {
             </div>
           )}
 
-          {keyfileProbeResult && keyfileProbeResult.installationCount >= 10 && (
+          {keyfileProbeResult &&
+            keyfileProbeResult.installationCount >= 10 &&
+            keyfileCanRecoverInstallations && (
             <button
               type="button"
               onClick={recoverOldestKeyfileInstallation}
@@ -815,6 +976,15 @@ export function OnboardingPage() {
                 : 'Revoke oldest installation'}
             </button>
           )}
+
+          {keyfileProbeResult &&
+            keyfileProbeResult.installationCount >= 10 &&
+            !keyfileCanRecoverInstallations && (
+              <div className="rounded-md border border-amber-500/60 bg-amber-950/50 px-4 py-3 text-sm text-amber-100">
+                This key is not the inbox recovery identity
+                {keyfileRecoveryAddress ? ` (${keyfileRecoveryAddress})` : ''}. Revoke an installation from an existing device before restoring here.
+              </div>
+            )}
 
           {keyfileCandidate && (
             <div className="space-y-3 rounded-lg border border-primary-800/60 bg-primary-900/60 p-4">
@@ -879,10 +1049,20 @@ export function OnboardingPage() {
     const remoteInstallations = probeResult.inboxState?.installations ?? [];
     const remoteIdentifiers: Identifier[] = probeResult.inboxState?.accountIdentifiers ?? [];
     const recoveryIdentifier = probeResult.inboxState?.recoveryIdentifier;
-    const recoveryAddress = recoveryIdentifier ? `0x${recoveryIdentifier.identifier}` : null;
+    const recoveryAddress = recoveryIdentifier ? formatIdentifier(recoveryIdentifier) : null;
+    const normalizedRecoveryAddress =
+      recoveryIdentifier?.identifierKind === IdentifierKind.Ethereum
+        ? normalizeEthereumAddress(recoveryIdentifier.identifier)
+        : null;
+    const connectedWalletIsRecovery = Boolean(
+      normalizedRecoveryAddress &&
+        normalizedRecoveryAddress === normalizeEthereumAddress(walletCandidate.address)
+    );
     const installationCount = probeResult.installationCount ?? 0;
     const installationWarning = installationCount >= 8 && installationCount < 10;
-    const installationBlocked = installationCount >= 10;
+    const installationBlocked =
+      Boolean(staleInstallationId) ||
+      (installationCount >= 10 && !resumableInstallationId);
     const hasInbox = probeResult.isRegistered && Boolean(probeResult.inboxId);
     const preferredLabel = getPreferredLabel(remoteIdentifiers, walletCandidate.address);
 
@@ -972,7 +1152,19 @@ export function OnboardingPage() {
                     )}
                     {installationBlocked && (
                       <div className="text-xs text-red-300 mt-1">
-                        Installation limit reached (10/10). Revoke an old installation to continue.
+                        {staleInstallationId
+                          ? 'An interrupted setup installation must be removed before this browser can retry.'
+                          : `Installation limit reached (${installationCount}/10). `}
+                        {connectedWalletIsRecovery
+                          ? staleInstallationId
+                            ? 'Remove that exact installation to continue.'
+                            : 'Revoke enough old installations to continue.'
+                          : 'Connect the recovery wallet shown below or use an existing device to remove an installation.'}
+                      </div>
+                    )}
+                    {installationCount >= 10 && resumableInstallationId && (
+                      <div className="text-xs text-amber-300 mt-1">
+                        This browser installation is already registered. Resume setup without creating another installation.
                       </div>
                     )}
                   </>
@@ -1045,19 +1237,29 @@ export function OnboardingPage() {
               <div className="pt-2">
                 {hasInbox ? (
                   installationBlocked ? (
-                    <button
-                      onClick={recoverOldestInstallation}
-                      disabled={isRecoveringInstallation}
-                      className="w-full rounded-md border border-amber-500/60 bg-amber-700 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isRecoveringInstallation ? 'Revoking…' : 'Revoke oldest installation'}
-                    </button>
+                    connectedWalletIsRecovery ? (
+                      <button
+                        onClick={recoverOldestInstallation}
+                        disabled={isRecoveringInstallation}
+                        className="w-full rounded-md border border-amber-500/60 bg-amber-700 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isRecoveringInstallation
+                          ? 'Revoking…'
+                          : staleInstallationId
+                            ? 'Remove interrupted installation'
+                            : `Revoke ${Math.max(1, installationCount - 9)} old installation${Math.max(1, installationCount - 9) === 1 ? '' : 's'}`}
+                      </button>
+                    ) : (
+                      <div className="rounded-md border border-amber-500/50 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
+                        Switch to the recovery wallet before using static installation recovery.
+                      </div>
+                    )
                   ) : (
                     <button
                       onClick={() => finalizeWalletIdentity()}
                       className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500"
                     >
-                      Add this device
+                      {resumableInstallationId ? 'Resume device setup' : 'Add this device'}
                     </button>
                   )
                 ) : (

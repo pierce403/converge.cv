@@ -1,6 +1,6 @@
 import type { WalletOption } from './hooks';
 
-const inboxConnectionOptionOrder = ['walletconnect', 'injected'] as const;
+const inboxConnectionOptionOrder = ['coinbase', 'walletconnect', 'injected'] as const;
 
 export const INBOX_CONNECTION_WALLET_OPTION_IDS = new Set<string>(inboxConnectionOptionOrder);
 

@@ -6,6 +6,7 @@
 import { IdentifierKind, type Signer } from '@xmtp/browser-sdk';
 import { toBytes, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { requireEthereumAddress } from '@/lib/utils/ethereum';
 
 type SignatureCacheEntry = {
   signature: string;
@@ -173,7 +174,7 @@ export function createEOASigner(
   address: `0x${string}`,
   signMessage: (message: string) => Promise<string>
 ): Signer {
-  const normalizedAddress = address.toLowerCase();
+  const normalizedAddress = requireEthereumAddress(address, 'EOA signer address');
   const signMessageCached = createCachedSignMessage(`eoa:${normalizedAddress}`, signMessage);
   return {
     type: 'EOA',
@@ -197,7 +198,7 @@ export function createSCWSigner(
   signMessage: (message: string) => Promise<string>,
   chainId: number = 1
 ): Signer {
-  const normalizedAddress = address.toLowerCase();
+  const normalizedAddress = requireEthereumAddress(address, 'SCW signer address');
   const normalizedChainId = Number.isFinite(chainId) ? chainId : 1;
   const signMessageCached = createCachedSignMessage(
     `scw:${normalizedAddress}:${normalizedChainId}`,
@@ -225,10 +226,11 @@ export function createSCWSigner(
  */
 export function createEphemeralSigner(privateKey: Hex): Signer {
   const account = privateKeyToAccount(privateKey);
+  const normalizedAddress = requireEthereumAddress(account.address, 'Derived signer address');
   return {
     type: 'EOA',
     getIdentifier: () => ({
-      identifier: account.address.toLowerCase(),
+      identifier: normalizedAddress,
       identifierKind: IdentifierKind.Ethereum,
     }),
     signMessage: async (message: string) => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertRecoveryAddress,
   ensureInstallationRecoveryNeeded,
   extractInstallationLimitInboxId,
   extractWrongChainIdDetails,
@@ -11,6 +12,13 @@ import {
 } from './installation-recovery';
 
 describe('installation recovery helpers', () => {
+  it('allows only the canonical recovery identity to perform static revocation', () => {
+    const recovery = `0x${'ab'.repeat(20)}`;
+    expect(assertRecoveryAddress(`0X${'AB'.repeat(20)}`, recovery)).toBe(recovery);
+    expect(() => assertRecoveryAddress(`0x${'cd'.repeat(20)}`, recovery)).toThrow(
+      /requires the inbox recovery wallet/
+    );
+  });
   it('does not revoke from a stale snapshot after capacity is already available', () => {
     expect(() => ensureInstallationRecoveryNeeded(10)).not.toThrow();
     expect(() => ensureInstallationRecoveryNeeded(9)).toThrow(/no revocation is needed/);
@@ -42,6 +50,19 @@ describe('installation recovery helpers', () => {
 
     expect(selected.map((installation) => installation.id)).toEqual(['old', 'middle']);
     expect(selected.map((installation) => Array.from(installation.bytes))).toEqual([[1], [2]]);
+  });
+
+  it('prefers a known stale local setup installation before active older devices', () => {
+    const selected = selectOldestRevocableInstallations(
+      [
+        { id: 'active-old', bytes: new Uint8Array([1]), clientTimestampNs: 10n },
+        { id: 'stale-new', bytes: new Uint8Array([2]), clientTimestampNs: 30n },
+      ],
+      1,
+      '0xstale-new'
+    );
+
+    expect(selected.map((installation) => installation.id)).toEqual(['stale-new']);
   });
 
   it('falls back to hex installation IDs when bytes are not present', () => {

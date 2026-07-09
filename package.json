@@ -1,7 +1,7 @@
 {
   "name": "converge.cv",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "postinstall": "patch-package || true; node scripts/fix-xmtp-wasm-worker.mjs",

@@ -10,6 +10,10 @@ import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { lockVault } from '@/lib/crypto';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { ConnectResult } from '@/lib/xmtp/client';
+import {
+  registrationPolicyForStoredIdentity,
+  type ClientRegistrationPolicy,
+} from '@/lib/xmtp/registration-policy';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Identity } from '@/types';
 import { useWalletConnection } from '@/lib/wagmi';
@@ -25,6 +29,7 @@ import {
   completeProvisioning,
   getScwRetryChainId,
   recordInstallationReady,
+  StaleInstallationError,
 } from '@/lib/xmtp/device-provisioning';
 
 export function useAuth() {
@@ -41,6 +46,7 @@ export function useAuth() {
       signMessage?: (message: string) => Promise<string>,
       options?: {
         register?: boolean;
+        registrationPolicy?: ClientRegistrationPolicy;
         enableHistorySync?: boolean;
         labelOverride?: string;
         skipRegistryUpdate?: boolean;
@@ -96,7 +102,6 @@ export function useAuth() {
         }
 
       const xmtp = getXmtpClient();
-      const shouldRegister = options?.register === true;
       const shouldSyncHistory =
         options?.enableHistorySync !== undefined ? options.enableHistorySync : false;
 
@@ -134,7 +139,9 @@ export function useAuth() {
           xmtpDbPathMode: storedIdentity?.xmtpDbPathMode,
         },
         {
-          register: shouldRegister,
+          registrationPolicy:
+            options?.registrationPolicy ??
+            (options?.register === true ? 'new-inbox' : 'resume-only'),
           enableHistorySync: shouldSyncHistory,
           expectedInboxId: options?.expectedInboxId,
           expectedInstallationId: options?.expectedInstallationId,
@@ -237,6 +244,7 @@ export function useAuth() {
       signMessage?: (message: string) => Promise<string>,
       options?: {
         register?: boolean;
+        registrationPolicy?: ClientRegistrationPolicy;
         enableHistorySync?: boolean;
         label?: string;
         skipRegistryUpdate?: boolean;
@@ -324,6 +332,9 @@ export function useAuth() {
           signMessage,
           {
             register: options?.register !== false,
+            registrationPolicy:
+              options?.registrationPolicy ??
+              (options?.register === false ? 'resume-only' : 'new-inbox'),
             enableHistorySync:
               options?.enableHistorySync !== undefined ? options.enableHistorySync : false,
             labelOverride: options?.label,
@@ -680,6 +691,10 @@ export function useAuth() {
       if (identity.privateKey) {
         const connection = await connectXmtpSafely(identity.address, identity.privateKey, undefined, undefined, {
           register: false,
+          registrationPolicy: registrationPolicyForStoredIdentity(
+            identity,
+            isPendingProvisioning
+          ),
           enableHistorySync: shouldSyncHistory,
           requestHistorySync: shouldRequestDeviceHistory,
           labelOverride: identity.displayName,
@@ -697,10 +712,11 @@ export function useAuth() {
           if (!walletSignMessage) {
             throw new Error('Wallet signing is not available. Please reconnect your wallet.');
           }
-          return await walletSignMessage(message);
+          return await walletSignMessage(message, identity.address);
         };
         const connection = await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
           register: false,
+          registrationPolicy: 'resume-only',
           enableHistorySync: shouldSyncHistory,
           requestHistorySync: shouldRequestDeviceHistory,
           walletType: identity.walletType,
@@ -775,6 +791,7 @@ export function useAuth() {
         options?.signMessage,
         {
           register: false,
+          registrationPolicy: 'resume-only',
           enableHistorySync: false,
           labelOverride: identity.displayName,
           required: true,
@@ -797,7 +814,11 @@ export function useAuth() {
       targetWalletAddress: string,
       chainId: number | undefined,
       signMessage: (message: string) => Promise<string>,
-      options?: { walletType?: 'EOA' | 'SCW'; label?: string }
+      options?: {
+        walletType?: 'EOA' | 'SCW';
+        label?: string;
+        onStatus?: (message: string) => void;
+      }
     ): Promise<{ inboxId: string; installationId: string; deviceKeyAddress: string }> => {
       const previousSession = useAuthStore.getState();
       const previousNamespace = getStorageNamespace();
@@ -813,12 +834,6 @@ export function useAuth() {
       if (!probe.inboxId) {
         throw new Error('No existing XMTP inbox was found for that wallet.');
       }
-      if (probe.installationCount >= 10) {
-        throw new Error(
-          'Installation limit reached (10/10). Revoke an old installation before adding this device.'
-        );
-      }
-
       const targetInboxId = normalizeInboxId(probe.inboxId);
       if (!targetInboxId) {
         throw new Error('XMTP returned an invalid inbox ID for that wallet.');
@@ -832,6 +847,37 @@ export function useAuth() {
           Boolean(candidate.privateKey) &&
           inboxIdsMatch(candidate.expectedInboxId, targetInboxId)
       );
+      const pendingInstallationIsRegistered = Boolean(
+        pendingIdentity?.installationId &&
+          probe.inboxState?.installations?.some(
+            (installation) =>
+              installation.id.replace(/^0x/i, '').toLowerCase() ===
+              pendingIdentity.installationId?.replace(/^0x/i, '').toLowerCase()
+          )
+      );
+      const pendingStaleInstallationIsRegistered = Boolean(
+        pendingIdentity?.staleInstallationId &&
+          probe.inboxState?.installations?.some(
+            (installation) =>
+              installation.id.replace(/^0x/i, '').toLowerCase() ===
+              pendingIdentity.staleInstallationId?.replace(/^0x/i, '').toLowerCase()
+          )
+      );
+      if (pendingIdentity?.staleInstallationId && !pendingStaleInstallationIsRegistered) {
+        pendingIdentity.staleInstallationId = undefined;
+        await currentStorage.putIdentity({ ...pendingIdentity });
+      }
+      if (pendingIdentity?.staleInstallationId && pendingStaleInstallationIsRegistered) {
+        throw new StaleInstallationError(
+          targetInboxId,
+          pendingIdentity.staleInstallationId
+        );
+      }
+      if (probe.installationCount >= 10 && !pendingInstallationIsRegistered) {
+        throw new Error(
+          'Installation limit reached (10/10). Revoke an old installation before adding this device.'
+        );
+      }
       const generated = pendingIdentity
         ? {
             identity: pendingIdentity,
@@ -859,21 +905,62 @@ export function useAuth() {
       // resume this exact key without registering it as a standalone inbox.
       await currentStorage.putIdentity(stagedIdentity);
 
-      const provision = async (provisioningChainId = chainId) =>
-        await xmtp.provisionDeviceKeyForInbox({
-          targetIdentity: {
-            address: targetWalletAddress,
-            chainId: provisioningChainId,
-            walletType,
-            signMessage,
-          },
-          deviceIdentity: {
-            address: stagedIdentity.address,
-            privateKey: generated.privateKey,
-            xmtpDbPathMode: 'inbox-default',
-          },
-          expectedInboxId: targetInboxId,
-        });
+      let lastProvisioningPhase = 'preflight';
+      const provision = async (provisioningChainId = chainId) => {
+        try {
+          return await xmtp.provisionDeviceKeyForInbox({
+            targetIdentity: {
+              address: targetWalletAddress,
+              chainId: provisioningChainId,
+              walletType,
+              signMessage,
+            },
+            deviceIdentity: {
+              address: stagedIdentity.address,
+              privateKey: generated.privateKey,
+              xmtpDbPathMode: 'inbox-default',
+            },
+            expectedInboxId: targetInboxId,
+            knownInstallationId: stagedIdentity.installationId,
+            onInstallationReady: async (installationId) => {
+              stagedIdentity.installationId = installationId;
+              if (
+                stagedIdentity.staleInstallationId?.replace(/^0x/i, '').toLowerCase() ===
+                installationId.replace(/^0x/i, '').toLowerCase()
+              ) {
+                stagedIdentity.staleInstallationId = undefined;
+              }
+              await currentStorage.putIdentity({ ...stagedIdentity, installationId });
+            },
+            onPhase: async (phase) => {
+              lastProvisioningPhase = phase;
+              const messages = {
+                preflight: 'Checking the target inbox and fresh device key…',
+                'opening-manager': 'Opening this browser installation…',
+                'manager-ready': 'Browser installation ready…',
+                'registering-installation': 'Approve this browser installation in your wallet…',
+                'installation-registered': 'Installation approved. Preparing the device key…',
+                'associating-key': 'Associating the fresh device key…',
+                'association-submitted': 'Device key accepted. Waiting for XMTP confirmation…',
+                'verifying-association': 'Verifying the new key against your existing inbox…',
+                complete: 'Device key verified. Opening your inbox…',
+              } as const;
+              options?.onStatus?.(messages[phase]);
+            },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error('[Auth] Device provisioning stopped', {
+            phase: lastProvisioningPhase,
+            message,
+          });
+          const provisioningError = new Error(
+            `Device setup stopped during ${lastProvisioningPhase}: ${message}`
+          );
+          Object.assign(provisioningError, { cause: error });
+          throw provisioningError;
+        }
+      };
 
       try {
         let provisioned: Awaited<ReturnType<typeof provision>>;
@@ -915,6 +1002,7 @@ export function useAuth() {
           undefined,
           {
             register: false,
+            registrationPolicy: 'resume-only',
             enableHistorySync: true,
             labelOverride: deviceIdentity.displayName,
             required: true,
@@ -953,6 +1041,23 @@ export function useAuth() {
           deviceKeyAddress: deviceIdentity.address,
         };
       } catch (error) {
+        let surfacedError = error;
+        const provisioningMessage = error instanceof Error ? error.message : String(error);
+        if (
+          /different local installation while resuming device setup|did not reopen the wallet-approved browser installation/i.test(
+            provisioningMessage
+          ) &&
+          stagedIdentity.installationId
+        ) {
+          stagedIdentity.staleInstallationId = stagedIdentity.installationId;
+          stagedIdentity.installationId = undefined;
+          await currentStorage.putIdentity({ ...stagedIdentity });
+          setIdentity({ ...stagedIdentity });
+          surfacedError = new StaleInstallationError(
+            targetInboxId,
+            stagedIdentity.staleInstallationId
+          );
+        }
         if (previousSession.isAuthenticated && previousSession.identity) {
           try {
             await setStorageNamespace(previousNamespace);
@@ -979,7 +1084,7 @@ export function useAuth() {
             console.warn('[Auth] Failed to restore the prior inbox after device setup:', restoreError);
           }
         }
-        throw error;
+        throw surfacedError;
       }
     },
     [connectXmtpSafely, setAuthenticated, setIdentity, setVaultUnlocked]

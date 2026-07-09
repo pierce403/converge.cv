@@ -25,10 +25,10 @@ describe('wagmi signers', () => {
 
   it('creates EOA signer that lowercases identifiers and forwards signatures', async () => {
     const signMessage = vi.fn(async (msg: string) => `0x${Buffer.from(msg).toString('hex')}`);
-    const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF1234', signMessage);
+    const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF123456', signMessage);
 
     const id = await Promise.resolve(signer.getIdentifier());
-    expect(id.identifier).toBe('0xabcdefabcdef1234567890abcdefabcdef1234');
+    expect(id.identifier).toBe('0xabcdefabcdef1234567890abcdefabcdef123456');
     expect(id.identifierKind).toBe(IdentifierKind.Ethereum);
 
     const bytes = await signer.signMessage('hello');
@@ -48,6 +48,28 @@ describe('wagmi signers', () => {
     expect(signMessage).toHaveBeenCalled();
   });
 
+  it('repairs repeated and case-insensitive prefixes before creating identifiers', async () => {
+    const signMessage = vi.fn(async () => '0x1234');
+    const signer = createEOASigner(
+      '0X0xABCDEFabcdef1234567890abcdefABCDEF123456' as `0x${string}`,
+      signMessage
+    );
+
+    const id = await Promise.resolve(signer.getIdentifier());
+    expect(id.identifier).toBe('0xabcdefabcdef1234567890abcdefabcdef123456');
+  });
+
+  it('rejects malformed wallet addresses before they reach XMTP', () => {
+    const signMessage = vi.fn(async () => '0x1234');
+
+    expect(() => createEOASigner('0x0x1234' as `0x${string}`, signMessage)).toThrow(
+      /EOA signer address must contain exactly 20 bytes/
+    );
+    expect(() => createSCWSigner('0xnot-an-address' as `0x${string}`, signMessage, 8453)).toThrow(
+      /SCW signer address must contain exactly 20 bytes/
+    );
+  });
+
   it('deduplicates concurrent wallet signature requests for the same message', async () => {
     const deferred: { resolve?: (signature: string) => void } = {};
     const signMessage = vi.fn(
@@ -57,7 +79,7 @@ describe('wagmi signers', () => {
         })
     );
 
-    const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF1234', signMessage);
+    const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF123456', signMessage);
     const message = 'XMTP wallet auth request';
 
     const first = signer.signMessage(message);
@@ -82,7 +104,7 @@ describe('wagmi signers', () => {
     vi.setSystemTime(start);
 
     const signMessage = vi.fn(async () => '0x1234');
-    const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF1234', signMessage);
+    const signer = createEOASigner('0xABCDEFabcdef1234567890abcdefABCDEF123456', signMessage);
     const expiresAt = new Date(start.getTime() + 2 * 60 * 1000).toISOString();
     const message = `XMTP auth challenge\nValid Until: ${expiresAt}`;
 

@@ -27,6 +27,8 @@ import type {
 } from '@/types';
 import type { StorageDriver, PageOpts, Query } from './interface';
 import type { Contact } from '../stores/contact-store';
+import { identityAddressNeedsRepair, normalizeIdentityAddresses } from '@/lib/identity/normalize';
+import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
 
 interface AttachmentData {
   id: string;
@@ -577,24 +579,53 @@ export class DexieDriver implements StorageDriver {
 
   // Identity
   async putIdentity(identity: Identity): Promise<void> {
-    await this.globalDb.identity.put(identity);
+    const normalized = normalizeIdentityAddresses(identity);
+    await this.globalDb.transaction('rw', this.globalDb.identity, async () => {
+      if (normalized.address !== identity.address) {
+        await this.globalDb.identity.delete(identity.address);
+      }
+      await this.globalDb.identity.put(normalized);
+    });
   }
 
   async getIdentity(): Promise<Identity | undefined> {
-    const identities = await this.globalDb.identity.toArray();
-    return identities[0];
+    return (await this.listIdentities())[0];
   }
 
   async listIdentities(): Promise<Identity[]> {
-    return await this.globalDb.identity.toArray();
+    const identities = await this.globalDb.identity.toArray();
+    const normalized: Identity[] = [];
+    for (const identity of identities) {
+      const repaired = normalizeIdentityAddresses(identity);
+      if (identityAddressNeedsRepair(identity)) {
+        await this.putIdentity(repaired);
+      }
+      normalized.push(repaired);
+    }
+    return normalized;
   }
 
   async getIdentityByAddress(address: string): Promise<Identity | undefined> {
-    return await this.globalDb.identity.get(address);
+    const normalizedAddress = normalizeEthereumAddress(address);
+    const identity =
+      (normalizedAddress ? await this.globalDb.identity.get(normalizedAddress) : undefined) ??
+      (await this.globalDb.identity.get(address));
+    if (!identity) return undefined;
+    const repaired = normalizeIdentityAddresses(identity);
+    if (identityAddressNeedsRepair(identity)) {
+      await this.putIdentity(repaired);
+    }
+    return repaired;
   }
 
   async getIdentityByInboxId(inboxId: string): Promise<Identity | undefined> {
-    return await this.globalDb.identity.where('inboxId').equals(inboxId).first();
+    const identity = await this.globalDb.identity.where('inboxId').equals(inboxId).first();
+    if (!identity) return undefined;
+    const repaired = normalizeIdentityAddresses(identity);
+    if (identityAddressNeedsRepair(identity)) {
+      await this.putIdentity(repaired);
+    }
+    return repaired;
   }
 
   async deleteIdentity(): Promise<void> {

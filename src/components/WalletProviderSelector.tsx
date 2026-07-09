@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useWalletProviderStore } from '@/lib/stores';
 import { getWalletProviderAvailability, WALLET_PROVIDER_OPTIONS } from '@/lib/wallets/providers';
 import { useWalletConnection } from '@/lib/wagmi';
+import { preserveWalletApprovalIntent } from '@/lib/wagmi/wallet-approval-state';
 
 interface WalletProviderSelectorProps {
   className?: string;
@@ -16,6 +17,7 @@ export function WalletProviderSelector({ className, dense }: WalletProviderSelec
 
   const handleSelect = async (nextProvider: typeof provider) => {
     if (nextProvider === provider) return;
+    preserveWalletApprovalIntent();
     try {
       await disconnectWallet();
     } catch (error) {
