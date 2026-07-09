@@ -190,10 +190,12 @@ pnpm typecheck        # TypeScript type checking
 - Address→inbox identity lookup now uses a shared cached resolver (`resolveInboxIdForAddress`) and `canMessageWithInbox`, reducing repeated `IdentityApi/GetInboxIds` calls across DM creation, send preflight, contacts refresh, and Farcaster sync
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
-- Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends the raw invite slug to the creator inbox via XMTP DM
+- Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends a Convos `join_request` custom content payload to the creator inbox via XMTP DM
 - Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
 - Convos group metadata compatibility now includes latest `appData` parsing (compressed protobuf), invite tag reads/writes via `updateAppData`, and member profile hydration from appData profiles.
-- Group sends now best-effort publish the sender’s Convos-style member profile (name + URL avatar) into group appData so Convos clients can see Converge profiles.
+- New one-to-one chats now use Convos-style single-peer XMTP groups; legacy DMs remain readable and invite requests still use creator DMs.
+- Group sends/replies/attachments now best-effort publish the sender’s Convos `profile_update` plus merged Convos-style member profile data into group appData so Convos clients can see Converge names.
+- Convos typing indicators, profile updates/snapshots, thinking messages, and join requests are registered as SDK custom content types and handled without surfacing side-channel bubbles.
 - XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
@@ -463,11 +465,25 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-07-09 (vapid.party XMTP-aware Web Push registration contract + static PWA client wiring)
+**Last Updated**: 2026-07-09 (Convos XMTP group/profile/typing/join-request interop)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Convos XMTP Interop Refresh
+- Inspected `/home/pierce/src/convos-ios` messaging, appData, profile, typing, and invite flows.
+- New user-created one-to-one chats now create Convos-style single-peer XMTP MLS groups instead of fresh DMs, while existing DMs remain readable and sendable.
+- Added Convos custom XMTP codecs for:
+  - `convos.org/profile_update:1.0`
+  - `convos.org/profile_snapshot:1.0`
+  - `convos.org/typing_indicator:1.0`
+  - `convos.org/join_request:1.0`
+- Convos profile update/snapshot and typing/thinking messages are consumed silently; profile names hydrate contacts/member display, typing emits transient UI state, and side channels are not persisted as visible chat bubbles.
+- Group sends, replies, and attachments now publish a silent Convos `profile_update` and upsert the sender profile into group appData.
+- Convos appData profile upserts now preserve existing encrypted image refs, legacy image URLs, and `connections` when Converge only has a partial profile update.
+- Invite claiming now sends a Convos `join_request` custom content message with invite-slug fallback instead of raw invite slug text; incoming join requests and legacy raw invite slugs both feed the existing approval UI.
+- Limitation: no live Converge-to-Convos delivery test was run in this pass; local codec/appData tests cover the protocol assumptions.
 
 ### vapid.party XMTP-Aware Push Registration
 - Created root `ARCHITECTURE.md` as the canonical architecture/decision tracker and linked `docs/architecture.md` to it.

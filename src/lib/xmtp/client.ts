@@ -65,7 +65,24 @@ import {
   type ConvosGroupProfile,
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
-import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ConvergeProfileContent } from './profile-codec';
+import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
+import {
+  ConvosJoinRequestCodec,
+  ConvosProfileSnapshotCodec,
+  ConvosProfileUpdateCodec,
+  ConvosTypingIndicatorCodec,
+  ContentTypeConvosJoinRequest,
+  ContentTypeConvosProfileSnapshot,
+  ContentTypeConvosProfileUpdate,
+  ContentTypeConvosThinking,
+  ContentTypeConvosTypingIndicator,
+  contentTypeMatches,
+  isConvosSilentContentType,
+  type ConvosJoinRequestContent,
+  type ConvosProfileSnapshotContent,
+  type ConvosProfileUpdateContent,
+  type ConvosTypingIndicatorContent,
+} from './convos-codecs';
 import { selectRecentConversationIds } from './backfill-targets';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
@@ -74,6 +91,17 @@ const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap for remote att
 const MAX_PROFILE_AVATAR_BYTES = 256 * 1024; // Avatar images must be <=256KB (base64 data URLs are allowed)
 const MAX_PROFILE_AVATAR_URL_CHARS = 4096; // Safety cap for non-data URLs
 const CONVERGE_PROFILE_CODEC = new ConvergeProfileCodec();
+const CONVOS_PROFILE_UPDATE_CODEC = new ConvosProfileUpdateCodec();
+const CONVOS_PROFILE_SNAPSHOT_CODEC = new ConvosProfileSnapshotCodec();
+const CONVOS_TYPING_INDICATOR_CODEC = new ConvosTypingIndicatorCodec();
+const CONVOS_JOIN_REQUEST_CODEC = new ConvosJoinRequestCodec();
+const XMTP_CONTENT_CODECS = [
+  CONVERGE_PROFILE_CODEC,
+  CONVOS_PROFILE_UPDATE_CODEC,
+  CONVOS_PROFILE_SNAPSHOT_CODEC,
+  CONVOS_TYPING_INDICATOR_CODEC,
+  CONVOS_JOIN_REQUEST_CODEC,
+];
 const XMTP_SDK_LOG_LEVEL_STORAGE_KEY = 'converge.xmtpSdkLogLevel.v1';
 
 function getXmtpSdkLogLevel(): LogLevel {
@@ -330,6 +358,7 @@ export class XmtpClient {
   private identityBackoffMs = 0;
   private identityCooldownLogUntil = 0;
   private handledInviteMessages: Set<string> = new Set();
+  private convosProfileUpdateSentForConversation: Map<string, string> = new Map();
   private inviteDerivedKey: Uint8Array | null = null;
   private inviteDerivedKeyInboxId: string | null = null;
   private inviteDerivedKeyPromise: Promise<Uint8Array> | null = null;
@@ -1081,58 +1110,80 @@ export class XmtpClient {
     }
   }
 
+  private static coerceContentTypeId(value: unknown): ContentTypeId | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const ct = value as Record<string, unknown>;
+    const authorityId = ct['authorityId'] ?? ct['authority_id'];
+    const typeId = ct['typeId'] ?? ct['type_id'];
+    const versionMajor = ct['versionMajor'] ?? ct['version_major'];
+    const versionMinor = ct['versionMinor'] ?? ct['version_minor'];
+    if (typeof authorityId !== 'string' || typeof typeId !== 'string') {
+      return undefined;
+    }
+    return {
+      authorityId,
+      typeId,
+      versionMajor: typeof versionMajor === 'number' ? versionMajor : Number(versionMajor ?? 1),
+      versionMinor: typeof versionMinor === 'number' ? versionMinor : Number(versionMinor ?? 0),
+    };
+  }
+
+  private static getContentTypeFromMessageObject(msg: unknown): ContentTypeId | undefined {
+    if (!msg || typeof msg !== 'object') return undefined;
+    const anyMsg = msg as Record<string, unknown>;
+    const contentType = XmtpClient.coerceContentTypeId(anyMsg['contentType']);
+    if (contentType) return contentType;
+
+    const encoded = anyMsg['encodedContent'] as Record<string, unknown> | undefined;
+    const fromEncoded = encoded ? XmtpClient.coerceContentTypeId(encoded['type']) : undefined;
+    if (fromEncoded) return fromEncoded;
+
+    const content = anyMsg['content'];
+    if (content && typeof content === 'object') {
+      const fromContent = XmtpClient.coerceContentTypeId((content as Record<string, unknown>)['type']);
+      if (fromContent) return fromContent;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Best-effort extraction of a full content type from a decoded/encoded message object.
+   * Handles decoded messages (conversation.messages()), stream messages, and raw wasm messages.
+   */
+  private getContentTypeFromAny(msg: unknown): ContentTypeId | undefined {
+    try {
+      return XmtpClient.getContentTypeFromMessageObject(msg);
+    } catch (err) {
+      console.warn('[XMTP] getContentTypeFromAny failed:', err);
+    }
+    return undefined;
+  }
+
   /**
    * Best-effort extraction of a content type identifier from a decoded/encoded message object.
    * Handles both decoded messages (dm.messages()) and raw wasm messages (getMessageById()).
    */
   private getContentTypeIdFromAny(msg: unknown): string | undefined {
-    try {
-      if (!msg || typeof msg !== 'object') return undefined;
-      const anyMsg = msg as Record<string, unknown>;
-      const contentType = anyMsg['contentType'] as { typeId?: string } | undefined;
-      if (contentType?.typeId) {
-        return contentType.typeId;
-      }
-      // Try decoded shape first: encodedContent?.type?.typeId (or type_id)
-      const encoded = anyMsg['encodedContent'] as Record<string, unknown> | undefined;
-      const typeObj = (encoded && (encoded['type'] as Record<string, unknown> | undefined)) || undefined;
-      const fromEncoded =
-        (typeObj?.['typeId'] as string | undefined) ||
-        (typeObj?.['type_id'] as string | undefined);
-      if (typeof fromEncoded === 'string') return fromEncoded;
+    return this.getContentTypeFromAny(msg)?.typeId;
+  }
 
-      // Some stream message shapes may expose content.type directly
-      const content = anyMsg['content'] as Record<string, unknown> | string | Uint8Array | undefined;
-      if (content && typeof content === 'object') {
-        const cType = (content as Record<string, unknown>)['type'] as Record<string, unknown> | undefined;
-        const fromContent =
-          (cType?.['typeId'] as string | undefined) ||
-          (cType?.['type_id'] as string | undefined);
-        if (typeof fromContent === 'string') return fromContent;
-      }
-
-      // Raw wasm message: content.type.typeId
-      const rawContent = anyMsg['content'] as Record<string, unknown> | undefined;
-      const rawType = rawContent && (rawContent['type'] as Record<string, unknown> | undefined);
-      const fromRaw =
-        (rawType?.['typeId'] as string | undefined) ||
-        (rawType?.['type_id'] as string | undefined);
-      if (typeof fromRaw === 'string') return fromRaw;
-    } catch (err) {
-      console.warn('[XMTP] getContentTypeIdFromAny failed:', err);
+  private static getEncodedContentFromAny(msg: unknown): EncodedContent | undefined {
+    if (!msg || typeof msg !== 'object') return undefined;
+    const anyMsg = msg as Record<string, unknown>;
+    const encoded = anyMsg['encodedContent'];
+    if (encoded && typeof encoded === 'object' && (encoded as Record<string, unknown>)['content'] instanceof Uint8Array) {
+      return encoded as EncodedContent;
+    }
+    const content = anyMsg['content'];
+    if (content && typeof content === 'object' && (content as Record<string, unknown>)['content'] instanceof Uint8Array) {
+      return content as EncodedContent;
     }
     return undefined;
   }
 
   private static isConvergeProfileContentType(value: unknown): boolean {
-    if (!value || typeof value !== 'object') return false;
-    const ct = value as Record<string, unknown>;
-    return (
-      ct['authorityId'] === XmtpClient.PROFILE_CONTENT_TYPE.authorityId &&
-      ct['typeId'] === XmtpClient.PROFILE_CONTENT_TYPE.typeId &&
-      ct['versionMajor'] === XmtpClient.PROFILE_CONTENT_TYPE.versionMajor &&
-      ct['versionMinor'] === XmtpClient.PROFILE_CONTENT_TYPE.versionMinor
-    );
+    return contentTypeMatches(value, XmtpClient.PROFILE_CONTENT_TYPE);
   }
 
   private static extractProfileUpdate(msg: unknown): { displayName?: string; avatarUrl?: string } | null {
@@ -1151,6 +1202,223 @@ export class XmtpClient {
       return null;
     }
     return null;
+  }
+
+  private static extractConvosProfileUpdates(
+    msg: unknown
+  ): Array<{ inboxId?: string; displayName?: string; encryptedImageUrl?: string }> {
+    if (!msg || typeof msg !== 'object') return [];
+    const anyMsg = msg as Record<string, unknown>;
+    const contentType = XmtpClient.getContentTypeFromMessageObject(msg);
+    const content = anyMsg['content'];
+
+    if (contentTypeMatches(contentType, ContentTypeConvosProfileUpdate)) {
+      const decoded =
+        content && typeof content === 'object'
+          ? (content as Partial<ConvosProfileUpdateContent>)
+          : (() => {
+              const encoded = XmtpClient.getEncodedContentFromAny(msg);
+              return encoded ? CONVOS_PROFILE_UPDATE_CODEC.decode(encoded) : undefined;
+            })();
+      const displayName = typeof decoded?.name === 'string' && decoded.name.trim() ? decoded.name.trim() : undefined;
+      const encryptedImageUrl =
+        typeof decoded?.encryptedImage?.url === 'string' && decoded.encryptedImage.url.trim()
+          ? decoded.encryptedImage.url.trim()
+          : undefined;
+      return displayName || encryptedImageUrl ? [{ displayName, encryptedImageUrl }] : [];
+    }
+
+    if (contentTypeMatches(contentType, ContentTypeConvosProfileSnapshot)) {
+      const decoded =
+        content && typeof content === 'object' && Array.isArray((content as Partial<ConvosProfileSnapshotContent>).profiles)
+          ? (content as Partial<ConvosProfileSnapshotContent>)
+          : (() => {
+              const encoded = XmtpClient.getEncodedContentFromAny(msg);
+              return encoded ? CONVOS_PROFILE_SNAPSHOT_CODEC.decode(encoded) : undefined;
+            })();
+      return (decoded?.profiles ?? [])
+        .map((profile) => ({
+          inboxId: profile.inboxId?.trim().replace(/^0x/i, '').toLowerCase(),
+          displayName: typeof profile.name === 'string' && profile.name.trim() ? profile.name.trim() : undefined,
+          encryptedImageUrl:
+            typeof profile.encryptedImage?.url === 'string' && profile.encryptedImage.url.trim()
+              ? profile.encryptedImage.url.trim()
+              : undefined,
+        }))
+        .filter((profile) => Boolean(profile.inboxId || profile.displayName || profile.encryptedImageUrl));
+    }
+
+    return [];
+  }
+
+  private static extractConvosJoinRequest(msg: unknown): ConvosJoinRequestContent | null {
+    if (!msg || typeof msg !== 'object') return null;
+    const anyMsg = msg as Record<string, unknown>;
+    if (!contentTypeMatches(XmtpClient.getContentTypeFromMessageObject(msg), ContentTypeConvosJoinRequest)) {
+      return null;
+    }
+    const content = anyMsg['content'];
+    if (content && typeof content === 'object') {
+      const candidate = content as Partial<ConvosJoinRequestContent>;
+      const inviteSlug = typeof candidate.inviteSlug === 'string' ? candidate.inviteSlug.trim() : '';
+      if (inviteSlug) {
+        return {
+          inviteSlug,
+          profile: candidate.profile,
+          metadata: candidate.metadata,
+        };
+      }
+    }
+    const encoded = XmtpClient.getEncodedContentFromAny(msg);
+    if (!encoded) return null;
+    const decoded = CONVOS_JOIN_REQUEST_CODEC.decode(encoded);
+    return decoded.inviteSlug ? decoded : null;
+  }
+
+  private async processProfileSideChannel(msg: unknown): Promise<boolean> {
+    if (!msg || typeof msg !== 'object') return false;
+    const anyMsg = msg as Record<string, unknown>;
+    const senderInboxId = typeof anyMsg['senderInboxId'] === 'string' ? anyMsg['senderInboxId'] : undefined;
+    const contactStore = useContactStore.getState();
+
+    const convergeProfile = XmtpClient.extractProfileUpdate(msg);
+    if (convergeProfile) {
+      if (senderInboxId) {
+        try {
+          await contactStore.upsertContactProfile({
+            inboxId: senderInboxId,
+            displayName: convergeProfile.displayName,
+            avatarUrl: convergeProfile.avatarUrl,
+            source: 'inbox',
+          });
+          logNetworkEvent({
+            direction: 'inbound',
+            event: 'profile:received',
+            details: `Profile update from ${senderInboxId}`,
+            payload: JSON.stringify(convergeProfile),
+          });
+        } catch (error) {
+          console.warn('[XMTP] Failed to process Converge profile message', error);
+        }
+      }
+      return true;
+    }
+    if (contentTypeMatches(XmtpClient.getContentTypeFromMessageObject(msg), XmtpClient.PROFILE_CONTENT_TYPE)) {
+      return true;
+    }
+
+    const convosProfiles = XmtpClient.extractConvosProfileUpdates(msg);
+    if (!convosProfiles.length) {
+      return false;
+    }
+
+    for (const profile of convosProfiles) {
+      const inboxId = profile.inboxId ?? senderInboxId;
+      if (!inboxId) continue;
+      try {
+        await contactStore.upsertContactProfile({
+          inboxId,
+          displayName: profile.displayName,
+          // Convos profile images are encrypted refs; do not use them as plaintext avatars.
+          source: 'inbox',
+        });
+      } catch (error) {
+        console.warn('[XMTP] Failed to process Convos profile message', error);
+      }
+    }
+
+    logNetworkEvent({
+      direction: 'inbound',
+      event: 'profile:received',
+      details: `Convos profile update in ${(anyMsg['conversationId'] as string | undefined) ?? 'conversation'}`,
+      payload: JSON.stringify(convosProfiles.map((profile) => ({
+        inboxId: profile.inboxId ?? senderInboxId,
+        displayName: profile.displayName,
+        encryptedImage: Boolean(profile.encryptedImageUrl),
+      }))),
+    });
+    return true;
+  }
+
+  private processConvosEphemeralSideChannel(msg: unknown, opts?: { dispatchTyping?: boolean }): boolean {
+    const contentType = this.getContentTypeFromAny(msg);
+    if (!contentType) return false;
+
+    if (contentTypeMatches(contentType, ContentTypeConvosTypingIndicator)) {
+      if (opts?.dispatchTyping !== false && typeof window !== 'undefined' && msg && typeof msg === 'object') {
+        const anyMsg = msg as Record<string, unknown>;
+        const senderInboxId = typeof anyMsg['senderInboxId'] === 'string' ? anyMsg['senderInboxId'] : '';
+        const conversationId = typeof anyMsg['conversationId'] === 'string' ? anyMsg['conversationId'] : '';
+        const myInbox = this.client?.inboxId?.toLowerCase();
+        const senderLower = senderInboxId.toLowerCase();
+        if (conversationId && (!myInbox || senderLower !== myInbox)) {
+          const sentAt = typeof anyMsg['sentAtNs'] === 'bigint'
+            ? Number(anyMsg['sentAtNs'] / 1000000n)
+            : Date.now();
+          const isRecent = Date.now() - sentAt <= 10_000;
+          const decoded =
+            anyMsg['content'] && typeof anyMsg['content'] === 'object'
+              ? (anyMsg['content'] as Partial<ConvosTypingIndicatorContent>)
+              : (() => {
+                  const encoded = XmtpClient.getEncodedContentFromAny(msg);
+                  return encoded ? CONVOS_TYPING_INDICATOR_CODEC.decode(encoded) : undefined;
+                })();
+          if (isRecent && typeof decoded?.isTyping === 'boolean') {
+            window.dispatchEvent(
+              new CustomEvent('xmtp:typing', {
+                detail: {
+                  conversationId,
+                  senderInboxId,
+                  isTyping: decoded.isTyping,
+                  sentAt,
+                },
+              })
+            );
+          }
+        }
+      }
+      return true;
+    }
+
+    if (contentTypeMatches(contentType, ContentTypeConvosThinking)) {
+      return true;
+    }
+
+    return isConvosSilentContentType(contentType);
+  }
+
+  private dispatchConvosJoinRequest(msg: unknown, isHistory: boolean): boolean {
+    const joinRequest = XmtpClient.extractConvosJoinRequest(msg);
+    if (!joinRequest?.inviteSlug || !msg || typeof msg !== 'object' || typeof window === 'undefined') {
+      return false;
+    }
+    const anyMsg = msg as Record<string, unknown>;
+    const conversationId = typeof anyMsg['conversationId'] === 'string' ? anyMsg['conversationId'] : '';
+    const senderInboxId = typeof anyMsg['senderInboxId'] === 'string' ? anyMsg['senderInboxId'] : '';
+    const messageId = typeof anyMsg['id'] === 'string' ? anyMsg['id'] : `join_request_${Date.now()}`;
+    if (!conversationId || !senderInboxId) {
+      return true;
+    }
+    const sentAt = typeof anyMsg['sentAtNs'] === 'bigint'
+      ? Number(anyMsg['sentAtNs'] / 1000000n)
+      : Date.now();
+    window.dispatchEvent(
+      new CustomEvent('xmtp:message', {
+        detail: {
+          conversationId,
+          message: {
+            id: messageId,
+            conversationId,
+            senderAddress: senderInboxId,
+            content: joinRequest.inviteSlug,
+            contentTypeId: ContentTypeConvosJoinRequest.typeId,
+            sentAt,
+          },
+          isHistory,
+        },
+      })
+    );
+    return true;
   }
 
   private isMissingConversationKeyError(err: unknown): boolean {
@@ -1246,6 +1514,14 @@ export class XmtpClient {
 
     const conv = await this.client.conversations.getConversationById(conversationId);
     if (!conv) throw new Error('Conversation not found');
+    const isDm = typeof (conv as { peerInboxId?: () => Promise<string> }).peerInboxId === 'function';
+    if (!isDm) {
+      try {
+        await this.ensureConvosGroupProfilePublished(conversationId, conv);
+      } catch (profileError) {
+        console.warn('[XMTP] Failed to publish group profile before reply (non-fatal):', profileError);
+      }
+    }
     const encoded = await encodeText(text);
     const replyContent: Reply = {
       reference: targetMessageId,
@@ -2200,8 +2476,12 @@ export class XmtpClient {
         try {
           // Best-effort scan only: do not dm.sync() here (streaming Unknown should cover real-time).
           const last = await dm.lastMessage();
-          if (!last || typeof last.content !== 'string') continue;
-          if (!isLikelyConvosInviteCode(last.content)) continue;
+          if (!last) continue;
+          const joinRequest = XmtpClient.extractConvosJoinRequest(last);
+          const inviteCode =
+            joinRequest?.inviteSlug ??
+            (typeof last.content === 'string' && isLikelyConvosInviteCode(last.content) ? last.content : null);
+          if (!inviteCode) continue;
 
           const existing = await storage.getMessage(last.id);
           if (existing) continue;
@@ -2215,7 +2495,8 @@ export class XmtpClient {
                   id: last.id,
                   conversationId: last.conversationId,
                   senderAddress: last.senderInboxId,
-                  content: last.content,
+                  content: inviteCode,
+                  contentTypeId: joinRequest ? ContentTypeConvosJoinRequest.typeId : undefined,
                   sentAt,
                 },
                 isHistory: false,
@@ -2600,6 +2881,67 @@ export class XmtpClient {
     return {
       conversationId: resolvedConversationId,
       conversationName: group.name ?? undefined,
+    };
+  }
+
+  async sendConvosInviteJoinRequest(inviteCode: string): Promise<Conversation> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    const parsed = tryParseConvosInvite(inviteCode);
+    if (!parsed?.payload.creatorInboxId) {
+      throw new Error('Invite is missing the creator inbox ID.');
+    }
+
+    const creatorInboxId = parsed.payload.creatorInboxId.trim().replace(/^0x/i, '').toLowerCase();
+    const draft = this.getOwnConvosGroupProfileDraft();
+    const payload: ConvosJoinRequestContent = {
+      inviteSlug: parsed.inviteCode,
+      profile: draft.displayName || draft.imageUrl
+        ? {
+            name: draft.displayName,
+            imageURL: draft.imageUrl,
+          }
+        : undefined,
+    };
+
+    const dm = await this.client.conversations.createDm(creatorInboxId);
+    const encoded = CONVOS_JOIN_REQUEST_CODEC.encode(payload);
+    await dm.send(encoded, { shouldPush: true });
+
+    let profileDisplayName: string | undefined;
+    let profileAvatar: string | undefined;
+    try {
+      const profile = await this.fetchInboxProfile(creatorInboxId, { mode: 'network' });
+      profileDisplayName = profile.displayName;
+      profileAvatar = profile.avatarUrl;
+    } catch (error) {
+      console.warn('[XMTP] Failed to fetch invite creator profile (non-fatal):', error);
+    }
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'invite:claim',
+      details: `Sent Convos join_request to ${creatorInboxId}`,
+    });
+
+    return {
+      id: dm.id,
+      topic: dm.id,
+      peerId: creatorInboxId,
+      displayName: profileDisplayName,
+      displayAvatar: profileAvatar,
+      createdAt: dm.createdAtNs ? Number(dm.createdAtNs / 1000000n) : Date.now(),
+      lastMessageAt: Date.now(),
+      lastMessagePreview: 'Invite request sent',
+      unreadCount: 0,
+      pinned: false,
+      archived: false,
+      lastMessageId: undefined,
+      lastMessageSender: this.client.inboxId ?? this.identity?.inboxId ?? this.identity?.address,
+      lastReadAt: Date.now(),
+      lastReadMessageId: undefined,
+      isGroup: false,
     };
   }
 
@@ -2995,7 +3337,7 @@ export class XmtpClient {
         client = await Client.create(signer, {
           env: 'production',
           dbPath,
-          codecs: [CONVERGE_PROFILE_CODEC],
+          codecs: XMTP_CONTENT_CODECS,
           loggingLevel: sdkLoggingLevel,
           structuredLogging: false,
           performanceLogging: false,
@@ -3017,7 +3359,7 @@ export class XmtpClient {
             client = await Client.create(signer, {
               env: 'production',
               dbPath,
-              codecs: [CONVERGE_PROFILE_CODEC],
+              codecs: XMTP_CONTENT_CODECS,
               loggingLevel: sdkLoggingLevel,
               structuredLogging: false,
               performanceLogging: false,
@@ -4030,6 +4372,15 @@ export class XmtpClient {
             } catch (rxOuter) {
               // ignore
             }
+            if (this.dispatchConvosJoinRequest(m, true)) {
+              continue;
+            }
+            if (await this.processProfileSideChannel(m)) {
+              continue;
+            }
+            if (this.processConvosEphemeralSideChannel(m, { dispatchTyping: false })) {
+              continue;
+            }
             // Handle profile broadcasts silently (do not surface as chat messages)
             const profileUpdate = XmtpClient.extractProfileUpdate(m);
             if (profileUpdate) {
@@ -4386,6 +4737,16 @@ export class XmtpClient {
                 // ignore
               }
 
+              if (this.dispatchConvosJoinRequest(m, true)) {
+                continue;
+              }
+              if (await this.processProfileSideChannel(m)) {
+                continue;
+              }
+              if (this.processConvosEphemeralSideChannel(m, { dispatchTyping: false })) {
+                continue;
+              }
+
               // Treat non-text/system content types in history
               try {
                 const lowerType = (typeId || '').toLowerCase();
@@ -4667,6 +5028,16 @@ export class XmtpClient {
               }
             } catch (err) {
               console.warn('[XMTP] Failed to inspect message kind', err);
+            }
+
+            if (this.dispatchConvosJoinRequest(message, false)) {
+              continue;
+            }
+            if (await this.processProfileSideChannel(message)) {
+              continue;
+            }
+            if (this.processConvosEphemeralSideChannel(message, { dispatchTyping: true })) {
+              continue;
             }
 
             // Handle Converge profile messages silently (metadata only).
@@ -5090,6 +5461,25 @@ export class XmtpClient {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async sendConvosProfileUpdate(conversationId: string, groupConversation: any, displayName?: string): Promise<void> {
+    const safeName = sanitizeConvosProfileDisplayName(displayName);
+    if (!safeName || this.convosProfileUpdateSentForConversation.get(conversationId) === safeName) {
+      return;
+    }
+    if (!groupConversation || typeof groupConversation.send !== 'function') {
+      return;
+    }
+    const encoded = CONVOS_PROFILE_UPDATE_CODEC.encode({ name: safeName });
+    await groupConversation.send(encoded, { shouldPush: false });
+    this.convosProfileUpdateSentForConversation.set(conversationId, safeName);
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'group:profile_update',
+      details: `Published Convos profile update for group ${conversationId}`,
+    });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async ensureConvosGroupProfilePublished(conversationId: string, groupConversation?: any): Promise<void> {
     if (!this.client) return;
 
@@ -5098,24 +5488,49 @@ export class XmtpClient {
     if (!inboxId) return;
 
     const group = groupConversation ?? (await this.getGroupConversation(conversationId));
-    if (!group || typeof group.updateAppData !== 'function') return;
-
-    const rawAppData = typeof group.appData === 'string' ? group.appData : '';
-    const appMetadata = await parseConvosGroupAppData(rawAppData);
-    if (rawAppData && !appMetadata.isEncoded) {
-      // Unknown metadata format; avoid clobbering it.
-      return;
-    }
-
-    const existingProfile = (appMetadata.profiles ?? []).find(
-      (candidate) => candidate.inboxId.trim().replace(/^0x/i, '').toLowerCase() === inboxId,
-    );
+    if (!group) return;
 
     const draft = this.getOwnConvosGroupProfileDraft();
+    let existingProfile: ConvosGroupProfile | undefined;
+    let rawAppData = '';
+    let appMetadata: Awaited<ReturnType<typeof parseConvosGroupAppData>> = {
+      tag: undefined,
+      expiresAt: undefined,
+      isEncoded: false,
+      isCompressed: false,
+      source: 'appData',
+      profiles: [],
+    };
+
+    if (typeof group.updateAppData === 'function') {
+      rawAppData = typeof group.appData === 'string' ? group.appData : '';
+      appMetadata = await parseConvosGroupAppData(rawAppData);
+      existingProfile = (appMetadata.profiles ?? []).find(
+        (candidate) => candidate.inboxId.trim().replace(/^0x/i, '').toLowerCase() === inboxId,
+      );
+    }
+
     const nextDisplayName = draft.displayName ?? sanitizeConvosProfileDisplayName(existingProfile?.name);
     const nextImageUrl = draft.imageUrl ?? XmtpClient.sanitizeConvosProfileImageUrl(existingProfile?.imageUrl);
 
     if (!nextDisplayName && !nextImageUrl) {
+      return;
+    }
+
+    if (nextDisplayName) {
+      try {
+        await this.sendConvosProfileUpdate(conversationId, group, nextDisplayName);
+      } catch (error) {
+        console.warn('[XMTP] Failed to send Convos profile update (non-fatal):', error);
+      }
+    }
+
+    if (typeof group.updateAppData !== 'function') {
+      return;
+    }
+
+    if (rawAppData && !appMetadata.isEncoded) {
+      // Unknown metadata format; avoid clobbering it.
       return;
     }
 
@@ -5594,7 +6009,7 @@ export class XmtpClient {
       const inboxIdInput = peerAddressOrInboxId;
       const originalInput = peerAddressOrInboxId;
 
-      let dmConversation;
+      let xmtpConversation;
 
       let resolvedPeerInboxId: string | null = null;
       if (isEthereumAddress(peerAddressOrInboxId)) {
@@ -5603,32 +6018,27 @@ export class XmtpClient {
           context: 'createConversation',
         });
 
-        // If we resolved the inbox ID, use createDm(inboxId) instead of createDmWithIdentifier
         if (resolvedPeerInboxId) {
-          console.log('[XMTP] Creating DM with resolved inbox ID:', resolvedPeerInboxId);
-          dmConversation = await this.client.conversations.createDm(resolvedPeerInboxId);
+          console.log('[XMTP] Creating Convos-style group with resolved inbox ID:', resolvedPeerInboxId);
+          xmtpConversation = await this.client.conversations.createGroup([resolvedPeerInboxId]);
         } else {
-          // Fallback to createDmWithIdentifier (may fail if not in local cache)
-          console.log('[XMTP] No inbox ID resolved, falling back to createDmWithIdentifier...');
+          console.log('[XMTP] No inbox ID resolved, falling back to createGroupWithIdentifiers...');
           const normalizedAddress = this.normalizeEthereumAddress(peerAddressOrInboxId).toLowerCase();
           const identifier = {
             identifier: toIdentifierHex(normalizedAddress),
             identifierKind: IdentifierKind.Ethereum,
           };
-          dmConversation = await this.client.conversations.createDmWithIdentifier(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            identifier as any
-          );
+          xmtpConversation = await this.client.conversations.createGroupWithIdentifiers([identifier as Identifier]);
         }
       } else {
-        console.log('[XMTP] Calling client.conversations.createDm with inbox ID:', inboxIdInput);
-        dmConversation = await this.client.conversations.createDm(inboxIdInput);
+        console.log('[XMTP] Calling client.conversations.createGroup with inbox ID:', inboxIdInput);
+        xmtpConversation = await this.client.conversations.createGroup([inboxIdInput]);
         resolvedPeerInboxId = inboxIdInput;
       }
 
-      console.log('[XMTP] ✅ DM conversation created:', {
-        id: dmConversation.id,
-        createdAtNs: dmConversation.createdAtNs,
+      console.log('[XMTP] ✅ Convos-style conversation group created:', {
+        id: xmtpConversation.id,
+        createdAtNs: xmtpConversation.createdAtNs,
         resolvedPeerInboxId,
       });
 
@@ -5718,17 +6128,22 @@ export class XmtpClient {
       }
 
       const conversation: Conversation = {
-        id: dmConversation.id,
-        topic: dmConversation.id, // Use conversation ID as topic
+        id: xmtpConversation.id,
+        topic: xmtpConversation.id, // Use conversation ID as topic
         peerId: peerForStore, // Store canonical inbox ID when available
         displayName: profileDisplayName, // Set display name from profile if available
         displayAvatar: profileAvatar, // Set avatar from profile if available
-        createdAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
-        lastMessageAt: dmConversation.createdAtNs ? Number(dmConversation.createdAtNs / 1000000n) : Date.now(),
+        createdAt: xmtpConversation.createdAtNs ? Number(xmtpConversation.createdAtNs / 1000000n) : Date.now(),
+        lastMessageAt: xmtpConversation.createdAtNs ? Number(xmtpConversation.createdAtNs / 1000000n) : Date.now(),
         unreadCount: 0,
         pinned: false,
         archived: false,
-        isGroup: false, // Explicitly mark as DM
+        isGroup: true,
+        groupName: profileDisplayName || 'Chat',
+        memberInboxes: [
+          this.client.inboxId,
+          resolvedPeerInboxId && !resolvedPeerInboxId.startsWith('0x') ? resolvedPeerInboxId.toLowerCase() : undefined,
+        ].filter((value): value is string => Boolean(value)),
       };
 
       logNetworkEvent({
@@ -5933,6 +6348,15 @@ export class XmtpClient {
         throw new Error(`Conversation ${conversationId} not found after sync`);
       }
 
+      const isDm = typeof (conversation as { peerInboxId?: () => Promise<string> }).peerInboxId === 'function';
+      if (!isDm) {
+        try {
+          await this.ensureConvosGroupProfilePublished(conversationId, conversation);
+        } catch (profileError) {
+          console.warn('[XMTP] Failed to publish group profile before attachment (non-fatal):', profileError);
+        }
+      }
+
       const encrypted = await encryptAttachment(attachment);
       const { url } = await this.uploadEncryptedAttachmentPayload(
         encrypted.payload,
@@ -6083,6 +6507,22 @@ export class XmtpClient {
       });
 
       return fallbackMessage;
+    }
+  }
+
+  async sendTypingIndicator(conversationId: string, isTyping: boolean): Promise<void> {
+    if (!this.client || !conversationId) {
+      return;
+    }
+    try {
+      const conversation = await this.client.conversations.getConversationById(conversationId);
+      if (!conversation || typeof conversation.send !== 'function') {
+        return;
+      }
+      const encoded = CONVOS_TYPING_INDICATOR_CODEC.encode({ isTyping });
+      await conversation.send(encoded, { shouldPush: false });
+    } catch (error) {
+      console.warn('[XMTP] Failed to send typing indicator (non-fatal):', error);
     }
   }
 

@@ -1,0 +1,99 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  ConvosJoinRequestCodec,
+  ConvosProfileSnapshotCodec,
+  ConvosProfileUpdateCodec,
+  ConvosTypingIndicatorCodec,
+  ContentTypeConvosJoinRequest,
+  ContentTypeConvosProfileSnapshot,
+  ContentTypeConvosProfileUpdate,
+  ContentTypeConvosTypingIndicator,
+  contentTypeMatches,
+  isConvosSilentContentType,
+} from './convos-codecs';
+
+describe('Convos XMTP codecs', () => {
+  it('encodes and decodes profile_update names as silent protobuf content', () => {
+    const codec = new ConvosProfileUpdateCodec();
+    const encoded = codec.encode({ name: '  Alice  ' });
+
+    expect(encoded.type).toEqual(ContentTypeConvosProfileUpdate);
+    expect(encoded.fallback).toBeUndefined();
+    expect(codec.shouldPush()).toBe(false);
+    expect(codec.decode(encoded)).toEqual({
+      name: 'Alice',
+      encryptedImage: undefined,
+      memberKind: undefined,
+      metadata: undefined,
+    });
+  });
+
+  it('encodes and decodes profile_snapshot member names', () => {
+    const codec = new ConvosProfileSnapshotCodec();
+    const inboxId = 'ab'.repeat(32);
+    const encoded = codec.encode({
+      profiles: [
+        {
+          inboxId,
+          name: 'Bob',
+        },
+      ],
+    });
+
+    expect(encoded.type).toEqual(ContentTypeConvosProfileSnapshot);
+    expect(codec.decode(encoded)).toEqual({
+      profiles: [
+        {
+          inboxId,
+          name: 'Bob',
+          encryptedImage: undefined,
+          memberKind: undefined,
+          metadata: undefined,
+        },
+      ],
+    });
+  });
+
+  it('encodes typing indicators as silent JSON content', () => {
+    const codec = new ConvosTypingIndicatorCodec();
+    const encoded = codec.encode({ isTyping: true });
+
+    expect(encoded.type).toEqual(ContentTypeConvosTypingIndicator);
+    expect(encoded.fallback).toBeUndefined();
+    expect(codec.shouldPush()).toBe(false);
+    expect(codec.decode(encoded)).toEqual({ isTyping: true });
+  });
+
+  it('encodes join requests with invite slug fallback and push enabled', () => {
+    const codec = new ConvosJoinRequestCodec();
+    const encoded = codec.encode({
+      inviteSlug: ' invite-slug ',
+      profile: {
+        name: 'Alice',
+        imageURL: 'https://cdn.example.com/alice.png',
+      },
+    });
+
+    expect(encoded.type).toEqual(ContentTypeConvosJoinRequest);
+    expect(encoded.fallback).toBe('invite-slug');
+    expect(codec.shouldPush()).toBe(true);
+    expect(codec.decode(encoded)).toEqual({
+      inviteSlug: 'invite-slug',
+      profile: {
+        name: 'Alice',
+        imageURL: 'https://cdn.example.com/alice.png',
+        memberKind: undefined,
+      },
+      metadata: undefined,
+    });
+  });
+
+  it('identifies Convos silent side-channel content types by full type id', () => {
+    expect(contentTypeMatches(ContentTypeConvosProfileUpdate, ContentTypeConvosProfileUpdate)).toBe(true);
+    expect(isConvosSilentContentType(ContentTypeConvosProfileUpdate)).toBe(true);
+    expect(isConvosSilentContentType(ContentTypeConvosProfileSnapshot)).toBe(true);
+    expect(isConvosSilentContentType(ContentTypeConvosTypingIndicator)).toBe(true);
+    expect(isConvosSilentContentType(ContentTypeConvosJoinRequest)).toBe(false);
+  });
+});

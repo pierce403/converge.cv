@@ -29,7 +29,6 @@ import {
   type ParsedConvosInvite,
 } from '@/lib/utils/convos-invite';
 import { useConversations } from '@/features/conversations/useConversations';
-import { useMessages } from '@/features/messages/useMessages';
 
 export function DebugPage() {
   const navigate = useNavigate();
@@ -45,8 +44,7 @@ export function DebugPage() {
   const isVaultUnlocked = useAuthStore((state) => state.isVaultUnlocked);
   const identity = useAuthStore((state) => state.identity);
 
-  const { createConversation } = useConversations();
-  const { sendMessage } = useMessages();
+  const { requestConvosInviteJoin } = useConversations();
 
   const conversationSummary = useConversationStore((state) => ({
     total: state.conversations.length,
@@ -153,24 +151,21 @@ export function DebugPage() {
 
     setInviteSending(true);
     try {
-      console.log('[Invite Claim] Creating DM with creator:', parsed.payload.creatorInboxId);
-      const conversation = await createConversation(parsed.payload.creatorInboxId);
+      console.log('[Invite Claim] Sending Convos join_request to creator:', parsed.payload.creatorInboxId);
+      const conversation = await requestConvosInviteJoin(parsed.inviteCode);
       if (!conversation) {
-        throw new Error('Failed to create DM with the invite creator.');
+        throw new Error('Failed to send invite request.');
       }
 
-      console.log('[Invite Claim] DM ready:', {
+      console.log('[Invite Claim] Join request sent through DM:', {
         conversationId: conversation.id,
         peerId: conversation.peerId,
       });
-      console.log('[Invite Claim] Sending invite slug…');
-      await sendMessage(conversation.id, parsed.inviteCode);
-      console.log('[Invite Claim] Invite slug sent.');
 
       logNetworkEvent({
         direction: 'outbound',
         event: 'invite:claim',
-        details: `Sent invite code to ${parsed.payload.creatorInboxId}`,
+        details: `Sent Convos join_request to ${parsed.payload.creatorInboxId}`,
       });
 
       setInviteSuccess('Invite sent. Waiting for the inviter to accept.');

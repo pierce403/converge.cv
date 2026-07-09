@@ -8,7 +8,6 @@ import {
   type ParsedConvosInvite,
 } from '@/lib/utils/convos-invite';
 import { useConversations } from '@/features/conversations/useConversations';
-import { useMessages } from '@/features/messages/useMessages';
 
 export function InviteClaimPage() {
   const navigate = useNavigate();
@@ -20,8 +19,7 @@ export function InviteClaimPage() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isVaultUnlocked = useAuthStore((state) => state.isVaultUnlocked);
 
-  const { createConversation } = useConversations();
-  const { sendMessage } = useMessages();
+  const { requestConvosInviteJoin } = useConversations();
 
   const [input, setInput] = useState(initialInput);
   const [parsed, setParsed] = useState<ParsedConvosInvite | null>(null);
@@ -65,12 +63,10 @@ export function InviteClaimPage() {
 
     setSending(true);
     try {
-      const conversation = await createConversation(parsed.payload.creatorInboxId);
+      const conversation = await requestConvosInviteJoin(parsed.inviteCode);
       if (!conversation) {
-        throw new Error('Failed to create DM with the invite creator.');
+        throw new Error('Failed to send invite request.');
       }
-
-      await sendMessage(conversation.id, parsed.inviteCode);
       try {
         window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Invite sent. Waiting for approval.' }));
       } catch {
@@ -82,7 +78,7 @@ export function InviteClaimPage() {
     } finally {
       setSending(false);
     }
-  }, [createConversation, isAuthenticated, isVaultUnlocked, navigate, parsed, sendMessage]);
+  }, [isAuthenticated, isVaultUnlocked, navigate, parsed, requestConvosInviteJoin]);
 
   const autoClaimedRef = useRef(false);
 

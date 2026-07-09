@@ -16,6 +16,28 @@ This root file is the canonical architecture and decision tracker for Converge. 
 - Static deployability: GitHub Pages remains sufficient for the Converge app shell.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
 
+## Convos XMTP Interop
+
+### Implemented Now In Converge
+
+- New user-initiated one-to-one chats use Convos' current single-peer MLS group pattern instead of creating a fresh DM. The stored `peerId` remains the other inbox ID for contact lookup, but `isGroup` is true so messages publish into a group conversation that Convos can list.
+- Legacy DMs remain readable and sendable. Invite-claim transport still uses a DM to the invite creator because Convos' join flow sends a request to the creator, not to the target group.
+- Converge registers these Convos custom content types with the XMTP SDK:
+  - `convos.org/profile_update:1.0`
+  - `convos.org/profile_snapshot:1.0`
+  - `convos.org/typing_indicator:1.0`
+  - `convos.org/join_request:1.0`
+- Profile update/snapshot and typing/thinking side channels are handled silently and are not persisted as visible chat bubbles.
+- Group sends, replies, and attachments best-effort publish the local display name through Convos `profile_update` and mirror merged profile metadata into `group.appData`.
+- Convos `group.appData` profile merging now preserves existing encrypted image refs, legacy image URLs, and `connections` when Converge only has a partial update.
+- Invite claiming sends a Convos `join_request` payload with the invite slug fallback instead of sending a raw invite slug as normal text.
+
+### Current Limitations
+
+- Existing local DM rows are not automatically migrated into Convos-style groups. Starting a new chat with the same peer creates or reuses a Converge-known single-peer group; old DM history stays separate.
+- Converge does not decrypt Convos encrypted profile images yet. It preserves encrypted refs in appData but only uses plaintext display names and legacy plaintext avatar URLs for rendering.
+- No live Converge-to-Convos end-to-end regression was run in this implementation pass. The changes are covered by local protocol codec and appData tests, but real cross-client delivery still needs manual verification with Convos.
+
 ## Push Notifications Through vapid.party
 
 ### Goal

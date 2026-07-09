@@ -14,6 +14,7 @@ interface MessageComposerProps {
   replyToMessage?: Message;
   onCancelReply?: () => void;
   onSent?: () => void;
+  onTypingChange?: (isTyping: boolean) => void;
   mentionCandidates?: MentionCandidate[];
 }
 
@@ -24,6 +25,7 @@ export function MessageComposer({
   replyToMessage,
   onCancelReply,
   onSent,
+  onTypingChange,
   mentionCandidates = [],
 }: MessageComposerProps) {
   const [message, setMessage] = useState('');
@@ -50,6 +52,12 @@ export function MessageComposer({
   }, [mentionState, mentionCandidates]);
 
   const isMentionMenuOpen = Boolean(mentionState && mentionResults.length > 0);
+
+  useEffect(() => {
+    return () => {
+      onTypingChange?.(false);
+    };
+  }, [onTypingChange]);
 
   useEffect(() => {
     if (!mentionState) {
@@ -138,6 +146,7 @@ export function MessageComposer({
     if (!trimmed || disabled) return;
 
     onSend(trimmed);
+    onTypingChange?.(false);
     onSent?.();
     setMessage('');
     setMentionState(null);
@@ -189,12 +198,14 @@ export function MessageComposer({
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMessage(e.target.value);
+    const nextValue = e.target.value;
+    setMessage(nextValue);
+    onTypingChange?.(nextValue.trim().length > 0);
 
     // Auto-resize textarea
     updateTextareaHeight(e.target);
 
-    updateMentionState(e.target.value, e.target.selectionStart);
+    updateMentionState(nextValue, e.target.selectionStart);
   };
 
   const handleAttachmentClick = () => {
@@ -205,6 +216,7 @@ export function MessageComposer({
   const handleAttachmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    onTypingChange?.(false);
     onSendAttachment?.(file);
     onSent?.();
     // Reset input so selecting the same file again triggers change

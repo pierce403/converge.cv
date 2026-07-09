@@ -50,6 +50,7 @@ export type ConvosGroupProfile = {
   encryptedImageUrl?: string;
   encryptedImageSalt?: Uint8Array;
   encryptedImageNonce?: Uint8Array;
+  connections?: string;
 };
 
 type ProtobufField = {
@@ -424,6 +425,7 @@ function parseConvosProfile(raw: Uint8Array): ConvosGroupProfile | null {
     const encryptedImageField = fields.find(
       (f) => f.fieldNumber === 4 && f.wireType === 2 && f.value instanceof Uint8Array,
     );
+    const connectionsField = fields.find((f) => f.fieldNumber === 5 && f.wireType === 2 && f.value instanceof Uint8Array);
     const encryptedImage = encryptedImageField && encryptedImageField.value instanceof Uint8Array
       ? parseConvosEncryptedImageRef(encryptedImageField.value)
       : undefined;
@@ -435,6 +437,10 @@ function parseConvosProfile(raw: Uint8Array): ConvosGroupProfile | null {
       encryptedImageUrl: encryptedImage?.url,
       encryptedImageSalt: encryptedImage?.salt,
       encryptedImageNonce: encryptedImage?.nonce,
+      connections:
+        connectionsField && connectionsField.value instanceof Uint8Array
+          ? decodeUtf8(connectionsField.value)?.trim() || undefined
+          : undefined,
     };
   } catch {
     return null;
@@ -468,6 +474,10 @@ function encodeConvosProfile(profile: ConvosGroupProfile): Uint8Array | null {
   if (encryptedImage) {
     fields.push(encodeLengthDelimited(4, encryptedImage));
   }
+
+  const connections = typeof profile.connections === 'string' ? profile.connections.trim() : '';
+  const connectionsField = encodeStringField(5, connections || undefined);
+  if (connectionsField) fields.push(connectionsField);
 
   return concatBytes(...fields);
 }
@@ -1052,6 +1062,10 @@ export function upsertConvosGroupProfile(
         : undefined,
     encryptedImageSalt: profile.encryptedImageSalt,
     encryptedImageNonce: profile.encryptedImageNonce,
+    connections:
+      typeof profile.connections === 'string' && profile.connections.trim()
+        ? profile.connections.trim()
+        : undefined,
   };
 
   const existing = Array.isArray(profiles) ? profiles : [];
@@ -1064,7 +1078,33 @@ export function upsertConvosGroupProfile(
   }
 
   const out = [...existing];
-  out[index] = nextProfile;
+  const previous = existing[index];
+  const previousHasEncryptedImage = Boolean(previous.encryptedImageUrl);
+  const nextHasEncryptedImage = Boolean(nextProfile.encryptedImageUrl);
+  const previousHasImage = Boolean(previous.imageUrl);
+  const nextHasImage = Boolean(nextProfile.imageUrl);
+  out[index] = {
+    ...previous,
+    inboxId: sanitizedInboxId,
+    name: nextProfile.name ?? previous.name,
+    imageUrl: nextHasImage ? nextProfile.imageUrl : previousHasImage ? previous.imageUrl : undefined,
+    encryptedImageUrl: nextHasEncryptedImage
+      ? nextProfile.encryptedImageUrl
+      : previousHasEncryptedImage
+        ? previous.encryptedImageUrl
+        : undefined,
+    encryptedImageSalt: nextHasEncryptedImage
+      ? nextProfile.encryptedImageSalt
+      : previousHasEncryptedImage
+        ? previous.encryptedImageSalt
+        : undefined,
+    encryptedImageNonce: nextHasEncryptedImage
+      ? nextProfile.encryptedImageNonce
+      : previousHasEncryptedImage
+        ? previous.encryptedImageNonce
+        : undefined,
+    connections: nextProfile.connections ?? previous.connections,
+  };
   return out;
 }
 

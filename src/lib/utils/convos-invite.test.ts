@@ -91,6 +91,7 @@ describe('convos invite metadata utils', () => {
         encryptedImageUrl: undefined,
         encryptedImageSalt: undefined,
         encryptedImageNonce: undefined,
+        connections: undefined,
       },
     ]);
   });
@@ -127,27 +128,59 @@ describe('convos invite metadata utils', () => {
   });
 
   it('upserts member profile by normalized inbox id', () => {
+    const salt = Uint8Array.from([1, 2, 3]);
+    const nonce = Uint8Array.from([4, 5, 6]);
     const existing = [
       {
         inboxId: `0x${'cd'.repeat(32)}`,
         name: 'Old Name',
+        imageUrl: 'https://cdn.example.com/old.png',
+        encryptedImageUrl: 'https://cdn.example.com/encrypted-old.bin',
+        encryptedImageSalt: salt,
+        encryptedImageNonce: nonce,
+        connections: '{"farcaster":"alice"}',
       },
     ];
 
     const result = upsertConvosGroupProfile(existing, {
       inboxId: 'CD'.repeat(32),
       name: '  New Name  ',
-      imageUrl: ' https://cdn.example.com/new.png ',
     });
 
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({
       inboxId: 'cd'.repeat(32),
       name: 'New Name',
-      imageUrl: 'https://cdn.example.com/new.png',
+      imageUrl: 'https://cdn.example.com/old.png',
+      encryptedImageUrl: 'https://cdn.example.com/encrypted-old.bin',
+      encryptedImageSalt: salt,
+      encryptedImageNonce: nonce,
+      connections: '{"farcaster":"alice"}',
+    });
+  });
+
+  it('round-trips Convos appData profile connections', async () => {
+    const inboxId = '12'.repeat(32);
+    const encoded = await encodeConvosGroupAppData({
+      profiles: [
+        {
+          inboxId,
+          name: 'Alice',
+          connections: '{"farcaster":"alice"}',
+        },
+      ],
+    });
+
+    const decoded = await parseConvosGroupAppData(encoded);
+
+    expect(decoded.profiles?.[0]).toEqual({
+      inboxId,
+      name: 'Alice',
+      imageUrl: undefined,
       encryptedImageUrl: undefined,
       encryptedImageSalt: undefined,
       encryptedImageNonce: undefined,
+      connections: '{"farcaster":"alice"}',
     });
   });
 

@@ -374,7 +374,7 @@ export function useConversations() {
         }
         const candidatePeerIds = new Set<string>([inboxKey, normalizedInput]);
         const found = existing.find(
-          (c) => !c.isGroup && candidatePeerIds.has(c.peerId.toLowerCase())
+          (c) => c.isGroup && candidatePeerIds.has(c.peerId.toLowerCase())
         );
 
         if (found) {
@@ -481,7 +481,14 @@ export function useConversations() {
           lastReadAt: Date.now(),
           lastReadMessageId: undefined,
           createdAt: Date.now(),
-          isGroup: false, // Explicitly mark as DM
+          isGroup: Boolean(xmtpConv.isGroup),
+          groupName: xmtpConv.isGroup ? profileDisplayName || 'Chat' : undefined,
+          memberInboxes: xmtpConv.isGroup && !actualPeerId.startsWith('0x')
+            ? [
+                useAuthStore.getState().identity?.inboxId,
+                actualPeerId,
+              ].filter((value): value is string => Boolean(value))
+            : undefined,
         };
 
         // Persist
@@ -502,6 +509,32 @@ export function useConversations() {
         return conversation;
       } catch (error) {
         console.error('Failed to create conversation:', error);
+        return null;
+      }
+    },
+    [addConversation]
+  );
+
+  const requestConvosInviteJoin = useCallback(
+    async (inviteCode: string): Promise<Conversation | null> => {
+      try {
+        const xmtp = getXmtpClient();
+        const conversation = await xmtp.sendConvosInviteJoinRequest(inviteCode);
+        const storage = await getStorage();
+        await storage.putConversation(conversation);
+        try {
+          await storage.unmarkConversationDeletion(conversation.id);
+          await storage.unmarkPeerDeletion(conversation.peerId);
+        } catch (cleanupError) {
+          console.warn(
+            '[useConversations] Failed to clear deleted markers during invite claim:',
+            cleanupError
+          );
+        }
+        addConversation(conversation);
+        return conversation;
+      } catch (error) {
+        console.error('Failed to send Convos invite join request:', error);
         return null;
       }
     },
@@ -1006,6 +1039,7 @@ export function useConversations() {
     incrementUnread,
     loadConversations,
     createConversation,
+    requestConvosInviteJoin,
     createGroupConversation,
     togglePin,
     toggleArchive,

@@ -15,6 +15,7 @@ import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
 import { evaluateContactAgainstFilters } from '@/lib/farcaster/filters';
 import type { MentionCandidate } from '@/lib/utils/mentions';
+import { getXmtpClient } from '@/lib/xmtp';
 
 const formatIdentifier = (value: string) => {
   if (!value) {
@@ -48,6 +49,16 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
   const lastScrollTopRef = useRef<number>(0);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [typingByInbox, setTypingByInbox] = useState<Record<string, { expiresAt: number }>>({});
+  const typingSendRef = useRef<{
+    isTyping: boolean;
+    lastSentAt: number;
+    stopTimer: number | null;
+  }>({
+    isTyping: false,
+    lastSentAt: 0,
+    stopTimer: null,
+  });
 
   const {
     conversations,
@@ -317,6 +328,110 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       setActiveConversation(null);
     };
   }, [id, setActiveConversation]);
+
+  const sendTypingState = useCallback((isTyping: boolean) => {
+    if (!id) return;
+    const state = typingSendRef.current;
+    if (state.stopTimer) {
+      window.clearTimeout(state.stopTimer);
+      state.stopTimer = null;
+    }
+    state.isTyping = isTyping;
+    state.lastSentAt = Date.now();
+    void getXmtpClient().sendTypingIndicator(id, isTyping);
+  }, [id]);
+
+  const handleTypingChange = useCallback((isTyping: boolean) => {
+    if (!id) return;
+    const state = typingSendRef.current;
+    const now = Date.now();
+
+    if (!isTyping) {
+      if (state.isTyping) {
+        sendTypingState(false);
+      }
+      return;
+    }
+
+    if (!state.isTyping || now - state.lastSentAt >= 5000) {
+      sendTypingState(true);
+    }
+
+    const latestState = typingSendRef.current;
+    if (latestState.stopTimer) {
+      window.clearTimeout(latestState.stopTimer);
+    }
+    latestState.stopTimer = window.setTimeout(() => {
+      if (typingSendRef.current.isTyping) {
+        sendTypingState(false);
+      }
+    }, 10000);
+  }, [id, sendTypingState]);
+
+  useEffect(() => {
+    const state = typingSendRef.current;
+    return () => {
+      if (state.stopTimer) {
+        window.clearTimeout(state.stopTimer);
+        state.stopTimer = null;
+      }
+      if (state.isTyping && id) {
+        state.isTyping = false;
+        state.lastSentAt = Date.now();
+        void getXmtpClient().sendTypingIndicator(id, false);
+      }
+    };
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) {
+      setTypingByInbox({});
+      return;
+    }
+
+    const handleTypingEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        conversationId?: string;
+        senderInboxId?: string;
+        isTyping?: boolean;
+      }>).detail;
+      if (!detail?.conversationId || detail.conversationId !== id || !detail.senderInboxId) {
+        return;
+      }
+      const senderKey = detail.senderInboxId.toLowerCase();
+      const myInbox = identity?.inboxId?.toLowerCase();
+      if (myInbox && senderKey === myInbox) {
+        return;
+      }
+      setTypingByInbox((current) => {
+        const next = { ...current };
+        if (detail.isTyping) {
+          next[senderKey] = { expiresAt: Date.now() + 15000 };
+        } else {
+          delete next[senderKey];
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('xmtp:typing', handleTypingEvent);
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      setTypingByInbox((current) => {
+        const entries = Object.entries(current).filter(([, value]) => value.expiresAt > now);
+        if (entries.length === Object.keys(current).length) {
+          return current;
+        }
+        return Object.fromEntries(entries);
+      });
+    }, 2000);
+
+    return () => {
+      window.removeEventListener('xmtp:typing', handleTypingEvent);
+      window.clearInterval(interval);
+      setTypingByInbox({});
+    };
+  }, [id, identity?.inboxId]);
 
   // Note: Message handling is done globally in Layout.tsx
   // This component just displays messages from the store
@@ -688,6 +803,21 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
   const showFilteredEmpty =
     farcasterFilters.enabled && hasLoadedConversation && messages.length > 0 && visibleMessages.length === 0;
   const showVisibleEmpty = !showInitialLoading && messagesToDisplay.length === 0 && hasLoadedConversation;
+  const typingDisplayText = useMemo(() => {
+    const now = Date.now();
+    const names = Object.entries(typingByInbox)
+      .filter(([, value]) => value.expiresAt > now)
+      .map(([inboxId]) => {
+        const contact = resolveContactForSender(inboxId);
+        return contact?.preferredName || contact?.name || groupMemberProfiles.get(inboxId)?.displayName || formatIdentifier(inboxId);
+      })
+      .filter(Boolean)
+      .slice(0, 3);
+    if (!names.length) return '';
+    if (names.length === 1) return `${names[0]} is typing...`;
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing...`;
+    return `${names[0]}, ${names[1]}, and ${names.length - 2} more are typing...`;
+  }, [typingByInbox, resolveContactForSender, groupMemberProfiles]);
 
   if (!conversation) {
     return (
@@ -1116,6 +1246,11 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
 
       {/* Composer */}
       <div ref={composerRef}>
+        {typingDisplayText && (
+          <div className="border-t border-primary-900/40 bg-primary-950/50 px-4 py-2 text-xs text-primary-300">
+            {typingDisplayText}
+          </div>
+        )}
         {conversation?.isGroup && !isGroupMember ? (
           <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg px-4 py-3 text-sm text-primary-200">
             You are no longer a member of this group and cannot send new messages.
@@ -1127,6 +1262,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
             replyToMessage={replyTo ?? undefined}
             onCancelReply={() => setReplyTo(null)}
             onSent={() => setReplyTo(null)}
+            onTypingChange={handleTypingChange}
             mentionCandidates={mentionCandidates}
           />
         )}
