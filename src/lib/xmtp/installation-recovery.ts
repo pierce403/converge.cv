@@ -11,6 +11,9 @@ export interface WrongChainIdDetails {
   signingFrom: number;
 }
 
+const LEGACY_CHAIN_ZERO_SCW_MESSAGE =
+  'This legacy smart-wallet inbox was registered in XMTP with SCW chain ID 0. Browser wallets now sign that wallet on its real chain, so XMTP rejects Converge wallet-based recovery/reassignment signatures. Use an already-connected Convos/XMTP device to revoke devices or pair/export the inbox; Converge cannot repair this inbox from WalletConnect alone.';
+
 type InstallationLike = Partial<Installation> & {
   installationId?: Uint8Array;
   idBytes?: Uint8Array;
@@ -32,6 +35,18 @@ export function extractWrongChainIdDetails(message: string | null | undefined): 
     return null;
   }
   return { initiallyAddedWith, signingFrom };
+}
+
+export function isSignatureValidationFailure(message: string | null | undefined): boolean {
+  return Boolean(message && /(?:signature error:\s*)?signature validation failed/i.test(message));
+}
+
+export function isLegacyScwChainZeroMismatch(details: WrongChainIdDetails | null): boolean {
+  return details?.initiallyAddedWith === 0;
+}
+
+export function legacyScwChainZeroRecoveryMessage(): string {
+  return LEGACY_CHAIN_ZERO_SCW_MESSAGE;
 }
 
 function hexToBytes(hex: string | undefined): Uint8Array | null {

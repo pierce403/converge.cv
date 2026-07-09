@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   extractInstallationLimitInboxId,
   extractWrongChainIdDetails,
+  isLegacyScwChainZeroMismatch,
+  isSignatureValidationFailure,
+  legacyScwChainZeroRecoveryMessage,
   selectOldestRevocableInstallations,
   shortInboxId,
 } from './installation-recovery';
@@ -44,13 +47,33 @@ describe('installation recovery helpers', () => {
   });
 
   it('extracts XMTP wrong-chain-id retry details', () => {
-    expect(
-      extractWrongChainIdDetails(
-        'Wrong chain id. Initially added with 0 but now signing from 8453'
-      )
-    ).toEqual({
+    const details = extractWrongChainIdDetails(
+      'Wrong chain id. Initially added with 0 but now signing from 8453'
+    );
+
+    expect(details).toEqual({
       initiallyAddedWith: 0,
       signingFrom: 8453,
     });
+    expect(isLegacyScwChainZeroMismatch(details)).toBe(true);
+  });
+
+  it('recognizes XMTP signature validation failures', () => {
+    expect(isSignatureValidationFailure('Signature error: Signature validation failed')).toBe(true);
+    expect(isSignatureValidationFailure('Signature validation failed')).toBe(true);
+    expect(isSignatureValidationFailure('Wrong chain id. Initially added with 0 but now signing from 8453')).toBe(false);
+  });
+
+  it('describes legacy chain-zero SCW recovery as a device-side action', () => {
+    expect(legacyScwChainZeroRecoveryMessage()).toContain('SCW chain ID 0');
+    expect(legacyScwChainZeroRecoveryMessage()).toContain('already-connected Convos/XMTP device');
+  });
+
+  it('does not treat nonzero wrong-chain details as legacy chain-zero', () => {
+    expect(isLegacyScwChainZeroMismatch(
+      extractWrongChainIdDetails(
+        'Wrong chain id. Initially added with 1 but now signing from 8453'
+      )
+    )).toBe(false);
   });
 });

@@ -18,7 +18,14 @@ import { FarcasterSettings } from './FarcasterSettings';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 import { getInboxConnectionWalletOptions } from '@/lib/wagmi/inbox-connection-options';
-import { extractInstallationLimitInboxId, extractWrongChainIdDetails, shortInboxId } from '@/lib/xmtp/installation-recovery';
+import {
+  extractInstallationLimitInboxId,
+  extractWrongChainIdDetails,
+  isLegacyScwChainZeroMismatch,
+  isSignatureValidationFailure,
+  legacyScwChainZeroRecoveryMessage,
+  shortInboxId,
+} from '@/lib/xmtp/installation-recovery';
 import buildInfo from '@/build-info.json';
 
 const BASE_CHAIN_ID = 8453;
@@ -36,6 +43,10 @@ interface InstallationRecoveryOptions {
 function isInstallationLimitError(message: string | null | undefined): boolean {
   if (!message) return false;
   return /10\/10|installation limit|already registered 10/i.test(message);
+}
+
+function isLegacyScwChainZeroRecoveryError(message: string | null | undefined): boolean {
+  return Boolean(message && /SCW chain ID 0|WalletConnect alone/i.test(message));
 }
 
 export function SettingsPage() {
@@ -416,12 +427,25 @@ export function SettingsPage() {
         target.walletType === 'SCW' &&
         target.chainId !== mismatch.initiallyAddedWith
       ) {
+        if (isLegacyScwChainZeroMismatch(mismatch)) {
+          throw new Error(legacyScwChainZeroRecoveryMessage());
+        }
         console.info('[Settings] Retrying existing inbox connection with XMTP-registered SCW chain id', {
           address: target.address,
           originallyDetectedChainId: target.chainId,
           retryChainId: mismatch.initiallyAddedWith,
         });
-        result = await connectWithTarget(mismatch.initiallyAddedWith);
+        try {
+          result = await connectWithTarget(mismatch.initiallyAddedWith);
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          if (isSignatureValidationFailure(retryMessage)) {
+            throw new Error(
+              `XMTP could not validate the smart-wallet reassignment signature on chain ${mismatch.initiallyAddedWith}. Revoke an installation from an already-connected Convos/XMTP device, then retry Converge.`
+            );
+          }
+          throw retryError;
+        }
       } else {
         throw error;
       }
@@ -1400,7 +1424,12 @@ function ConnectExistingInboxModal({
   const recoveryInboxId = blockedInboxId ?? errorInboxId;
   const isRecovering = activeAction === 'recover';
   const isConnectingExistingInbox = activeAction === 'connect';
-  const showInstallationRecovery = isInstallationLimitError(error) || Boolean(recoveryInboxId) || isRecovering;
+  const legacyScwRecoveryBlocked = isLegacyScwChainZeroRecoveryError(error);
+  const showInstallationRecovery = !legacyScwRecoveryBlocked && (
+    isInstallationLimitError(error) ||
+    Boolean(recoveryInboxId) ||
+    isRecovering
+  );
 
   const runConnect = async (getAccounts: () => Promise<readonly string[] | undefined>) => {
     if (isWorking) return;
@@ -1422,6 +1451,9 @@ function ConnectExistingInboxModal({
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to connect wallet';
       const inboxId = extractInstallationLimitInboxId(message);
+      if (isLegacyScwChainZeroRecoveryError(message)) {
+        setBlockedInboxId(null);
+      }
       if (inboxId) {
         setBlockedInboxId(inboxId);
         setRecoveryStep(`Inbox ${shortInboxId(inboxId)} is full. Use recovery before retrying.`);
@@ -1476,7 +1508,11 @@ function ConnectExistingInboxModal({
       console.info('[Settings] Existing inbox installation recovery completed', result);
     } catch (err) {
       setRecoveryStep(null);
-      onError(err instanceof Error ? err.message : 'Failed to revoke old installations');
+      const message = err instanceof Error ? err.message : 'Failed to revoke old installations';
+      if (isLegacyScwChainZeroRecoveryError(message)) {
+        setBlockedInboxId(null);
+      }
+      onError(message);
     } finally {
       setActiveAction(null);
       onWorkingChange(false);

@@ -65,7 +65,14 @@ import {
   type ConvosGroupProfile,
   type ConvosInvitePayload,
 } from '@/lib/utils/convos-invite';
-import { extractWrongChainIdDetails, selectOldestRevocableInstallations, shortInboxId } from './installation-recovery';
+import {
+  extractWrongChainIdDetails,
+  isLegacyScwChainZeroMismatch,
+  isSignatureValidationFailure,
+  legacyScwChainZeroRecoveryMessage,
+  selectOldestRevocableInstallations,
+  shortInboxId,
+} from './installation-recovery';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
 import {
   ConvosJoinRequestCodec,
@@ -1195,6 +1202,10 @@ export class XmtpClient {
         identity.walletType === 'SCW' &&
         identity.chainId !== mismatch.initiallyAddedWith
       ) {
+        if (isLegacyScwChainZeroMismatch(mismatch)) {
+          emitStatus('XMTP reports this smart-wallet inbox was registered with legacy SCW chain ID 0.');
+          throw new Error(legacyScwChainZeroRecoveryMessage());
+        }
         emitStatus(
           `XMTP expects this smart wallet on chain ${mismatch.initiallyAddedWith}; retrying revoke with that chain id.`
         );
@@ -1203,7 +1214,17 @@ export class XmtpClient {
           chainId: mismatch.initiallyAddedWith,
           walletType: 'SCW',
         });
-        await Client.revokeInstallations(signer, inboxId, bytes, 'production');
+        try {
+          await Client.revokeInstallations(signer, inboxId, bytes, 'production');
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          if (isSignatureValidationFailure(retryMessage)) {
+            throw new Error(
+              `XMTP could not validate the smart-wallet recovery signature on chain ${mismatch.initiallyAddedWith}. Revoke an installation from an already-connected Convos/XMTP device, then retry Converge.`
+            );
+          }
+          throw retryError;
+        }
       } else {
         throw error;
       }

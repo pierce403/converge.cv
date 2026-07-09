@@ -493,17 +493,23 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.3.4 + SCW chain-id retry)
+**Last Updated**: 2026-07-09 (app version 0.3.5 + legacy SCW chain-zero blocker)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
 
+### Legacy SCW Chain-Zero Recovery Blocker
+- Bumped Converge from `0.3.4` to `0.3.5` after real recovery attempts showed `Wrong chain id. Initially added with 0 but now signing from 8453` followed by `Signature validation failed`.
+- Important learning: retrying an XMTP smart-wallet identity update with SCW chain ID `0` is not useful in browser-wallet recovery. The second signature is over the same challenge and XMTP cannot validate the chain-zero smart-wallet signature from the browser wallet.
+- Converge now stops after XMTP reports the legacy chain-zero mismatch, avoids asking for the second doomed signature, hides the stale recovery retry panel, and tells the user to use an already-connected Convos/XMTP device to revoke devices or pair/export the inbox.
+- Nonzero SCW chain mismatches still retry with the XMTP-registered chain ID from the error.
+
 ### SCW Chain-ID Retry For Existing Inbox Recovery
 - Bumped Converge from `0.3.3` to `0.3.4` after fixing XMTP smart-wallet recovery errors like `Wrong chain id. Initially added with 0 but now signing from 8453`.
-- Added parsing for XMTP wrong-chain-id errors and retry recovery/reassignment with the SCW chain ID XMTP says was originally registered.
+- Added parsing for XMTP wrong-chain-id errors and retry recovery/reassignment with the SCW chain ID XMTP says was originally registered. Later follow-up in `0.3.5` excludes legacy chain ID `0` because browser-wallet signatures cannot validate that path.
 - This matters for legacy Convos/Base smart-wallet inboxes where the address has Base bytecode but XMTP identity updates expect chain ID `0`.
-- The retry is used for both Settings → Connect Existing Inbox → "Revoke Oldest Installation" and the subsequent "Use Connected Wallet" reassignment attempt.
+- The retry is used for both Settings → Connect Existing Inbox → "Revoke Oldest Installation" and the subsequent "Use Connected Wallet" reassignment attempt only for nonzero registered chain IDs.
 
 ### Static Existing Inbox Installation Recovery
 - Bumped Converge from `0.3.2` to `0.3.3` after hardening the Settings → Connect Existing Inbox 10/10 recovery flow.
