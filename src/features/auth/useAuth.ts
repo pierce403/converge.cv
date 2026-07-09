@@ -22,6 +22,7 @@ import type { VaultSecrets, Identity } from '@/types';
 import { useWalletConnection } from '@/lib/wagmi';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
 import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
+import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
 
 export function useAuth() {
   const authStore = useAuthStore();
@@ -183,6 +184,11 @@ export function useAuth() {
         label?: string;
         skipRegistryUpdate?: boolean;
         mnemonic?: string;
+        identityKind?: Identity['identityKind'];
+        linkedWalletAddress?: string;
+        linkedWalletChainId?: number;
+        linkedAt?: number;
+        previousInboxId?: string;
       }
     ) => {
       try {
@@ -204,6 +210,11 @@ export function useAuth() {
           privateKey: privateKey, // Store encrypted in production (or undefined for connected wallets)
           createdAt: Date.now(),
           displayName: options?.label,
+          identityKind: options?.identityKind,
+          linkedWalletAddress: options?.linkedWalletAddress,
+          linkedWalletChainId: options?.linkedWalletChainId,
+          linkedAt: options?.linkedAt,
+          previousInboxId: options?.previousInboxId,
         };
         if (options?.mnemonic) {
           identity.mnemonic = options.mnemonic;
@@ -618,7 +629,26 @@ export function useAuth() {
       let storage = await getStorage();
       let identities = await storage.listIdentities();
       if (!identities.length) {
-        return false;
+        try {
+          await setStorageNamespace('default');
+        } catch {
+          // ignore; storage may already be on the default namespace
+        }
+
+        const generated = generateLocalAppIdentity();
+        return await createIdentity(
+          generated.identity.address,
+          generated.privateKey,
+          undefined,
+          undefined,
+          {
+            register: true,
+            enableHistorySync: false,
+            label: generated.identity.displayName,
+            mnemonic: generated.mnemonic,
+            identityKind: generated.identity.identityKind,
+          }
+        );
       }
 
       let identity: Identity | undefined;
@@ -734,7 +764,17 @@ export function useAuth() {
       console.error('Failed to check existing identity:', error);
       return false;
     }
-  }, [setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked, connectXmtpSafely, walletAddress, walletChainId, walletSignMessage]);
+  }, [
+    setIdentity,
+    setVaultSecrets,
+    setAuthenticated,
+    setVaultUnlocked,
+    connectXmtpSafely,
+    createIdentity,
+    walletAddress,
+    walletChainId,
+    walletSignMessage,
+  ]);
 
   const probeIdentity = useCallback(
     async (
@@ -754,6 +794,105 @@ export function useAuth() {
     []
   );
 
+  const connectLocalIdentityToWalletInbox = useCallback(
+    async (
+      targetWalletAddress: string,
+      chainId: number | undefined,
+      signMessage: (message: string) => Promise<string>,
+      options?: { walletType?: 'EOA' | 'SCW'; label?: string }
+    ): Promise<{ inboxId: string; previousInboxId?: string }> => {
+      const currentIdentity = useAuthStore.getState().identity;
+      if (!currentIdentity) {
+        throw new Error('No local app identity is loaded.');
+      }
+      if (!currentIdentity.privateKey) {
+        throw new Error('The current identity does not have an exportable local key.');
+      }
+
+      const xmtp = getXmtpClient();
+      const probe = await xmtp.probeIdentity({
+        address: targetWalletAddress,
+        chainId,
+        walletType: options?.walletType,
+        signMessage,
+      });
+
+      if (!probe.inboxId) {
+        throw new Error('No existing XMTP inbox was found for that wallet.');
+      }
+      if (probe.installationCount >= 10) {
+        throw new Error('Installation limit reached (10/10). Revoke an old installation before connecting this app key.');
+      }
+
+      const targetInboxId = normalizeInboxId(probe.inboxId);
+      if (!targetInboxId) {
+        throw new Error('XMTP returned an invalid inbox ID for that wallet.');
+      }
+
+      const previousInboxId = normalizeInboxId(currentIdentity.inboxId) ?? undefined;
+
+      await xmtp.reassignAccountToInbox({
+        targetIdentity: {
+          address: targetWalletAddress,
+          chainId,
+          walletType: options?.walletType,
+          signMessage,
+        },
+        accountIdentity: {
+          address: currentIdentity.address,
+          privateKey: currentIdentity.privateKey,
+        },
+      });
+
+      const updatedIdentity: Identity = {
+        ...currentIdentity,
+        inboxId: targetInboxId,
+        installationId: undefined,
+        identityKind: 'local-app',
+        linkedWalletAddress: targetWalletAddress,
+        linkedWalletChainId: chainId,
+        linkedAt: Date.now(),
+        previousInboxId,
+        displayName: currentIdentity.displayName || options?.label,
+      };
+
+      await setStorageNamespace(targetInboxId);
+      const storage = await getStorage();
+      await storage.putIdentity(updatedIdentity);
+      setIdentity(updatedIdentity);
+      setAuthenticated(true);
+      setVaultUnlocked(true);
+
+      const registry = useInboxRegistryStore.getState();
+      if (previousInboxId && !inboxIdsMatch(previousInboxId, targetInboxId)) {
+        registry.removeEntry(previousInboxId);
+      }
+      registry.upsertEntry({
+        inboxId: targetInboxId,
+        displayLabel: options?.label || updatedIdentity.displayName || targetWalletAddress,
+        primaryDisplayIdentity: targetWalletAddress,
+        lastOpenedAt: Date.now(),
+        hasLocalDB: false,
+      });
+      registry.setCurrentInbox(targetInboxId);
+
+      await connectXmtpSafely(
+        updatedIdentity.address,
+        updatedIdentity.privateKey,
+        undefined,
+        undefined,
+        {
+          register: false,
+          enableHistorySync: true,
+          labelOverride: updatedIdentity.displayName,
+        }
+      );
+
+      return { inboxId: targetInboxId, previousInboxId };
+    },
+    [connectXmtpSafely, setAuthenticated, setIdentity, setVaultUnlocked]
+  );
+
   return {
     ...authStore,
     createIdentity,
@@ -767,5 +906,6 @@ export function useAuth() {
     burnIdentity,
     checkExistingIdentity,
     probeIdentity,
+    connectLocalIdentityToWalletInbox,
   };
 }

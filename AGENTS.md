@@ -34,10 +34,11 @@
 - `checkExistingIdentity()` sets `isVaultUnlocked: true` automatically
 
 ### ⚡ ONE-CLICK ONBOARDING
-- Current flow: Welcome screen → Click "Get Started" → Automatically create identity → Ready to use
+- Current flow: app startup → `checkExistingIdentity()` → auto-generate a local app key if none exists → register/connect XMTP → ready to use
 - **No manual wallet address entry**
 - **No passphrase setup**
 - **No multi-step wizard** unless absolutely necessary
+- Wallets are for optional existing-inbox connection/reassignment, not default identity creation.
 
 ### 🚫 NO FAKE/MOCK DATA OR IDs
 - **NEVER use placeholder, fake, or mock API keys, project IDs, or credentials**
@@ -52,23 +53,32 @@
 
 ### Identity & Storage
 - **Identities stored in IndexedDB** (via Dexie), NOT localStorage
-- Wallet addresses auto-generated using `crypto.getRandomValues()`
+- Local app keys are generated with secp256k1 wallet primitives and stored as exportable identity records.
 - Private keys stored in identity record (would be device-encrypted in production)
 - No vault secrets required for default flow
 
 ### Authentication Flow
 ```
-Welcome → handleStart() → 
-  Generate wallet (crypto.getRandomValues) → 
-  createIdentity(address, privateKey) → 
-  Store in IndexedDB → 
-  Navigate to main app
+App start → checkExistingIdentity() →
+  If no identity exists, generate local app key →
+  createIdentity(address, privateKey) →
+  Store in IndexedDB →
+  Connect/register XMTP →
+  Open main app
+
+Optional existing inbox connection →
+  Connect wallet that owns existing inbox →
+  Probe wallet inbox →
+  Wallet signs XMTP account reassignment →
+  Move local app key into target inbox →
+  Reconnect with local app key
 ```
 
 ### Key Functions
 - `createIdentity(address, privateKey)` - Simple, no passphrase
 - `createIdentityWithPassphrase(passphrase, address)` - Advanced option (not in default flow)
-- `checkExistingIdentity()` - Auto-unlocks vault on app load
+- `checkExistingIdentity()` - Auto-unlocks vault and generates/connects a local app key on first app load
+- `connectLocalIdentityToWalletInbox()` - Uses a wallet signature to move the local app key into an existing XMTP inbox
 
 ---
 
@@ -465,11 +475,20 @@ Guidance:
 Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.2.0 + Convos XMTP interop)
+**Last Updated**: 2026-07-09 (app version 0.3.0 + local app key startup)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### Local App Key Startup + Existing Inbox Connection
+- Bumped Converge from `0.2.0` to `0.3.0` for the identity startup/reassignment behavior change.
+- Startup now auto-generates an exportable local app key when no identity exists, stores it in IndexedDB, registers it with XMTP, and opens the app without passphrases or wallet prompts.
+- Wallet providers are no longer the default persistent identity path. Settings → Connect Existing Inbox uses the wallet only to approve moving the local app key into an already-existing wallet-owned XMTP inbox.
+- The wallet connection flow probes the wallet inbox, blocks at XMTP's 10-installation limit, then calls the browser SDK's `unsafe_addAccount(..., true)` through a temporary manager client to reassign the local app key to the target inbox.
+- After reassignment, Converge persists the local app key with the destination `inboxId`, switches the storage namespace, removes the generated inbox from the visible registry, reconnects using the local key, and syncs history from the existing inbox.
+- The generated inbox is intentionally abandoned after reassignment. This pass removes it from the visible registry but does not aggressively delete every old namespace/OPFS artifact.
+- `FEATURES.md` and root `ARCHITECTURE.md` document this as the current identity architecture; do not reintroduce wallet-primary onboarding without updating those docs.
 
 ### App Version Bump
 - Bumped Converge from `0.1.0` to `0.2.0` after the Convos XMTP interop feature work.

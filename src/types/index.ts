@@ -145,6 +145,11 @@ export interface Identity {
   address: string;
   publicKey: string;
   privateKey?: string; // Should be encrypted in storage
+  identityKind?: 'local-app' | 'wallet' | 'imported';
+  linkedWalletAddress?: string;
+  linkedWalletChainId?: number;
+  linkedAt?: number;
+  previousInboxId?: string;
   inviteKey?: string; // Derived invite key for wallet-based identities
   inviteKeyInboxId?: string; // Inbox ID the invite key is bound to
   createdAt: number;

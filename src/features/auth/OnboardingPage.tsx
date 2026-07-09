@@ -4,8 +4,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { generateMnemonic, mnemonicToAccount, english } from 'viem/accounts';
-import { bytesToHex } from 'viem';
 import { IdentifierKind, type Identifier } from '@xmtp/browser-sdk';
 import { WalletSelector } from './WalletSelector';
 import { useAuth } from './useAuth';
@@ -16,7 +14,7 @@ import { resetXmtpClient } from '@/lib/xmtp/client';
 import { deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
 import type { KeyfileIdentity } from '@/lib/keyfile';
 import { useWalletConnection } from '@/lib/wagmi';
-import { setStorageNamespace } from '@/lib/storage';
+import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
@@ -183,7 +181,7 @@ export function OnboardingPage() {
     hydrateRegistry();
   }, [hydrateRegistry]);
 
-  // If navigated with ?connect=1 (from InboxSwitcher), jump straight into wallet selection
+  // If navigated with ?connect=1 from a deep link or older route, jump straight into wallet selection.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -306,19 +304,14 @@ export function OnboardingPage() {
     setView('processing');
 
     try {
-      const mnemonic = generateMnemonic(english);
-      const account = mnemonicToAccount(mnemonic, { path: "m/44'/60'/0'/0/0" });
-      const privateKeyBytes = account.getHdKey().privateKey;
-      if (!privateKeyBytes) {
-        throw new Error('Unable to derive private key from mnemonic.');
-      }
-      const privateKeyHex = bytesToHex(privateKeyBytes);
+      const generated = generateLocalAppIdentity();
 
-      const success = await auth.createIdentity(account.address, privateKeyHex, undefined, undefined, {
+      const success = await auth.createIdentity(generated.identity.address, generated.privateKey, undefined, undefined, {
         register: true,
         enableHistorySync: false,
-        label: `Identity ${shortAddress(account.address)}`,
-        mnemonic,
+        label: generated.identity.displayName,
+        mnemonic: generated.mnemonic,
+        identityKind: generated.identity.identityKind,
       });
 
       if (!success) {
@@ -441,60 +434,42 @@ export function OnboardingPage() {
     }
   };
 
-  const finalizeWalletIdentity = async (mode: 'connect' | 'create') => {
+  const finalizeWalletIdentity = async () => {
     if (!walletCandidate) {
       return;
     }
 
-    if (mode === 'connect' && probeResult && probeResult.installationCount >= 10) {
+    if (probeResult && probeResult.installationCount >= 10) {
       setError('Installation limit reached (10/10). Revoke an old installation to continue.');
       return;
     }
 
     const inboxId = probeResult?.inboxId ?? null;
-    const registryEntry = inboxId
-      ? registryEntries.find((entry) => entry.inboxId === inboxId)
-      : undefined;
-    const enableHistorySync = registryEntry ? !registryEntry.hasLocalDB : true;
+    if (!inboxId) {
+      setError('No existing XMTP inbox was found for that wallet.');
+      return;
+    }
 
-    setStatusMessage(mode === 'create' ? 'Creating your inbox…' : 'Connecting to your inbox…');
+    setStatusMessage('Moving this app key into your existing inbox…');
     setView('processing');
 
     try {
-      if (mode === 'connect' && inboxId) {
-        // CRITICAL: Switch storage namespace to the target inbox BEFORE connecting/syncing.
-        // This prevents mixing data with the previously active inbox.
-        await setStorageNamespace(inboxId);
-        setCurrentInbox(inboxId);
-      }
-
       const label = getPreferredLabel(probeResult?.inboxState?.accountIdentifiers, walletCandidate.address);
-      const success = await auth.createIdentity(
+      await auth.connectLocalIdentityToWalletInbox(
         walletCandidate.address,
-        undefined,
         walletCandidate.chainId,
         walletCandidate.signMessage,
         {
-          register: true,
-          enableHistorySync,
           label,
         }
       );
-
-      if (!success) {
-        throw new Error('createIdentity returned false');
-      }
 
       // Force a reload to ensure a clean state for the new inbox
       const pendingTarget = getPendingTargetUrl();
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {
-      console.error('[Onboarding] Failed to finalize wallet identity:', err);
-      setError(
-        mode === 'create'
-          ? 'Failed to create a new inbox. Please try again.'
-          : 'Failed to connect this identity. Please try again.'
-      );
+      console.error('[Onboarding] Failed to connect app key to wallet inbox:', err);
+      setError(err instanceof Error ? err.message : 'Failed to connect this app key. Please try again.');
       setView('results');
     }
   };
@@ -572,9 +547,9 @@ export function OnboardingPage() {
             className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
           >
             <div className="text-3xl">🔐</div>
-            <div className="mt-2 text-xl font-semibold text-primary-50">Connect identity</div>
+            <div className="mt-2 text-xl font-semibold text-primary-50">Connect existing inbox</div>
             <div className="mt-1 text-sm text-primary-200">
-              Attach an existing XMTP identity via WalletConnect, MetaMask, Coinbase Wallet, and more.
+              Use WalletConnect, MetaMask, Coinbase Wallet, and more to approve this app key for an existing XMTP inbox.
             </div>
           </button>
           <button
@@ -582,7 +557,7 @@ export function OnboardingPage() {
             className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
           >
             <div className="text-3xl">✨</div>
-            <div className="mt-2 text-xl font-semibold text-primary-50">Create new identity</div>
+            <div className="mt-2 text-xl font-semibold text-primary-50">Create local app key</div>
             <div className="mt-1 text-sm text-primary-200">
               We&rsquo;ll generate everything for you instantly — no passphrases or extra steps.
             </div>
@@ -885,19 +860,16 @@ export function OnboardingPage() {
               <div className="pt-2">
                 {hasInbox ? (
                   <button
-                    onClick={() => finalizeWalletIdentity('connect')}
+                    onClick={() => finalizeWalletIdentity()}
                     disabled={installationBlocked}
                     className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:border-primary-700 disabled:bg-primary-900 disabled:text-primary-400"
                   >
-                    Connect to this inbox
+                    Move app key to this inbox
                   </button>
                 ) : (
-                  <button
-                    onClick={() => finalizeWalletIdentity('create')}
-                    className="w-full rounded-md border border-accent-500/60 bg-transparent px-4 py-3 text-sm font-semibold text-accent-200 transition hover:border-accent-400 hover:bg-accent-500/10"
-                  >
-                    Create new inbox with this wallet
-                  </button>
+                  <div className="rounded-md border border-primary-800/60 bg-primary-900/50 px-4 py-3 text-sm text-primary-200">
+                    This wallet does not have an existing XMTP inbox. Keep using the generated app key.
+                  </div>
                 )}
               </div>
             </div>
@@ -906,8 +878,8 @@ export function OnboardingPage() {
           </div>
 
           <div className="rounded-xl border border-primary-800/40 bg-primary-950/40 p-4 text-xs text-primary-300">
-            XMTP associates one inbox per identity. If you need a fresh start, you can always create a brand-new inbox with the
-            connect wallet button above. History stays with the original inbox.
+            Moving this app key reassigns it to the selected wallet inbox. The generated inbox is abandoned and future messages
+            sync from the existing inbox.
           </div>
         </div>
       </div>

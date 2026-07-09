@@ -8,6 +8,7 @@ import { setStorageNamespace, closeStorage, getStorage } from '@/lib/storage';
 import { QRCodeOverlay } from '@/components/QRCodeOverlay';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { InboxRegistryEntry } from '@/types';
+import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 const isAutoLabel = (val?: string | null): boolean => {
@@ -205,27 +206,21 @@ export function InboxSwitcher() {
     setTimeout(() => window.location.reload(), 50);
   };
 
-  const handleCreateEphemeral = async () => {
+  const handleCreateLocalAppKey = async () => {
     try {
-      const { generateMnemonic, mnemonicToAccount, english } = await import('viem/accounts');
-      const { bytesToHex } = await import('viem');
-      const mnemonic = generateMnemonic(english);
-      const account = mnemonicToAccount(mnemonic, { path: "m/44'/60'/0'/0/0" });
-      const pkBytes = account.getHdKey().privateKey;
-      if (!pkBytes) throw new Error('Failed to derive private key');
-      const privateKeyHex = bytesToHex(pkBytes);
-      const label = `Identity ${shortAddress(account.address)}`;
-      const ok = await createIdentity(account.address, privateKeyHex, undefined, undefined, {
+      const generated = generateLocalAppIdentity();
+      const ok = await createIdentity(generated.identity.address, generated.privateKey, undefined, undefined, {
         register: true,
         enableHistorySync: false,
-        label,
-        mnemonic,
+        label: generated.identity.displayName,
+        mnemonic: generated.mnemonic,
+        identityKind: generated.identity.identityKind,
       });
       if (!ok) throw new Error('createIdentity returned false');
       navigate('/');
     } catch (e) {
-      console.error('[InboxSwitcher] Failed to create ephemeral identity:', e);
-      alert('Failed to create a new identity. Please try again.');
+      console.error('[InboxSwitcher] Failed to create local app key:', e);
+      alert('Failed to create a local app key. Please try again.');
     }
   };
 
@@ -437,12 +432,12 @@ export function InboxSwitcher() {
             <Menu.Item>
               {({ active }) => (
                 <button
-                  onClick={() => navigate('/onboarding?connect=1')}
+                  onClick={() => navigate('/settings?connectInbox=1')}
                   className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
                     active ? 'bg-accent-600/20 text-accent-200' : 'text-accent-300 hover:text-accent-200'
                   }`}
                 >
-                  Connect to another inbox…
+                  Connect existing inbox…
                 </button>
               )}
             </Menu.Item>
@@ -452,12 +447,12 @@ export function InboxSwitcher() {
             <Menu.Item>
               {({ active }) => (
                 <button
-                  onClick={handleCreateEphemeral}
+                  onClick={handleCreateLocalAppKey}
                   className={`w-full rounded-lg px-3 py-2 text-left text-sm font-semibold transition ${
                     active ? 'bg-primary-800/70 text-primary-100' : 'text-primary-200 hover:text-primary-100'
                   }`}
                 >
-                  Create ephemeral identity
+                  Create local app key
                 </button>
               )}
             </Menu.Item>

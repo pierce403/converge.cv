@@ -159,6 +159,16 @@ export interface IdentityProbeResult {
   inboxState?: InboxState;
 }
 
+export interface AccountReassignmentOptions {
+  targetIdentity: XmtpIdentity;
+  accountIdentity: XmtpIdentity;
+}
+
+export interface AccountReassignmentResult {
+  inboxId: string;
+  installationId?: string;
+}
+
 interface ConnectOptions {
   register?: boolean;
   enableHistorySync?: boolean;
@@ -3629,6 +3639,86 @@ export class XmtpClient {
       event: 'identity:add_account:success',
       details: `Associated ${identity.address} with inbox ${this.client.inboxId}`,
     });
+  }
+
+  /**
+   * Move an account signer into another already-registered inbox.
+   *
+   * Used by Converge's local-app-key flow:
+   * - targetIdentity is the wallet that owns the existing inbox and approves the move.
+   * - accountIdentity is the generated local key that Converge will keep using.
+   *
+   * XMTP names this API `unsafe_addAccount` because the moved account loses access to
+   * its previous inbox. Converge passes allowInboxReassign=true deliberately here.
+   */
+  async reassignAccountToInbox({
+    targetIdentity,
+    accountIdentity,
+  }: AccountReassignmentOptions): Promise<AccountReassignmentResult> {
+    if (!accountIdentity.privateKey && !accountIdentity.signMessage) {
+      throw new Error('Account identity must be signable before it can be reassigned.');
+    }
+
+    if (this.client) {
+      await this.disconnect();
+    }
+
+    const targetSigner = await this.createSigner(targetIdentity);
+    const accountSigner = await this.createSigner(accountIdentity);
+    const randomSuffix = Math.random().toString(36).substring(2, 10);
+    const dbPath = `xmtp-link-inbox-temp-${randomSuffix}.db3`;
+
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'identity:reassign_account',
+      details: `Moving ${accountIdentity.address} into wallet inbox for ${targetIdentity.address}`,
+    });
+
+    const manager = await Client.create(targetSigner, {
+      env: 'production',
+      dbPath,
+      codecs: XMTP_CONTENT_CODECS,
+      loggingLevel: getXmtpSdkLogLevel(),
+      structuredLogging: false,
+      performanceLogging: false,
+      disableAutoRegister: true,
+    });
+
+    try {
+      const inboxId = manager.inboxId;
+      if (!inboxId) {
+        throw new Error('No existing XMTP inbox was found for that wallet.');
+      }
+
+      await manager.unsafe_addAccount(accountSigner, true);
+
+      let confirmedInboxId = inboxId;
+      try {
+        const state = await manager.preferences.fetchInboxState();
+        if (state?.inboxId) {
+          confirmedInboxId = state.inboxId;
+        }
+      } catch (error) {
+        console.warn('[XMTP] Failed to refresh inbox state after account reassignment:', error);
+      }
+
+      logNetworkEvent({
+        direction: 'status',
+        event: 'identity:reassign_account:success',
+        details: `Moved ${accountIdentity.address} into inbox ${confirmedInboxId}`,
+      });
+
+      return {
+        inboxId: confirmedInboxId,
+        installationId: manager.installationId,
+      };
+    } finally {
+      try {
+        await manager.close();
+      } catch {
+        // ignore
+      }
+    }
   }
 
   async probeIdentity(identity: XmtpIdentity): Promise<IdentityProbeResult> {

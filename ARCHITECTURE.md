@@ -16,6 +16,28 @@ This root file is the canonical architecture and decision tracker for Converge. 
 - Static deployability: GitHub Pages remains sufficient for the Converge app shell.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
 
+## Local App Key And Existing Inbox Connection
+
+### Implemented Now In Converge
+
+- On startup, if no local identity exists, Converge generates a secp256k1 local app key, stores it in IndexedDB, registers it with XMTP, and opens the app without a passphrase or wallet prompt.
+- The local app key is exportable through the existing keyfile path and remains the signer Converge uses after setup.
+- Wallet providers (Native/MetaMask/WalletConnect/Coinbase, Thirdweb, Privy) are used to connect the local app key to an existing wallet-owned XMTP inbox, not as the default persistent Converge identity.
+- The connection flow probes the wallet for an existing XMTP inbox, asks the wallet to sign XMTP's account reassignment approval, then uses `unsafe_addAccount(..., true)` through a temporary manager client to move the local app key into that inbox.
+- After reassignment, Converge switches storage to the target inbox, reconnects XMTP with the local app key, and history sync runs from the existing inbox. The generated inbox is removed from the visible registry and treated as abandoned.
+
+### Privacy And Safety Notes
+
+- Private keys and mnemonics remain local to the browser's IndexedDB identity store; they are not placed in `localStorage` and are not sent to wallet providers.
+- Wallet signatures authorize XMTP identity/account management only. Wallets do not decrypt messages and are not required for normal sends after the local app key has been moved.
+- Reassignment is intentionally one-way for the generated inbox: moving the local app key to an existing inbox routes future XMTP resolution to the destination inbox.
+
+### Current Limitations
+
+- The browser SDK exposes the required API as `unsafe_addAccount` because account reassignment can strand the previous inbox. Converge uses it deliberately only after the user chooses the connect-existing-inbox flow.
+- If the target inbox is at XMTP's installation limit, Converge blocks the move until an old installation is revoked.
+- The old generated inbox is removed from Converge's visible registry after reassignment, but this pass does not aggressively delete every old namespace/OPFS artifact for that abandoned inbox.
+
 ## Convos XMTP Interop
 
 ### Implemented Now In Converge

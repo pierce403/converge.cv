@@ -1,7 +1,10 @@
 # Features and Specifications
 
 ## One-Click Onboarding and Inbox Switching
-- Landing flow keeps the experience minimal by defaulting to a single-step landing view and switching into wallet selection when the user arrives with `?connect=1` (e.g., from the inbox switcher).
+- Startup auto-creates an exportable local app key when no identity exists, stores it in IndexedDB, registers it with XMTP, and opens the app without passphrases or wallet prompts.
+- Wallet connection is now an inbox-connection flow, not the default app identity: Settings → Connect Existing Inbox asks the wallet that owns an existing XMTP inbox to approve moving the local app key into that inbox via XMTP account reassignment.
+- After a wallet-approved reassignment, Converge keeps signing with the local app key, switches storage to the existing inbox, removes the generated inbox from the visible registry, and syncs history from the wallet-owned inbox.
+- The old generated inbox is abandoned by design when the local app key is moved; message history remains with the destination XMTP inbox.
 - Registry hydration runs on load so previously used inboxes are listed with last-opened timestamps and buttons to reopen them without re-onboarding.
 - Wallet connect, probing, and keyfile import are unified under a single `view` state machine (`'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'`) so all entry points share status messaging and error handling.
 - Wallet-based XMTP signing requests are deduplicated and cached per challenge, with expiry-aware refresh so reconnect flows avoid repeated wallet signature popups.
@@ -16,7 +19,7 @@
 ### Inbox Switcher Isolation
 - Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, drafts, and keys never leak across inboxes.
 - Switching inboxes triggers a full teardown of the current client/session, rehydrates the registry list, and reopens the selected identity with its own cached message history.
-- The switcher UI lists available inboxes with their last-opened time, displays connection status per entry, and provides an explicit "Add new inbox" path that reuses the single-step onboarding flow.
+- The switcher UI lists available inboxes with their last-opened time, displays connection status per entry, and provides explicit paths to create another local app key or connect the current key to an existing wallet-owned inbox.
 - Inbox IDs are normalized when stored and matched so namespace switches persist across reloads instead of snapping back to the previous identity.
 - A destructive burn action lives inside the inbox switcher, wiping the current identity’s keys plus its local messages and contacts on this device.
 
