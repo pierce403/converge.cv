@@ -153,6 +153,8 @@ export function MessageBubble({
             messageId: message.id,
             inviteCode: inviteMeta.inviteCode,
             payload: invitePayload,
+            requesterProfile: inviteMeta.requesterProfile,
+            requesterMetadata: inviteMeta.requesterMetadata,
             receivedAt: message.sentAt,
           },
         })

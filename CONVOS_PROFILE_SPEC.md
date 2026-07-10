@@ -1,92 +1,83 @@
-# Convos Profile Spec (from convos-cli)
+# Convos Profile Interoperability
 
-## Summary
-Convos per-conversation profiles (display name + avatar URL) are stored in XMTP group metadata (`appData`). The `convos conversation update-profile` command reads the existing `appData`, upserts the caller's profile (keyed by XMTP `inboxId`), and writes the updated metadata back to the group via `updateAppData`.
+## Product Model
 
-This is **not** part of `xmtp-js` or the XMTP CLI. The behavior comes from the Convos CLI repository (`xmtplabs/convos-cli`).
+Convos names are application-level group profile messages. They are not XMTP
+identity, account, inbox, or installation properties. A participant called
+"Orange Orca" must publish that name into each MLS group where it should appear.
 
-## CLI Command Behavior
-Command:
+Current Convos iOS uses these channels, from lowest to highest authority:
+
+1. A contact/local fallback.
+2. The legacy profile in `group.appData`.
+3. A `convos.org/profile_snapshot:1.0` entry relayed by a group member.
+4. A self-authored `convos.org/profile_update:1.0` from the subject inbox.
+
+Within one source, the newer XMTP message timestamp wins. Blank names do not
+clear a known nonblank name. Converge stores the source and timestamp with each
+group member so history order cannot roll a direct update back to a stale
+snapshot.
+
+## Profile Messages
+
+Both message types are protobuf, have no fallback text, and use
+`shouldPush:false`.
+
+`ProfileUpdate` fields:
+
+- `name = 1`
+- `encrypted_image = 2`
+- `member_kind = 3` (`1` means agent)
+- `metadata = 4`, a map of string keys to typed string/double/bool values
+
+The subject is the XMTP message's `senderInboxId`; there is no inbox ID in the
+payload.
+
+`ProfileSnapshot` contains repeated `MemberProfile` values:
+
+- raw inbox ID bytes `= 1`
+- name `= 2`
+- encrypted image `= 3`
+- member kind `= 4`
+- typed metadata map `= 5`
+
+Snapshots are necessary because a member added to an MLS group cannot decrypt
+profile messages sent before it joined. Converge sends a current-roster snapshot
+after group creation, direct member addition, and invite acceptance. The builder
+syncs the roster, scans up to 500 recent messages, merges stored/appData state,
+and always includes the local profile. Receivers refresh the current XMTP roster
+before filtering snapshot entries so a post-add snapshot cannot race stale local
+membership state.
+
+## Invite Names
+
+`convos.org/join_request:1.0` is JSON and can include:
+
+```json
+{
+  "inviteSlug": "...",
+  "profile": { "name": "Orange Orca" },
+  "metadata": {}
+}
 ```
-convos conversation update-profile <conversation-id> --name "Alice" --image "https://example.com/avatar.jpg"
-```
 
-Flow:
-1. Load the local identity associated with `<conversation-id>`.
-2. Create an XMTP client for that identity and `sync()` conversations.
-3. Fetch the conversation by ID and require it to be a **group** (DMs are rejected).
-4. Read `group.appData` (empty string if missing) and parse it into metadata.
-5. Build a profile object:
-   - `inboxId` = `client.inboxId`
-   - `name` is included only if `--name` is passed
-   - `image` is included only if `--image` is passed
-   - Passing an empty string clears the field (sets it to `undefined`).
-6. `upsertProfile(metadata, profile)` updates or adds the profile by inboxId (case-insensitive).
-7. Serialize metadata back to `appData` and write it with `group.updateAppData(...)`.
-8. Update the **local identity store** with the new `profileName` (name only; image is not stored locally).
+Converge sends its current generated or user-selected display name in this
+request. A Converge invite creator retains that requester profile, adds the
+member, and includes it in the post-add snapshot.
 
-Clear behavior:
-- `--name "" --image ""` produces a profile entry with only `inboxId` set.
-- That results in an “anonymous” profile in Convos because name + image are absent.
+## Legacy appData
 
-## Storage Model (appData)
-The `appData` string is a **base64url-encoded protobuf**, optionally compressed. Schema matches the Convos iOS client (`ConversationCustomMetadata`).
+`group.appData` remains a backward-compatibility fallback. It is base64url
+protobuf, optionally compressed with the Convos `0x1f` header. Converge reads
+legacy profile entries at lower authority than snapshots and direct updates.
+Profile publication deliberately does not rewrite this full shared blob: the
+SDK exposes no compare-and-swap, so a read/merge/write cycle could erase a
+concurrent invite tag or a metadata field added by a newer client. Invite-tag
+edits remain a separate explicit metadata operation.
 
-### Protobuf Schema (logical fields)
-- `ConversationCustomMetadata`
-  - `tag` (field 1, string)
-  - `profiles` (field 2, repeated `ConversationProfile`)
-  - `expiresAtUnix` (field 3, sfixed64, optional)
-  - `imageEncryptionKey` (field 4, bytes, optional)
-  - `encryptedGroupImage` (field 5, `EncryptedImageRef`, optional)
+## Current Limitation
 
-- `ConversationProfile`
-  - `inboxId` (field 1, bytes)
-  - `name` (field 2, string, optional)
-  - `image` (field 3, string, optional)
-  - `encryptedImage` (field 4, `EncryptedImageRef`, optional)
-
-- `EncryptedImageRef`
-  - `url` (field 1, string)
-  - `salt` (field 2, bytes)
-  - `nonce` (field 3, bytes)
-
-### What convos-cli actually reads/writes
-- Reads/writes: `tag`, `profiles[].inboxId`, `profiles[].name`, `profiles[].image`, `expiresAtUnix`
-- Ignores: `encryptedImage`, `imageEncryptionKey`, `encryptedGroupImage` (present in schema but not surfaced)
-
-### Inbox ID encoding
-- Stored as raw bytes in protobuf.
-- Encoded/decoded as hex strings in the CLI (no `0x` prefix in storage).
-
-## Encoding & Compression
-Encoding pipeline in `serializeAppData`:
-1. Protobuf-encode metadata.
-2. If payload > 100 bytes, `deflate` it.
-3. Only keep compression if compressed is **smaller** than raw.
-4. If compressed, prepend a 5-byte header:
-   - `0x1f` marker (1 byte)
-   - original size (4 bytes, big-endian)
-5. Base64url-encode the final bytes.
-6. Enforce 8 KB size limit on the encoded string.
-
-Decoding in `parseAppData`:
-- If string starts with `{`, treat as legacy JSON and parse `{ tag, expiresAtUnix }`.
-- Otherwise, base64url-decode, check for the `0x1f` compression marker, then inflate.
-- If parse fails, returns `{ tag: "", profiles: [] }`.
-
-## Profile Upsert Semantics
-`upsertProfile` behavior:
-- Matches profiles by `inboxId` case-insensitively.
-- If match exists, merges fields (`{ ...existing, ...profile }`).
-- If no match, appends a new profile.
-
-Because empty-string clears are converted to `undefined`, a clear operation **removes** that field when re-serialized. The profile entry itself remains, which Convos interprets as “anonymous”.
-
-## Related Profile Touchpoints
-- `convos conversations create --profile-name` writes the creator's profile into `appData` at group creation time.
-- `convos conversations join --profile-name` upserts the joiner’s profile after acceptance.
-- `convos conversation profiles` lists group members and their stored profile name/image (if any).
-
-## Practical Implication for Converge
-To be Convos-compatible, write the **same protobuf appData** into the group’s `appData` field, using the caller’s XMTP `inboxId` as the profile key. A simple name/image update is sufficient for Convos to display it.
+Converge preserves Convos encrypted avatar references but does not yet decrypt
+and render those group-scoped avatars. Names, agent kind, and typed agent
+metadata are decoded, persisted, snapshotted, and shown without metadata chat
+bubbles.

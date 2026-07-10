@@ -196,8 +196,21 @@ export function ChatList() {
             ? getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId)
             : undefined;
 
+          const groupName = (() => {
+            if (!conversation.isGroup) return undefined;
+            const current = conversation.groupName?.trim();
+            const isGeneric = conversation.groupNameDerived || !current || /^(chat|group chat|group with \d+ members)$/i.test(current);
+            if (!isGeneric) return current;
+            const myInbox = identity?.inboxId?.toLowerCase();
+            const peers = (conversation.groupMembers ?? []).filter(
+              (member) => member.inboxId?.toLowerCase() !== myInbox,
+            );
+            return peers.length === 1 && peers[0].displayName
+              ? peers[0].displayName
+              : conversation.displayName || current || 'Group Chat';
+          })();
           const displayName = conversation.isGroup
-            ? conversation.groupName || 'Group Chat'
+            ? groupName || 'Group Chat'
             : contact?.preferredName
               || contact?.name
               || conversation.displayName
@@ -209,7 +222,7 @@ export function ChatList() {
             : conversation.displayAvatar || contact?.preferredAvatar || contact?.avatar || defaultContactInfo?.avatar;
 
           const fallbackAvatarLabel = conversation.isGroup
-            ? conversation.groupName || 'Group'
+            ? groupName || 'Group'
             : contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
           const conversationDescription = contact?.description ?? defaultContactInfo?.description;

@@ -301,7 +301,12 @@ export function Layout() {
         const result = await xmtp.processConvosInviteJoinRequest(
           request.inviteCode,
           request.senderInboxId,
-          { messageId: request.messageId }
+          {
+            messageId: request.messageId,
+            requesterProfile: request.requesterProfile,
+            requesterMetadata: request.requesterMetadata,
+            receivedAt: request.receivedAt,
+          }
         );
         if (result) {
           const label = result.conversationName
@@ -883,7 +888,10 @@ export function Layout() {
         for (const c of changes) {
           const field = (c.fieldName || '').toString();
           const val = (c.newValue ?? '').toString().trim();
-          if (field === 'group_name') updates.groupName = val || undefined;
+          if (field === 'group_name') {
+            updates.groupName = val || undefined;
+            updates.groupNameDerived = false;
+          }
           else if (field === 'group_image_url_square') updates.groupImage = val || undefined;
           else if (field === 'description') updates.groupDescription = val || undefined;
         }
@@ -894,7 +902,8 @@ export function Layout() {
 
         // If membership changed or no metadata changes detected, refresh authoritative details
         const membershipChanged = added.length > 0 || removed.length > 0;
-        if (membershipChanged || (!changes || changes.length === 0)) {
+        const appDataChanged = changes.some((change) => change.fieldName?.toLowerCase().includes('app'));
+        if (membershipChanged || changes.length === 0 || appDataChanged) {
           try {
             const xmtp = getXmtpClient();
             const details = await xmtp.fetchGroupDetails(conversationId);
@@ -913,6 +922,13 @@ export function Layout() {
                 isSuperAdmin: m.isSuperAdmin,
                 displayName: m.displayName,
                 avatar: m.avatar,
+                memberKind: m.memberKind,
+                profileMetadata: m.profileMetadata,
+                profileSource: m.profileSource,
+                profileUpdatedAt: m.profileUpdatedAt,
+                encryptedProfileImageUrl: m.encryptedProfileImageUrl,
+                encryptedProfileImageSalt: m.encryptedProfileImageSalt,
+                encryptedProfileImageNonce: m.encryptedProfileImageNonce,
               }));
               const merged: Partial<Conversation> = {
                 members: uniqueMembers,
@@ -922,7 +938,10 @@ export function Layout() {
                 groupMembers,
               };
               const name = details.name?.trim();
-              if (name) merged.groupName = name;
+              if (name) {
+                merged.groupName = name;
+                merged.groupNameDerived = false;
+              }
               const img = details.imageUrl?.trim();
               if (img) merged.groupImage = img;
               const desc = details.description?.trim();

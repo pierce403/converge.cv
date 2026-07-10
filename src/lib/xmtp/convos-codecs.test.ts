@@ -29,6 +29,30 @@ describe('Convos XMTP codecs', () => {
     });
   });
 
+  it('round-trips typed agent metadata in profile updates', () => {
+    const codec = new ConvosProfileUpdateCodec();
+    const encoded = codec.encode({
+      name: 'Build Agent',
+      memberKind: 1,
+      metadata: {
+        templateId: 'template-1',
+        score: 4.25,
+        active: true,
+      },
+    });
+
+    expect(codec.decode(encoded)).toEqual({
+      name: 'Build Agent',
+      encryptedImage: undefined,
+      memberKind: 1,
+      metadata: {
+        templateId: 'template-1',
+        score: 4.25,
+        active: true,
+      },
+    });
+  });
+
   it('encodes and decodes profile_snapshot member names', () => {
     const codec = new ConvosProfileSnapshotCodec();
     const inboxId = 'ab'.repeat(32);
@@ -52,6 +76,21 @@ describe('Convos XMTP codecs', () => {
           metadata: undefined,
         },
       ],
+    });
+  });
+
+  it('round-trips member kind and metadata in profile snapshots', () => {
+    const codec = new ConvosProfileSnapshotCodec();
+    const inboxId = 'cd'.repeat(32);
+    const encoded = codec.encode({
+      profiles: [{ inboxId, name: 'Deploy Agent', memberKind: 1, metadata: { emoji: 'bot', ready: true } }],
+    });
+
+    expect(codec.decode(encoded).profiles[0]).toMatchObject({
+      inboxId,
+      name: 'Deploy Agent',
+      memberKind: 1,
+      metadata: { emoji: 'bot', ready: true },
     });
   });
 

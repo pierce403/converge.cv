@@ -978,6 +978,8 @@ export function useMessages() {
                   kind: 'invite-request',
                   inviteCode: content,
                   payload: parsedInvite.payload,
+                  requesterProfile: xmtpMessage.convosJoinRequest?.profile,
+                  requesterMetadata: xmtpMessage.convosJoinRequest?.metadata,
                 },
               }
             : undefined,
@@ -996,6 +998,8 @@ export function useMessages() {
                       messageId: message.id,
                       inviteCode: content,
                       payload: parsedInvite.payload,
+                      requesterProfile: xmtpMessage.convosJoinRequest?.profile,
+                      requesterMetadata: xmtpMessage.convosJoinRequest?.metadata,
                       receivedAt: message.sentAt || Date.now(),
                     },
                   })

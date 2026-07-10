@@ -228,9 +228,9 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends a Convos `join_request` custom content payload to the creator inbox via XMTP DM
 - Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
-- Convos group metadata compatibility now includes latest `appData` parsing (compressed protobuf), invite tag reads/writes via `updateAppData`, and member profile hydration from appData profiles.
+- Convos profile compatibility now treats self-authored `profile_update` and roster `profile_snapshot` messages as primary, with compressed protobuf `appData` as a legacy fallback.
 - New one-to-one chats now use Convos-style single-peer XMTP groups; legacy DMs remain readable and invite requests still use creator DMs.
-- Group sends/replies/attachments now best-effort publish the sender’s Convos `profile_update` plus merged Convos-style member profile data into group appData so Convos clients can see Converge names.
+- Group activation/sends/profile saves publish the sender's Convos `profile_update`; group creation and member additions publish roster snapshots so newly joined MLS members can see existing names and agents.
 - Convos typing indicators, profile updates/snapshots, thinking messages, and join requests are registered as SDK custom content types and handled without surfacing side-channel bubbles.
 - XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
@@ -507,9 +507,21 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.4.2 + XMTP registration lifecycle repair)
+**Last Updated**: 2026-07-10 (app version 0.4.3 + Convos profile/snapshot interoperability)
 **Updated By**: AI Agent
 
+
+## Latest Changes (2026-07-10)
+
+### Convos Profile and Agent-Name Interoperability
+- Bumped Converge from `0.4.2` to `0.4.3` after auditing the current local `convos-ios` profile repository, codecs, merge rules, group-ready lifecycle, and invite-acceptance flow.
+- Important model: names are not XMTP identity/inbox properties. Convos recognizes names through silent group `profile_update` and `profile_snapshot` protobuf messages; compressed `group.appData` is a lower-authority compatibility fallback.
+- Profile precedence is `profile_update > profile_snapshot > appData > contact`; same-source updates use XMTP `sentAt`, and blank names do not clear known names. Converge now persists this provenance with group members so history replay cannot regress names.
+- Local names such as "Orange Orca" publish when a group becomes active, before sends, and after profile saves. New groups and every successful member addition/invite acceptance send a current-roster snapshot for MLS post-join visibility.
+- Typed join-request profiles are retained locally through approval and included in the post-add snapshot instead of being discarded. Inbound snapshots refresh the authoritative XMTP roster before filtering so member-add event ordering cannot drop the new name.
+- Agent `memberKind=1` and typed metadata maps now encode/decode and survive inbound state plus outbound snapshots. Message labels, typing, mentions, member settings, and single-peer group titles prefer the resolved Convos profile name over placeholder contacts.
+- Profile publication reads legacy appData as a fallback but does not rewrite the shared blob because the SDK has no compare-and-swap and a profile write could clobber concurrent group metadata. Invite-tag edits remain a separate explicit operation.
+- Snapshot publication requires a successful group sync and authoritative roster read; it aborts instead of relaying stale or phantom members. Tests cover these failures along with precedence/recency, empty metadata semantics, typed agent metadata, concurrent/reload publication deduplication, cached-roster races, and post-join snapshots.
 
 ## Latest Changes (2026-07-09)
 
@@ -646,8 +658,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
   - `convos.org/typing_indicator:1.0`
   - `convos.org/join_request:1.0`
 - Convos profile update/snapshot and typing/thinking messages are consumed silently; profile names hydrate contacts/member display, typing emits transient UI state, and side channels are not persisted as visible chat bubbles.
-- Group sends, replies, and attachments now publish a silent Convos `profile_update` and upsert the sender profile into group appData.
-- Convos appData profile upserts now preserve existing encrypted image refs, legacy image URLs, and `connections` when Converge only has a partial profile update.
+- Group sends, replies, and attachments now publish a silent Convos `profile_update`; current profile publication no longer mutates the shared appData blob.
 - Invite claiming now sends a Convos `join_request` custom content message with invite-slug fallback instead of raw invite slug text; incoming join requests and legacy raw invite slugs both feed the existing approval UI.
 - Limitation: no live Converge-to-Convos delivery test was run in this pass; local codec/appData tests cover the protocol assumptions.
 
@@ -819,7 +830,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
   - image encryption metadata passthrough (`fields 4-5`).
 - Group detail hydration now reads Convos appData and maps member profile names/avatars into `groupMembers`, so Converge can display Convos profile names in group chats.
 - Invite-tag updates now prefer `group.updateAppData(...)`; legacy description-embedded metadata remains as fallback for older groups.
-- Group message sends now best-effort upsert the local user profile into Convos appData so Convos clients can read Converge profile updates.
+- Group profile appData remains readable for legacy compatibility; current Convos profile updates/snapshots are the authoritative publication path.
 - Added tests in `src/lib/utils/convos-invite.test.ts` covering appData roundtrip, compressed parsing, profile upsert normalization, and Convos display-name limits.
 
 ### XMTP Identity Rate-Limit Hardening

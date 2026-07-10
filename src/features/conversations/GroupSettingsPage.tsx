@@ -1307,7 +1307,12 @@ export function GroupSettingsPage() {
                       {avatarContent}
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-primary-50">{getMemberDisplayName(member)}</span>
+                      <span className="flex items-center gap-2 text-primary-50">
+                        {getMemberDisplayName(member)}
+                        {member.memberKind === 1 && (
+                          <span className="text-[10px] uppercase text-primary-300">Agent</span>
+                        )}
+                      </span>
                       <span className="text-xs text-primary-400">{formatIdentifier(secondaryLine)}</span>
                     </div>
                     {member.isSuperAdmin ? (

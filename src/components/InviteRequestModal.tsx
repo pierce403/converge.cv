@@ -3,7 +3,7 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { useContactStore, useFarcasterStore } from '@/lib/stores';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 import { fetchNeynarUserByVerification } from '@/lib/farcaster/neynar';
-import type { InvitePayload } from '@/types';
+import type { ConvosJoinRequesterProfile, InvitePayload } from '@/types';
 
 export interface InviteRequest {
   conversationId: string;
@@ -11,6 +11,8 @@ export interface InviteRequest {
   messageId?: string;
   inviteCode: string;
   payload: InvitePayload;
+  requesterProfile?: ConvosJoinRequesterProfile;
+  requesterMetadata?: Record<string, string>;
   receivedAt: number;
 }
 
@@ -154,8 +156,8 @@ export function InviteRequestModal({
         if (!cancelled) {
           setProfile({
             inboxId: request.senderInboxId,
-            displayName: contact?.preferredName || contact?.name || inboxProfile?.displayName,
-            avatarUrl: contact?.preferredAvatar || contact?.avatar || inboxProfile?.avatarUrl,
+            displayName: request.requesterProfile?.name || contact?.preferredName || contact?.name || inboxProfile?.displayName,
+            avatarUrl: request.requesterProfile?.imageURL || contact?.preferredAvatar || contact?.avatar || inboxProfile?.avatarUrl,
             address,
             farcaster,
           });

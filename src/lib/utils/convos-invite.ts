@@ -35,6 +35,7 @@ export type ConvosGroupMetadata = {
   profiles?: ConvosGroupProfile[];
   imageEncryptionKey?: Uint8Array;
   encryptedGroupImage?: ConvosEncryptedImageRef;
+  emoji?: string;
 };
 
 export type ConvosEncryptedImageRef = {
@@ -952,6 +953,7 @@ export async function parseConvosGroupAppData(raw: string | null | undefined): P
     const encryptedGroupImageField = fields.find(
       (candidate) => candidate.fieldNumber === 5 && candidate.wireType === 2,
     );
+    const emojiField = fields.find((candidate) => candidate.fieldNumber === 6 && candidate.wireType === 2);
 
     const profiles = fields
       .filter((candidate) => candidate.fieldNumber === 2 && candidate.wireType === 2)
@@ -990,6 +992,10 @@ export async function parseConvosGroupAppData(raw: string | null | undefined): P
           ? toUint8Array(imageKeyField.value)
           : undefined,
       encryptedGroupImage,
+      emoji:
+        emojiField && emojiField.value instanceof Uint8Array
+          ? decodeUtf8(emojiField.value)?.trim() || undefined
+          : undefined,
     };
   } catch {
     return {
@@ -1031,6 +1037,9 @@ export async function encodeConvosGroupAppData(metadata: ConvosGroupMetadata): P
   if (encryptedGroupImage) {
     fields.push(encodeLengthDelimited(5, encryptedGroupImage));
   }
+
+  const emojiField = encodeStringField(6, metadata.emoji?.trim() || undefined);
+  if (emojiField) fields.push(emojiField);
 
   const payload = fields.length ? concatBytes(...fields) : new Uint8Array();
   if (payload.length > CONVOS_METADATA_COMPRESSION_THRESHOLD) {

@@ -41,8 +41,11 @@ export interface Conversation {
   displayAvatar?: string;
   profileSentDisplayName?: boolean; // Track if we've sent our display name to this conversation
   profileSentAvatar?: boolean; // Track if we've sent our avatar to this conversation
+  convosProfilePublishedRevision?: string;
+  convosProfilePublishedAt?: number;
   isGroup?: boolean;
   groupName?: string; // Human-readable name for group chats
+  groupNameDerived?: boolean; // True when a single-peer title is only a profile fallback
   groupImage?: string; // URL or base64 data for group avatar
   groupDescription?: string; // Optional description for the group
   inviteTag?: string; // Optional Convos invite tag for group linking
@@ -100,6 +103,8 @@ export interface InviteRequestMetadata {
   kind: 'invite-request';
   inviteCode: string;
   payload: InvitePayload;
+  requesterProfile?: ConvosJoinRequesterProfile;
+  requesterMetadata?: Record<string, string>;
 }
 
 export interface MessageMetadata {
@@ -139,6 +144,21 @@ export interface GroupMember {
   isSuperAdmin?: boolean;
   displayName?: string;
   avatar?: string;
+  memberKind?: number;
+  profileMetadata?: Record<string, string | number | boolean>;
+  profileSource?: ConvosProfileSource;
+  profileUpdatedAt?: number;
+  encryptedProfileImageUrl?: string;
+  encryptedProfileImageSalt?: Uint8Array;
+  encryptedProfileImageNonce?: Uint8Array;
+}
+
+export type ConvosProfileSource = 'contact' | 'appData' | 'profileSnapshot' | 'profileUpdate';
+
+export interface ConvosJoinRequesterProfile {
+  name?: string;
+  imageURL?: string;
+  memberKind?: string;
 }
 
 export interface Identity {

@@ -174,6 +174,13 @@ function encodeEnumField(fieldNumber: number, value?: number): Uint8Array | null
   return concatBytes(encodeKey(fieldNumber, 0), encodeVarint(value));
 }
 
+function encodeDoubleField(fieldNumber: number, value: number): Uint8Array | null {
+  if (!Number.isFinite(value)) return null;
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, value, true);
+  return concatBytes(encodeKey(fieldNumber, 1), bytes);
+}
+
 function readLengthDelimited(bytes: Uint8Array, offset: number): { value: Uint8Array; offset: number } {
   const { value: length, offset: nextOffset } = readVarint(bytes, offset);
   const end = nextOffset + length;
@@ -281,7 +288,9 @@ function parseMetadataValue(raw: Uint8Array): string | number | boolean | undefi
     }
     const numberValue = fields.find((field) => field.fieldNumber === 2 && typeof field.value === 'bigint');
     if (typeof numberValue?.value === 'bigint') {
-      return Number(numberValue.value);
+      const bytes = new Uint8Array(8);
+      new DataView(bytes.buffer).setBigUint64(0, numberValue.value, true);
+      return new DataView(bytes.buffer).getFloat64(0, true);
     }
     const boolValue = fields.find((field) => field.fieldNumber === 3 && typeof field.value === 'number');
     if (typeof boolValue?.value === 'number') {
@@ -291,6 +300,29 @@ function parseMetadataValue(raw: Uint8Array): string | number | boolean | undefi
     return undefined;
   }
   return undefined;
+}
+
+function encodeMetadataValue(value: string | number | boolean): Uint8Array | null {
+  if (typeof value === 'string') {
+    return encodeStringField(1, value);
+  }
+  if (typeof value === 'number') {
+    return encodeDoubleField(2, value);
+  }
+  return concatBytes(encodeKey(3, 0), encodeVarint(value ? 1 : 0));
+}
+
+function encodeMetadata(metadata: Record<string, string | number | boolean> | undefined, fieldNumber: number): Uint8Array[] {
+  if (!metadata) return [];
+  const entries: Uint8Array[] = [];
+  for (const [rawKey, value] of Object.entries(metadata)) {
+    const key = encodeStringField(1, rawKey);
+    const encodedValue = encodeMetadataValue(value);
+    if (!key || !encodedValue) continue;
+    const entry = concatBytes(key, encodeLengthDelimited(2, encodedValue));
+    entries.push(encodeLengthDelimited(fieldNumber, entry));
+  }
+  return entries;
 }
 
 function parseMetadataEntry(raw: Uint8Array): [string, string | number | boolean] | null {
@@ -344,6 +376,7 @@ function encodeProfileUpdateBytes(content: ConvosProfileUpdateContent): Uint8Arr
   if (encryptedImage) fields.push(encodeLengthDelimited(2, encryptedImage));
   const memberKind = encodeEnumField(3, content.memberKind);
   if (memberKind) fields.push(memberKind);
+  fields.push(...encodeMetadata(content.metadata, 4));
   return fields.length ? concatBytes(...fields) : new Uint8Array();
 }
 
@@ -427,6 +460,7 @@ export class ConvosProfileSnapshotCodec implements ContentCodec<ConvosProfileSna
         if (encryptedImage) memberFields.push(encodeLengthDelimited(3, encryptedImage));
         const memberKind = encodeEnumField(4, profile.memberKind);
         if (memberKind) memberFields.push(memberKind);
+        memberFields.push(...encodeMetadata(profile.metadata, 5));
         return encodeLengthDelimited(1, concatBytes(...memberFields));
       })
       .filter((value): value is Uint8Array => Boolean(value));

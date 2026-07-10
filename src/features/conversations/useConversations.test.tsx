@@ -317,6 +317,11 @@ describe('groupDetailsToConversationUpdates', () => {
           permissionLevel: 1,
           isAdmin: true,
           isSuperAdmin: false,
+          displayName: 'Orange Orca',
+          memberKind: 1,
+          profileMetadata: { templateId: 'agent-template' },
+          profileSource: 'profileUpdate',
+          profileUpdatedAt: 42,
         },
         {
           inboxId: 'inbox-b',
@@ -360,6 +365,13 @@ describe('groupDetailsToConversationUpdates', () => {
     expect(updates.memberInboxes).toEqual(['inbox-a', 'inbox-b']);
     expect(updates.superAdminInboxes).toEqual(['inbox-b']);
     expect(updates.groupPermissions?.policySet.addMemberPolicy).toBe(1);
+    expect(updates.groupMembers?.[0]).toMatchObject({
+      displayName: 'Orange Orca',
+      memberKind: 1,
+      profileMetadata: { templateId: 'agent-template' },
+      profileSource: 'profileUpdate',
+      profileUpdatedAt: 42,
+    });
   });
 });
 

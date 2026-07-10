@@ -50,6 +50,13 @@ export const groupDetailsToConversationUpdates = (details: GroupDetails): Partia
     isSuperAdmin: member.isSuperAdmin,
     displayName: member.displayName,
     avatar: member.avatar,
+    memberKind: member.memberKind,
+    profileMetadata: member.profileMetadata,
+    profileSource: member.profileSource,
+    profileUpdatedAt: member.profileUpdatedAt,
+    encryptedProfileImageUrl: member.encryptedProfileImageUrl,
+    encryptedProfileImageSalt: member.encryptedProfileImageSalt,
+    encryptedProfileImageNonce: member.encryptedProfileImageNonce,
   }));
 
   const updates: Partial<Conversation> = {
@@ -61,7 +68,10 @@ export const groupDetailsToConversationUpdates = (details: GroupDetails): Partia
     groupMembers,
   };
   const name = details.name?.trim();
-  if (name) updates.groupName = name;
+  if (name) {
+    updates.groupName = name;
+    updates.groupNameDerived = false;
+  }
   const img = details.imageUrl?.trim();
   if (img) updates.groupImage = img;
   const desc = details.description?.trim();

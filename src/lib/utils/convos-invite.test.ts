@@ -69,6 +69,7 @@ describe('convos invite metadata utils', () => {
     const encoded = await encodeConvosGroupAppData({
       tag: 'TakobotTag',
       expiresAt,
+      emoji: 'wave',
       profiles: [
         {
           inboxId,
@@ -83,6 +84,7 @@ describe('convos invite metadata utils', () => {
     expect(decoded.isEncoded).toBe(true);
     expect(decoded.tag).toBe('TakobotTag');
     expect(decoded.expiresAt?.toISOString()).toBe(expiresAt.toISOString());
+    expect(decoded.emoji).toBe('wave');
     expect(decoded.profiles).toEqual([
       {
         inboxId,

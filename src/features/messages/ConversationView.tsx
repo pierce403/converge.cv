@@ -67,6 +67,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     toggleMute,
     markAsRead,
     setActiveConversation,
+    refreshGroupDetails,
   } = useConversations();
   const conversationId = id ?? '';
   const messages = useMessageStore(
@@ -181,6 +182,14 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       });
     }
   }, [id, loadMessages]);
+
+  useEffect(() => {
+    if (!id || !conversation?.isGroup) return;
+    void refreshGroupDetails(id);
+    void getXmtpClient().publishConvosGroupProfile(id).catch((error) => {
+      console.warn('[ConversationView] Failed to publish Convos profile on group activation:', error);
+    });
+  }, [conversation?.isGroup, id, refreshGroupDetails]);
 
   // Pull-to-refresh: detect scroll to top and sync messages
   useEffect(() => {
@@ -547,14 +556,23 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       return '';
     }
     if (conversation.isGroup) {
-      return conversation.groupName || 'Group Chat';
+      const current = conversation.groupName?.trim();
+      const isGeneric = conversation.groupNameDerived || !current || /^(chat|group chat|group with \d+ members)$/i.test(current);
+      if (!isGeneric) return current;
+      const myInbox = identity?.inboxId?.toLowerCase();
+      const peers = (conversation.groupMembers ?? []).filter(
+        (member) => member.inboxId?.toLowerCase() !== myInbox,
+      );
+      return peers.length === 1 && peers[0].displayName
+        ? peers[0].displayName
+        : conversation.displayName || current || 'Group Chat';
     }
     return conversation.displayName
       || contact?.preferredName
       || contact?.name
       || defaultContactInfo?.name
       || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
-  }, [conversation, contact, defaultContactInfo]);
+  }, [conversation, contact, defaultContactInfo, identity?.inboxId]);
 
   const conversationAvatar = useMemo(() => {
     if (!conversation) {
@@ -586,11 +604,11 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       const contactMatch =
         contactsByInboxId.get(inboxLower) || (addressLower ? contactsByAddress.get(addressLower) : undefined);
       const displayName =
+        member.displayName ||
         contactMatch?.preferredName ||
         contactMatch?.name ||
-        member.displayName ||
         (addressLower ? formatIdentifier(addressLower) : formatIdentifier(inboxLower));
-      const avatar = contactMatch?.preferredAvatar || contactMatch?.avatar || member.avatar;
+      const avatar = member.avatar || contactMatch?.preferredAvatar || contactMatch?.avatar;
       map.set(inboxLower, { displayName, avatar, address: addressLower });
     });
 
@@ -643,7 +661,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       const contact =
         (inboxLower ? contactsByInboxId.get(inboxLower) : undefined) ||
         (addressLower ? contactsByAddress.get(addressLower) : undefined);
-      const preferredName = contact?.preferredName || contact?.name || displayName;
+      const preferredName = displayName || contact?.preferredName || contact?.name;
       const fallback = address || contact?.primaryAddress || inboxId;
       const display = preferredName || fallback || inboxId || address || 'Unknown';
       const secondary = preferredName ? (fallback || inboxId) : undefined;
@@ -733,15 +751,21 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     if (!senderLower) {
       return null;
     }
-    const existingByInbox = contactsByInboxId.get(senderLower);
-    if (existingByInbox) {
-      return existingByInbox;
-    }
-    const existingByAddress = contactsByAddress.get(senderLower);
-    if (existingByAddress) {
-      return existingByAddress;
-    }
     const profile = groupMemberProfiles.get(senderLower);
+    const existingByInbox = contactsByInboxId.get(senderLower);
+    const existingByAddress = contactsByAddress.get(senderLower);
+    const existing = existingByInbox ?? existingByAddress;
+    if (existing) {
+      return profile
+        ? {
+            ...existing,
+            name: profile.displayName || existing.name,
+            preferredName: profile.displayName || existing.preferredName,
+            avatar: profile.avatar || existing.avatar,
+            preferredAvatar: profile.avatar || existing.preferredAvatar,
+          }
+        : existing;
+    }
     const addressLower = profile?.address?.toLowerCase();
     const displayName = profile?.displayName || formatIdentifier(addressLower ?? senderLower);
     const avatar = profile?.avatar;
@@ -809,7 +833,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       .filter(([, value]) => value.expiresAt > now)
       .map(([inboxId]) => {
         const contact = resolveContactForSender(inboxId);
-        return contact?.preferredName || contact?.name || groupMemberProfiles.get(inboxId)?.displayName || formatIdentifier(inboxId);
+        return groupMemberProfiles.get(inboxId)?.displayName || contact?.preferredName || contact?.name || formatIdentifier(inboxId);
       })
       .filter(Boolean)
       .slice(0, 3);
