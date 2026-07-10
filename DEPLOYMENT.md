@@ -29,10 +29,12 @@ This app is configured to deploy automatically to GitHub Pages via GitHub Action
 ### Automatic Deployment
 
 Every push to the `main` branch triggers:
-1. TypeScript type checking
-2. ESLint code quality checks
-3. Production build
-4. Deployment to GitHub Pages
+1. Frozen-lockfile install with pnpm 10.5.2
+2. TypeScript type checking
+3. ESLint code quality checks
+4. Vitest regression suite
+5. Production build
+6. Deployment to GitHub Pages
 
 The workflow is defined in `.github/workflows/deploy.yml`.
 

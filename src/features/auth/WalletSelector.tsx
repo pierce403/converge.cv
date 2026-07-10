@@ -6,6 +6,7 @@ import { useCallback, useState, useEffect, useRef } from 'react';
 import { useWalletConnection, type WalletOption } from '@/lib/wagmi';
 import { WalletProviderSelector } from '@/components/WalletProviderSelector';
 import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
+import { formatWalletConnectionError } from './wallet-connection-error';
 
 interface WalletSelectorProps {
   onWalletConnected: (
@@ -19,9 +20,22 @@ interface WalletSelectorProps {
 }
 
 export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportKeyfile }: WalletSelectorProps) {
-  const { connectWallet, address, chainId, isConnecting, walletOptions, provider } = useWalletConnection();
+  const {
+    connectWallet,
+    address,
+    chainId,
+    isConnecting,
+    walletOptions,
+    provider,
+    signMessage,
+  } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
-  const submittedConnectionRef = useRef<string | null>(null);
+  const connectorPendingRef = useRef(false);
+  const submittedConnectionRef = useRef<{
+    key: string;
+    hasSigner: boolean;
+    promise: Promise<void>;
+  } | null>(null);
 
   const emitConnected = useCallback(
     async (
@@ -30,14 +44,34 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
       signMessageOverride?: (message: string) => Promise<string>
     ) => {
       const connectionKey = `${provider}:${nextAddress.trim().toLowerCase()}`;
-      if (submittedConnectionRef.current === connectionKey) {
-        return;
+      const existing = submittedConnectionRef.current;
+      if (existing?.key === connectionKey) {
+        if (existing.hasSigner || !signMessageOverride) {
+          await existing.promise;
+          return;
+        }
+        // A provider state effect may arrive just before the connector returns
+        // its account-bound signer. Let that attempt settle, then upgrade it.
+        try {
+          await existing.promise;
+        } catch {
+          // The richer connector result below is the recovery attempt.
+        }
       }
-      submittedConnectionRef.current = connectionKey;
+      const promise = Promise.resolve(
+        onWalletConnected(nextAddress, nextChainId, signMessageOverride)
+      ).then(() => undefined);
+      submittedConnectionRef.current = {
+        key: connectionKey,
+        hasSigner: Boolean(signMessageOverride),
+        promise,
+      };
       try {
-        await onWalletConnected(nextAddress, nextChainId, signMessageOverride);
+        await promise;
       } catch (error) {
-        submittedConnectionRef.current = null;
+        if (submittedConnectionRef.current?.promise === promise) {
+          submittedConnectionRef.current = null;
+        }
         throw error;
       }
     },
@@ -46,37 +80,33 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
 
   const handleConnect = async (wallet: WalletOption) => {
     setError(null);
+    connectorPendingRef.current = true;
     try {
       // Let the connector own mobile deep links so its session can resume on return.
       const result = await connectWallet(wallet);
       if (result && result.accounts && result.accounts[0]) {
-        await emitConnected(result.accounts[0], result.chainId);
+        await emitConnected(result.accounts[0], result.chainId, result.signMessage);
       }
     } catch (err) {
       console.error('Failed to connect wallet:', err);
-      
-      // Handle common WalletConnect errors gracefully
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      
-      if (errorMessage.includes('User rejected') || errorMessage.includes('User cancelled')) {
-        setError('Connection cancelled. Please try again.');
-      } else if (errorMessage.includes('session_request') || errorMessage.includes('listeners')) {
-        setError('Connection timeout. Please try again.');
-      } else {
-        setError(errorMessage.includes('Failed') ? errorMessage : 'Failed to connect wallet');
-      }
+      setError(formatWalletConnectionError(err));
+    } finally {
+      connectorPendingRef.current = false;
     }
   };
 
   // If already connected when component mounts, proceed once
   useEffect(() => {
-    if (address) {
-      void emitConnected(address, chainId).catch((err) => {
+    if (address && !isConnecting && !connectorPendingRef.current) {
+      const accountSigner = signMessage
+        ? async (message: string) => await signMessage(message, address)
+        : undefined;
+      void emitConnected(address, chainId, accountSigner).catch((err) => {
         console.error('Failed to continue after wallet connection:', err);
         setError(err instanceof Error ? err.message : 'Failed to continue with connected wallet');
       });
     }
-  }, [address, chainId, emitConnected]);
+  }, [address, chainId, emitConnected, isConnecting, signMessage]);
 
   return (
     <div className="w-full max-w-md mx-auto p-6 space-y-6 bg-primary-900/60 border border-primary-800/60 rounded-2xl shadow-lg backdrop-blur">
@@ -97,7 +127,10 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
               type="button"
               onClick={() => {
                 setError(null);
-                void emitConnected(address, chainId).catch((retryError) => {
+                const accountSigner = signMessage
+                  ? async (message: string) => await signMessage(message, address)
+                  : undefined;
+                void emitConnected(address, chainId, accountSigner).catch((retryError) => {
                   setError(
                     retryError instanceof Error
                       ? retryError.message

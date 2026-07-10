@@ -74,14 +74,25 @@ export function selectOldestRevocableInstallations(
 ): RevocableInstallation[] {
   const selected: RevocableInstallation[] = [];
   const normalizedPreferred = preferredInstallationId?.replace(/^0x/i, '').toLowerCase();
-  const ordered = [...installations].sort((a, b) => {
-    const aPreferred =
-      Boolean(normalizedPreferred) &&
-      a.id?.replace(/^0x/i, '').toLowerCase() === normalizedPreferred;
-    const bPreferred =
-      Boolean(normalizedPreferred) &&
-      b.id?.replace(/^0x/i, '').toLowerCase() === normalizedPreferred;
-    if (aPreferred !== bPreferred) return aPreferred ? -1 : 1;
+  const preferred = normalizedPreferred
+    ? installations.find(
+        (installation) =>
+          installation.id?.replace(/^0x/i, '').toLowerCase() === normalizedPreferred
+      )
+    : undefined;
+
+  // A preferred ID represents an exact interrupted installation, not a hint.
+  // Failing closed here prevents a stale snapshot from revoking another device.
+  if (normalizedPreferred && (!preferred || !getInstallationBytes(preferred))) {
+    return [];
+  }
+
+  const ordered = [
+    ...(preferred ? [preferred] : []),
+    ...installations.filter((installation) => installation !== preferred),
+  ].sort((a, b) => {
+    if (a === preferred) return -1;
+    if (b === preferred) return 1;
     const aTime = a.clientTimestampNs ?? 0n;
     const bTime = b.clientTimestampNs ?? 0n;
     return aTime < bTime ? -1 : aTime > bTime ? 1 : 0;

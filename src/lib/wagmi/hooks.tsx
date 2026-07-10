@@ -35,6 +35,7 @@ export interface WalletOption {
 export interface WalletConnectResult {
   accounts?: readonly string[];
   chainId?: number;
+  signMessage?: (message: string) => Promise<string>;
 }
 
 export interface WalletConnectionValue {
@@ -176,6 +177,20 @@ function WagmiWalletConnectionProvider({
     return nativeWalletOptions(isMobile);
   }, [provider, hasThirdwebConnector, isMobile]);
 
+  const signMessageForAccount = useCallback(
+    async (message: string, accountAddress: string) =>
+      await runWithWalletSignatureStatus({
+        provider,
+        message,
+        run: async () =>
+          await signMessageAsync({
+            message,
+            account: accountAddress as `0x${string}`,
+          }),
+      }),
+    [provider, signMessageAsync]
+  );
+
   const connectWallet = useCallback(
     async (option: WalletOption) => {
       const connector = resolveConnector(option, connectors);
@@ -187,9 +202,17 @@ function WagmiWalletConnectionProvider({
         params.strategy = option.strategy;
       }
       const result = await connectAsync(params as Parameters<typeof connectAsync>[0]);
-      return normalizeConnectResult(result);
+      const normalized = normalizeConnectResult(result);
+      const connectedAddress = normalized?.accounts?.[0];
+      return normalized && connectedAddress
+        ? {
+            ...normalized,
+            signMessage: async (message: string) =>
+              await signMessageForAccount(message, connectedAddress),
+          }
+        : normalized;
     },
-    [connectAsync, connectors]
+    [connectAsync, connectors, signMessageForAccount]
   );
 
   const connectDefaultWallet = useCallback(async () => {
@@ -202,8 +225,16 @@ function WagmiWalletConnectionProvider({
       throw new Error('No wallet connectors are available.');
     }
     const result = await connectAsync({ connector });
-    return normalizeConnectResult(result);
-  }, [walletOptions, connectWallet, connectAsync, connectors]);
+    const normalized = normalizeConnectResult(result);
+    const connectedAddress = normalized?.accounts?.[0];
+    return normalized && connectedAddress
+      ? {
+          ...normalized,
+          signMessage: async (message: string) =>
+            await signMessageForAccount(message, connectedAddress),
+        }
+      : normalized;
+  }, [walletOptions, connectWallet, connectAsync, connectors, signMessageForAccount]);
 
   const disconnectWallet = useCallback(async () => {
     await disconnectAsync();
@@ -217,17 +248,13 @@ function WagmiWalletConnectionProvider({
       ) {
         throw new Error('The selected wallet account is no longer active. Reconnect it and retry.');
       }
-      return await runWithWalletSignatureStatus({
-        provider,
-        message,
-        run: async () =>
-          await signMessageAsync({
-            message,
-            account: accountAddress as `0x${string}` | undefined,
-          }),
-      });
+      const selectedAddress = accountAddress ?? account.address;
+      if (!selectedAddress) {
+        throw new Error('No wallet account is connected.');
+      }
+      return await signMessageForAccount(message, selectedAddress);
     },
-    [provider, signMessageAsync, account.address]
+    [account.address, signMessageForAccount]
   );
 
   const value = useMemo<WalletConnectionValue>(
@@ -303,6 +330,20 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
     return current;
   }, [pickWallet]);
 
+  const signMessageForAccount = useCallback(
+    async (message: string, accountAddress: string) =>
+      await runWithWalletSignatureStatus({
+        provider: 'privy',
+        message,
+        run: async () =>
+          await signMessageAsync({
+            message,
+            account: accountAddress as `0x${string}`,
+          }),
+      }),
+    [signMessageAsync]
+  );
+
   const connectWallet = useCallback(
     async (_option: WalletOption) => {
       setIsConnecting(true);
@@ -326,13 +367,26 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
               ? Number(wallet.chainId.split(':').pop())
               : undefined;
         return wallet?.address
-          ? { accounts: [wallet.address], chainId: Number.isFinite(chainIdValue) ? chainIdValue : undefined }
+          ? {
+              accounts: [wallet.address],
+              chainId: Number.isFinite(chainIdValue) ? chainIdValue : undefined,
+              signMessage: async (message: string) =>
+                await signMessageForAccount(message, wallet.address),
+            }
           : undefined;
       } finally {
         setIsConnecting(false);
       }
     },
-    [ready, authenticated, login, connectPrivyWallet, waitForWallet, setActiveWallet]
+    [
+      ready,
+      authenticated,
+      login,
+      connectPrivyWallet,
+      waitForWallet,
+      setActiveWallet,
+      signMessageForAccount,
+    ]
   );
 
   const connectDefaultWallet = useCallback(async () => {
@@ -363,17 +417,13 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
       ) {
         throw new Error('The selected Privy wallet account is no longer active. Reconnect it and retry.');
       }
-      return await runWithWalletSignatureStatus({
-        provider: 'privy',
-        message,
-        run: async () =>
-          await signMessageAsync({
-            message,
-            account: accountAddress as `0x${string}` | undefined,
-          }),
-      });
+      const selectedAddress = accountAddress ?? account.address;
+      if (!selectedAddress) {
+        throw new Error('No Privy wallet account is connected.');
+      }
+      return await signMessageForAccount(message, selectedAddress);
     },
-    [signMessageAsync, account.address]
+    [account.address, signMessageForAccount]
   );
 
   const value = useMemo<WalletConnectionValue>(
@@ -441,6 +491,14 @@ function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode })
     return {
       accounts: account?.address ? [account.address] : undefined,
       chainId: wallet.getChain()?.id,
+      signMessage: account
+        ? async (message: string) =>
+            await runWithWalletSignatureStatus({
+              provider: 'thirdweb',
+              message,
+              run: async () => await account.signMessage({ message }),
+            })
+        : undefined,
     } satisfies WalletConnectResult;
   }, [connect]);
 

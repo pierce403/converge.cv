@@ -24,6 +24,9 @@ import { normalizeEthereumAddress, requireEthereumAddress } from '@/lib/utils/et
 import { getStorage } from '@/lib/storage';
 import { formatXmtpIdentifier } from '@/lib/xmtp/identifiers';
 import { StaleInstallationError } from '@/lib/xmtp/device-provisioning';
+import { getResumableKeyfileInstallationId } from './keyfile-resume';
+import { formatCreateInboxError } from '@/lib/identity/identity-errors';
+import { isUsableNetworkDisplayName } from '@/lib/identity/profile-suggestions';
 
 const BASE_CHAIN_ID = 8453;
 
@@ -177,11 +180,18 @@ export function OnboardingPage() {
   const [walletCandidate, setWalletCandidate] = useState<WalletIdentityCandidate | null>(null);
   const [probeResult, setProbeResult] = useState<IdentityProbeResult | null>(null);
   const [isRecoveringInstallation, setIsRecoveringInstallation] = useState(false);
+  const [isRecoveringNewInbox, setIsRecoveringNewInbox] = useState(false);
   const [keyfileCandidate, setKeyfileCandidate] = useState<KeyfileIdentity | null>(null);
   const [keyfileProbeResult, setKeyfileProbeResult] = useState<IdentityProbeResult | null>(null);
   const [isRecoveringKeyfileInstallation, setIsRecoveringKeyfileInstallation] = useState(false);
   const [resumableInstallationId, setResumableInstallationId] = useState<string | null>(null);
+  const [resumableKeyfileInstallationId, setResumableKeyfileInstallationId] = useState<string | null>(null);
+  const [staleKeyfileInstallationId, setStaleKeyfileInstallationId] = useState<string | null>(null);
   const [staleInstallationId, setStaleInstallationId] = useState<string | null>(null);
+  const [staleNewInbox, setStaleNewInbox] = useState<{
+    inboxId: string;
+    installationId: string;
+  } | null>(null);
   const [keyfileError, setKeyfileError] = useState<string | null>(null);
   const [keyfileName, setKeyfileName] = useState<string | null>(null);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
@@ -279,10 +289,18 @@ export function OnboardingPage() {
       keyfileRecoveryAddress &&
       keyfileRecoveryAddress === normalizeEthereumAddress(keyfileCandidate.address)
   );
+  const keyfileRecoveryNeeded = Boolean(
+    staleKeyfileInstallationId ||
+      (keyfileProbeResult &&
+        keyfileProbeResult.installationCount >= 10 &&
+        !resumableKeyfileInstallationId)
+  );
 
   const resetKeyfileFlow = () => {
     setKeyfileCandidate(null);
     setKeyfileProbeResult(null);
+    setResumableKeyfileInstallationId(null);
+    setStaleKeyfileInstallationId(null);
     setKeyfileError(null);
     setKeyfileName(null);
     if (keyfileInputRef.current) {
@@ -334,12 +352,16 @@ export function OnboardingPage() {
       const derived = deriveIdentityFromKeyfile(parsed);
       setKeyfileCandidate(derived);
       setKeyfileProbeResult(null);
+      setResumableKeyfileInstallationId(null);
+      setStaleKeyfileInstallationId(null);
       setKeyfileError(null);
       setKeyfileName(file.name);
     } catch (err) {
       console.error('[Onboarding] Failed to parse keyfile:', err);
       setKeyfileCandidate(null);
       setKeyfileProbeResult(null);
+      setResumableKeyfileInstallationId(null);
+      setStaleKeyfileInstallationId(null);
       setKeyfileName(file.name);
       setKeyfileError(
         err instanceof Error ? err.message : 'Unable to read that keyfile. Please double-check the file.'
@@ -388,7 +410,6 @@ export function OnboardingPage() {
       const generated = generateLocalAppIdentity();
 
       const success = await auth.createIdentity(generated.identity.address, generated.privateKey, undefined, undefined, {
-        register: true,
         registrationPolicy: 'new-inbox',
         enableHistorySync: false,
         label: generated.identity.displayName,
@@ -401,6 +422,7 @@ export function OnboardingPage() {
       if (!success) {
         throw new Error('createIdentity returned false');
       }
+      setStaleNewInbox(null);
 
       // Force a reload to ensure a clean state for the new inbox
       if (!navigateToPendingTarget()) {
@@ -408,8 +430,106 @@ export function OnboardingPage() {
       }
     } catch (err) {
       console.error('[Onboarding] Failed to create generated identity:', err);
-      setError('Unable to create a new identity. Please try again.');
+      if (err instanceof StaleInstallationError) {
+        setStaleNewInbox({
+          inboxId: err.inboxId,
+          installationId: err.installationId,
+        });
+      }
+      setError(formatCreateInboxError(err));
       setView('landing');
+    }
+  };
+
+  const recoverInterruptedNewInbox = async () => {
+    if (!staleNewInbox || isRecoveringNewInbox) {
+      return;
+    }
+    if (
+      !window.confirm(
+        'Remove the interrupted XMTP installation that no longer exists in this browser, then resume this same inbox key?'
+      )
+    ) {
+      return;
+    }
+
+    setIsRecoveringNewInbox(true);
+    setError(null);
+    setStatusMessage('Removing interrupted installation…');
+    setView('processing');
+    try {
+      const storage = await getStorage();
+      const pending = (await storage.listIdentities()).find(
+        (identity) =>
+          identity.provisioningMode === 'new-inbox' &&
+          identity.provisioningPending === true &&
+          identity.privateKey &&
+          identity.inboxId?.toLowerCase() === staleNewInbox.inboxId.toLowerCase() &&
+          identity.installationId?.replace(/^0x/i, '').toLowerCase() ===
+            staleNewInbox.installationId.replace(/^0x/i, '').toLowerCase()
+      );
+      if (!pending?.privateKey) {
+        throw new Error('The interrupted local inbox key is no longer available in this browser.');
+      }
+
+      let probe = await auth.probeIdentity(pending.address, pending.privateKey);
+      if (!probe.inboxId || probe.inboxId.toLowerCase() !== staleNewInbox.inboxId.toLowerCase()) {
+        throw new Error('The interrupted key no longer resolves to its saved XMTP inbox.');
+      }
+      const staleInstallationIsVisible = probe.inboxState?.installations?.some(
+        (installation) =>
+          installation.id.replace(/^0x/i, '').toLowerCase() ===
+          staleNewInbox.installationId.replace(/^0x/i, '').toLowerCase()
+      );
+      if (!staleInstallationIsVisible) {
+        setStaleNewInbox(null);
+        await handleCreateGeneratedIdentity();
+        return;
+      }
+      const xmtp = getXmtpClient();
+      const result = await xmtp.revokeOldestInstallationsForIdentity(
+        { address: pending.address, privateKey: pending.privateKey },
+        1,
+        {
+          inboxId: staleNewInbox.inboxId,
+          inboxState: probe.inboxState,
+          preferredInstallationId: staleNewInbox.installationId,
+          onStatus: setStatusMessage,
+        }
+      );
+      if (
+        !result.revoked.some(
+          (installationId) =>
+            installationId.replace(/^0x/i, '').toLowerCase() ===
+            staleNewInbox.installationId.replace(/^0x/i, '').toLowerCase()
+        )
+      ) {
+        throw new Error('XMTP did not remove the interrupted installation.');
+      }
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        probe = await auth.probeIdentity(pending.address, pending.privateKey);
+        const stillVisible = probe.inboxState?.installations?.some(
+          (installation) =>
+            installation.id.replace(/^0x/i, '').toLowerCase() ===
+            staleNewInbox.installationId.replace(/^0x/i, '').toLowerCase()
+        );
+        if (!stillVisible) {
+          setStaleNewInbox(null);
+          await handleCreateGeneratedIdentity();
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error(
+        'XMTP accepted the removal, but the old installation is still visible. Wait a moment and retry recovery.'
+      );
+    } catch (recoveryError) {
+      console.error('[Onboarding] Interrupted new inbox recovery failed:', recoveryError);
+      setError(formatCreateInboxError(recoveryError));
+      setView('landing');
+    } finally {
+      setIsRecoveringNewInbox(false);
     }
   };
 
@@ -431,7 +551,18 @@ export function OnboardingPage() {
       );
       assertKeyfileInboxMatch(keyfileCandidate.expectedInboxId, keyProbe.inboxId);
       setKeyfileProbeResult(keyProbe);
-      if (keyProbe.installationCount >= 10) {
+      const storage = await getStorage();
+      const resumeInstallationId = getResumableKeyfileInstallationId(
+        await storage.listIdentities(),
+        {
+          address: keyfileCandidate.address,
+          privateKey: keyfileCandidate.privateKey,
+          inboxId: keyfileCandidate.expectedInboxId ?? keyProbe.inboxId ?? undefined,
+          inboxState: keyProbe.inboxState,
+        }
+      );
+      setResumableKeyfileInstallationId(resumeInstallationId ?? null);
+      if (keyProbe.installationCount >= 10 && !resumeInstallationId) {
         setKeyfileError(
           'Installation limit reached (10/10). Revoke the oldest installation before restoring this key on a new browser.'
         );
@@ -446,7 +577,6 @@ export function OnboardingPage() {
         undefined,
         undefined,
         {
-          register: false,
           registrationPolicy: keyProbe.isRegistered ? 'existing-inbox' : 'new-inbox',
           enableHistorySync: true,
           // Don't pass label - will fetch from XMTP
@@ -455,6 +585,7 @@ export function OnboardingPage() {
           provisioningMode: 'keyfile-restore',
           xmtpDbPathMode: 'inbox-default',
           expectedInboxId: keyfileCandidate.expectedInboxId ?? keyProbe.inboxId ?? undefined,
+          expectedInstallationId: resumeInstallationId,
           requestHistorySync: keyProbe.isRegistered,
         }
       );
@@ -482,7 +613,10 @@ export function OnboardingPage() {
 
         if (identity?.inboxId && xmtp.isConnected()) {
           const profile = await xmtp.refreshInboxProfile(identity.inboxId);
-          if (profile.displayName) {
+          if (
+            profile.displayName &&
+            isUsableNetworkDisplayName(profile.displayName, identity)
+          ) {
             const storage = await getStorage();
             const updatedIdentity = { ...identity, displayName: profile.displayName };
             await storage.putIdentity(updatedIdentity);
@@ -500,6 +634,10 @@ export function OnboardingPage() {
       }
     } catch (err) {
       console.error('[Onboarding] Failed to import keyfile identity:', err);
+      if (err instanceof StaleInstallationError) {
+        setResumableKeyfileInstallationId(null);
+        setStaleKeyfileInstallationId(err.installationId);
+      }
       setKeyfileError(
         err instanceof Error ? err.message : 'Failed to import that keyfile. Please try again.'
       );
@@ -752,7 +890,9 @@ export function OnboardingPage() {
     }
     if (
       !window.confirm(
-        'Revoke the oldest installation to make room for this keyfile on this browser? Creation time does not prove that device is inactive.'
+        staleKeyfileInstallationId
+          ? 'Remove the interrupted keyfile installation that no longer exists in this browser, then resume this same inbox?'
+          : 'Revoke the oldest installation to make room for this keyfile on this browser? Creation time does not prove that device is inactive.'
       )
     ) {
       return;
@@ -761,26 +901,98 @@ export function OnboardingPage() {
     setIsRecoveringKeyfileInstallation(true);
     setKeyfileError(null);
     try {
+      const staleInstallationId = staleKeyfileInstallationId;
+      let latestProbe = await auth.probeIdentity(
+        keyfileCandidate.address,
+        keyfileCandidate.privateKey
+      );
+      if (
+        !latestProbe.inboxId ||
+        latestProbe.inboxId.toLowerCase() !== keyfileProbeResult.inboxId.toLowerCase()
+      ) {
+        throw new Error('The keyfile no longer resolves to the inbox shown for recovery.');
+      }
+      setKeyfileProbeResult(latestProbe);
+
+      if (staleInstallationId) {
+        const staleInstallationIsVisible = latestProbe.inboxState?.installations?.some(
+          (installation) =>
+            installation.id.replace(/^0x/i, '').toLowerCase() ===
+            staleInstallationId.replace(/^0x/i, '').toLowerCase()
+        );
+        if (!staleInstallationIsVisible) {
+          setStaleKeyfileInstallationId(null);
+          setKeyfileError(
+            latestProbe.installationCount >= 10
+              ? 'The interrupted installation is gone, but this inbox still has 10/10 installations. Review the devices before choosing a separate revocation.'
+              : null
+          );
+          return;
+        }
+      }
+
       const xmtp = getXmtpClient();
-      await xmtp.revokeOldestInstallationsForIdentity(
+      const recoveryResult = await xmtp.revokeOldestInstallationsForIdentity(
         {
           address: keyfileCandidate.address,
           privateKey: keyfileCandidate.privateKey,
         },
-        Math.max(1, keyfileProbeResult.installationCount - 9),
+        staleInstallationId
+          ? 1
+          : Math.max(1, latestProbe.installationCount - 9),
         {
-          inboxId: keyfileProbeResult.inboxId,
-          inboxState: keyfileProbeResult.inboxState,
-          requireAtLimit: true,
+          inboxId: latestProbe.inboxId,
+          inboxState: latestProbe.inboxState,
+          requireAtLimit: !staleInstallationId,
+          preferredInstallationId: staleInstallationId ?? undefined,
         }
       );
-      const refreshed = await auth.probeIdentity(
+      if (
+        staleInstallationId &&
+        !recoveryResult.revoked.some(
+          (installationId) =>
+            installationId.replace(/^0x/i, '').toLowerCase() ===
+            staleInstallationId.replace(/^0x/i, '').toLowerCase()
+        )
+      ) {
+        throw new Error('XMTP did not remove the interrupted keyfile installation.');
+      }
+
+      if (staleInstallationId) {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          latestProbe = await auth.probeIdentity(
+            keyfileCandidate.address,
+            keyfileCandidate.privateKey
+          );
+          setKeyfileProbeResult(latestProbe);
+          const stillVisible = latestProbe.inboxState?.installations?.some(
+            (installation) =>
+              installation.id.replace(/^0x/i, '').toLowerCase() ===
+              staleInstallationId.replace(/^0x/i, '').toLowerCase()
+          );
+          if (!stillVisible) {
+            setStaleKeyfileInstallationId(null);
+            setKeyfileError(
+              latestProbe.installationCount >= 10
+                ? 'The interrupted installation is gone, but this inbox still has 10/10 installations. Review the devices before choosing a separate revocation.'
+                : null
+            );
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        throw new Error(
+          'XMTP accepted the removal, but the interrupted installation is still visible. Wait a moment and retry recovery.'
+        );
+      }
+
+      latestProbe = await auth.probeIdentity(
         keyfileCandidate.address,
         keyfileCandidate.privateKey
       );
-      setKeyfileProbeResult(refreshed);
+      setKeyfileProbeResult(latestProbe);
       setKeyfileError(
-        refreshed.installationCount >= 10
+        latestProbe.installationCount >= 10
           ? 'XMTP still reports 10 installations. Wait a moment and retry the recovery check.'
           : null
       );
@@ -855,8 +1067,20 @@ export function OnboardingPage() {
         </div>
 
         {error && (
-          <div className="rounded-lg border border-red-500/60 bg-red-900/30 p-4 text-left text-sm text-red-200">
-            {error}
+          <div className="space-y-3 rounded-lg border border-red-500/60 bg-red-900/30 p-4 text-left text-sm text-red-200">
+            <div>{error}</div>
+            {staleNewInbox && (
+              <button
+                type="button"
+                onClick={recoverInterruptedNewInbox}
+                disabled={isRecoveringNewInbox}
+                className="rounded-md border border-red-300/50 bg-red-950/50 px-3 py-2 text-xs font-semibold text-red-50 disabled:opacity-50"
+              >
+                {isRecoveringNewInbox
+                  ? 'Removing interrupted installation…'
+                  : 'Remove interrupted installation and retry'}
+              </button>
+            )}
           </div>
         )}
 
@@ -962,9 +1186,7 @@ export function OnboardingPage() {
             </div>
           )}
 
-          {keyfileProbeResult &&
-            keyfileProbeResult.installationCount >= 10 &&
-            keyfileCanRecoverInstallations && (
+          {keyfileRecoveryNeeded && keyfileCanRecoverInstallations && (
             <button
               type="button"
               onClick={recoverOldestKeyfileInstallation}
@@ -973,13 +1195,13 @@ export function OnboardingPage() {
             >
               {isRecoveringKeyfileInstallation
                 ? 'Revoking installation...'
-                : 'Revoke oldest installation'}
+                : staleKeyfileInstallationId
+                  ? 'Remove interrupted installation'
+                  : 'Revoke oldest installation'}
             </button>
           )}
 
-          {keyfileProbeResult &&
-            keyfileProbeResult.installationCount >= 10 &&
-            !keyfileCanRecoverInstallations && (
+          {keyfileRecoveryNeeded && !keyfileCanRecoverInstallations && (
               <div className="rounded-md border border-amber-500/60 bg-amber-950/50 px-4 py-3 text-sm text-amber-100">
                 This key is not the inbox recovery identity
                 {keyfileRecoveryAddress ? ` (${keyfileRecoveryAddress})` : ''}. Revoke an installation from an existing device before restoring here.
@@ -1014,7 +1236,12 @@ export function OnboardingPage() {
             disabled={
               !keyfileCandidate ||
               isRecoveringKeyfileInstallation ||
-              Boolean(keyfileProbeResult && keyfileProbeResult.installationCount >= 10)
+              Boolean(staleKeyfileInstallationId) ||
+              Boolean(
+                keyfileProbeResult &&
+                  keyfileProbeResult.installationCount >= 10 &&
+                  !resumableKeyfileInstallationId
+              )
             }
             className="rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:border-primary-700 disabled:bg-primary-900 disabled:text-primary-400"
           >

@@ -209,6 +209,7 @@ pnpm typecheck        # TypeScript type checking
 - Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
 - Mobile wallet connectors own their redirect/deep-link lifecycle, and every XMTP signature is bound to the selected wallet account
 - Existing-inbox and reload connections fail closed under explicit registration policies instead of falling back to standalone inbox creation
+- Fresh inbox registration uses `client.isRegistered()`, persists the installation before mutation, registers at most once, and verifies the signer plus exact installation in network state before onboarding completes
 - New installations request XMTP device history and explain that an older installation may need to be online
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
@@ -451,7 +452,7 @@ if (!isRegistered) {
 5. Note any new dependencies or tools added
 6. Update `MEMORY.md`/`memory/` when durable context is useful but too detailed for this file.
 7. Update `SKILLS.md`/`skills/` when a reusable procedure changes.
-8. Always run the full CI-equivalent checks before handing work back: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build` (matches the GitHub Pages workflow order: typecheck → lint → build/deploy).
+8. Always run the full CI-equivalent checks before handing work back: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build` (matches the GitHub Pages workflow order: typecheck → lint → test → build/deploy).
 9. **ALWAYS COMMIT AND PUSH ALL CHANGES** - This is mandatory after completing any work:
    ```bash
    git add -A
@@ -506,11 +507,25 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-09 (app version 0.4.1 + XMTP wallet/onboarding hardening)
+**Last Updated**: 2026-07-09 (app version 0.4.2 + XMTP registration lifecycle repair)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-09)
+
+### XMTP Registration Lifecycle Repair
+- Bumped Converge from `0.4.1` to `0.4.2` after real browser testing found that Create New Converge Inbox always stopped at `Association error: Missing identity update`.
+- Root cause: `Client.create({ disableAutoRegister: true })` returns a prospective deterministic `inboxId` before registration, but Converge queried `preferences.fetchInboxState()` as if that proved a network identity update existed. The unit suite covered policy booleans but did not model a real fresh Browser SDK client, and onboarding discarded the underlying error.
+- Replaced the state guess with one tested lifecycle: resolve the signer, inspect `client.isRegistered()`, persist the prospective installation, call `register()` no more than once when the explicit policy permits it, and require the signer plus normalized installation ID in live inbox state. Missing policy now defaults to `resume-only`; the contradictory `register` boolean was removed.
+- Identity registration success is no longer coupled to optional conversation sync or stream startup. Onboarding surfaces bounded actionable XMTP errors instead of the generic identity-creation message.
+- Malformed unrelated identity rows no longer brick onboarding, identity-storage failures stop before opening a different XMTP database, interrupted account association waits for the independent resolver, and exact pending keyfile installations can resume at 10/10.
+- Native wallet callbacks preserve real continuation errors. Native, Privy, and Thirdweb completion paths now carry the returned account-bound signer directly into onboarding/Settings instead of reading stale hook state after a mobile wallet return.
+- New-inbox retries resume only a validated pending key with both inbox and installation IDs; incomplete pre-registration rows cannot trap every future Create New attempt. Inbox Switcher uses the same bounded actionable error formatter as onboarding.
+- Interrupted-installation recovery is exact-match-only: if the saved stale ID has disappeared, Converge must not fall back to revoking the oldest device. Keep stale recovery state until fresh ledger reads confirm removal.
+- XMTP profile fallbacks that echo an address or inbox ID no longer overwrite generated Color Animal names.
+- Production drift was part of the verification failure: the Pages workflow used pnpm 8 against a pnpm 10 lockfile, ignored it, and resolved the caret SDK range to 6.5.0. The SDK is now pinned to 6.1.2; CI uses pnpm 10.5.2, `--frozen-lockfile`, and runs Vitest before build.
+- Vite dev dependency optimization now excludes the Browser SDK so its module worker URL remains intact during local browser verification. Public metadata was corrected from the stale v5.0.1 claim.
+- Build-info generation invokes Git without a shell and accepts successful stdout from restricted runners that report a spurious child-process `EPERM`, preventing valid local metadata from being overwritten with `unknown`.
 
 ### XMTP Wallet and Onboarding Hardening
 - Bumped Converge from `0.4.0` to `0.4.1` after auditing the shipped provisioning flow against the pinned `@xmtp/browser-sdk` 6.1.2 implementation.

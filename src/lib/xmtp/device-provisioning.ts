@@ -391,6 +391,10 @@ export async function provisionFreshDeviceKey(
           if (resolvedAfterError !== expected) {
             throw error;
           }
+          // The request response was interrupted, but the manager can already
+          // observe the committed association. Treat it as submitted so the
+          // independent static resolver must also converge before we continue.
+          accountAdded = true;
           console.info(
             '[XMTP] Device key association became visible while the add-account request was settling; resuming verification.'
           );

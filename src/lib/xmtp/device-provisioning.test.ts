@@ -318,7 +318,31 @@ describe('fresh device provisioning', () => {
     );
 
     expect(result.inboxId).toBe(targetInbox);
-    expect(result.accountAdded).toBe(false);
+    expect(result.accountAdded).toBe(true);
+    expect(harness.dependencies.resolveInboxId).toHaveBeenCalledWith(deviceIdentifier);
+  });
+
+  it('does not finish an interrupted add-account until the independent resolver sees it', async () => {
+    const harness = setup({ addAccountThrowsAfterMutation: true });
+    harness.dependencies.resolveInboxId = vi.fn(async (identifier: Identifier) =>
+      identifier.identifier.toLowerCase() === targetIdentifier.identifier.toLowerCase()
+        ? targetInbox
+        : undefined
+    );
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        harness.dependencies
+      )
+    ).rejects.toThrow('association is not visible everywhere yet');
+
+    const deviceLookups = harness.dependencies.resolveInboxId.mock.calls.filter(
+      ([identifier]) => identifier.identifier === deviceIdentifier.identifier
+    );
+    expect(deviceLookups.length).toBeGreaterThan(1);
   });
 
   it('fails closed when target inbox capacity cannot be fetched', async () => {

@@ -596,9 +596,31 @@ export class DexieDriver implements StorageDriver {
     const identities = await this.globalDb.identity.toArray();
     const normalized: Identity[] = [];
     for (const identity of identities) {
-      const repaired = normalizeIdentityAddresses(identity);
+      let repaired: Identity;
+      try {
+        repaired = normalizeIdentityAddresses(identity);
+      } catch (error) {
+        console.warn(
+          '[Storage] Skipping a malformed identity row; the original row remains in IndexedDB for recovery.',
+          {
+            address:
+              typeof identity?.address === 'string' ? identity.address : '(missing address)',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
+        continue;
+      }
       if (identityAddressNeedsRepair(identity)) {
-        await this.putIdentity(repaired);
+        try {
+          await this.putIdentity(repaired);
+        } catch (error) {
+          // The normalized in-memory record is still usable. Do not let a failed
+          // best-effort repair hide every other identity from onboarding.
+          console.warn('[Storage] Could not persist an identity address repair.', {
+            address: identity.address,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       normalized.push(repaired);
     }

@@ -5,11 +5,11 @@ import path from 'path';
 // https://vitejs.dev/config/
 export default defineConfig({
   base: '/', // Custom domain - use root path
-  // Don't exclude XMTP packages - they need to be bundled for workers to load them
-  // optimizeDeps: {
-  //   exclude: ['@xmtp/wasm-bindings', '@xmtp/browser-sdk'],
-  //   include: ['@xmtp/proto'],
-  // },
+  // Browser SDK resolves its own module worker URL. Vite dependency prebundling
+  // rewrites that relationship and leaves the XMTP worker blank in dev mode.
+  optimizeDeps: {
+    exclude: ['@xmtp/browser-sdk'],
+  },
   plugins: [
     react(),
     // Service worker disabled - not needed for XMTP protocol v3 (cthulhu.bot works without it)
@@ -31,7 +31,6 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    // No COOP/COEP headers needed - cthulhu.bot works without them
   },
   build: {
     outDir: 'dist',

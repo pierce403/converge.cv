@@ -65,6 +65,29 @@ describe('installation recovery helpers', () => {
     expect(selected.map((installation) => installation.id)).toEqual(['stale-new']);
   });
 
+  it('does not fall back to another device when the exact stale installation is absent', () => {
+    const selected = selectOldestRevocableInstallations(
+      [{ id: 'active-old', bytes: new Uint8Array([1]), clientTimestampNs: 10n }],
+      1,
+      'stale-missing'
+    );
+
+    expect(selected).toEqual([]);
+  });
+
+  it('does not fall back when the exact stale installation has no revocation bytes', () => {
+    const selected = selectOldestRevocableInstallations(
+      [
+        { id: 'stale-no-bytes', clientTimestampNs: 20n },
+        { id: 'active-old', bytes: new Uint8Array([1]), clientTimestampNs: 10n },
+      ],
+      1,
+      'stale-no-bytes'
+    );
+
+    expect(selected).toEqual([]);
+  });
+
   it('falls back to hex installation IDs when bytes are not present', () => {
     const selected = selectOldestRevocableInstallations([{ id: '0a0b', clientTimestampNs: 1n }]);
 

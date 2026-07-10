@@ -51,10 +51,7 @@ import {
   normalizeEthereumAddress as normalizeEthereumAccountAddress,
   requireEthereumAddress,
 } from '@/lib/utils/ethereum';
-import {
-  registrationCapabilities,
-  type ClientRegistrationPolicy,
-} from './registration-policy';
+import type { ClientRegistrationPolicy } from './registration-policy';
 import {
   createConvosInvite,
   decodeConversationToken,
@@ -85,7 +82,6 @@ import {
 } from './installation-recovery';
 import {
   getClientDbPath,
-  planClientInstallation,
   provisionFreshDeviceKey,
   shouldRequestHistorySync,
   signerIdentityKey,
@@ -93,6 +89,10 @@ import {
   type XmtpDbPathMode,
   type ProvisionDeviceResult,
 } from './device-provisioning';
+import {
+  ensureClientRegistration,
+  installationIdsMatch,
+} from './client-registration';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
 import {
   ConvosJoinRequestCodec,
@@ -218,7 +218,6 @@ export interface RevokeOldestInstallationsOptions {
 }
 
 interface ConnectOptions {
-  register?: boolean;
   registrationPolicy?: ClientRegistrationPolicy;
   enableHistorySync?: boolean;
   expectedInboxId?: string;
@@ -1130,7 +1129,11 @@ export class XmtpClient {
     const bytes = selectedInstallations.map((installation) => installation.bytes);
 
     if (!bytes.length) {
-      throw new Error('No revocable installation bytes were available for that inbox.');
+      throw new Error(
+        options.preferredInstallationId
+          ? 'The interrupted installation is no longer present in the latest XMTP inbox state. No other installation was revoked.'
+          : 'No revocable installation bytes were available for that inbox.'
+      );
     }
 
     const selectedPreferredInstallation = Boolean(
@@ -3368,7 +3371,7 @@ export class XmtpClient {
         }
         if (
           options?.expectedInstallationId &&
-          installationId !== options.expectedInstallationId
+          !installationIdsMatch(installationId, options.expectedInstallationId)
         ) {
           throw new Error(
             'XMTP reused a different browser installation than the wallet-approved installation.'
@@ -3416,10 +3419,7 @@ export class XmtpClient {
     this.identity = identity;
 
     const registrationPolicy: ClientRegistrationPolicy =
-      options?.registrationPolicy ??
-      (options?.register === false ? 'resume-only' : 'new-inbox');
-    const { allowInboxCreation, allowInstallationRegistration } =
-      registrationCapabilities(registrationPolicy);
+      options?.registrationPolicy ?? 'resume-only';
     const shouldSyncHistory = options?.enableHistorySync === true;
 
     let client: Client<unknown> | null = null;
@@ -3493,102 +3493,43 @@ export class XmtpClient {
         throw error;
       }
 
-      if (
-        options?.expectedInboxId &&
-        client.inboxId?.toLowerCase() !== options.expectedInboxId.toLowerCase()
-      ) {
-        throw new Error(
-          `XMTP opened inbox ${client.inboxId ?? 'unknown'} instead of expected inbox ${options.expectedInboxId}.`
-        );
-      }
-      if (
-        options?.expectedInstallationId &&
-        client.installationId !== options.expectedInstallationId
-      ) {
-        throw new Error(
-          'XMTP did not reopen the wallet-approved browser installation. Registration was stopped to avoid creating another installation.'
-        );
-      }
-
-      // Decide whether we must register a new installation / initialize identity
-      let mustRegister = false;
-      let existingInstallationCount = 0;
-      let installationRegistered = false;
-      if (!client.inboxId) {
-        if (!allowInboxCreation) {
-          throw new Error(
-            'XMTP did not resolve this identity to the expected inbox. Registration was stopped to avoid creating an unrelated inbox.'
-          );
-        }
-        mustRegister = true;
-        console.warn('[XMTP] New identity has no inbox yet; registration is allowed by policy');
-      }
-      try {
-        const preState: InboxState = await this.retryWithBackoff('preferences.fetchInboxState', () => client!.preferences.fetchInboxState());
-        const existing = preState.installations || [];
-        const hasOurInstallation = existing.some((inst: unknown) => {
-          const id = (inst as { id?: string }).id;
-          return id && client && id === client.installationId;
-        });
-        const count = existing.length;
-        existingInstallationCount = count;
-
-        if (hasOurInstallation) {
-          mustRegister = false;
-          console.log('[XMTP] Installation already present; skipping register()');
-        } else {
-          if (!allowInstallationRegistration) {
-            throw new Error(
-              'This browser no longer has its registered XMTP installation. Reconnect the controlling wallet or restore the key on this device instead of creating one silently.'
+      const signerIdentifier = await signer.getIdentifier();
+      const registration = await ensureClientRegistration(
+        {
+          client,
+          identifier: signerIdentifier,
+          policy: registrationPolicy,
+          expectedInboxId: options?.expectedInboxId,
+          expectedInstallationId: options?.expectedInstallationId,
+        },
+        {
+          resolveInboxId: async (identifier) =>
+            await this.retryWithBackoff('getInboxIdForIdentifier', () =>
+              getInboxIdForIdentifier(identifier, 'production')
+            ),
+          fetchInboxState: async (inboxId) => {
+            const states = await this.retryWithBackoff('client.fetchInboxStates', () =>
+              Client.fetchInboxStates([inboxId], 'production')
             );
-          }
-          const installationPlan = planClientInstallation({
-            inboxId: client.inboxId ?? identity.inboxId ?? 'unknown',
-            hasCurrentInstallation: false,
-            existingInstallationCount: count,
-          });
-          mustRegister = installationPlan.registerInstallation;
-          console.warn('[XMTP] Installation missing from inbox state; registration is allowed by policy');
+            return states[0];
+          },
+          onInstallationReady: options?.onInstallationReady,
         }
-
-        if (count >= 8) {
-          console.warn('[XMTP] Installation count nearing limit:', count);
-          logNetworkEvent({ direction: 'status', event: 'connect:installation_warning', details: `Installation count ${count}/10` });
-        }
-      } catch (preCheckErr) {
-        const msg = preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr ?? '');
-        if (/10\/10|installation limit|already registered 10/i.test(msg)) {
-          throw preCheckErr;
-        }
-        if (/uninitialized identity/i.test(msg)) {
-          if (!allowInboxCreation) {
-            throw new Error(
-              'XMTP reports an uninitialized identity, but this flow is only allowed to open an existing inbox. Registration was stopped.'
-            );
-          }
-          mustRegister = true;
-          console.warn('[XMTP] New identity is uninitialized; registration is allowed by policy');
-        } else {
-          throw preCheckErr;
-        }
-      }
-
-      if (mustRegister) {
-        console.log('[XMTP] Registering inbox/installation after probe');
-        await this.retryWithDelay('client.register', () => client!.register(), {
-          attempts: 2,
-          initialDelayMs: 1000,
-          shouldRetry: (err) => this.isTransientNetworkError(err) || this.isRateLimitError(err),
-          onRateLimit: () => this.noteIdentityRateLimit('connect:client.register'),
-        });
+      );
+      const {
+        existingInstallationCount,
+        installationRegistered,
+      } = registration;
+      if (installationRegistered) {
         this.reduceIdentityCooldown();
-        installationRegistered = true;
-
-        if (!client.inboxId) {
-          throw new Error('Client.register completed but inboxId is still missing');
-        }
-      } else {
-        console.log('[XMTP] Skipping register() per options or pre-check');
+      }
+      if (existingInstallationCount >= 8) {
+        console.warn('[XMTP] Installation count nearing limit:', existingInstallationCount);
+        logNetworkEvent({
+          direction: 'status',
+          event: 'connect:installation_warning',
+          details: `Installation count ${existingInstallationCount}/10`,
+        });
       }
 
       console.log('[XMTP] ✅ Client created successfully');
@@ -3603,12 +3544,6 @@ export class XmtpClient {
       if (!client.inboxId || !client.installationId) {
         throw new Error('XMTP created a client without a usable inbox or installation ID.');
       }
-      await options?.onInstallationReady?.({
-        inboxId: client.inboxId,
-        installationId: client.installationId,
-        installationRegistered,
-      });
-
       let historySyncRequested = false;
       const historySyncRequired = shouldRequestHistorySync({
         installationRegistered,
@@ -3646,7 +3581,7 @@ export class XmtpClient {
       logNetworkEvent({
         direction: 'status',
         event: 'connect:registration_check',
-        details: `Register step ${mustRegister ? 'completed' : 'skipped'} (policy=${registrationPolicy}); inbox ID: ${client.inboxId}`,
+        details: `Register step ${installationRegistered ? 'completed' : 'skipped'} (policy=${registrationPolicy}); inbox ID: ${client.inboxId}`,
       });
 
       setConnectionStatus('connected');
@@ -3666,54 +3601,68 @@ export class XmtpClient {
       // Start syncing conversations and streaming messages
       console.log('[XMTP] Starting conversation sync and message streaming...');
       const { setSyncStatus, setSyncProgress } = useXmtpStore.getState();
-
-      setSyncStatus('syncing-conversations');
-      setSyncProgress(0);
-      await this.syncConversations({ soft: true, reason: 'connect' });
-
-      if (shouldSyncHistory) {
-        console.log('[XMTP] History sync enabled – fetching past messages. This may take time if another device needs to provide history.');
-        setSyncStatus('syncing-messages');
-        setSyncProgress(40);
-        await this.syncHistory({ mode: 'full', skipConversationSync: true });
-        setSyncProgress(85);
-      } else {
-        console.log('[XMTP] Full history sync disabled. Running a light recent sync.');
-        setSyncStatus('syncing-messages');
-        setSyncProgress(70);
-        await this.syncHistory({
-          mode: 'recent',
-          sinceMs: historySinceMs,
-          conversationLimit: 8,
-          messageLimit: 200,
-          lookbackMs: 30 * 1000,
-          skipConversationSync: true,
-        });
-      }
-
-      await this.startMessageStream();
-      await this.scanInviteJoinRequests('connect');
-      this.startBackgroundDiscoveryLoop();
-
-      // Instrumentation (aggregated): prove caches + sync dedupe are working without spamming the log.
       try {
+        setSyncStatus('syncing-conversations');
+        setSyncProgress(0);
+        await this.syncConversations({ soft: true, reason: 'connect' });
+
+        if (shouldSyncHistory) {
+          console.log('[XMTP] History sync enabled – fetching past messages. This may take time if another device needs to provide history.');
+          setSyncStatus('syncing-messages');
+          setSyncProgress(40);
+          await this.syncHistory({ mode: 'full', skipConversationSync: true });
+          setSyncProgress(85);
+        } else {
+          console.log('[XMTP] Full history sync disabled. Running a light recent sync.');
+          setSyncStatus('syncing-messages');
+          setSyncProgress(70);
+          await this.syncHistory({
+            mode: 'recent',
+            sinceMs: historySinceMs,
+            conversationLimit: 8,
+            messageLimit: 200,
+            lookbackMs: 30 * 1000,
+            skipConversationSync: true,
+          });
+        }
+
+        await this.startMessageStream();
+        await this.scanInviteJoinRequests('connect');
+        this.startBackgroundDiscoveryLoop();
+
+        try {
+          logNetworkEvent({
+            direction: 'status',
+            event: 'cache:summary',
+            details: `getDmByInboxId hit=${this.cacheCounters.dmByInbox.hit} miss=${this.cacheCounters.dmByInbox.miss}; fetchInboxStates hit=${this.cacheCounters.inboxState.hit} miss=${this.cacheCounters.inboxState.miss}; resolveInboxIdForAddress hit=${this.cacheCounters.addressInbox.hit} miss=${this.cacheCounters.addressInbox.miss} network=${this.cacheCounters.addressInbox.network} cooldownSkip=${this.cacheCounters.addressInbox.cooldownSkip}`,
+          });
+        } catch {
+          // Debug instrumentation must not affect the connected client.
+        }
+
+        setSyncProgress(100);
+        setSyncStatus('complete');
+
+        setTimeout(() => {
+          setSyncStatus('idle');
+          setSyncProgress(0);
+        }, 2000);
+      } catch (bootstrapError) {
+        console.warn(
+          '[XMTP] Inbox and installation are connected, but initial conversation sync/stream startup is degraded:',
+          bootstrapError
+        );
         logNetworkEvent({
           direction: 'status',
-          event: 'cache:summary',
-          details: `getDmByInboxId hit=${this.cacheCounters.dmByInbox.hit} miss=${this.cacheCounters.dmByInbox.miss}; fetchInboxStates hit=${this.cacheCounters.inboxState.hit} miss=${this.cacheCounters.inboxState.miss}; resolveInboxIdForAddress hit=${this.cacheCounters.addressInbox.hit} miss=${this.cacheCounters.addressInbox.miss} network=${this.cacheCounters.addressInbox.network} cooldownSkip=${this.cacheCounters.addressInbox.cooldownSkip}`,
+          event: 'connect:bootstrap_degraded',
+          details:
+            bootstrapError instanceof Error
+              ? bootstrapError.message
+              : String(bootstrapError),
         });
-      } catch {
-        // ignore debug store failures
-      }
-
-      setSyncProgress(100);
-      setSyncStatus('complete');
-
-      // Hide the sync indicator after a brief delay
-      setTimeout(() => {
         setSyncStatus('idle');
         setSyncProgress(0);
-      }, 2000);
+      }
 
       if (!client.inboxId || !client.installationId) {
         throw new Error('XMTP connected without a usable inbox or installation ID.');

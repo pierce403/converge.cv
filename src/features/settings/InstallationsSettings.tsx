@@ -6,6 +6,8 @@ import { useCallback, useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
 import { getStorage } from '@/lib/storage';
+import { installationIdsMatch } from '@/lib/xmtp/client-registration';
+import { useXmtpStore } from '@/lib/stores/xmtp-store';
 
 interface KeyPackageStatus {
   lifetime?: {
@@ -24,7 +26,9 @@ interface Installation {
 
 export function InstallationsSettings() {
   const identity = useAuthStore((state) => state.identity);
+  const connectionStatus = useXmtpStore((state) => state.connectionStatus);
   const [installations, setInstallations] = useState<Installation[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -37,10 +41,14 @@ export function InstallationsSettings() {
     setVerifiedCurrentInstallationId(null);
     try {
       const xmtp = getXmtpClient();
-      
-      // Try to get inbox state even if not connected
-      // This allows viewing/revoking installations when connection failed due to 10/10 limit
       console.log('[Installations] Loading installations, connected:', xmtp.isConnected());
+      if (
+        !xmtp.isConnected() &&
+        (connectionStatus === 'connecting' || connectionStatus === 'disconnected')
+      ) {
+        setHasLoaded(false);
+        return;
+      }
       
       type SafeInboxStateLite = {
         installations?: Array<{ id: string; clientTimestampNs?: bigint }>;
@@ -56,19 +64,20 @@ export function InstallationsSettings() {
       });
 
       console.log('[Installations] Found', sortedInstallations.length, 'installations');
+      setHasLoaded(true);
 
       const liveInstallationId = xmtp.getInstallationId();
-      const verifiedLiveInstallationId =
-        liveInstallationId &&
-          sortedInstallations.some((installation) => installation.id === liveInstallationId)
-          ? liveInstallationId
-          : null;
+      const verifiedLiveInstallationId = liveInstallationId
+        ? sortedInstallations.find((installation) =>
+            installationIdsMatch(installation.id, liveInstallationId)
+          )?.id ?? null
+        : null;
       setVerifiedCurrentInstallationId(verifiedLiveInstallationId);
 
       if (
         verifiedLiveInstallationId &&
         identity &&
-        identity.installationId !== verifiedLiveInstallationId
+        !installationIdsMatch(identity.installationId, verifiedLiveInstallationId)
       ) {
         const updatedIdentity = { ...identity, installationId: verifiedLiveInstallationId };
         const storage = await getStorage();
@@ -98,6 +107,7 @@ export function InstallationsSettings() {
         setInstallations(sortedInstallations as unknown as Installation[]);
       }
     } catch (err) {
+      setHasLoaded(false);
       console.error('[Installations] Failed to load:', err);
       const errorMsg = err instanceof Error ? err.message : 'Failed to load installations';
       
@@ -112,7 +122,7 @@ export function InstallationsSettings() {
     } finally {
       setIsLoading(false);
     }
-  }, [identity]);
+  }, [connectionStatus, identity]);
 
   const refreshStatuses = async () => {
     setIsFetchingStatuses(true);
@@ -140,15 +150,23 @@ export function InstallationsSettings() {
   };
 
   useEffect(() => {
-    void loadInstallations();
-  }, [loadInstallations]);
+    if (connectionStatus === 'connected' || connectionStatus === 'error') {
+      void loadInstallations();
+    } else {
+      setHasLoaded(false);
+      setVerifiedCurrentInstallationId(null);
+    }
+  }, [connectionStatus, loadInstallations]);
 
   const handleRevoke = async (installationBytes: Uint8Array, installationId: string) => {
     if (!verifiedCurrentInstallationId) {
       setError('Reconnect XMTP and refresh installations before revoking a device.');
       return;
     }
-    const isCurrentDevice = installationId === verifiedCurrentInstallationId;
+    const isCurrentDevice = installationIdsMatch(
+      installationId,
+      verifiedCurrentInstallationId
+    );
     
     const confirmMessage = isCurrentDevice
       ? 'Are you sure you want to revoke THIS device? You will be logged out and need to reconnect.'
@@ -261,12 +279,18 @@ export function InstallationsSettings() {
 
         <div className="flex items-center justify-between gap-3">
           <h3 className="font-medium text-primary-100">
-            All Installations ({installations.length}/10)
+            {hasLoaded
+              ? `All Installations (${installations.length}/10)`
+              : 'All Installations (checking...)'}
           </h3>
           <div className="flex items-center gap-3">
             <button
               onClick={loadInstallations}
-              disabled={isLoading}
+              disabled={
+                isLoading ||
+                connectionStatus === 'connecting' ||
+                connectionStatus === 'disconnected'
+              }
               className="text-sm text-accent-300 hover:text-accent-200 disabled:opacity-50"
               title="Fetch latest inbox state from the network"
             >
@@ -286,6 +310,14 @@ export function InstallationsSettings() {
         {error && (
           <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
             {error}
+          </div>
+        )}
+
+        {!hasLoaded &&
+          (connectionStatus === 'connecting' || connectionStatus === 'disconnected') &&
+          !error && (
+          <div className="p-3 bg-primary-950/30 border border-primary-800/60 rounded text-sm text-primary-200">
+            Waiting for XMTP to reconnect before loading installation state.
           </div>
         )}
 
@@ -311,7 +343,10 @@ export function InstallationsSettings() {
               Creation date doesn't indicate activity — an old installation may still be active on another device.
             </div>
             {installations.map((installation) => {
-              const isCurrentDevice = installation.id === currentInstallationId;
+              const isCurrentDevice = installationIdsMatch(
+                installation.id,
+                currentInstallationId
+              );
               const isRevoking = revokingId === installation.id;
               const hasError = !!installation.keyPackageStatus?.validationError;
               const expiry = formatExpiry(installation.keyPackageStatus?.lifetime?.notAfter);
@@ -380,7 +415,7 @@ export function InstallationsSettings() {
           </div>
         )}
 
-        {!isLoading && installations.length === 0 && !error && (
+        {!isLoading && hasLoaded && installations.length === 0 && !error && (
           <div className="text-center py-8 text-primary-200 text-sm">
             No installations found. Try connecting to XMTP first.
           </div>

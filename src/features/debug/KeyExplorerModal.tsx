@@ -3,6 +3,7 @@ import { IdentifierKind, type Identifier, type InboxState, type Installation } f
 import { useAuthStore, useConversationStore } from '@/lib/stores';
 import { getXmtpClient, type GroupKeySummary } from '@/lib/xmtp';
 import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
+import { installationIdsMatch } from '@/lib/xmtp/client-registration';
 
 interface KeyExplorerModalProps {
   isOpen: boolean;
@@ -435,7 +436,10 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
             title: `Install ${short}`,
             icon: 'installation',
             description: 'Device/app keypair used by this app install.',
-            badge: installationId && installId === installationId ? 'This device' : undefined,
+            badge:
+              installationId && installationIdsMatch(installId, installationId)
+                ? 'This device'
+                : undefined,
             when: when ? `First seen ${when}` : undefined,
             details: [
               {
