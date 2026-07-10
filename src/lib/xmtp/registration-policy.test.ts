@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Identity } from '@/types';
 import {
+  expectedInstallationForStoredIdentity,
   registrationCapabilities,
   registrationPolicyForStoredIdentity,
 } from './registration-policy';
@@ -54,5 +55,14 @@ describe('XMTP registration policy', () => {
     expect(registrationPolicyForStoredIdentity(identity({ provisioningPending: false }), false)).toBe(
       'resume-only'
     );
+  });
+
+  it('pins settled reconnects to the persisted browser installation', () => {
+    expect(
+      expectedInstallationForStoredIdentity(identity({ installationId: ' 0xAABB ' }))
+    ).toBe('0xAABB');
+    expect(
+      expectedInstallationForStoredIdentity(identity({ installationId: undefined }))
+    ).toBeUndefined();
   });
 });

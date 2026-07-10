@@ -87,15 +87,93 @@ describe('DexieDriver identity isolation', () => {
     (driver as unknown as { globalDb: { identity: typeof identityTable } }).globalDb = {
       identity: identityTable,
     };
-    vi.spyOn(driver, 'putIdentity').mockRejectedValue(new Error('IndexedDB is read-only'));
+    const putIdentity = vi
+      .spyOn(driver, 'putIdentity')
+      .mockRejectedValue(new Error('IndexedDB is read-only'));
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const identities = await driver.listIdentities();
 
     expect(identities).toEqual([validIdentity]);
+    expect(putIdentity).toHaveBeenCalledWith(repairableIdentity);
     expect(warning).toHaveBeenCalledWith(
       '[Storage] Could not persist an identity address repair.',
       expect.objectContaining({ error: 'IndexedDB is read-only' })
     );
+  });
+
+  it('deletes the malformed primary key when persisting an address repair', async () => {
+    const repairableIdentity = {
+      ...validIdentity,
+      address: `0X0x${validIdentity.address.slice(2)}`,
+    };
+    const identityTable = {
+      delete: vi.fn(async () => undefined),
+      put: vi.fn(async () => undefined),
+    };
+    const globalDb = {
+      identity: identityTable,
+      transaction: vi.fn(async (...args: unknown[]) => {
+        const callback = args.at(-1) as () => Promise<void>;
+        await callback();
+      }),
+    };
+    const driver = new DexieDriver('identity-primary-key-repair-test');
+    (driver as unknown as { globalDb: typeof globalDb }).globalDb = globalDb;
+
+    await driver.putIdentity(repairableIdentity);
+
+    expect(identityTable.delete).toHaveBeenCalledWith(repairableIdentity.address);
+    expect(identityTable.put).toHaveBeenCalledWith(validIdentity);
+  });
+});
+
+describe('DexieDriver targeted XMTP cleanup', () => {
+  it('does not interpret an explicitly empty target list as a global OPFS wipe', async () => {
+    const clear = vi.fn(async () => undefined);
+    const table = { clear };
+    const dataDb = {
+      conversations: table,
+      messages: table,
+      attachments: table,
+      attachmentData: table,
+      contacts: table,
+      deletedConversations: table,
+      transaction: vi.fn(async (...args: unknown[]) => {
+        const callback = args.at(-1) as () => Promise<void>;
+        await callback();
+      }),
+    };
+    const removeEntry = vi.fn(async () => undefined);
+    const getDirectory = vi.fn(async () => ({
+      entries: () => ({
+        async *[Symbol.asyncIterator]() {
+          yield ['xmtp-production-first.db3'];
+          yield ['xmtp-production-second.db3'];
+        },
+      }),
+      removeEntry,
+    }));
+    const originalStorage = Object.getOwnPropertyDescriptor(navigator, 'storage');
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory },
+    });
+
+    try {
+      const driver = new DexieDriver('targeted-opfs-test');
+      (driver as unknown as { dataDb: typeof dataDb }).dataDb = dataDb;
+
+      const result = await driver.clearAllData({ opfsAddresses: [] });
+
+      expect(removeEntry).not.toHaveBeenCalled();
+      expect(result.deletedOpfsDatabases).toEqual([]);
+    } finally {
+      if (originalStorage) {
+        Object.defineProperty(navigator, 'storage', originalStorage);
+      } else {
+        Reflect.deleteProperty(navigator, 'storage');
+      }
+    }
   });
 });

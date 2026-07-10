@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ethereumAddressesEqual,
   hasEthereumHexPrefix,
   isEthereumAddress,
   normalizeEthereumAddress,
@@ -44,5 +45,11 @@ describe('Ethereum address normalization', () => {
   it('detects case-insensitive Ethereum prefixes', () => {
     expect(hasEthereumHexPrefix(' 0X1234')).toBe(true);
     expect(hasEthereumHexPrefix('1234')).toBe(false);
+  });
+
+  it('compares checksummed and repeated-prefix forms as one address', () => {
+    expect(ethereumAddressesEqual(`0x${BODY}`, `0X0x${BODY.toUpperCase()}`)).toBe(true);
+    expect(ethereumAddressesEqual('0x0x1234', '0x1234')).toBe(false);
+    expect(ethereumAddressesEqual(undefined, undefined)).toBe(false);
   });
 });

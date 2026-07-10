@@ -48,12 +48,16 @@ const normalizeInboxId = (value: string | null | undefined) =>
   value?.trim().toLowerCase() || null;
 
 export const normalizeInstallationId = (value: string | null | undefined) =>
-  value?.trim().toLowerCase().replace(/^0x/, '') || null;
+  value?.trim().replace(/^(?:0x)+/i, '').toLowerCase() || null;
 
 export const installationIdsMatch = (
   left: string | null | undefined,
   right: string | null | undefined
-) => normalizeInstallationId(left) === normalizeInstallationId(right);
+) => {
+  const normalizedLeft = normalizeInstallationId(left);
+  const normalizedRight = normalizeInstallationId(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+};
 
 const identifiersMatch = (left: Identifier, right: Identifier) =>
   left.identifierKind === right.identifierKind &&

@@ -357,6 +357,7 @@ export function useMessages() {
             ]
           : []),
         source: 'inbox',
+        persistIfMissing: true,
       });
       console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
     },

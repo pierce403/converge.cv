@@ -2,18 +2,18 @@ import { test, expect, type Page } from '@playwright/test';
 
 test.describe('Regressions', () => {
 
-    // Helper to handle the "Make it yours" modal if it appears
+    // Helper to handle either the required first-run editor or a later reminder.
     async function handleOnboardingModal(page: Page) {
         try {
             console.log('Waiting for onboarding modal...');
-            const modalHeader = page.getByText('Make it yours');
+            const modalHeader = page.getByText(/choose your inbox profile|make it yours/i);
             // Wait up to 20s for it to appear
             await modalHeader.waitFor({ state: 'visible', timeout: 20000 });
 
             if (await modalHeader.isVisible()) {
-                console.log('Modal visible, dismissing forever...');
-                // Click "Don't remind me again" to ensure it doesn't come back
-                await page.getByText("Don't remind me again").click();
+                console.log('Modal visible, continuing with the generated profile...');
+                const continueButton = page.getByRole('button', { name: /continue|don't remind me again/i });
+                await continueButton.click();
                 // Wait for the overlay to disappear
                 await page.locator('.fixed.inset-0.bg-black\\/70').waitFor({ state: 'detached', timeout: 10000 });
                 console.log('Onboarding modal dismissed');
@@ -33,21 +33,11 @@ test.describe('Regressions', () => {
         // Wait for initial auth check loading to finish
         await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 15000 });
 
-        // Handle explicit new-inbox onboarding if we are on the landing page
-        const createIdentityButton = page.getByRole('button', { name: 'Create new Converge inbox' });
-        if (await createIdentityButton.isVisible()) {
-            console.log('Clicking Create new identity');
-            await createIdentityButton.click();
-
-            // Wait for the creation process to finish
-            await expect(page.getByText('Creating your new inbox…')).not.toBeVisible({ timeout: 30000 });
-        }
+        // True first run creates automatically and holds the main UI behind the profile editor.
+        await handleOnboardingModal(page);
 
         // Wait for the main UI to be ready (Layout mounted)
         await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 30000 });
-
-        // Handle potential "Make it yours" modal which appears over the Layout
-        await handleOnboardingModal(page);
     });
 
     test('address formatting consistency', async ({ page }) => {
@@ -154,12 +144,16 @@ test.describe('Regressions', () => {
         expect(identity1InboxId).toBeTruthy();
 
         // 2. Create Identity 2 via InboxSwitcher
-        const switcherButton = page.getByRole('button', { name: /current inbox/i });
+        const identity1Label = await page.evaluate(() => {
+            // @ts-expect-error accessing global store
+            return window.useAuthStore?.getState?.()?.identity?.displayName || 'Inbox';
+        });
+        const switcherButton = page.getByRole('button', { name: /inbox switcher/i });
         await expect(switcherButton).toBeVisible();
         await page.waitForTimeout(500);
         await switcherButton.click({ force: true });
 
-        const createButton = page.getByRole('menuitem', { name: /create ephemeral identity/i });
+        const createButton = page.getByRole('menuitem', { name: /create new inbox/i });
         await createButton.click();
 
         // Wait for reload/navigation
@@ -176,6 +170,10 @@ test.describe('Regressions', () => {
         const identity2InboxId = await page.evaluate(() => {
             // @ts-expect-error accessing global store
             return window.useAuthStore?.getState?.()?.identity?.inboxId || null;
+        });
+        const identity2Label = await page.evaluate(() => {
+            // @ts-expect-error accessing global store
+            return window.useAuthStore?.getState?.()?.identity?.displayName || 'Inbox';
         });
         console.log('Identity 2:', identity2InboxId);
 
@@ -200,7 +198,7 @@ test.describe('Regressions', () => {
         // Find the button for Identity 1 in the list
         // It should be in the "On this device" list
         // The button contains the inbox ID or part of it
-        const switchBackBtn = page.getByRole('menuitem').filter({ hasText: identity1InboxId }).first();
+        const switchBackBtn = page.getByRole('menuitem', { name: identity1Label }).first();
         await switchBackBtn.click();
 
         // Wait for reload
@@ -227,7 +225,7 @@ test.describe('Regressions', () => {
 
         // 7. Switch back to Identity 2
         await switcherButton.click();
-        const switchToId2Btn = page.getByRole('menuitem').filter({ hasText: identity2InboxId }).first();
+        const switchToId2Btn = page.getByRole('menuitem', { name: identity2Label }).first();
         await switchToId2Btn.click();
 
         await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 30_000 });

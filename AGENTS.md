@@ -74,9 +74,9 @@ read the same source of truth.
 - Contacts are separate per inbox, created after active participation, and display the peer's published profile. Do not add private aliases, notes, or custom contact sync. XMTP consent is network-synced per inbox, cached locally, and refreshed when that inbox becomes active.
 - Follow current Convos behavior by default, including profile messages that carry human and agent names, unless a Converge-specific difference is explicitly documented.
 - Notifications are app/browser-level: one browser subscription, one relay registration per loaded inbox/installation, and batched conversation topics per registration. Enable covers all loaded inboxes; disable deletes all registrations before unsubscribing. Inactive pushes set an approximate switcher activity dot without syncing. Visible copy may name the full inbox profile but must not expose sender or message content. Keep this experimental until live delivery and welcome-topic coverage are verified.
-- Notification-tap behavior remains unresolved: do not silently choose between automatic inbox switching and opening with the target inbox highlighted.
+- Notification clicks open or focus Converge without automatically switching inboxes. The target inbox remains marked with an approximate activity dot until the user selects it.
 
-`FEATURES.md` contains the user-facing approved target and explicitly separates it from shipped behavior. `ARCHITECTURE.md` is the canonical technical contract for implementation after context compaction.
+`FEATURES.md` contains the shipped user-facing contract. `ARCHITECTURE.md` is the canonical technical implementation contract after context compaction.
 
 ---
 
@@ -107,7 +107,8 @@ Add this device to existing inbox →
   Probe target inbox and installation limit without creating a client for the new key →
   Generate a fresh local account key →
   Register/reuse this browser installation under wallet authority →
-  Associate the fresh key only after proving it is unassociated →
+  Require that exact installation in the published inbox state →
+  Associate the fresh key only after proving it is unassociated and the wallet is still current authority →
   Reopen the same inbox database with the fresh key → verify inbox and installation IDs → request history
 ```
 
@@ -164,7 +165,7 @@ src/
 │   └── Providers.tsx       # Context providers
 ├── features/
 │   ├── auth/
-│   │   ├── OnboardingPage.tsx    # Explicit new/join/restore onboarding
+│   │   ├── OnboardingPage.tsx    # First-run creation plus empty-state new/join/restore
 │   │   ├── useAuth.ts            # Auth hook with createIdentity()
 │   ├── conversations/
 │   ├── messages/
@@ -223,10 +224,17 @@ pnpm typecheck        # TypeScript type checking
 ## Current State (as of this session)
 
 ### ✅ Completed
+- True first-run creation now registers the first inbox before showing the dismissible Color Animal name/avatar editor; the post-burn empty marker prevents silent replacement after the final inbox is burned
+- The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Add this device actions; duplicate imports stop with "This inbox is already loaded"
+- Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
+- Contact persistence is inbox-scoped and action-gated, uses peer-published profiles, and discards legacy private aliases/avatar overrides/notes instead of adding custom contact sync
+- Plaintext keyfile export is available only under collapsed Advanced settings; wallet association requires acknowledging that the address-to-inbox link is public and effectively permanent
+- Notifications use one app/browser toggle, one shared PushSubscription, cached per-inbox/installation relay records, and inactive-inbox activity dots. Notification clicks focus/open Converge without switching; live delivery and first-contact coverage remain experimental/unverified
 - Explicit onboarding model for new inbox creation, same-key keyfile restore, and fresh-device-key association with an existing wallet inbox
 - Wallet-approved device provisioning verifies the target inbox, prevents accidental reassignment, reuses one inbox-aware browser database, and persists the final installation ID
 - Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
-- Mobile wallet connectors own their redirect/deep-link lifecycle, and every XMTP signature is bound to the selected wallet account
+- Mobile wallet connectors own their redirect/deep-link lifecycle, can resume with an account-bound signer before chain state arrives, and every XMTP signature is bound to the selected wallet account
+- Explicit wallet choices never fall through to another connector. Bytecode inspection is bounded; if all inspection RPCs fail, onboarding and Settings ask the user to choose regular wallet or smart account, and require a real connected chain for the smart-account choice.
 - Existing-inbox and reload connections fail closed under explicit registration policies instead of falling back to standalone inbox creation
 - Fresh inbox registration uses `client.isRegistered()`, persists the installation before mutation, registers at most once, and verifies the signer plus exact installation in network state before onboarding completes
 - New installations request XMTP device history and explain that an older installation may need to be online
@@ -235,14 +243,14 @@ pnpm typecheck        # TypeScript type checking
 - Wallet provider switching (Native / Thirdweb / Privy) with Thirdweb as default; provider selector is available in onboarding + Settings
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
-- Vault unlocked by default
+- Local identities remain available by default; no lock/vault UI is exposed
 - Identity storage in IndexedDB
 - Clean UI with proper feature messaging
 - Desktop browser chat view now uses a persistent split pane (conversation list left, selected thread right)
 - Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
 - External wallet signing now shows a global blocking modal so users clearly see when Converge is waiting on signature approval/rejection
-- Contact Details refresh now uses Farcaster display names (not fname/username) as the preferred Converge display label, with username as fallback only
-- Address→inbox identity lookup now uses a shared cached resolver (`resolveInboxIdForAddress`) and `canMessageWithInbox`, reducing repeated `IdentityApi/GetInboxIds` calls across DM creation, send preflight, contacts refresh, and Farcaster sync
+- Contact Details refresh treats the peer-published XMTP/Convos profile as canonical; Farcaster/ENS are optional secondary identity and reputation metadata
+- Address→inbox identity lookup uses a shared cached resolver (`resolveInboxIdForAddress`) and `canMessageWithInbox`, reducing repeated `IdentityApi/GetInboxIds` calls across conversation, send, and contact refresh paths
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends a Convos `join_request` custom content payload to the creator inbox via XMTP DM
@@ -256,10 +264,11 @@ pnpm typecheck        # TypeScript type checking
 - Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
 - Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
-- Static PWA push registration is wired to the intended vapid.party XMTP relay contract without shipping any vapid.party API key:
+- Static PWA push registration is wired to the intended app-level vapid.party XMTP relay contract without shipping any vapid.party API key:
   - public config only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`;
-  - `Enable notifications` registers `/sw.js`, requests browser permission, creates/reuses a `PushSubscription`, gathers `inboxId`/`installationId`, gathers SDK-exposed conversation HMAC keys via `conversations.hmacKeys()`, and POSTs to `/xmtp/subscriptions`;
-  - service worker notification payloads stay generic and same-origin routed; plaintext XMTP message content is not sent through push.
+  - `Enable notifications` registers `/sw.js`, requests browser permission, creates/reuses one `PushSubscription`, and upserts cached `inboxId`/`installationId` plus conversation HMAC topics for every loaded inbox with available material;
+  - disable deletes every cached relay record before unsubscribing, retaining failed deletion tombstones for retry;
+  - the service worker stores opaque per-inbox activity hints, uses the locally cached profile name, and focuses/opens Converge without auto-switching; plaintext XMTP message content is not sent through push.
 - Push delivery is not end-to-end verified yet because current public vapid.party docs/source still expose generic API-key endpoints; XMTP-aware public endpoints must ship before live delivery can be claimed.
   - **XMTP SDK v6.1.2 on protocol v3**: ✅ Fully working!
   - **Upgraded from v5.0.1 → v6.1.2** (January 25, 2026)
@@ -272,9 +281,7 @@ pnpm typecheck        # TypeScript type checking
   - **Key difference from v3**: `getIdentifier()` is synchronous in v5+ (was async in v3)
 
 ### 🚧 TODO
-- Message sending: ✅ First-message send path fixed (use `getConversationById` before `send`) and DM creation via identifier. Monitor for edge cases and delivery state UX.
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
-- Group chat support (SDK supports it, UI not implemented)
 - Video + multi-file attachments (image attachments are now supported)
 - Re-enable non-push PWA features (install prompt, update notifications/full app-shell service worker) when ready.
 - Push follow-up: implement/verify vapid.party XMTP public endpoints (`/xmtp/vapid-public-key`, `/xmtp/subscriptions`) and run a real push delivery test before claiming notifications are complete.
@@ -296,7 +303,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-02-03): `pnpm test --run` passes.
+- Current Vitest status (2026-07-10): `pnpm test --run` passes (73 files, 376 tests).
 
 ---
 
@@ -305,7 +312,7 @@ pnpm typecheck        # TypeScript type checking
 User wants to enable:
 1. **Create new identity from nothing** → ✅ DONE (identities now properly registered on XMTP network)
 2. **Message someone on the Base app** → ✅ DM creation + sending working (v6, identifier-based)
-3. Worry about connecting existing identities later → Deferred
+3. **Manage multiple independent inboxes and add a fresh local key to an existing wallet-controlled inbox** → ✅ Implemented; continue live cross-device validation
 
 Focus on **friction-free onboarding** for new users first.
 
@@ -526,26 +533,42 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.4.5 + approved multi-inbox product contract)
+**Last Updated**: 2026-07-10 (app version 0.5.1 + XMTP installation-membership gate)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-10)
 
-### Approved Multi-Inbox Product Contract Checkpoint
-- Recorded the product-intent interview in `FEATURES.md`, `ARCHITECTURE.md`, and the canonical rules above so context compaction or agent handoff does not lose it.
-- The target distinguishes a true first visit from an intentional post-burn empty state, models the top-left control as an inbox switcher, reserves wallet use for authority/admin, and keeps only the selected inbox connected.
-- It also fixes the intended location and wipe semantics for Burn Inbox, establishes Convos-first published profiles and inbox-scoped contacts/consent, and defines notifications as one app-level setting with per-inbox relay records and inactive-inbox activity hints.
-- This is a documentation checkpoint, not a claim that those pending UI/storage/push changes are already shipped. Notification-tap behavior remains the one explicitly unresolved decision.
+### XMTP Existing-Member Publication Gate
+- Bumped Converge from `0.5.0` to `0.5.1` after a real deanpierce.eth device join reached `unsafe_addAccount` and XMTP rejected `PublishIdentityUpdate` with `Missing existing member`.
+- Root cause: libxmtp pre-signs add-account requests with the manager installation key as the existing inbox member. Converge detected that the installation was absent from the published inbox state but deliberately continued based only on local `manager.isRegistered()`, so XMTP could not authorize that existing-member signature.
+- Device joins now poll for the exact manager `installationId` in the target inbox state before account association. If it remains absent, setup preserves the pending key/installation, makes no add-account request, and asks the user to retry the same setup.
+- The connected wallet must also still appear as a current account identifier or the inbox recovery identifier before Converge opens the manager client.
+- The generic account-association helper applies the same installation-membership preflight, and normalized installation comparison no longer treats two missing IDs as equal.
+- Tests now cover delayed installation visibility, permanent non-visibility, interrupted registration followed by visibility, locally ready but remotely absent installations, and a wallet that resolves historically but is no longer a current authority.
+- Browser SDK stable `7.0.0` retains the same add-account authorization sequence and does not itself fix this race. XMTP merged a later `waitForRegistrationVisible` option, but Converge must keep its app-level published-membership gate until it upgrades to a release that actually exposes and verifies that behavior.
+
+### Implemented Multi-Inbox Product Contract
+- Bumped Converge from `0.4.5` to `0.5.0` for the complete multi-inbox lifecycle, honest local-key security model, app-level notification state, and inbox-scoped contact behavior.
+- True first run now creates the first local-key inbox before showing the dismissible Color Animal profile editor; burning the final inbox persists an intentional-empty marker so startup offers Create, Import, and Join instead of silently replacing it.
+- The top-left control is an Inbox Switcher with one profile-name/avatar row per inbox. It closes the active client before switching and offers Create new inbox, Import keyfile, and Add this device to existing inbox. Duplicate imports stop before mutation with "This inbox is already loaded".
+- Burn Inbox moved to the selected inbox's Settings, closes the client and uses static revocation for the exact current installation, then performs the complete local namespace/key/OPFS/cache wipe even when remote revocation fails. A blocked local wipe preserves the key and registry for retry. Key export is Advanced-only, and wallet association requires acknowledging its public, effectively permanent identity link.
+- Contacts remain isolated per inbox, are created through explicit participation, use peer-published profiles, and discard legacy private aliases/notes. No custom contact-sync protocol was added.
+- Notifications now use one browser subscription plus cached per-inbox/installation relay records. Inactive pushes create approximate switcher dots and locally named generic notifications without syncing. Clicking focuses/opens Converge without automatically switching inboxes. Live relay delivery and welcome-topic coverage remain experimental and unverified.
+- Reload and manual reconnect pin the persisted installation ID; a different local installation is rejected instead of being accepted and written over the saved identity. The Vite E2E flag now uses a statically replaceable expression, and the multi-inbox smoke covers desktop and mobile viewports without touching production XMTP.
+- Explicit wallet choices now fail closed when their connector is unavailable instead of opening a different wallet. Mobile continuation can advance from an account-bound signer before chain state arrives; failed bytecode inspection offers an explicit regular-wallet/smart-account choice, with a real chain ID required for smart accounts.
+- Cryptographic key/signature inputs and installation IDs canonicalize missing, uppercase, and repeated `0x` prefixes before parsing. SCW signer creation never defaults an unknown chain to mainnet, and disconnect waits for in-flight stream handling before closing the XMTP worker/database.
+- The 2026-07-10 release gate passed typecheck, zero-warning ESLint, 73 Vitest files (376 tests), and the production build. Live two-browser XMTP history transfer and vapid.party delivery remain explicit follow-up validation work.
+- Rechecked Convos profile compatibility through upstream `convos-ios origin/dev@47ddd6e7`; the commits after the prior `590d2689` baseline did not change the profile wire schema or precedence model.
 
 ### XMTP Device-Join Registration and Stream Lifecycle Repair
 - Bumped Converge from `0.4.4` to `0.4.5` after a real Settings device-join attempt stopped during `registering-installation` even though XMTP had accepted the installation.
-- Root cause: Browser SDK 6.1.2 can return from `register()` before a separate static `Client.fetchInboxStates()` reader observes the new installation. Converge added an approximately 16-second static-ledger gate and incorrectly turned normal replication lag into a fatal retry error.
-- Wallet-approved device joins now require the manager client's own `isRegistered()` readiness after registration and treat only the lagging post-submit static observation as nonfatal. The 10/10 capacity preflight remains strict, and the fresh local account key must still converge through the manager resolver, independent resolver, and target inbox identity state before setup completes.
+- Browser SDK 6.1.2 can return from `register()` before a separate static `Client.fetchInboxStates()` reader observes the new installation. Version 0.4.5 incorrectly made that lag nonfatal based only on local `isRegistered()` state; version 0.5.1 supersedes that policy because the next add-account update requires the published installation as its existing-member signer.
+- Wallet-approved device joins require local readiness and bounded polling for the exact installation in published inbox state. The 10/10 capacity preflight remains strict, and the fresh local account key must still converge through the manager resolver, independent resolver, and target inbox identity state before setup completes.
 - Interrupted joins reuse the persisted installation and local database without calling `register()` again when the manager is already locally registered. A returned registration that leaves `isRegistered()` false still fails closed.
 - The pinned SDK predates the April 2026 `waitForRegistrationVisible` quorum option, and published stable 7.0.0 does not contain it either; do not pass that option until upgrading to a release that actually exposes it.
 - `streamAllMessages()` returns an `AsyncStreamProxy`, whose cancellation API is asynchronous `end()`/`return()`. Disconnect now awaits `end()` once before closing the XMTP client instead of calling the nonexistent `close()` method.
-- Regression coverage includes stale static state after successful registration, interrupted registration, reload/resume without duplicate registration, local registration failure, 10/10 blocking, and stream cleanup ordering/failure behavior.
+- Regression coverage includes delayed and permanently stale published state after local registration, interrupted registration, reload/resume without duplicate registration, local registration failure, 10/10 blocking, and stream cleanup ordering/failure behavior.
 
 ### Convos Profile and Agent-Name Interoperability
 - Bumped Converge from `0.4.2` to `0.4.3` after auditing the current local `convos-ios` profile repository, codecs, merge rules, group-ready lifecycle, and invite-acceptance flow.
@@ -559,7 +582,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Current Convos Unified-Profile Source Audit
 - Bumped Converge from `0.4.3` to `0.4.4` after checking the profile specification and implementation against the latest upstream source rather than the stale ADR.
-- Revalidated the profile contract against `convos-ios origin/dev@590d2689` rather than the partially stale upstream ADR 005. The relevant recent changes are `0dc31f48` (2026-07-06, unified profiles) and `b4e62896` (2026-07-08, scoped grant/timezone metadata).
+- Revalidated the profile contract against `convos-ios origin/dev@47ddd6e7` rather than the partially stale upstream ADR 005. The relevant profile changes remain `0dc31f48` (2026-07-06, unified profiles) and `b4e62896` (2026-07-08, scoped grant/timezone metadata); later commits through the current head did not change the wire model.
 - `CONVOS_PROFILE_SPEC.md` now separates the unchanged wire schema from Convos' current local storage: global `DBProfile` identity by inbox, global local `DBMyProfile`, per-conversation encrypted `DBProfileAvatar`, and per-conversation outgoing `connections`/`timezone` overlays.
 - Current Convos publication is lazy per conversation, durably retried, stamped only after delivery, and still best-effort mirrored into appData. Converge intentionally does not mirror profile writes into appData because the Browser SDK lacks Convos' atomic metadata helper.
 - Current Convos snapshot triggers also include verified already-member invite replays and a post-device-pair broadcast to all allowed groups. Converge does not yet implement that post-pair profile fan-out or Convos' durable profile retry queue.
@@ -588,14 +611,14 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Bumped Converge from `0.4.0` to `0.4.1` after auditing the shipped provisioning flow against the pinned `@xmtp/browser-sdk` 6.1.2 implementation.
 - Added one strict Ethereum-address boundary used by XMTP signers, identity storage, contacts, member profiles, and UI formatting. Repairable missing/uppercase/repeated prefixes migrate to one lowercase `0x`; malformed values stop before XMTP.
 - Removed Converge's pre-connector mobile Coinbase/Base redirect. Wagmi/Thirdweb now own the wallet request and return lifecycle, provider changes preserve the onboarding step, callbacks dedupe, and signatures verify the active account.
-- EIP-7702 delegated EOAs are no longer misclassified as smart-contract wallets. If bytecode inspection fails on every relevant chain, provisioning stops instead of guessing a signer type.
+- EIP-7702 delegated EOAs are no longer misclassified as smart-contract wallets. If bytecode inspection fails on every relevant chain, provisioning stops automatic inference and requires an explicit regular-wallet or smart-account choice instead of guessing; smart accounts also require the connector's real chain ID.
 - Existing-inbox setup now shows explicit connection and approval steps plus phase status. It persists the manager installation before mutation, verifies registration and association in live inbox state, tolerates interrupted responses that already reached the ledger, and reopens only the exact approved installation under `resume-only` policy.
 - A remote pending installation whose local inbox database now opens a different ID is marked stale. Retry is blocked until the recovery identity explicitly removes that exact stale ID, including below the installation limit, so setup does not strand an extra slot or revoke an older device unnecessarily.
 - At 10/10, a previously registered pending installation may resume without creating another. Static recovery is limited to the inbox recovery identity and revokes only enough confirmed installations to return to 9/10.
 
 ### XMTP Device Provisioning and Honest Key Model
 - Bumped Converge from `0.3.9` to `0.4.0` after separating XMTP account identities, inboxes, and installations in onboarding and reconnect behavior.
-- In version 0.4.0, empty browsers stopped auto-registering a generated standalone inbox and instead offered a new inbox, same-key keyfile restore, or a fresh local account key joined to an existing wallet-controlled inbox. The approved 2026-07-10 target restores automatic creation only for a true first visit.
+- In version 0.4.0, empty browsers stopped auto-registering a generated standalone inbox. The 2026-07-10 multi-inbox implementation restores automatic creation only for a true first visit, while the intentional post-burn empty state still offers new inbox, same-key import, and wallet-approved join choices.
 - Wallet-approved joins statically resolve the target and fresh identifiers, enforce the 10-installation limit before mutation, register/reuse one inbox-aware browser database, add only a proven-unassociated key, then reconnect and verify the target `inboxId` and exact `installationId`.
 - Pending keys are stored before ledger mutation and resumed after interruption. Failed Settings/switcher provisioning restores the previous active identity and namespace instead of leaving an authenticated half-transition.
 - Wallet and keyfile 10/10 recovery refetch current inbox state immediately before the recovery signature and stop without revocation if capacity is already available.

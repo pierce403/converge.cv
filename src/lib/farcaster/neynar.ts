@@ -137,6 +137,22 @@ const rememberVerificationMiss = (address: string): void => {
   writeStoredTimestamp(verificationMissKey(normalized), expiresAt);
 };
 
+export const clearNeynarVerificationCacheForAddresses = (addresses: string[]): void => {
+  const storage = getBrowserStorage();
+  for (const address of addresses) {
+    const normalized = address.trim().toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+    verificationMissCache.delete(normalized);
+    try {
+      storage?.removeItem(verificationMissKey(normalized));
+    } catch {
+      // In-memory cache eviction still succeeds when browser storage is unavailable.
+    }
+  }
+};
+
 export const resetNeynarHealthForTest = (): void => {
   neynarCooldownUntil = 0;
   lastCooldownLogAt = 0;

@@ -17,6 +17,7 @@ This folder contains Converge.cv developer documentation and pointers to the can
 - **Storage schema (Dexie/IndexedDB)**: [`storage-schema.md`](storage-schema.md)
 - **Contact management**: [`contacts.md`](contacts.md)
 - **Conversation management**: [`conversations.md`](conversations.md)
+- **Multi-inbox identity and push contracts**: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)
 
 ## Conventions

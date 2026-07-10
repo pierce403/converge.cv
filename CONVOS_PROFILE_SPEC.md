@@ -3,9 +3,11 @@
 ## Verified Source Baseline
 
 This document follows current `convos-ios` source at `origin/dev` commit
-`590d2689937614db729c910b5a409520856c9d2c` (2026-07-10). The important recent
+`47ddd6e7499b93dc2000fc5547d3ddbeb96c9284` (2026-07-10). The important recent
 changes are the unified-profile rewrite in `0dc31f48` (2026-07-06) and the
-conversation-scoped metadata correction in `b4e62896` (2026-07-08).
+conversation-scoped metadata correction in `b4e62896` (2026-07-08). The 14
+subsequent commits through `47ddd6e7` were rechecked and did not change the
+profile wire schema or precedence model documented here.
 
 The upstream `docs/adr/005-member-profile-system.md` still names parts of the
 pre-rewrite storage and publishing flow. For current behavior, the source under

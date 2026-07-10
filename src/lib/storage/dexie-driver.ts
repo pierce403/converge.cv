@@ -25,7 +25,7 @@ import type {
   Identity,
   DeletedConversationRecord,
 } from '@/types';
-import type { StorageDriver, PageOpts, Query } from './interface';
+import type { ClearAllDataResult, StorageDriver, PageOpts, Query } from './interface';
 import type { Contact } from '../stores/contact-store';
 import { identityAddressNeedsRepair, normalizeIdentityAddresses } from '@/lib/identity/normalize';
 import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
@@ -612,7 +612,9 @@ export class DexieDriver implements StorageDriver {
       }
       if (identityAddressNeedsRepair(identity)) {
         try {
-          await this.putIdentity(repaired);
+          // Pass the original row so putIdentity can delete its malformed
+          // primary key before writing the canonical address.
+          await this.putIdentity(identity);
         } catch (error) {
           // The normalized in-memory record is still usable. Do not let a failed
           // best-effort repair hide every other identity from onboarding.
@@ -635,7 +637,7 @@ export class DexieDriver implements StorageDriver {
     if (!identity) return undefined;
     const repaired = normalizeIdentityAddresses(identity);
     if (identityAddressNeedsRepair(identity)) {
-      await this.putIdentity(repaired);
+      await this.putIdentity(identity);
     }
     return repaired;
   }
@@ -645,7 +647,7 @@ export class DexieDriver implements StorageDriver {
     if (!identity) return undefined;
     const repaired = normalizeIdentityAddresses(identity);
     if (identityAddressNeedsRepair(identity)) {
-      await this.putIdentity(repaired);
+      await this.putIdentity(identity);
     }
     return repaired;
   }
@@ -694,25 +696,32 @@ export class DexieDriver implements StorageDriver {
   }
 
   // Clear ALL data
-  async clearAllData(options?: { opfsAddresses?: string[] }): Promise<void> {
-    await this.dataDb.transaction('rw', [
-      this.dataDb.conversations,
-      this.dataDb.messages,
-      this.dataDb.attachments,
-      this.dataDb.attachmentData,
-      this.dataDb.contacts,
-      this.dataDb.deletedConversations,
-    ], async () => {
-      await this.dataDb.conversations.clear();
-      await this.dataDb.messages.clear();
-      await this.dataDb.attachments.clear();
-      await this.dataDb.attachmentData.clear();
-      await this.dataDb.contacts.clear();
-      await this.dataDb.deletedConversations.clear();
-      console.log('[Storage] ✅ All IndexedDB data cleared');
-    });
+  async clearAllData(options?: { opfsAddresses?: string[] }): Promise<ClearAllDataResult> {
+    let indexedDbError: unknown;
+    try {
+      await this.dataDb.transaction('rw', [
+        this.dataDb.conversations,
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.contacts,
+        this.dataDb.deletedConversations,
+      ], async () => {
+        await this.dataDb.conversations.clear();
+        await this.dataDb.messages.clear();
+        await this.dataDb.attachments.clear();
+        await this.dataDb.attachmentData.clear();
+        await this.dataDb.contacts.clear();
+        await this.dataDb.deletedConversations.clear();
+        console.log('[Storage] ✅ All IndexedDB data cleared');
+      });
+    } catch (error) {
+      indexedDbError = error;
+    }
 
     // Also clear XMTP OPFS database
+    const deletedOpfsDatabases: string[] = [];
+    let opfsWarning: string | undefined;
     try {
       const targets = (options?.opfsAddresses ?? [])
         .map((addr) => addr?.toLowerCase?.().trim())
@@ -723,7 +732,10 @@ export class DexieDriver implements StorageDriver {
       // @ts-expect-error - OPFS API types
       for await (const [name] of opfsRoot.entries()) {
         if (name.startsWith('xmtp-') && name.endsWith('.db3')) {
-          if (targets.length > 0) {
+          // `undefined` retains the legacy clear-all behavior used by explicit
+          // full-app logout. A supplied target list is always restrictive;
+          // importantly, an empty supplied list must never delete every inbox.
+          if (options?.opfsAddresses !== undefined) {
             const nameLower = name.toLowerCase();
             const matched = targets.some((addr) => nameLower.includes(addr.replace(/^0x/, '')));
             if (!matched) {
@@ -731,13 +743,20 @@ export class DexieDriver implements StorageDriver {
             }
           }
           await opfsRoot.removeEntry(name);
+          deletedOpfsDatabases.push(name);
           console.log('[Storage] ✅ Cleared XMTP database:', name);
         }
       }
     } catch (error) {
       console.warn('[Storage] Could not clear XMTP OPFS databases:', error);
-      // Non-fatal - continue anyway
+      opfsWarning = error instanceof Error ? error.message : String(error);
     }
+
+    if (indexedDbError) {
+      throw indexedDbError;
+    }
+
+    return { deletedOpfsDatabases, opfsWarning };
   }
 
   // Search - basic prefix search on Dexie

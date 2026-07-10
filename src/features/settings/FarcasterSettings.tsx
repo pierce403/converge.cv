@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import { useFarcasterStore } from '@/lib/stores/farcaster-store';
-import { useAuthStore } from '@/lib/stores';
-import { getStorage } from '@/lib/storage';
 
 export function FarcasterSettings() {
   const filters = useFarcasterStore((state) => state.filters);
@@ -13,39 +11,8 @@ export function FarcasterSettings() {
   const getEffectiveKey = useFarcasterStore((state) => state.getEffectiveNeynarApiKey);
   const effectiveKey = getEffectiveKey();
 
-  const identity = useAuthStore((state) => state.identity);
-  const setIdentity = useAuthStore((state) => state.setIdentity);
-
   const [localKey, setLocalKey] = useState(userKey ?? '');
-  const [localFid, setLocalFid] = useState(identity?.farcasterFid ? String(identity.farcasterFid) : '');
   const [message, setMessage] = useState<string | null>(null);
-
-  const saveFid = async () => {
-    setMessage(null);
-    if (!identity) {
-      setMessage('Connect an identity before linking Farcaster.');
-      return;
-    }
-    if (!localFid.trim()) {
-      setMessage('Enter your Farcaster FID to use sync and filters.');
-      return;
-    }
-    const parsed = Number(localFid.trim());
-    if (Number.isNaN(parsed)) {
-      setMessage('FID must be a number.');
-      return;
-    }
-    try {
-      const storage = await getStorage();
-      const updatedIdentity = { ...identity, farcasterFid: parsed };
-      await storage.putIdentity(updatedIdentity);
-      setIdentity(updatedIdentity);
-      setMessage('Saved Farcaster FID for contact sync.');
-    } catch (error) {
-      console.warn('[Settings] Failed to save Farcaster FID', error);
-      setMessage('Could not save Farcaster FID.');
-    }
-  };
 
   const saveKey = () => {
     setUserKey(localKey || undefined);
@@ -72,7 +39,7 @@ export function FarcasterSettings() {
             <div>
               <p className="font-medium text-primary-100">Neynar API key</p>
               <p className="text-sm text-primary-300">
-                {effectiveKey ? 'Using a configured Neynar key for Farcaster lookups.' : 'Add a key to enable Farcaster sync.'}
+                {effectiveKey ? 'Using a configured Neynar key for optional Farcaster reputation lookups.' : 'Add a key to enable optional Farcaster reputation lookups.'}
               </p>
             </div>
             {defaultKey && !userKey && (
@@ -93,25 +60,6 @@ export function FarcasterSettings() {
               <button onClick={saveKey} className="btn-primary text-sm px-3 py-2">Save Key</button>
               <button onClick={removeKey} className="btn-secondary text-sm px-3 py-2">Use Default/Remove</button>
             </div>
-          </div>
-        </div>
-
-        <div className="p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-primary-100">Your Farcaster account</p>
-              <p className="text-sm text-primary-300">Stores your FID for syncing followed users into contacts.</p>
-            </div>
-          </div>
-          <div className="flex gap-2 items-center">
-            <input
-              type="text"
-              className="input-primary flex-1"
-              value={localFid}
-              onChange={(e) => setLocalFid(e.target.value)}
-              placeholder="Enter your Farcaster FID"
-            />
-            <button onClick={saveFid} className="btn-secondary px-3 py-2 text-sm">Save FID</button>
           </div>
         </div>
 

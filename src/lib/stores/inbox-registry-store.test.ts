@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from '@testing-library/react';
-import { useInboxRegistryStore, getInboxDisplayLabel } from './inbox-registry-store';
+import {
+  INBOX_ALREADY_LOADED_MESSAGE,
+  useInboxRegistryStore,
+  getInboxDisplayLabel,
+} from './inbox-registry-store';
 
 const STORAGE_KEY = 'converge.inboxRegistry.v1';
 const CURRENT_KEY = 'converge.currentInboxId.v1';
@@ -34,6 +38,42 @@ describe('inbox registry store', () => {
     expect(hydrated.isHydrated).toBe(true);
     expect(hydrated.entries[0]?.inboxId).toBe('abc');
     expect(hydrated.currentInboxId).toBe('abc');
+  });
+
+  it('collapses multiple account-key rows into one inbox entry', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify([
+        {
+          inboxId: ' SAME-INBOX ',
+          displayLabel: 'Old name',
+          primaryDisplayIdentity: '0xold',
+          lastOpenedAt: 10,
+          hasLocalDB: true,
+        },
+        {
+          inboxId: 'same-inbox',
+          displayLabel: 'Orange Orca',
+          avatar: 'data:image/png;base64,new',
+          primaryDisplayIdentity: 'Orange Orca',
+          lastOpenedAt: 20,
+          hasLocalDB: false,
+        },
+      ])
+    );
+
+    useInboxRegistryStore.getState().hydrate();
+
+    const state = useInboxRegistryStore.getState();
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0]).toMatchObject({
+      inboxId: 'same-inbox',
+      displayLabel: 'Orange Orca',
+      avatar: 'data:image/png;base64,new',
+      hasLocalDB: true,
+      lastOpenedAt: 20,
+    });
+    expect(state.hasInbox(' SAME-INBOX ')).toBe(true);
   });
 
   it('marks an inbox as opened and persists timestamp', () => {
@@ -90,7 +130,17 @@ describe('inbox registry store', () => {
         lastOpenedAt: 0,
         hasLocalDB: true,
       })
-    ).toBe('0x1234…5678');
+    ).toBe('Unnamed inbox');
+
+    expect(
+      getInboxDisplayLabel({
+        inboxId: 'inbox-repaired-address',
+        displayLabel: `0X0x${'ab'.repeat(20)}`,
+        primaryDisplayIdentity: `0x0x${'ab'.repeat(20)}`,
+        lastOpenedAt: 0,
+        hasLocalDB: true,
+      })
+    ).toBe('Unnamed inbox');
 
     expect(
       getInboxDisplayLabel({
@@ -111,5 +161,9 @@ describe('inbox registry store', () => {
         hasLocalDB: true,
       })
     ).toBe('Custom Label');
+  });
+
+  it('uses the approved duplicate import message', () => {
+    expect(INBOX_ALREADY_LOADED_MESSAGE).toBe('This inbox is already loaded');
   });
 });

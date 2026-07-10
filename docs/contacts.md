@@ -1,44 +1,66 @@
 # Contact Management
 
-This document explains how Converge.cv creates, stores, merges, and refreshes contacts.
+Converge keeps a separate local contact projection for each loaded XMTP inbox.
+It follows the current Convos model: the peer's published profile is the name
+and avatar source, while contacts are a local convenience rather than a custom
+cross-device address-book protocol.
 
-## TL;DR
+## Product Contract
 
-- **Contact records are persisted in IndexedDB** (Dexie) in the `contacts` table.
-- **Zustand holds the in-memory contact list** (`useContactStore`), and `loadContacts()` hydrates it from IndexedDB.
-- **`localStorage` is *not* the primary contact DB**. It only stores:
-  - the active inbox namespace (`converge.storageNamespace.v1`)
-  - small settings blobs (ex: Farcaster settings)
-  - a stub for the contacts store persistence (`converge-contacts-storage` stores `{}` by design)
-- **XMTP is the canonical source** for inbox ID ↔ account-identifier links.
-  Display names are app-level data learned from Convos group profile messages,
-  Converge legacy-DM profile messages, local contacts, and enrichment sources.
-- **Farcaster and ENS enrich the same `Contact` record**, using merge rules that preserve user edits.
+- Contacts are scoped to the selected inbox's IndexedDB namespace.
+- Starting or sending in a conversation, explicitly choosing Add Contact, or
+  another deliberate participation action can create a contact.
+- Passive conversation discovery alone does not create a durable contact.
+- The displayed name/avatar comes from the peer's published XMTP/Convos
+  profile. ENS and Farcaster can enrich identifiers and reputation, but do not
+  replace a newer peer-published profile.
+- Converge does not expose private aliases, private avatar overrides, or notes.
+  Legacy `preferredName`, `preferredAvatar`, and `notes` fields remain readable
+  for migration compatibility but are cleared whenever a contact is normalized
+  or merged.
+- Converge does not implement a private contact-sync protocol. Another device
+  rebuilds its local contact list through its own participation and published
+  profiles.
 
-## Data model (schema)
+## Storage
 
-### TypeScript schema
+Contacts are stored in the namespaced Dexie database:
 
-The contact schema lives in the Zustand contact store:
+```text
+ConvergeDB:<normalized-inbox-id>
+```
 
-- `ContactIdentity` + `Contact`: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L28)
+The current table declaration is:
 
 ```ts
-export interface ContactIdentity {
-  identifier: string;
-  kind: string;
-  displayLabel?: string;
-  isPrimary?: boolean;
-}
+contacts: '&inboxId, primaryAddress, *addresses'
+```
 
-export interface Contact {
+- `inboxId` is the normalized XMTP inbox ID and primary key.
+- `primaryAddress` is an optional associated account address.
+- `addresses` is a deduplicated multi-entry list used to resolve known account
+  identifiers back to one contact.
+- Switching inboxes changes the storage namespace before contacts are loaded,
+  so one brand/social identity never inherits another inbox's address book.
+- Zustand holds only the active inbox's in-memory projection. Its localStorage
+  persistence intentionally stores no contact rows; IndexedDB is authoritative.
+
+Source files:
+
+- Store and merge rules: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts)
+- Dexie driver: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
+- Namespace selection: [`src/lib/storage/index.ts`](../src/lib/storage/index.ts)
+
+## Contact Shape
+
+The current `Contact` interface includes:
+
+```ts
+interface Contact {
   inboxId: string;
   name: string;
   avatar?: string;
   description?: string;
-  preferredName?: string;
-  preferredAvatar?: string;
-  notes?: string;
   createdAt: number;
   source?: 'farcaster' | 'inbox' | 'manual';
   isBlocked?: boolean;
@@ -57,251 +79,64 @@ export interface Contact {
 }
 ```
 
-Notes:
+The TypeScript interface still declares legacy private-override fields so old
+rows deserialize safely. Current normalization deliberately writes those fields
+as `undefined`.
 
-- `inboxId` is the **primary key** for the persisted contact record.
-  - It is normalized to lowercase in the store (`normalizeInboxId`).
-- `addresses` is a **deduped** list of known identifiers (usually Ethereum addresses); it’s used for:
-  - finding an existing contact by any known address
-  - migrating “legacy” contacts that were created with an address instead of an inbox id
-- `identities` is a structured list of linked identities.
-  - XMTP-provided identity state maps into this.
-  - ENS identities may be added by refresh flows.
-- `preferredName` / `preferredAvatar` / `notes` are **user-facing overrides** (may come from user edits or trusted sources).
+## Creation And Updates
 
-### IndexedDB schema (Dexie)
+Primary contact creation paths are user actions:
 
-Contacts are stored in IndexedDB via Dexie.
+- Add Contact from a conversation/contact card.
+- Starting a new one-to-one conversation.
+- Sending a message or attachment to a peer that is not yet a contact.
+- Blocking a peer, which stores the minimum inbox-keyed record needed to retain
+  the block decision.
 
-- DB implementation: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
-- Full Dexie schema reference: [`docs/storage-schema.md`](storage-schema.md)
-- `contacts` store definition: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
+Inbound conversation discovery creates the conversation row without adding the
+sender to the address book. Published profile messages are consumed silently;
+they update profile data associated with the peer rather than appearing as chat
+bubbles.
 
-The current contacts store is:
+`upsertContactProfile()` is the canonical merge path. It:
 
-```ts
-contacts: '&inboxId, primaryAddress, *addresses'
-```
+- resolves address-like inputs to an XMTP inbox ID before persistence;
+- refuses to persist malformed or unresolved `0x...` values as inbox IDs;
+- merges associated account identifiers without duplicates;
+- migrates an older address-keyed row to the canonical inbox ID;
+- applies peer-published name/avatar data;
+- preserves Farcaster reputation fields as secondary metadata; and
+- clears legacy private aliases, avatar overrides, and notes.
 
-Meaning (Dexie syntax):
+## Published Profiles
 
-- `&inboxId` = unique primary key
-- `primaryAddress` = indexed field
-- `*addresses` = multiEntry index (allows querying by any address in the array)
+Names are application profile data, not XMTP inbox properties.
 
-### Namespacing: contacts are per-inbox
-
-Storage is namespaced per inbox.
-
-- Namespace key in localStorage: `converge.storageNamespace.v1` ([`src/lib/storage/index.ts`](../src/lib/storage/index.ts#L15))
-- Dexie DB names:
-  - global DB: `ConvergeDB`
-  - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L293))
-
-This means:
-
-- Contacts live in the **data DB** for the currently selected inbox namespace.
-- Switching inboxes switches the underlying IndexedDB “shard”.
-
-## Where contacts are written (all write paths)
-
-There are two primitives:
-
-- `addContact(contact)` — “manual add” (expects a full-ish `Contact`)
-- `upsertContactProfile(profile)` — “merge + canonicalize” (preferred; creates or updates)
-
-Both ultimately persist through the storage driver:
-
-- `StorageDriver.putContact(...)`: [`src/lib/storage/interface.ts`](../src/lib/storage/interface.ts#L76)
-- Dexie implementation uses `contacts`: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts)
-
-### Create / upsert triggers
-
-| Trigger | Creates new contact? | Code path |
-|---|---:|---|
-| Manual add button | Yes | [`src/features/contacts/AddContactButton.tsx`](../src/features/contacts/AddContactButton.tsx#L23) → `addContact` |
-| Contact card “Add/Remove” toggle | Yes | [`src/components/ContactCardModal.tsx`](../src/components/ContactCardModal.tsx#L100) → `addContact` |
-| DM menu “Add to contacts” | Yes | [`src/features/messages/ConversationView.tsx`](../src/features/messages/ConversationView.tsx#L799) → `upsertContactProfile` |
-| Sending a message to a non-contact | Yes | [`src/features/messages/useMessages.ts`](../src/features/messages/useMessages.ts#L147) → `upsertContactProfile` |
-| Creating a new conversation | Yes (best-effort) | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L417) → `upsertContactProfile` |
-| Opening a shared `/contact/:userId` link | Yes | [`src/features/contacts/ContactLinkPage.tsx`](../src/features/contacts/ContactLinkPage.tsx#L17) → `upsertContactProfile` |
-| Viewing user info modal (best-effort profile fetch) | Possibly | [`src/components/UserInfoModal.tsx`](../src/components/UserInfoModal.tsx#L37) → `upsertContactProfile` |
-| Incoming XMTP message (auto-add only if sender has displayName) | Possibly | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L286) → `upsertContactProfile` |
-| Farcaster sync (following list) | Yes | [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L476) → `storage.putContact` |
-| Block user (persist block even if not a saved contact) | Yes (placeholder) | [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L272) |
-
-### Update-only flows (don’t intentionally create new contacts)
-
-| Trigger | Code path |
-|---|---|
-| Refresh all contacts after XMTP connects | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L694) |
-| Periodic/conditional enrichment on app activity | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L165) |
-| Group member profile refresh (only for existing contacts) | [`src/features/messages/ConversationView.tsx`](../src/features/messages/ConversationView.tsx#L260) |
-| Contact card “Refresh inbox” (manual merge of Farcaster/ENS/XMTP) | [`src/components/ContactCardModal.tsx`](../src/components/ContactCardModal.tsx#L118) |
-| Contacts page “Refresh” | [`src/features/contacts/ContactsPage.tsx`](../src/features/contacts/ContactsPage.tsx#L203) |
-
-## Persistence: what’s in localStorage vs IndexedDB
-
-### IndexedDB (Dexie) — source of truth for contacts
-
-Contacts are persisted in IndexedDB (Dexie) via `putContact/getContact/listContacts`.
-
-- `useContactStore.loadContacts()` reads: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L317)
-- `DexieDriver.putContact()` writes: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L538)
-
-### localStorage — keys used by contact flows
-
-1) Storage namespace (controls which IndexedDB shard is active)
-
-- Key: `converge.storageNamespace.v1`
-- Implementation: [`src/lib/storage/index.ts`](../src/lib/storage/index.ts#L15)
-
-2) Contact store persist stub
-
-The contact store is wrapped with Zustand `persist`, but it intentionally stores **no contacts**:
-
-- Persist config: [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L694)
-
-```ts
-partialize: (_state) => ({}),
-```
-
-This leaves IndexedDB as the canonical contact database.
-
-3) Farcaster settings (feeds Farcaster contact sync)
-
-- Key: `converge-farcaster-settings`
-- Implementation: [`src/lib/stores/farcaster-store.ts`](../src/lib/stores/farcaster-store.ts#L46)
-
-4) Pending XMTP profile publish (not contacts, but affects the profile data we merge)
-
-- Key: `pending-profile-save:${inboxKey}`
-- Flush logic: [`src/app/Layout.tsx`](../src/app/Layout.tsx#L700)
-
-## Merging identity data: XMTP + ENS + Farcaster
-
-### XMTP: canonical inboxId + account identity state
-
-The XMTP wrapper exposes two important calls used throughout the app:
-
-- `deriveInboxIdFromAddress(address)` resolves an Ethereum address to its XMTP
-  inbox ID through the shared cached resolver:
-  [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L705)
-- `fetchInboxProfile(inboxIdOrAddress)` returns a normalized profile object that includes:
-  - `displayName`
-  - `avatarUrl`
-  - `primaryAddress`
-  - `addresses[]`
-  - `identities[]`
-  [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L758)
-
-Important detail: Converge also supports silent app-level profile messages:
-
-- Legacy DMs use the structured `converge.cv/profile:1.0` custom content type.
-  Old `cv:profile:` text is accepted only as a migration/cleanup format and is
-  not sent by current code.
 - Convos-style groups use `convos.org/profile_update:1.0` and
-  `convos.org/profile_snapshot:1.0`; see
-  [`CONVOS_PROFILE_SPEC.md`](../CONVOS_PROFILE_SPEC.md).
-- `fetchInboxProfile` can prefer a recent structured profile message from local
-  DM history when available:
-  [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L866)
+  `convos.org/profile_snapshot:1.0`.
+- Legacy DMs can use the structured `converge.cv/profile:1.0` content type.
+- Current merge precedence is documented in
+  [`CONVOS_PROFILE_SPEC.md`](../CONVOS_PROFILE_SPEC.md). Direct profile updates
+  outrank snapshots and legacy group appData; timestamps prevent older history
+  from replacing newer profile state.
+- Human and agent names use the same published-profile channel. Agent
+  `memberKind` is retained, but cryptographic agent-attestation verification is
+  still not implemented.
+- Converge does not yet decrypt current Convos encrypted profile-image slots;
+  see the interop limitations in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
-### ENS: display name enrichment
+## Consent
 
-ENS utilities live in:
+XMTP consent is encrypted, network-synchronized state scoped to an inbox. The
+Browser SDK caches it in that inbox's local XMTP database. Converge does not
+copy consent into a global contact table or invent a contact-sync layer.
 
-- [`src/lib/utils/ens.ts`](../src/lib/utils/ens.ts#L1)
+Only the selected inbox opens an XMTP client. Therefore an inactive inbox does
+not refresh consent in the background; it refreshes after the user selects and
+syncs that inbox.
 
-Currently:
+## Burn Inbox
 
-- Reverse ENS (`0x...` → `name.eth`) is real (`resolveENSFromAddress`).
-- `.fcast.id` lookups resolve via Neynar verification (when a Neynar key is available):
-  [`resolveFcastId`](../src/lib/utils/ens.ts#L154)
-- `.base.eth` lookups are a filtered reverse ENS result:
-  [`resolveBaseEthName`](../src/lib/utils/ens.ts#L188)
-
-ENS integration shows up in two main places:
-
-1) Farcaster sync name selection prefers ENS when available:
-
-- [`src/lib/farcaster/service.ts`](../src/lib/farcaster/service.ts#L267)
-
-2) Contact card “Refresh inbox” can add an ENS identity and prefer it over XMTP displayName:
-
-- Ranking + merge logic: [`src/components/ContactCardModal.tsx`](../src/components/ContactCardModal.tsx#L174)
-
-### Farcaster: enrichment and bulk creation
-
-Farcaster follow sync lives in the contact store:
-
-- [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L476)
-
-Core behavior:
-
-- Fetches your following list (Neynar if available, else `VITE_FARCASTER_API_BASE`).
-- Extracts an Ethereum address from Farcaster verifications.
-- Resolves a preferred name using `resolveContactName` (ENS > .fcast.id > .base.eth > Farcaster display).
-- Enriches stats via Neynar bulk fetch (`fetchNeynarUsersBulk`, chunked by 100):
-  [`src/lib/farcaster/neynar.ts`](../src/lib/farcaster/neynar.ts#L166)
-- Attempts to resolve the XMTP inbox ID for the verified address.
-
-Farcaster-specific fields are stored on the `Contact` record (not as `ContactIdentity`), e.g. `farcasterFid`, `farcasterUsername`.
-
-## Upsert + canonicalization rules (how updates work)
-
-### The core merge function: `upsertContactProfile`
-
-`upsertContactProfile` is the recommended way to write contacts because it:
-
-- finds an existing contact by **inboxId OR any known address**
-- merges `addresses` and `identities` with dedupe
-- preserves existing Farcaster fields via `metadata`
-- supports migrating a contact when its canonical inboxId becomes known
-
-Implementation:
-
-- [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L349)
-
-Key detail: if an existing record is found but the canonical `inboxId` differs, the store deletes the legacy record:
-
-- [`src/lib/stores/contact-store.ts`](../src/lib/stores/contact-store.ts#L468)
-
-### Contact refresh merge priority (Contact Card)
-
-The most explicit “merge brain” is the Contact Card refresh flow:
-
-- [`src/components/ContactCardModal.tsx`](../src/components/ContactCardModal.tsx#L174)
-
-It uses a priority model for name/avatar:
-
-1. Farcaster
-2. ENS
-3. XMTP
-4. “message” / local fallback
-
-It also:
-
-- aggregates identities from XMTP inbox state
-- resolves ENS forward/backward when possible
-- resolves inboxId from the primary Ethereum address
-- persists the merged result via `upsertContactProfile`
-
-### Automatic refresh cadence
-
-Contacts use `lastSyncedAt` to throttle network work.
-
-Examples:
-
-- On incoming message, Converge avoids profile fetches more often than every ~5 minutes per contact:
-  [`src/app/Layout.tsx`](../src/app/Layout.tsx#L258)
-- Background enrichment treats contacts as stale after ~30 minutes or when missing name/avatar:
-  [`src/app/Layout.tsx`](../src/app/Layout.tsx#L165)
-
-## Related schemas
-
-### Your own identity stores Farcaster FID
-
-Your local `Identity` record stores `farcasterFid` to make Farcaster sync easier to re-run.
-
-- `Identity.farcasterFid`: [`src/types/index.ts`](../src/types/index.ts#L114)
+Burn Inbox deletes the selected namespace's contacts along with messages,
+attachments, profile state, keys, and the XMTP database. Contacts from other
+loaded inboxes remain in their own namespaces.

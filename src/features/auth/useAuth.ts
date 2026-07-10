@@ -3,14 +3,19 @@
  */
 
 import { useCallback } from 'react';
-import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
-import { closeStorage, getStorage, getStorageNamespace, setStorageNamespace } from '@/lib/storage';
+import {
+  INBOX_ALREADY_LOADED_MESSAGE,
+  useAuthStore,
+  useInboxRegistryStore,
+} from '@/lib/stores';
+import { getStorage, getStorageNamespace, setStorageNamespace } from '@/lib/storage';
 import { ensureInboxStorageNamespace } from '@/lib/storage/namespacing';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { lockVault } from '@/lib/crypto';
 import { getXmtpClient } from '@/lib/xmtp';
 import type { ConnectResult } from '@/lib/xmtp/client';
 import {
+  expectedInstallationForStoredIdentity,
   registrationPolicyForStoredIdentity,
   type ClientRegistrationPolicy,
 } from '@/lib/xmtp/registration-policy';
@@ -39,11 +44,20 @@ import {
   isUsableNetworkDisplayName,
 } from '@/lib/identity/profile-suggestions';
 import { installationIdsMatch } from '@/lib/xmtp/client-registration';
+import {
+  clearIntentionalEmptyInboxState,
+} from './onboarding-state';
+import { burnInbox } from '@/lib/identity/burn-inbox';
+import { isInboxLoadedLocally } from '@/lib/identity/loaded-inbox';
+import {
+  ethereumAddressesEqual,
+  requireEthereumAddress,
+} from '@/lib/utils/ethereum';
 
 export function useAuth() {
   const authStore = useAuthStore();
   const { setIdentity, setVaultSecrets, setAuthenticated, setVaultUnlocked } = authStore;
-  const isE2E = import.meta?.env?.VITE_E2E_TEST === 'true';
+  const isE2E = import.meta.env.VITE_E2E_TEST === 'true';
   const { address: walletAddress, chainId: walletChainId, signMessage: walletSignMessage } = useWalletConnection();
 
   const connectXmtpSafely = useCallback(
@@ -65,14 +79,15 @@ export function useAuth() {
       }
     ): Promise<ConnectResult | null> => {
       try {
+        const canonicalAddress = requireEthereumAddress(address, 'XMTP identity address');
         if (isE2E) {
           // Skip live XMTP connection during E2E.
           const storage = await getStorage();
-          const identity = await storage.getIdentityByAddress(address);
-          if (identity && identity.address === address) {
-            const stubInboxId = identity.inboxId || `local-${address.slice(2, 10)}`;
+          const identity = await storage.getIdentityByAddress(canonicalAddress);
+          if (identity && ethereumAddressesEqual(identity.address, canonicalAddress)) {
+            const stubInboxId = identity.inboxId || `local-${canonicalAddress.slice(2, 10)}`;
             const stubInstallationId =
-              identity.installationId || `local-installation-${address.slice(2, 10)}`;
+              identity.installationId || `local-installation-${canonicalAddress.slice(2, 10)}`;
             identity.inboxId = stubInboxId;
             identity.installationId = stubInstallationId;
             identity.provisioningPending = false;
@@ -89,6 +104,7 @@ export function useAuth() {
               registry.upsertEntry({
                 inboxId: stubInboxId,
                 displayLabel: label,
+                avatar: identity.avatar,
                 primaryDisplayIdentity: identity.displayName || identity.address,
                 lastOpenedAt: Date.now(),
                 hasLocalDB: true,
@@ -114,7 +130,7 @@ export function useAuth() {
 
       // Pull the persisted identity so the XMTP client can throttle redundant syncs across reloads.
       let lastSyncedAt: number | undefined;
-      const storedIdentity = await loadStoredIdentityForXmtp(address);
+      const storedIdentity = await loadStoredIdentityForXmtp(canonicalAddress);
       if (storedIdentity && typeof storedIdentity.lastSyncedAt === 'number') {
         lastSyncedAt = storedIdentity.lastSyncedAt;
       }
@@ -128,7 +144,7 @@ export function useAuth() {
 
       const result = await xmtp.connect(
         {
-          address,
+          address: canonicalAddress,
           privateKey,
           chainId,
           walletType: options?.walletType ?? storedIdentity?.walletType,
@@ -147,7 +163,7 @@ export function useAuth() {
           requestHistorySync: options?.requestHistorySync,
           onInstallationReady: async (ready) => {
             const storage = await getStorage();
-            const identity = await storage.getIdentityByAddress(address);
+            const identity = await storage.getIdentityByAddress(canonicalAddress);
             if (!identity) {
               return;
             }
@@ -165,8 +181,8 @@ export function useAuth() {
 
         if (inboxId && installationId) {
           const storage = await getStorage();
-          const identity = await storage.getIdentityByAddress(address);
-          if (identity && identity.address === address) {
+          const identity = await storage.getIdentityByAddress(canonicalAddress);
+          if (identity && ethereumAddressesEqual(identity.address, canonicalAddress)) {
             const completedIdentity = completeProvisioning(
               {
                 ...identity,
@@ -190,6 +206,7 @@ export function useAuth() {
               registry.upsertEntry({
                 inboxId,
                 displayLabel: label,
+                avatar: completedIdentity.avatar,
                 primaryDisplayIdentity: completedIdentity.displayName || completedIdentity.address,
                 lastOpenedAt: Date.now(),
                 hasLocalDB: true,
@@ -263,6 +280,7 @@ export function useAuth() {
         expectedInboxId?: string;
         expectedInstallationId?: string;
         requestHistorySync?: boolean;
+        deferAuthentication?: boolean;
       }
     ) => {
       const previousSession = useAuthStore.getState();
@@ -278,7 +296,14 @@ export function useAuth() {
         ) {
           const identities = await storage.listIdentities();
           if (options.provisioningMode === 'new-inbox') {
-            const pendingPlan = planPendingNewInboxAttempts(identities);
+            const pendingPlan = planPendingNewInboxAttempts(identities, {
+              // A user who is already inside an inbox is asking for another
+              // independent inbox. Never let a stale flag on the loaded signer
+              // replace the freshly generated key for that explicit action.
+              excludeAddress: previousSession.isAuthenticated
+                ? previousSession.identity?.address
+                : undefined,
+            });
             pendingIdentity = pendingPlan.resumable;
             for (const discardable of pendingPlan.discardable) {
               await storage.deleteIdentityByAddress(discardable.address);
@@ -297,7 +322,10 @@ export function useAuth() {
           }
         }
 
-        const effectiveAddress = pendingIdentity?.address ?? walletAddress;
+        const effectiveAddress = requireEthereumAddress(
+          pendingIdentity?.address ?? walletAddress,
+          'XMTP identity address'
+        );
         const effectivePrivateKey = pendingIdentity?.privateKey ?? privateKey;
         const effectiveMnemonic = pendingIdentity?.mnemonic ?? options?.mnemonic;
 
@@ -369,8 +397,11 @@ export function useAuth() {
           throw new Error('XMTP did not return a verified inbox installation.');
         }
 
-        setAuthenticated(true);
-        setVaultUnlocked(true);
+        clearIntentionalEmptyInboxState();
+        if (!options?.deferAuthentication) {
+          setAuthenticated(true);
+          setVaultUnlocked(true);
+        }
 
         return true;
       } catch (error) {
@@ -382,7 +413,7 @@ export function useAuth() {
         if (
           previousSession.isAuthenticated &&
           previousSession.identity &&
-          previousSession.identity.address.toLowerCase() !== attemptedAddress.toLowerCase()
+          !ethereumAddressesEqual(previousSession.identity.address, attemptedAddress)
         ) {
           try {
             await setStorageNamespace(previousNamespace);
@@ -402,6 +433,8 @@ export function useAuth() {
                   skipRegistryUpdate: true,
                   expectedInboxId:
                     previousSession.identity.expectedInboxId ?? previousSession.identity.inboxId,
+                  expectedInstallationId:
+                    expectedInstallationForStoredIdentity(previousSession.identity),
                 }
               );
             }
@@ -468,70 +501,12 @@ export function useAuth() {
       console.warn('[Auth] Failed to reset inbox registry (non-fatal):', error);
     }
 
+    clearIntentionalEmptyInboxState();
+
     console.log('[Auth] ✅ Logout complete - all data cleared');
   }, [authStore]);
 
-  const burnIdentity = useCallback(
-    async (inboxId: string): Promise<boolean> => {
-      const targetInboxId = normalizeInboxId(inboxId);
-      if (!targetInboxId) {
-        return false;
-      }
-
-      try {
-        const registry = useInboxRegistryStore.getState();
-        registry.hydrate();
-
-        const previousNamespace = getStorageNamespace();
-        const storage = await getStorage();
-        const identities = await storage.listIdentities();
-        const targetIdentity = identities.find((item) => inboxIdsMatch(item.inboxId, targetInboxId));
-        const wasCurrent = inboxIdsMatch(useAuthStore.getState().identity?.inboxId, targetInboxId);
-
-        await setStorageNamespace(targetInboxId);
-        const targetStorage = await getStorage();
-
-        await targetStorage.clearAllData({
-          opfsAddresses: targetIdentity
-            ? [targetIdentity.address, targetIdentity.inboxId].filter(
-                (value): value is string => Boolean(value)
-              )
-            : undefined,
-        });
-        if (targetIdentity?.address) {
-          await targetStorage.deleteIdentityByAddress(targetIdentity.address);
-        }
-
-        await closeStorage();
-        await setStorageNamespace(previousNamespace);
-        await getStorage();
-
-        registry.removeEntry(targetInboxId);
-        if (typeof window !== 'undefined') {
-          const forced = window.localStorage.getItem('converge.forceInboxId.v1');
-          if (forced && inboxIdsMatch(forced, targetInboxId)) {
-            window.localStorage.removeItem('converge.forceInboxId.v1');
-          }
-        }
-
-        if (wasCurrent) {
-          try {
-            await getXmtpClient().disconnect();
-          } catch (error) {
-            console.warn('[Auth] Failed to disconnect XMTP client during burn:', error);
-          }
-          authStore.logout();
-          setVaultSecrets(null);
-        }
-
-        return true;
-      } catch (error) {
-        console.error('[Auth] Failed to burn identity:', error);
-        return false;
-      }
-    },
-    [authStore, setVaultSecrets]
-  );
+  const burnIdentity = useCallback(async (inboxId: string) => burnInbox(inboxId), []);
 
   /**
    * Check if user has existing identity
@@ -559,7 +534,11 @@ export function useAuth() {
       }
 
       // Ensure storage namespace is aligned with the current registry inbox before instantiating storage
-      const normalizedRegistryInbox = normalizeInboxId(registry.currentInboxId);
+      // setCurrentInbox() replaces the Zustand state object; reacquire it after
+      // consuming the one-shot switch hint instead of reading the stale snapshot.
+      const normalizedRegistryInbox = normalizeInboxId(
+        useInboxRegistryStore.getState().currentInboxId
+      );
       if (normalizedRegistryInbox) {
         try {
           await setStorageNamespace(normalizedRegistryInbox);
@@ -667,6 +646,7 @@ export function useAuth() {
       if (!isPendingProvisioning) {
         setAuthenticated(true);
         setVaultUnlocked(true);
+        clearIntentionalEmptyInboxState();
       }
 
       if (
@@ -686,7 +666,7 @@ export function useAuth() {
           )
         ) {
           console.info(
-            '[Auth] Pending device key is not associated with its target inbox yet; returning to wallet approval.'
+            '[Auth] Pending local account key is not associated with its target inbox yet; returning to wallet approval.'
           );
           return false;
         }
@@ -716,13 +696,14 @@ export function useAuth() {
           labelOverride: identity.displayName,
           required: isPendingProvisioning,
           expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
-          expectedInstallationId: isPendingProvisioning ? identity.installationId : undefined,
+          expectedInstallationId: expectedInstallationForStoredIdentity(identity),
         });
         if (isPendingProvisioning && connection) {
+          clearIntentionalEmptyInboxState();
           setAuthenticated(true);
           setVaultUnlocked(true);
         }
-      } else if (walletAddress && walletAddress.toLowerCase() === identity.address.toLowerCase()) {
+      } else if (walletAddress && ethereumAddressesEqual(walletAddress, identity.address)) {
         console.log('[Auth] Reconnecting wallet-based identity with wallet signer');
         const signMessage = async (message: string) => {
           if (!walletSignMessage) {
@@ -738,9 +719,10 @@ export function useAuth() {
           labelOverride: identity.displayName,
           required: isPendingProvisioning,
           expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
-          expectedInstallationId: isPendingProvisioning ? identity.installationId : undefined,
+          expectedInstallationId: expectedInstallationForStoredIdentity(identity),
         });
         if (isPendingProvisioning && connection) {
+          clearIntentionalEmptyInboxState();
           setAuthenticated(true);
           setVaultUnlocked(true);
         }
@@ -812,6 +794,7 @@ export function useAuth() {
           requestHistorySync: identity.needsHistorySync,
           walletType: options?.walletType ?? identity.walletType,
           expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
+          expectedInstallationId: expectedInstallationForStoredIdentity(identity),
         }
       );
 
@@ -851,6 +834,9 @@ export function useAuth() {
       const targetInboxId = normalizeInboxId(probe.inboxId);
       if (!targetInboxId) {
         throw new Error('XMTP returned an invalid inbox ID for that wallet.');
+      }
+      if (await isInboxLoadedLocally(targetInboxId)) {
+        throw new Error(INBOX_ALREADY_LOADED_MESSAGE);
       }
 
       const currentStorage = await getStorage();
@@ -949,15 +935,17 @@ export function useAuth() {
             onPhase: async (phase) => {
               lastProvisioningPhase = phase;
               const messages = {
-                preflight: 'Checking the target inbox and fresh device key…',
+                preflight: 'Checking the target inbox and fresh local account key…',
                 'opening-manager': 'Opening this browser installation…',
                 'manager-ready': 'Browser installation ready…',
                 'registering-installation': 'Approve this browser installation in your wallet…',
-                'installation-registered': 'Installation approved. Preparing the device key…',
-                'associating-key': 'Associating the fresh device key…',
-                'association-submitted': 'Device key accepted. Waiting for XMTP confirmation…',
+                'installation-registered': 'Installation approved. Preparing the local account key…',
+                'verifying-installation':
+                  'Waiting for XMTP to publish this browser installation…',
+                'associating-key': 'Associating the fresh local account key…',
+                'association-submitted': 'Local account key accepted. Waiting for XMTP confirmation…',
                 'verifying-association': 'Verifying the new key against your existing inbox…',
-                complete: 'Device key verified. Opening your inbox…',
+                complete: 'Local account key verified. Opening your inbox…',
               } as const;
               options?.onStatus?.(messages[phase]);
             },
@@ -1031,17 +1019,19 @@ export function useAuth() {
           !installationIdsMatch(connection.installationId, provisioned.installationId)
         ) {
           throw new Error(
-            'The local device key did not reopen the wallet-approved XMTP installation.'
+            'The local account key did not reopen the wallet-approved XMTP installation.'
           );
         }
 
         setAuthenticated(true);
         setVaultUnlocked(true);
+        clearIntentionalEmptyInboxState();
 
         const registry = useInboxRegistryStore.getState();
         registry.upsertEntry({
           inboxId: targetInboxId,
           displayLabel: deviceIdentity.displayName || targetWalletAddress,
+          avatar: deviceIdentity.avatar,
           primaryDisplayIdentity: targetWalletAddress,
           lastOpenedAt: Date.now(),
           hasLocalDB: true,
@@ -1090,6 +1080,8 @@ export function useAuth() {
                   skipRegistryUpdate: true,
                   expectedInboxId:
                     previousSession.identity.expectedInboxId ?? previousSession.identity.inboxId,
+                  expectedInstallationId:
+                    expectedInstallationForStoredIdentity(previousSession.identity),
                 }
               );
             }

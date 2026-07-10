@@ -458,6 +458,7 @@ export function useConversations() {
                   ]
                 : []),
               source: 'inbox',
+              persistIfMissing: true,
             });
             console.log('[useConversations] ✅ Fetched and stored contact profile:', {
               inboxId: profileInboxId,

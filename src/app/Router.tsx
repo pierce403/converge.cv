@@ -18,6 +18,7 @@ import { InviteClaimPage } from '@/features/conversations/InviteClaimPage';
 import { closeStorage, getStorageNamespace } from '@/lib/storage';
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { resetXmtpClient } from '@/lib/xmtp/client';
+import { disablePush } from '@/lib/push';
 
 export function AppRouter() {
   const { isAuthenticated, checkExistingIdentity } = useAuth();
@@ -38,6 +39,13 @@ export function AppRouter() {
     const wipe = async () => {
       console.log('[AppRouter] Detected clear_all_data flag - wiping local state...');
 
+      const pushCleanupComplete = await disablePush();
+      if (!pushCleanupComplete) {
+        console.warn(
+          '[AppRouter] Some push relay registrations could not be deleted; preserving push cleanup state.'
+        );
+      }
+
       try {
         await resetXmtpClient();
       } catch (e) {
@@ -52,13 +60,13 @@ export function AppRouter() {
 
       try {
         const deleteDb = async (name: string) =>
-          new Promise<void>((resolve) => {
+          new Promise<void>((resolve, reject) => {
             const req = indexedDB.deleteDatabase(name);
             req.onsuccess = () => resolve();
-            req.onerror = () => resolve();
+            req.onerror = () => reject(req.error ?? new Error(`Failed to delete ${name}`));
             req.onblocked = () => {
               console.warn('[AppRouter] DB delete blocked:', name);
-              resolve();
+              reject(new Error(`Deletion of ${name} was blocked by another Converge tab.`));
             };
           });
 
@@ -67,6 +75,9 @@ export function AppRouter() {
         if (Array.isArray(dbs) && dbs.length > 0) {
           for (const db of dbs) {
             if (db.name) {
+              if (!pushCleanupComplete && db.name === 'ConvergePushState') {
+                continue;
+              }
               console.log('[AppRouter] Deleting DB:', db.name);
               await deleteDb(db.name);
             }
@@ -78,7 +89,12 @@ export function AppRouter() {
           await deleteDb('ConvergeDB:default');
         }
       } catch (e) {
-        console.warn('[AppRouter] Failed to delete IndexedDB databases (non-fatal):', e);
+        console.error('[AppRouter] Failed to delete IndexedDB databases:', e);
+        alert(
+          `${e instanceof Error ? e.message : 'Browser data deletion was blocked.'} Close other Converge tabs and retry Clear All Browser Data.`
+        );
+        window.location.replace('/settings');
+        return;
       }
 
       try {
@@ -94,7 +110,12 @@ export function AppRouter() {
           }
         }
       } catch (e) {
-        console.warn('[AppRouter] Failed to clear OPFS databases (non-fatal):', e);
+        console.error('[AppRouter] Failed to clear XMTP OPFS databases:', e);
+        alert(
+          'Converge removed IndexedDB data but could not remove every XMTP database file. Close other Converge tabs and clear this site\'s browser storage before using the app again.'
+        );
+        window.location.replace('/onboarding');
+        return;
       }
 
       try {

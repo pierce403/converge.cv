@@ -12,10 +12,17 @@ Converge is a static, local-first messaging PWA for XMTP protocol v3. It uses Re
 
 Converge treats XMTP accounts, inboxes, and installations as separate things:
 
+- **True first visit** automatically creates the first local-key inbox, then opens a dismissible Color Animal name/avatar editor before the main messaging UI. Burning the final inbox creates an intentionally empty onboarding state instead of silently replacing it.
 - **Create new Converge inbox** generates a local secp256k1 account key, creates a new XMTP inbox, and registers this browser installation.
 - **Restore from keyfile** reuses the exact private key or mnemonic from the file. On a browser without its XMTP database, that same account resolves to the same inbox and registers a new installation.
 - **Add this device to existing inbox** generates a fresh local account key for this browser. A wallet that already controls the target inbox registers or reuses one browser installation, approves the fresh account, and Converge reopens the same inbox database with the fresh key.
 - **Wallet approval** is authority for an existing inbox. It does not silently create a wallet inbox or move an already-registered Converge key.
+
+Before Converge associates the fresh local account key, it waits for the exact browser installation to appear as a published member of the target XMTP inbox. Local `isRegistered()` state alone is not treated as authorization; if XMTP is still propagating the installation, setup stops without submitting the account association and resumes the same pending key on retry.
+
+The top-left Inbox Switcher has one profile-name/avatar row per inbox. Only the selected inbox connects and syncs. Add Inbox supports creation, exact-key import, and wallet-approved device join; importing a key that resolves to an already loaded inbox stops with `This inbox is already loaded`.
+
+Before wallet-approved association can continue, Settings requires an explicit acknowledgment that wallet/account links to an XMTP inbox are publicly queryable and effectively permanent in XMTP identity history.
 
 An XMTP inbox can have up to 10 active installations. Converge checks the target inbox before registration and offers static recovery only when the connected signer is the inbox recovery identity. It rechecks the live count and revokes only enough explicitly confirmed installations to return to 9/10.
 
@@ -30,6 +37,8 @@ New installations explicitly request XMTP device history. A pre-existing install
 - Real-time message streams plus local IndexedDB conversation and message caches
 - Image attachments encrypted before IPFS upload
 - Multiple local inboxes with isolated app-data namespaces
+- Inbox-scoped contacts that use peer-published profiles and are created after active participation
+- Settings-only Burn Inbox with static installation revocation, complete local wipe, and blocked-cleanup retry handling
 - Wallet providers through Native/Wagmi, Thirdweb, and Privy
 - Farcaster profile enrichment through Neynar
 - Installable static PWA shell
@@ -46,11 +55,13 @@ XMTP encrypts messages end to end before ciphertext is sent to the XMTP network.
 - The Browser SDK's local XMTP SQLite database is not encrypted.
 - Downloaded Converge keyfiles contain an unencrypted private key or mnemonic.
 
-A keyfile or browser profile containing this data must be protected as sensitive account material. Converge does not currently expose passphrase, passkey, or vault-lock controls; those incomplete paths were removed from the UI until real key encryption and recovery semantics exist.
+A keyfile or browser profile containing this data must be protected as sensitive account material. Plaintext key export is available only inside the collapsed **Advanced** Settings section and is never an onboarding requirement or backup nag. Converge does not currently expose passphrase, passkey, or vault-lock controls; those incomplete paths were removed from the UI until real key encryption and recovery semantics exist.
 
 ## Push Status
 
-Web Push support is experimental. Converge can register a browser `PushSubscription` and send inbox, installation, and locally available conversation HMAC metadata to the configured vapid.party XMTP relay contract. Live end-to-end delivery and welcome/new-conversation topic coverage have not been verified. The app must not claim that push delivery is complete until a real relay test passes.
+Web Push support is experimental. One app/browser toggle manages a shared `PushSubscription` plus one cached relay record per loaded inbox/installation. Inactive-inbox pushes create an approximate activity dot without connecting or syncing that inbox, and visible copy can use its locally cached profile name without exposing sender or message content. Clicking a notification opens or focuses Converge but does not automatically switch inboxes.
+
+Live end-to-end delivery and welcome/new-conversation topic coverage have not been verified against vapid.party. The app must not claim that push delivery is complete until a real relay test passes.
 
 ## Development
 

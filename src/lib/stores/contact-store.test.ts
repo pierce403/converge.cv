@@ -8,47 +8,12 @@ const mockStorage = {
   unmarkPeerDeletion: vi.fn(async (_inboxId: string) => undefined),
 };
 
-const mockFetchFarcasterFollowingWithNeynar = vi.fn();
-const mockFetchNeynarUsersBulk = vi.fn();
-
-const mockResolveXmtpAddressFromFarcasterUser = vi.fn();
-const mockResolveContactName = vi.fn();
-
 const mockDeriveInboxIdFromAddress = vi.fn(async (_address: string): Promise<string | null> => null);
-const mockResolveInboxIdForAddress = vi.fn(async (_address: string): Promise<string | null> => null);
-const mockCanMessageWithInbox = vi.fn(async (_inboxId: string) => ({
-  canMessage: true,
-  inboxId: null as string | null,
-}));
 
 vi.mock('@/lib/xmtp', () => ({
   getXmtpClient: () => ({
     deriveInboxIdFromAddress: (address: string) => mockDeriveInboxIdFromAddress(address),
-    resolveInboxIdForAddress: (address: string) => mockResolveInboxIdForAddress(address),
-    canMessageWithInbox: (inboxId: string) => mockCanMessageWithInbox(inboxId),
-    isConnected: () => true,
   }),
-}));
-
-vi.mock('./farcaster-store', () => ({
-  useFarcasterStore: {
-    getState: () => ({
-      getEffectiveNeynarApiKey: () => 'test-key',
-    }),
-  },
-}));
-
-vi.mock('@/lib/farcaster/service', () => ({
-  fetchFarcasterUserFollowingFromAPI: vi.fn(async () => []),
-  resolveXmtpAddressFromFarcasterUser: (...args: unknown[]) =>
-    mockResolveXmtpAddressFromFarcasterUser(...args),
-  resolveContactName: (...args: unknown[]) => mockResolveContactName(...args),
-}));
-
-vi.mock('@/lib/farcaster/neynar', () => ({
-  fetchFarcasterFollowingWithNeynar: (...args: unknown[]) =>
-    mockFetchFarcasterFollowingWithNeynar(...args),
-  fetchNeynarUsersBulk: (...args: unknown[]) => mockFetchNeynarUsersBulk(...args),
 }));
 
 vi.mock('@/lib/storage', () => ({
@@ -62,8 +27,6 @@ describe('contact store', () => {
     useContactStore.setState({ contacts: [], isLoading: false });
 
     mockDeriveInboxIdFromAddress.mockResolvedValue(null);
-    mockResolveInboxIdForAddress.mockResolvedValue(null);
-    mockCanMessageWithInbox.mockResolvedValue({ canMessage: true, inboxId: null });
   });
 
   it('blocks contacts with a persisted placeholder when missing', async () => {
@@ -87,8 +50,47 @@ describe('contact store', () => {
     expect(mockStorage.unmarkPeerDeletion).toHaveBeenCalledWith('inbox-123');
   });
 
-  it('enriches contacts from inline profile payloads', async () => {
+  it('does not persist a discovered profile until the user saves the contact', async () => {
     const store = useContactStore.getState();
+
+    const discovered = await store.upsertContactProfile({
+      inboxId: 'inbox-discovered',
+      displayName: 'Discovered Name',
+      avatarUrl: 'https://example.com/discovered.png',
+      source: 'inbox',
+    });
+
+    expect(discovered.name).toBe('Discovered Name');
+    expect(store.getContactByInboxId('inbox-discovered')).toBeUndefined();
+    expect(mockStorage.putContact).not.toHaveBeenCalled();
+  });
+
+  it('persists a missing profile when a deliberate participation action requests it', async () => {
+    const store = useContactStore.getState();
+
+    await store.upsertContactProfile({
+      inboxId: 'inbox-participated',
+      displayName: 'Participating Peer',
+      source: 'inbox',
+      persistIfMissing: true,
+    });
+
+    expect(store.getContactByInboxId('inbox-participated')?.name).toBe('Participating Peer');
+    expect(mockStorage.putContact).toHaveBeenCalledWith(
+      expect.objectContaining({ inboxId: 'inbox-participated' })
+    );
+  });
+
+  it('enriches explicitly saved contacts from inline profile payloads', async () => {
+    const store = useContactStore.getState();
+
+    await store.addContact({
+      inboxId: 'inbox-abcdef',
+      name: '',
+      createdAt: Date.now(),
+      source: 'manual',
+    });
+    mockStorage.putContact.mockClear();
 
     const enriched = await store.upsertContactProfile({
       inboxId: 'inbox-abcdef',
@@ -105,7 +107,7 @@ describe('contact store', () => {
     });
 
     expect(enriched.name).toBe('Inline Name');
-    expect(enriched.preferredName).toBe('Inline Name');
+    expect(enriched.preferredName).toBeUndefined();
     expect(enriched.avatar).toBe('https://example.com/avatar.png');
     expect(enriched.primaryAddress?.toLowerCase().startsWith('0xabcdef')).toBe(true);
     expect(enriched.addresses?.length ?? 0).toBeGreaterThanOrEqual(2);
@@ -147,6 +149,33 @@ describe('contact store', () => {
     expect(updated.name).toBe('Alice');
     expect(updated.preferredName).not.toBe('0x2222222222222222222222222222222222222222');
     expect(mockStorage.putContact).toHaveBeenCalledWith(expect.objectContaining({ inboxId: 'inbox-alice', name: 'Alice' }));
+  });
+
+  it('keeps the published profile when Farcaster metadata is refreshed', async () => {
+    const store = useContactStore.getState();
+    await store.addContact({
+      inboxId: 'inbox-profile-source',
+      name: 'Published Name',
+      avatar: 'https://example.com/published.png',
+      createdAt: Date.now(),
+      source: 'inbox',
+    } as unknown as never);
+
+    const updated = await store.upsertContactProfile({
+      inboxId: 'inbox-profile-source',
+      displayName: 'Farcaster Name',
+      avatarUrl: 'https://example.com/farcaster.png',
+      source: 'farcaster',
+      metadata: {
+        farcasterUsername: 'farcaster-user',
+        farcasterFollowerCount: 42,
+      },
+    });
+
+    expect(updated.name).toBe('Published Name');
+    expect(updated.avatar).toBe('https://example.com/published.png');
+    expect(updated.farcasterUsername).toBe('farcaster-user');
+    expect(updated.farcasterFollowerCount).toBe(42);
   });
 
   it('does not persist address-looking names when normalizing inputs', async () => {
@@ -220,106 +249,27 @@ describe('contact store', () => {
     );
   });
 
-  it('syncFarcasterContacts enriches contacts with bulk Neynar profiles', async () => {
-    const addr1 = '0x1111111111111111111111111111111111111111';
-    const addr2 = '0x2222222222222222222222222222222222222222';
-
-    mockFetchFarcasterFollowingWithNeynar.mockResolvedValueOnce([
+  it('drops legacy private aliases and notes when contacts are loaded', async () => {
+    mockStorage.listContacts.mockResolvedValueOnce([
       {
-        fid: 1,
-        custody_address: '0x',
-        username: 'alice',
-        display_name: 'Alice',
-        pfp_url: 'https://example.com/a.png',
-        profile: { bio: { text: '' } },
-        verifications: [addr1],
+        inboxId: 'inbox-published-profile',
+        name: 'Published Name',
+        preferredName: 'Private Alias',
+        preferredAvatar: 'https://example.com/private.png',
+        notes: 'private note',
+        avatar: 'https://example.com/published.png',
+        createdAt: 1,
       },
-      {
-        fid: 2,
-        custody_address: '0x',
-        username: 'bob',
-        display_name: 'Bob',
-        pfp_url: 'https://example.com/b.png',
-        profile: { bio: { text: '' } },
-        verifications: [addr2],
-      },
-    ]);
+    ] as never);
 
-    mockFetchNeynarUsersBulk.mockResolvedValueOnce([
-      {
-        fid: 1,
-        custody_address: '0x',
-        username: 'alice',
-        display_name: 'Alice',
-        pfp_url: 'https://example.com/a.png',
-        profile: { bio: { text: '' } },
-        verifications: [addr1],
-        follower_count: 111,
-        following_count: 222,
-        active_status: 'active',
-        score: 9,
-        power_badge: true,
-      },
-      {
-        fid: 2,
-        custody_address: '0x',
-        username: 'bob',
-        display_name: 'Bob',
-        pfp_url: 'https://example.com/b.png',
-        profile: { bio: { text: '' } },
-        verifications: [addr2],
-        follower_count: 333,
-        following_count: 444,
-        active_status: 'inactive',
-        score: 1,
-        power_badge: false,
-      },
-    ]);
+    await useContactStore.getState().loadContacts();
 
-    mockResolveXmtpAddressFromFarcasterUser.mockImplementation((user: { verifications?: string[] }) =>
-      user.verifications?.[0] ?? null
-    );
-    mockResolveContactName.mockImplementation(async (user: { username?: string; display_name?: string }) => ({
-      name: user.display_name || user.username || 'unknown',
-      preferredName: user.username ? `${user.username}.fcast.id` : undefined,
-    }));
-
-    mockCanMessageWithInbox.mockImplementation(async (address: string) => ({
-      canMessage: true,
-      inboxId: `inbox:${address.toLowerCase()}`,
-    }));
-
-    const store = useContactStore.getState();
-    await store.syncFarcasterContacts(123);
-
-    expect(mockFetchFarcasterFollowingWithNeynar).toHaveBeenCalledWith(123, 'test-key');
-    expect(mockFetchNeynarUsersBulk).toHaveBeenCalledTimes(1);
-    expect(mockFetchNeynarUsersBulk).toHaveBeenCalledWith([1, 2], 'test-key');
-
-    const storedContacts = mockStorage.putContact.mock.calls.map((call) => call[0]) as Array<{ farcasterFid?: number }>;
-    const alice = storedContacts.find((contact) => contact.farcasterFid === 1) as unknown as {
-      farcasterFollowerCount?: number;
-      farcasterFollowingCount?: number;
-      farcasterActiveStatus?: string;
-      farcasterScore?: number;
-      farcasterPowerBadge?: boolean;
-      inboxId?: string;
-      addresses?: string[];
-    };
-
-    expect(alice).toBeTruthy();
-    expect(alice.farcasterFollowerCount).toBe(111);
-    expect(alice.farcasterFollowingCount).toBe(222);
-    expect(alice.farcasterActiveStatus).toBe('active');
-    expect(alice.farcasterScore).toBe(9);
-    expect(alice.farcasterPowerBadge).toBe(true);
-    expect(alice.inboxId).toBe(`inbox:${addr1}`);
-    expect(alice.addresses?.map((address) => address.toLowerCase())).toContain(addr1.toLowerCase());
-    expect(mockCanMessageWithInbox).toHaveBeenCalledTimes(2);
-    expect(mockCanMessageWithInbox).toHaveBeenNthCalledWith(1, addr1);
-    expect(mockCanMessageWithInbox).toHaveBeenNthCalledWith(2, addr2);
-    expect(mockDeriveInboxIdFromAddress).not.toHaveBeenCalled();
-
-    expect(useContactStore.getState().contacts).toHaveLength(2);
+    const contact = useContactStore.getState().getContactByInboxId('inbox-published-profile');
+    expect(contact?.name).toBe('Published Name');
+    expect(contact?.avatar).toBe('https://example.com/published.png');
+    expect(contact?.preferredName).toBeUndefined();
+    expect(contact?.preferredAvatar).toBeUndefined();
+    expect(contact?.notes).toBeUndefined();
   });
+
 });

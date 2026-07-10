@@ -27,3 +27,9 @@ export function registrationPolicyForStoredIdentity(
   }
   return 'resume-only';
 }
+
+export function expectedInstallationForStoredIdentity(
+  identity: Pick<Identity, 'installationId'>
+): string | undefined {
+  return identity.installationId?.trim() || undefined;
+}

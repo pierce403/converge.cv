@@ -1,6 +1,6 @@
 import { IdentifierKind, type InboxState, type Identifier } from '@xmtp/browser-sdk';
 import { describe, expect, it, vi } from 'vitest';
-import { ensureClientRegistration } from './client-registration';
+import { ensureClientRegistration, installationIdsMatch } from './client-registration';
 import { StaleInstallationError } from './device-provisioning';
 
 const inboxId = 'a'.repeat(64);
@@ -70,6 +70,11 @@ function harness(options?: {
 }
 
 describe('ensureClientRegistration', () => {
+  it('never treats two missing installation IDs as the same installation', () => {
+    expect(installationIdsMatch(undefined, undefined)).toBe(false);
+    expect(installationIdsMatch('0X0xaabb', 'aabb')).toBe(true);
+  });
+
   it('registers a fresh identity without probing nonexistent inbox state first', async () => {
     const setup = harness();
 
@@ -128,7 +133,7 @@ describe('ensureClientRegistration', () => {
         identifier,
         policy: 'resume-only',
         expectedInboxId: inboxId.toUpperCase(),
-        expectedInstallationId: '0xaabb',
+        expectedInstallationId: '0X0xaabb',
       },
       setup.dependencies
     );

@@ -1,6 +1,6 @@
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Identity } from '@/types';
-import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
+import { ethereumAddressesEqual, normalizeEthereumAddress } from '@/lib/utils/ethereum';
 import { inboxIdsMatch } from '@/lib/utils/inbox';
 
 const isValidResumableAttempt = (identity: Identity) => {
@@ -24,13 +24,26 @@ const isValidResumableAttempt = (identity: Identity) => {
   }
 };
 
-export function planPendingNewInboxAttempts(identities: Identity[]): {
+interface PendingNewInboxPlanOptions {
+  /**
+   * A loaded inbox is not an interrupted create attempt. Excluding its signer
+   * prevents a stale provisioning flag from replacing a newly generated key.
+   */
+  excludeAddress?: string;
+}
+
+export function planPendingNewInboxAttempts(
+  identities: Identity[],
+  options: PendingNewInboxPlanOptions = {}
+): {
   resumable?: Identity;
   discardable: Identity[];
 } {
   const pending = identities.filter(
     (identity) =>
-      identity.provisioningMode === 'new-inbox' && identity.provisioningPending === true
+      identity.provisioningMode === 'new-inbox' &&
+      identity.provisioningPending === true &&
+      (!options.excludeAddress || !ethereumAddressesEqual(identity.address, options.excludeAddress))
   );
   const resumable = pending
     .filter(isValidResumableAttempt)

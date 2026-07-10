@@ -46,18 +46,12 @@ const formatIdentifier = (value?: string | null): string => {
 
 export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const identity = useAuthStore((state) => state.identity);
-  const updateContact = useContactStore((state) => state.updateContact);
   const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
   const addContact = useContactStore((s) => s.addContact);
   const removeContact = useContactStore((s) => s.removeContact);
   const isContact = useContactStore((s) => s.isContact);
   const [showQR, setShowQR] = useState(false);
-  const [preferredName, setPreferredName] = useState(contact.preferredName || '');
-  const [avatarUrlState, setAvatarUrlState] = useState<string | undefined>(
-    contact.preferredAvatar || contact.avatar
-  );
-  const [notes, setNotes] = useState(contact.notes || '');
-  const [isSaving, setIsSaving] = useState(false);
+  const [avatarUrlState, setAvatarUrlState] = useState<string | undefined>(contact.avatar);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [inboxState, setInboxState] = useState<InboxState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -90,9 +84,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   })();
 
   useEffect(() => {
-    setPreferredName(contact.preferredName || '');
-    setNotes(contact.notes || '');
-    setAvatarUrlState(contact.preferredAvatar || contact.avatar);
+    setAvatarUrlState(contact.avatar);
     // Load existing inbox state if available
     if (contact.inboxId) {
       loadInboxState(contact.inboxId);
@@ -233,25 +225,19 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         (c) => !c.isGroup && c.peerId?.toLowerCase?.() === subject.inboxId?.toLowerCase?.()
       );
 
-      const initialPriority: 'farcaster' | 'xmtp' | 'message' =
-        subject.source === 'farcaster' || subject.farcasterFid || subject.farcasterUsername
-          ? 'farcaster'
-          : 'xmtp';
-
       let latestProfileDisplayName =
-        subject.preferredName ??
         subject.name ??
         conversationMatch?.displayName;
-      let latestProfileAvatar = subject.preferredAvatar ?? subject.avatar ?? conversationMatch?.displayAvatar;
-      let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = initialPriority;
-      let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = initialPriority;
+      let latestProfileAvatar = subject.avatar ?? conversationMatch?.displayAvatar;
+      let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
+      let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
 
       const preferName = (
         next: string | null | undefined,
         priority: 'farcaster' | 'ens' | 'xmtp' | 'message'
       ) => {
         if (!next) return;
-        const rank = { farcaster: 3, ens: 2, xmtp: 1, message: 0 } as const;
+        const rank = { farcaster: -1, ens: -1, xmtp: 2, message: 0 } as const;
         if (rank[priority] >= rank[namePriority]) {
           latestProfileDisplayName = next;
           namePriority = priority;
@@ -263,7 +249,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         priority: 'farcaster' | 'ens' | 'xmtp' | 'message'
       ) => {
         if (!next) return;
-        const rank = { farcaster: 3, ens: 2, xmtp: 1, message: 0 } as const;
+        const rank = { farcaster: -1, ens: -1, xmtp: 2, message: 0 } as const;
         if (rank[priority] >= rank[avatarPriority]) {
           latestProfileAvatar = next;
           avatarPriority = priority;
@@ -273,7 +259,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const ingestProfile = (profile: Awaited<ReturnType<typeof xmtp.fetchInboxProfile>> | null) => {
         if (!profile) return;
         if (profile.displayName) {
-          // Keep source priority intact (Farcaster > ENS > XMTP > message).
+          // Peer-published XMTP/Convos profile data is canonical.
           preferName(profile.displayName, 'xmtp');
         }
         if (profile.avatarUrl) {
@@ -455,9 +441,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         ...Array.from(otherIdentities.values()),
       ];
 
-      let updatedDisplayName = latestProfileDisplayName || ensIdentity?.identifier;
+      let updatedDisplayName = latestProfileDisplayName;
       if (isEthereumAddress(updatedDisplayName) && subject.name && !isEthereumAddress(subject.name)) {
-        updatedDisplayName = subject.preferredName ?? subject.name;
+        updatedDisplayName = subject.name;
       }
       const updatedAvatar = latestProfileAvatar;
 
@@ -494,9 +480,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const latestMetadata: Partial<Contact> = {
         ...subject,
         inboxId: normalizedInboxId,
-        preferredName: subject.preferredName,
-        preferredAvatar: subject.preferredAvatar,
-        notes: subject.notes,
         farcasterUsername: fcResolvedProfile?.username ?? subject.farcasterUsername,
         farcasterFid: fcResolvedProfile?.fid ?? (isSelfContact ? identity?.farcasterFid : undefined) ?? subject.farcasterFid,
         farcasterScore: fcResolvedProfile?.score ?? subject.farcasterScore,
@@ -523,18 +506,15 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const stabilizedMetadata: Partial<Contact> = {
         ...latestMetadata,
         name: refreshedContact.name,
-        preferredName: refreshedContact.preferredName,
         avatar: refreshedContact.avatar,
-        preferredAvatar: refreshedContact.preferredAvatar,
       };
 
-      setPreferredName(refreshedContact.preferredName ?? refreshedContact.name ?? '');
-      setAvatarUrlState(refreshedContact.preferredAvatar ?? refreshedContact.avatar);
+      setAvatarUrlState(refreshedContact.avatar);
 
       const displayAvatar =
-        refreshedContact.preferredAvatar ?? refreshedContact.avatar ?? updatedAvatar ?? avatarUrlState;
+        refreshedContact.avatar ?? updatedAvatar ?? avatarUrlState;
       const displayName =
-        refreshedContact.preferredName ?? refreshedContact.name ?? updatedDisplayName ?? subject.name;
+        refreshedContact.name ?? updatedDisplayName ?? subject.name;
 
       const candidateKeys = new Set(
         [
@@ -657,23 +637,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     }
   };
 
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      const targetInboxId = contact.inboxId ?? contact.primaryAddress ?? contact.addresses?.[0];
-      if (!targetInboxId) {
-        throw new Error('Unable to resolve inbox ID for contact update');
-      }
-      await updateContact(targetInboxId, { preferredName, notes });
-      onClose();
-    } catch (error) {
-      console.error('Failed to save contact details:', error);
-      alert('Failed to save contact details. Please try again.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     alert(`${label} copied to clipboard!`);
@@ -694,8 +657,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const dmConversation = conversations.find((c) => !c.isGroup && c.peerId.toLowerCase() === contact.inboxId.toLowerCase());
   const isMuted = Boolean(dmConversation?.mutedUntil && dmConversation.mutedUntil > Date.now());
 
-  // Determine display name with priority
-  const displayName = preferredName || liveContact.name || formatIdentifier(liveContact.inboxId);
+  const displayName = liveContact.name || formatIdentifier(liveContact.inboxId);
 
   // Determine avatar (custom > Farcaster)
   const avatarUrl = avatarUrlState;
@@ -744,10 +706,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
             {/* Display Name */}
             <h3 className="text-xl font-semibold mb-2">{displayName}</h3>
-            {liveContact.preferredName && liveContact.preferredName !== liveContact.name && (
-              <p className="text-primary-300 text-sm mb-4">Also known as: {liveContact.name}</p>
-            )}
-
             {(liveContact.farcasterUsername || liveContact.farcasterFid) && (
               <div className="flex flex-col items-center gap-1 mb-4 text-sm text-primary-200">
                 {liveContact.farcasterUsername && (
@@ -787,21 +745,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
                 </div>
               </div>
             )}
-
-            {/* Display Name Input */}
-            <div className="w-full mb-4">
-              <label htmlFor="preferredName" className="block text-sm font-medium text-primary-300 mb-1">
-                Display Name
-              </label>
-              <input
-                id="preferredName"
-                type="text"
-                value={preferredName}
-                onChange={(e) => setPreferredName(e.target.value)}
-                className="input-primary w-full"
-                placeholder="Enter display name"
-              />
-            </div>
 
             {/* Mute toggle if DM exists */}
             {dmConversation && (
@@ -902,31 +845,8 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
               )}
             </div>
 
-            {/* Notes */}
-            <div className="w-full mb-6">
-              <label htmlFor="notes" className="block text-sm font-medium text-primary-300 mb-1">
-                Notes (max 500 chars)
-              </label>
-              <textarea
-                id="notes"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                maxLength={500}
-                rows={4}
-                className="input-primary w-full resize-none"
-                placeholder="Add notes about this contact..."
-              />
-            </div>
-
             {/* Actions */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={handleSave}
-                className="btn-primary w-full"
-                disabled={isSaving}
-              >
-                {isSaving ? 'Saving...' : 'Save Changes'}
-              </button>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 onClick={() => setShowQR(true)}
                 className="btn-secondary w-full"

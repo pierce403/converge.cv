@@ -7,7 +7,12 @@ import { useNavigate } from 'react-router-dom';
 import { IdentifierKind, type Identifier } from '@xmtp/browser-sdk';
 import { WalletSelector } from './WalletSelector';
 import { useAuth } from './useAuth';
-import { useInboxRegistryStore, getInboxDisplayLabel } from '@/lib/stores';
+import {
+  INBOX_ALREADY_LOADED_MESSAGE,
+  useAuthStore,
+  useInboxRegistryStore,
+  getInboxDisplayLabel,
+} from '@/lib/stores';
 import type { IdentityProbeResult } from '@/lib/xmtp/client';
 import type { InboxRegistryEntry } from '@/types';
 import { resetXmtpClient } from '@/lib/xmtp/client';
@@ -19,6 +24,13 @@ import { getXmtpClient } from '@/lib/xmtp';
 import { getPublicClient } from '@wagmi/core';
 import { wagmiConfigNative } from '@/lib/wagmi';
 import { classifyWalletBytecode } from '@/lib/wagmi/wallet-account';
+import {
+  requireWalletTypeHintChain,
+  WalletInspectionRequiredError,
+  walletInspectionChainIds,
+  withWalletInspectionTimeout,
+  type WalletTypeHint,
+} from '@/lib/wagmi/wallet-inspection';
 import { consumeWalletApprovalIntent } from '@/lib/wagmi/wallet-approval-state';
 import { normalizeEthereumAddress, requireEthereumAddress } from '@/lib/utils/ethereum';
 import { getStorage } from '@/lib/storage';
@@ -26,9 +38,16 @@ import { formatXmtpIdentifier } from '@/lib/xmtp/identifiers';
 import { StaleInstallationError } from '@/lib/xmtp/device-provisioning';
 import { getResumableKeyfileInstallationId } from './keyfile-resume';
 import { formatCreateInboxError } from '@/lib/identity/identity-errors';
+import { isInboxLoadedLocally } from '@/lib/identity/loaded-inbox';
 import { isUsableNetworkDisplayName } from '@/lib/identity/profile-suggestions';
-
-const BASE_CHAIN_ID = 8453;
+import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
+import {
+  clearProfileEditorIntent,
+  findPendingProvisioningIdentity,
+  hasIntentionalEmptyInboxState,
+  requestProfileEditor,
+  shouldAutoCreateFirstInbox,
+} from './onboarding-state';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
 
@@ -130,14 +149,22 @@ const renderRegistryEntry = (
       className="rounded-lg border border-primary-800/60 bg-primary-950/60 p-4 shadow-sm"
     >
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-primary-100">
-            {getInboxDisplayLabel(entry)}
-          </div>
-          <div className="text-xs text-primary-300 break-all">Inbox ID: {entry.inboxId}</div>
-          <div className="text-xs text-primary-400 mt-1">
-            Primary identity: {entry.primaryDisplayIdentity}
-          </div>
+        <div className="flex min-w-0 items-center gap-3">
+          {entry.avatar ? (
+            <img
+              src={entry.avatar}
+              alt=""
+              className="h-11 w-11 shrink-0 rounded-full object-cover"
+            />
+          ) : (
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-600 text-sm font-semibold text-white">
+              {getInboxDisplayLabel(entry).charAt(0).toUpperCase()}
+            </span>
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-primary-100">
+              {getInboxDisplayLabel(entry)}
+            </div>
           <div className="text-xs text-primary-500 mt-1">
             Last opened: {entry.lastOpenedAt ? new Date(entry.lastOpenedAt).toLocaleString() : 'never'}
           </div>
@@ -149,6 +176,7 @@ const renderRegistryEntry = (
               No local XMTP database yet. Full history may require an older device to be online.
             </div>
           )}
+          </div>
         </div>
         <div>
           <button
@@ -172,6 +200,7 @@ export function OnboardingPage() {
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
+  const registryHydrated = useInboxRegistryStore((state) => state.isHydrated);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
 
   const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'>('landing');
@@ -179,6 +208,7 @@ export function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [walletCandidate, setWalletCandidate] = useState<WalletIdentityCandidate | null>(null);
   const [probeResult, setProbeResult] = useState<IdentityProbeResult | null>(null);
+  const [walletAssociationAcknowledged, setWalletAssociationAcknowledged] = useState(false);
   const [isRecoveringInstallation, setIsRecoveringInstallation] = useState(false);
   const [isRecoveringNewInbox, setIsRecoveringNewInbox] = useState(false);
   const [keyfileCandidate, setKeyfileCandidate] = useState<KeyfileIdentity | null>(null);
@@ -194,7 +224,12 @@ export function OnboardingPage() {
   } | null>(null);
   const [keyfileError, setKeyfileError] = useState<string | null>(null);
   const [keyfileName, setKeyfileName] = useState<string | null>(null);
+  const [initialIntentResolved, setInitialIntentResolved] = useState(false);
+  const [hasExplicitOnboardingIntent, setHasExplicitOnboardingIntent] = useState(false);
+  const [hasPendingProvisioning, setHasPendingProvisioning] = useState<boolean | null>(null);
+  const [showInitialProfile, setShowInitialProfile] = useState(false);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
+  const firstRunAttemptedRef = useRef(false);
 
   useEffect(() => {
     hydrateRegistry();
@@ -204,18 +239,52 @@ export function OnboardingPage() {
     signMessageRef.current = signMessage;
   }, [signMessage]);
 
-  // If navigated with ?connect=1 from a deep link or older route, jump straight into wallet selection.
+  // Explicit restore/join links must win over automatic first-inbox creation.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const shouldResumeWalletApproval = consumeWalletApprovalIntent();
       if (params.get('connect') === '1' || shouldResumeWalletApproval) {
+        setHasExplicitOnboardingIntent(true);
         setView('wallet');
+      } else if (params.get('action') === 'import') {
+        setHasExplicitOnboardingIntent(true);
+        setView('keyfile');
       }
     } catch {
       // ignore
+    } finally {
+      setInitialIntentResolved(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!initialIntentResolved) return;
+
+    let cancelled = false;
+    const inspectPendingProvisioning = async () => {
+      try {
+        const identities = await (await getStorage()).listIdentities();
+        const pending = findPendingProvisioningIdentity(identities);
+        if (cancelled) return;
+        setHasPendingProvisioning(Boolean(pending));
+        if (pending?.provisioningMode === 'device-join' && !hasExplicitOnboardingIntent) {
+          setHasExplicitOnboardingIntent(true);
+          setView('wallet');
+        }
+      } catch (pendingError) {
+        console.warn('[Onboarding] Could not inspect pending provisioning state:', pendingError);
+        if (!cancelled) {
+          // Fail closed: a storage error must never trigger an unrelated inbox creation.
+          setHasPendingProvisioning(true);
+        }
+      }
+    };
+    void inspectPendingProvisioning();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasExplicitOnboardingIntent, initialIntentResolved]);
 
   useEffect(() => {
     let cancelled = false;
@@ -395,6 +464,7 @@ export function OnboardingPage() {
     // Clear local state
     setWalletCandidate(null);
     setProbeResult(null);
+    setWalletAssociationAcknowledged(false);
     setError(null);
 
     console.log('[Onboarding] ✅ Wallet flow reset complete');
@@ -417,17 +487,23 @@ export function OnboardingPage() {
         identityKind: generated.identity.identityKind,
         provisioningMode: 'new-inbox',
         xmtpDbPathMode: 'inbox-default',
+        deferAuthentication: true,
       });
 
       if (!success) {
         throw new Error('createIdentity returned false');
       }
       setStaleNewInbox(null);
-
-      // Force a reload to ensure a clean state for the new inbox
-      if (!navigateToPendingTarget()) {
-        window.location.assign('/');
+      const createdIdentity = useAuthStore.getState().identity;
+      if (!createdIdentity) {
+        throw new Error('The new inbox was created without a local identity record.');
       }
+      requestProfileEditor({
+        address: createdIdentity.address,
+        inboxId: createdIdentity.inboxId,
+        reason: registryEntries.length === 0 ? 'first-inbox' : 'new-inbox',
+      });
+      setShowInitialProfile(true);
     } catch (err) {
       console.error('[Onboarding] Failed to create generated identity:', err);
       if (err instanceof StaleInstallationError) {
@@ -438,6 +514,57 @@ export function OnboardingPage() {
       }
       setError(formatCreateInboxError(err));
       setView('landing');
+    }
+  };
+
+  useEffect(() => {
+    if (
+      firstRunAttemptedRef.current ||
+      !initialIntentResolved ||
+      hasPendingProvisioning === null ||
+      view !== 'landing' ||
+      !shouldAutoCreateFirstInbox({
+        isRegistryHydrated: registryHydrated,
+        entries: registryEntries,
+        hasExplicitOnboardingIntent,
+        isIntentionalEmpty: hasIntentionalEmptyInboxState(),
+        hasPendingProvisioning,
+      })
+    ) {
+      return;
+    }
+
+    firstRunAttemptedRef.current = true;
+    void handleCreateGeneratedIdentity();
+    // The creation handler deliberately owns retries after this one automatic attempt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    hasExplicitOnboardingIntent,
+    hasPendingProvisioning,
+    initialIntentResolved,
+    registryEntries,
+    registryHydrated,
+    view,
+  ]);
+
+  const finishInitialProfile = () => {
+    const currentIdentity = useAuthStore.getState().identity;
+    if (currentIdentity?.address) {
+      try {
+        window.localStorage.setItem(
+          `personalization-reminder:${currentIdentity.address.toLowerCase()}`,
+          JSON.stringify({ lastNagAt: Date.now(), dismissedForever: false })
+        );
+      } catch {
+        // The profile prompt is dismissible even when preferences cannot persist.
+      }
+    }
+    clearProfileEditorIntent();
+    setShowInitialProfile(false);
+    auth.setVaultUnlocked(true);
+    auth.setAuthenticated(true);
+    if (!navigateToPendingTarget()) {
+      navigate('/');
     }
   };
 
@@ -551,6 +678,11 @@ export function OnboardingPage() {
       );
       assertKeyfileInboxMatch(keyfileCandidate.expectedInboxId, keyProbe.inboxId);
       setKeyfileProbeResult(keyProbe);
+      if (keyProbe.inboxId && (await isInboxLoadedLocally(keyProbe.inboxId))) {
+        setKeyfileError(INBOX_ALREADY_LOADED_MESSAGE);
+        setView('keyfile');
+        return;
+      }
       const storage = await getStorage();
       const resumeInstallationId = getResumableKeyfileInstallationId(
         await storage.listIdentities(),
@@ -653,46 +785,53 @@ export function OnboardingPage() {
   const handleWalletConnected = async (
     address: string,
     chainId?: number,
-    signMessageOverride?: (message: string) => Promise<string>
+    signMessageOverride?: (message: string) => Promise<string>,
+    walletTypeHint?: WalletTypeHint
   ) => {
     try {
       const canonicalAddress = requireEthereumAddress(address, 'Connected wallet address');
-      let walletType: WalletIdentityCandidate['walletType'] = 'EOA';
-      let signerChainId = chainId;
-      const supportedChainIds = new Set([1, BASE_CHAIN_ID, 84532]);
-      const inspectionChainIds = [
-        ...(chainId && supportedChainIds.has(chainId) ? [chainId] : []),
-        BASE_CHAIN_ID,
-      ].filter((value, index, values) => values.indexOf(value) === index);
-      let successfulInspections = 0;
+      let walletType: WalletIdentityCandidate['walletType'] = walletTypeHint ?? 'EOA';
+      let signerChainId = walletTypeHint
+        ? requireWalletTypeHintChain(walletTypeHint, chainId)
+        : chainId;
 
-      for (const inspectionChainId of inspectionChainIds) {
-        try {
-          const publicClient = getPublicClient(wagmiConfigNative, {
-            chainId: inspectionChainId as 1 | 8453 | 84532,
-          });
-          if (!publicClient) {
-            continue;
-          }
-          const bytecode = await publicClient.getBytecode({ address: canonicalAddress });
-          successfulInspections += 1;
-          if (classifyWalletBytecode(bytecode) === 'SCW') {
-            walletType = 'SCW';
-            signerChainId = inspectionChainId;
-            break;
-          }
-        } catch (inspectionError) {
-          console.warn(
-            `[Onboarding] Could not inspect wallet bytecode on chain ${inspectionChainId}:`,
-            inspectionError
-          );
-        }
-      }
-
-      if (successfulInspections === 0) {
-        throw new Error(
-          'Converge could not verify whether this address is a wallet or smart account. Check the connection and retry.'
+      if (!walletTypeHint) {
+        const inspections = await Promise.all(
+          walletInspectionChainIds(chainId).map(async (inspectionChainId) => {
+            try {
+              const publicClient = getPublicClient(wagmiConfigNative, {
+                chainId: inspectionChainId,
+              });
+              if (!publicClient) {
+                return null;
+              }
+              const bytecode = await withWalletInspectionTimeout(
+                publicClient.getBytecode({ address: canonicalAddress })
+              );
+              return { inspectionChainId, bytecode };
+            } catch (inspectionError) {
+              console.warn(
+                `[Onboarding] Could not inspect wallet bytecode on chain ${inspectionChainId}:`,
+                inspectionError
+              );
+              return null;
+            }
+          })
         );
+        const successfulInspections = inspections.filter(
+          (inspection): inspection is NonNullable<typeof inspection> => Boolean(inspection)
+        );
+        const smartAccountInspection = successfulInspections.find(
+          ({ bytecode }) => classifyWalletBytecode(bytecode) === 'SCW'
+        );
+        if (smartAccountInspection) {
+          walletType = 'SCW';
+          signerChainId = smartAccountInspection.inspectionChainId;
+        }
+
+        if (successfulInspections.length === 0) {
+          throw new WalletInspectionRequiredError();
+        }
       }
 
       const candidate: WalletIdentityCandidate = {
@@ -711,6 +850,7 @@ export function OnboardingPage() {
         },
       };
 
+      setWalletAssociationAcknowledged(false);
       setWalletCandidate(candidate);
       setStatusMessage('Checking XMTP for inboxes…');
       setView('probing');
@@ -735,6 +875,10 @@ export function OnboardingPage() {
 
   const finalizeWalletIdentity = async () => {
     if (!walletCandidate) {
+      return;
+    }
+    if (!walletAssociationAcknowledged) {
+      setError('Acknowledge the public wallet-to-inbox identity link before continuing.');
       return;
     }
 
@@ -775,12 +919,12 @@ export function OnboardingPage() {
       const pendingTarget = getPendingTargetUrl();
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {
-      console.error('[Onboarding] Failed to connect app key to wallet inbox:', err);
+      console.error('[Onboarding] Failed to add local account key to wallet inbox:', err);
       if (err instanceof StaleInstallationError) {
         setResumableInstallationId(null);
         setStaleInstallationId(err.installationId);
       }
-      setError(err instanceof Error ? err.message : 'Failed to connect this app key. Please try again.');
+      setError(err instanceof Error ? err.message : 'Failed to add this local account key. Please try again.');
       setView('results');
     }
   };
@@ -1050,7 +1194,7 @@ export function OnboardingPage() {
       )}
 
       <div className="mt-6 text-xs text-primary-300">
-        Need to connect another identity? You can always do so later from Settings → Identities.
+        You can add another inbox later from the Inbox Switcher.
       </div>
     </div>
   );
@@ -1461,6 +1605,25 @@ export function OnboardingPage() {
                 </div>
               )}
 
+              {hasInbox && !installationBlocked && (
+                <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                  <div>
+                    Wallet and account addresses associated with an XMTP inbox are publicly queryable. This identity link is effectively permanent in XMTP history.
+                  </div>
+                  <label className="flex items-start gap-2 text-xs text-amber-50">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 form-checkbox rounded text-accent-500"
+                      checked={walletAssociationAcknowledged}
+                      onChange={(event) =>
+                        setWalletAssociationAcknowledged(event.target.checked)
+                      }
+                    />
+                    <span>I understand this wallet-to-inbox association is public and effectively permanent.</span>
+                  </label>
+                </div>
+              )}
+
               <div className="pt-2">
                 {hasInbox ? (
                   installationBlocked ? (
@@ -1484,7 +1647,13 @@ export function OnboardingPage() {
                   ) : (
                     <button
                       onClick={() => finalizeWalletIdentity()}
-                      className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500"
+                      disabled={!walletAssociationAcknowledged}
+                      title={
+                        !walletAssociationAcknowledged
+                          ? 'Acknowledge the public identity link to continue.'
+                          : undefined
+                      }
+                      className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {resumableInstallationId ? 'Resume device setup' : 'Add this device'}
                     </button>
@@ -1507,6 +1676,20 @@ export function OnboardingPage() {
       </div>
     );
   };
+
+  if (showInitialProfile) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-primary-950">
+        <PersonalizationReminderModal
+          mode="onboarding"
+          missingDisplayName
+          missingAvatar
+          onRemindLater={finishInitialProfile}
+          onDismissForever={finishInitialProfile}
+        />
+      </div>
+    );
+  }
 
   if (view === 'landing') {
     return renderLanding();

@@ -25,6 +25,11 @@ export interface Query {
   search?: string;
 }
 
+export interface ClearAllDataResult {
+  deletedOpfsDatabases: string[];
+  opfsWarning?: string;
+}
+
 export interface StorageDriver {
   // Initialization
   init(): Promise<void>;
@@ -86,7 +91,7 @@ export interface StorageDriver {
   deleteVaultSecrets(): Promise<void>;
 
   // Clear all data
-  clearAllData(options?: { opfsAddresses?: string[] }): Promise<void>;
+  clearAllData(options?: { opfsAddresses?: string[] }): Promise<ClearAllDataResult>;
 
   // Search
   searchMessages(query: string, limit?: number): Promise<Message[]>;

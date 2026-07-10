@@ -5,6 +5,7 @@
 import { bytesToHex } from 'viem';
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts';
 import type { Identity } from '@/types';
+import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
 
 export const KEYFILE_TYPE = 'converge-keyfile' as const;
 export const KEYFILE_VERSION = 1 as const;
@@ -128,9 +129,11 @@ export function deriveIdentityFromKeyfile(keyfile: ConvergeKeyfile): KeyfileIden
     resolvedAddress = account.address;
   } else if (privateKey && privateKey.trim().length > 0) {
     const trimmedPrivateKey = privateKey.trim();
-    const normalised = /^0x/i.test(trimmedPrivateKey)
-      ? `0x${trimmedPrivateKey.slice(2)}`
-      : `0x${trimmedPrivateKey}`;
+    const privateKeyBody = trimmedPrivateKey.replace(/^(?:0x)+/i, '');
+    if (!/^[0-9a-f]{64}$/i.test(privateKeyBody)) {
+      throw new Error('Keyfile private key must contain exactly 32 bytes of hexadecimal data.');
+    }
+    const normalised = `0x${privateKeyBody}`;
     const account = privateKeyToAccount(normalised as `0x${string}`);
     resolvedPrivateKey = normalised as `0x${string}`;
     resolvedAddress = account.address;
@@ -139,7 +142,11 @@ export function deriveIdentityFromKeyfile(keyfile: ConvergeKeyfile): KeyfileIden
   }
 
   if (address && address.trim().length > 0) {
-    if (resolvedAddress.toLowerCase() !== address.trim().toLowerCase()) {
+    const expectedAddress = normalizeEthereumAddress(address);
+    if (!expectedAddress) {
+      throw new Error('Keyfile address must contain exactly 20 bytes of hexadecimal address data.');
+    }
+    if (normalizeEthereumAddress(resolvedAddress) !== expectedAddress) {
       throw new Error('Keyfile data does not match the expected address.');
     }
   }

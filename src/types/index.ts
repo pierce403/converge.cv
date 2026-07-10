@@ -198,6 +198,7 @@ export interface Identity {
 export interface InboxRegistryEntry {
   inboxId: string;
   displayLabel: string;
+  avatar?: string;
   primaryDisplayIdentity: string;
   lastOpenedAt: number;
   hasLocalDB: boolean;

@@ -4,6 +4,7 @@ import {
   completeProvisioning,
   getClientDbPath,
   getScwRetryChainId,
+  InstallationMembershipPendingError,
   InstallationLimitError,
   planClientInstallation,
   provisionFreshDeviceKey,
@@ -38,19 +39,26 @@ function setup(options?: {
   locallyRegistered?: boolean;
   registerNoop?: boolean;
   staticInstallationStaysStale?: boolean;
+  staticInstallationVisibleAfter?: number;
   registerThrowsAfterMutation?: boolean;
   addAccountThrowsAfterMutation?: boolean;
+  targetIsCurrentAuthority?: boolean;
 }) {
   let associatedDeviceInbox = options?.deviceInbox;
   let associatedIdentifier = deviceIdentifier;
   const installationIds = [...(options?.installationIds ?? [])];
   let locallyRegistered =
     options?.locallyRegistered ?? installationIds.includes('installation-new');
+  let delayedVisibilityReads = 0;
+  let registrationCanBecomeVisible = locallyRegistered;
+  const events: string[] = [];
   const register = vi.fn(async () => {
+    registrationCanBecomeVisible = true;
     if (!options?.registerNoop) {
       locallyRegistered = true;
       if (
         !options?.staticInstallationStaysStale &&
+        options?.staticInstallationVisibleAfter === undefined &&
         !installationIds.includes(manager.installationId!)
       ) {
         installationIds.push(manager.installationId!);
@@ -61,6 +69,7 @@ function setup(options?: {
     }
   });
   const addAccount = vi.fn(async (newSigner: Signer) => {
+    events.push('add-account');
     associatedIdentifier = await newSigner.getIdentifier();
     associatedDeviceInbox = targetInbox;
     if (options?.addAccountThrowsAfterMutation) {
@@ -82,18 +91,33 @@ function setup(options?: {
       ? targetInbox
       : associatedDeviceInbox
   );
-  const fetchInboxState = vi.fn(async () =>
-    options?.omitInboxState
+  const fetchInboxState = vi.fn(async () => {
+    if (
+      registrationCanBecomeVisible &&
+      options?.staticInstallationVisibleAfter !== undefined &&
+      !installationIds.includes(manager.installationId!)
+    ) {
+      delayedVisibilityReads += 1;
+      if (delayedVisibilityReads >= options.staticInstallationVisibleAfter) {
+        installationIds.push(manager.installationId!);
+        events.push('installation-visible');
+      }
+    }
+    return options?.omitInboxState
       ? undefined
       : ({
           inboxId: targetInbox,
+          recoveryIdentifier:
+            options?.targetIsCurrentAuthority === false
+              ? ({ identifier: `0x${'44'.repeat(20)}`, identifierKind: 0 } as Identifier)
+              : targetIdentifier,
           installations: installationIds.map((id) => ({ id })),
           accountIdentifiers: [
-            targetIdentifier,
+            ...(options?.targetIsCurrentAuthority === false ? [] : [targetIdentifier]),
             ...(associatedDeviceInbox === targetInbox ? [associatedIdentifier] : []),
           ],
-        } as InboxState)
-  );
+        } as InboxState);
+  });
   const createManager = vi.fn(async () => manager);
   const sleep = vi.fn(async () => undefined);
 
@@ -102,6 +126,7 @@ function setup(options?: {
     register,
     addAccount,
     close,
+    events,
     dependencies: { resolveInboxId, fetchInboxState, createManager, sleep },
   };
 }
@@ -156,6 +181,7 @@ describe('fresh device provisioning', () => {
       'manager-ready',
       'registering-installation',
       'installation-registered',
+      'verifying-installation',
       'associating-key',
       'association-submitted',
       'verifying-association',
@@ -279,7 +305,7 @@ describe('fresh device provisioning', () => {
       targetInbox,
       {
         ...harness.dependencies,
-        knownInstallationId: '0xinstallation-new',
+        knownInstallationId: '0X0xinstallation-new',
       }
     );
 
@@ -308,7 +334,7 @@ describe('fresh device provisioning', () => {
   it('resumes when register throws after the manager becomes locally registered', async () => {
     const harness = setup({
       registerThrowsAfterMutation: true,
-      staticInstallationStaysStale: true,
+      staticInstallationVisibleAfter: 3,
     });
 
     const result = await provisionFreshDeviceKey(
@@ -323,8 +349,8 @@ describe('fresh device provisioning', () => {
     expect(harness.manager.isRegistered).toHaveBeenCalled();
   });
 
-  it('continues when the manager is registered before the static identity reader catches up', async () => {
-    const harness = setup({ staticInstallationStaysStale: true });
+  it('waits until the manager installation is a published inbox member before association', async () => {
+    const harness = setup({ staticInstallationVisibleAfter: 3 });
 
     const result = await provisionFreshDeviceKey(
       signer(targetIdentifier),
@@ -337,12 +363,32 @@ describe('fresh device provisioning', () => {
     expect(result.accountAdded).toBe(true);
     expect(harness.manager.isRegistered).toHaveBeenCalled();
     expect(harness.register).toHaveBeenCalledOnce();
+    expect(harness.dependencies.fetchInboxState.mock.calls.length).toBeGreaterThan(3);
+    expect(harness.events.indexOf('installation-visible')).toBeLessThan(
+      harness.events.indexOf('add-account')
+    );
   });
 
-  it('resumes a locally registered installation without registering again while static state lags', async () => {
+  it('stops before association when a newly registered installation never becomes a member', async () => {
+    const harness = setup({ staticInstallationStaysStale: true });
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        harness.dependencies
+      )
+    ).rejects.toBeInstanceOf(InstallationMembershipPendingError);
+
+    expect(harness.register).toHaveBeenCalledOnce();
+    expect(harness.addAccount).not.toHaveBeenCalled();
+  });
+
+  it('resumes a locally registered installation after static membership catches up', async () => {
     const harness = setup({
       locallyRegistered: true,
-      staticInstallationStaysStale: true,
+      staticInstallationVisibleAfter: 3,
     });
 
     const result = await provisionFreshDeviceKey(
@@ -358,6 +404,28 @@ describe('fresh device provisioning', () => {
     expect(result.installationRegistered).toBe(false);
     expect(result.accountAdded).toBe(true);
     expect(harness.register).not.toHaveBeenCalled();
+  });
+
+  it('does not trust local registration while the installation is absent from the inbox ledger', async () => {
+    const harness = setup({
+      locallyRegistered: true,
+      staticInstallationStaysStale: true,
+    });
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        {
+          ...harness.dependencies,
+          knownInstallationId: 'installation-new',
+        }
+      )
+    ).rejects.toBeInstanceOf(InstallationMembershipPendingError);
+
+    expect(harness.register).not.toHaveBeenCalled();
+    expect(harness.addAccount).not.toHaveBeenCalled();
   });
 
   it('fails closed when register returns but the local installation remains unregistered', async () => {
@@ -426,6 +494,23 @@ describe('fresh device provisioning', () => {
       )
     ).rejects.toThrow('could not verify the installation limit');
 
+    expect(harness.register).not.toHaveBeenCalled();
+    expect(harness.addAccount).not.toHaveBeenCalled();
+  });
+
+  it('requires the approving wallet to remain a current inbox authority', async () => {
+    const harness = setup({ targetIsCurrentAuthority: false });
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        harness.dependencies
+      )
+    ).rejects.toThrow(/not a current account or recovery authority/i);
+
+    expect(harness.dependencies.createManager).not.toHaveBeenCalled();
     expect(harness.register).not.toHaveBeenCalled();
     expect(harness.addAccount).not.toHaveBeenCalled();
   });
@@ -552,7 +637,27 @@ describe('client identity and history policy', () => {
     const base = { address: '0xABCD', walletType: 'SCW' as const, chainId: 8453 };
     expect(signerIdentityKey(base)).not.toBe(signerIdentityKey({ ...base, chainId: 1 }));
     expect(signerIdentityKey(base)).not.toBe(
+      signerIdentityKey({ address: base.address, walletType: 'SCW' })
+    );
+    expect(signerIdentityKey(base)).not.toBe(
+      signerIdentityKey({ ...base, walletType: 'EOA' })
+    );
+    expect(signerIdentityKey(base)).not.toBe(
       signerIdentityKey({ address: base.address, privateKey: '0x01' })
+    );
+  });
+
+  it('uses one signer and legacy database key for repaired Ethereum address forms', () => {
+    const body = 'abcdefabcdef1234567890abcdefabcdef123456';
+    const canonical = `0x${body}`;
+    const repeatedPrefix = `0X0x${body.toUpperCase()}`;
+    const signer = { walletType: 'SCW' as const, chainId: 8453 };
+
+    expect(signerIdentityKey({ address: repeatedPrefix, ...signer })).toBe(
+      signerIdentityKey({ address: canonical, ...signer })
+    );
+    expect(getClientDbPath(repeatedPrefix, 'legacy-address')).toBe(
+      `xmtp-production-${canonical}.db3`
     );
   });
 

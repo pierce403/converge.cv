@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 import type { InboxRegistryEntry } from '@/types';
 import { normalizeInboxId } from '@/lib/utils/inbox';
+import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
 
 const STORAGE_KEY = 'converge.inboxRegistry.v1';
 const CURRENT_KEY = 'converge.currentInboxId.v1';
+
+export const INBOX_ALREADY_LOADED_MESSAGE = 'This inbox is already loaded';
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined' && typeof localStorage !== 'undefined';
@@ -23,7 +26,7 @@ function readEntriesFromStorage(): InboxRegistryEntry[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed
+    const normalized = parsed
       .map((entry) => ({
         ...entry,
         inboxId: normalizeInboxId(entry.inboxId) || '',
@@ -31,6 +34,27 @@ function readEntriesFromStorage(): InboxRegistryEntry[] {
         hasLocalDB: Boolean(entry.hasLocalDB),
       }))
       .filter((entry) => entry.inboxId.length > 0);
+
+    // Older builds could persist more than one account-key row for the same
+    // inbox. The product switcher is inbox-based, so collapse them here.
+    return normalized.reduce<InboxRegistryEntry[]>((entries, entry) => {
+      const existingIndex = entries.findIndex((candidate) => candidate.inboxId === entry.inboxId);
+      if (existingIndex === -1) {
+        return [...entries, entry];
+      }
+      const existing = entries[existingIndex];
+      const newer = entry.lastOpenedAt >= existing.lastOpenedAt ? entry : existing;
+      const older = newer === entry ? existing : entry;
+      const next = [...entries];
+      next[existingIndex] = {
+        ...older,
+        ...newer,
+        avatar: newer.avatar || older.avatar,
+        hasLocalDB: newer.hasLocalDB || older.hasLocalDB,
+        lastOpenedAt: Math.max(newer.lastOpenedAt, older.lastOpenedAt),
+      };
+      return next;
+    }, []);
   } catch (error) {
     console.warn('[InboxRegistry] Failed to read registry from storage:', error);
     return [];
@@ -54,7 +78,7 @@ function readCurrentInboxId(): string | null {
     return null;
   }
   try {
-    return window.localStorage.getItem(CURRENT_KEY);
+    return normalizeInboxId(window.localStorage.getItem(CURRENT_KEY));
   } catch (error) {
     console.warn('[InboxRegistry] Failed to read current inbox id:', error);
     return null;
@@ -85,6 +109,7 @@ interface InboxRegistryState {
   updateEntry: (inboxId: string, updates: Partial<InboxRegistryEntry>) => void;
   markOpened: (inboxId: string, hasLocalDB?: boolean) => void;
   removeEntry: (inboxId: string) => void;
+  hasInbox: (inboxId: string | null | undefined) => boolean;
   setCurrentInbox: (inboxId: string | null) => void;
   reset: () => void;
 }
@@ -149,6 +174,12 @@ export const useInboxRegistryStore = create<InboxRegistryState>((set, get) => ({
       writeCurrentInboxId(null);
     }
   },
+  hasInbox: (inboxId) => {
+    const normalizedInboxId = normalizeInboxId(inboxId);
+    return Boolean(
+      normalizedInboxId && get().entries.some((entry) => entry.inboxId === normalizedInboxId)
+    );
+  },
   setCurrentInbox: (inboxId) => {
     const normalizedInboxId = normalizeInboxId(inboxId);
     set({ currentInboxId: normalizedInboxId });
@@ -162,12 +193,17 @@ export const useInboxRegistryStore = create<InboxRegistryState>((set, get) => ({
 }));
 
 export function getInboxDisplayLabel(entry: InboxRegistryEntry): string {
-  if (entry.displayLabel.trim().length > 0) {
-    return entry.displayLabel;
+  const displayLabel = entry.displayLabel.trim();
+  const technicalLabel =
+    /^(?:identity|wallet|app key)\s/i.test(displayLabel) ||
+    Boolean(normalizeEthereumAddress(displayLabel)) ||
+    /^[0-9a-f]{64}$/i.test(displayLabel);
+  if (displayLabel.length > 0 && !technicalLabel) {
+    return displayLabel;
   }
   const identifier = entry.primaryDisplayIdentity;
-  if (identifier.startsWith('0x')) {
-    return `${identifier.slice(0, 6)}…${identifier.slice(-4)}`;
+  if (normalizeEthereumAddress(identifier) || /^[0-9a-f]{64}$/i.test(identifier)) {
+    return 'Unnamed inbox';
   }
   if (identifier.length > 12) {
     return `${identifier.slice(0, 4)}…${identifier.slice(-4)}`;

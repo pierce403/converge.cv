@@ -435,7 +435,7 @@ export function KeyExplorerModal({ isOpen, onClose }: KeyExplorerModalProps) {
             id: `installation-${installId}`,
             title: `Install ${short}`,
             icon: 'installation',
-            description: 'Device/app keypair used by this app install.',
+            description: 'Local account keypair used by this Converge inbox.',
             badge:
               installationId && installationIdsMatch(installId, installationId)
                 ? 'This device'

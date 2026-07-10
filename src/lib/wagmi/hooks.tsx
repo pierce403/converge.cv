@@ -19,6 +19,9 @@ import { useWalletProviderStore } from '@/lib/stores';
 import type { WalletProvider } from '@/lib/wallets/providers';
 import { getThirdwebClient } from '@/lib/wallets/providers';
 import { runWithWalletSignatureStatus } from '@/lib/wagmi/signature-status';
+import { normalizeWalletAccounts } from '@/lib/wagmi/wallet-account';
+import { ethereumAddressesEqual } from '@/lib/utils/ethereum';
+import { resolveWalletConnector } from '@/lib/wagmi/wallet-connector';
 
 export interface WalletOption {
   id: string;
@@ -113,40 +116,10 @@ const privyWalletOptions = (ready: boolean, authenticated: boolean): WalletOptio
   },
 ];
 
-const resolveConnector = (
-  option: WalletOption,
-  connectors: ReturnType<typeof useConnectors>
-) => {
-  if (option.connectorId) {
-    const byId = connectors.find((c) => c.id === option.connectorId);
-    if (byId) return byId;
-  }
-  if (option.connectorName) {
-    const byName = connectors.find((c) => c.name === option.connectorName);
-    if (byName) return byName;
-  }
-  return connectors[0];
-};
-
-const normalizeAccounts = (accounts: unknown): readonly string[] | undefined => {
-  if (!Array.isArray(accounts)) return undefined;
-  if (accounts.length === 0) return [];
-  const first = accounts[0] as unknown;
-  if (typeof first === 'string') {
-    return accounts.filter((item): item is string => typeof item === 'string');
-  }
-  if (typeof first === 'object' && first !== null && 'address' in (first as Record<string, unknown>)) {
-    return accounts
-      .map((item) => (typeof item === 'object' && item !== null ? (item as { address?: string }).address : undefined))
-      .filter((address): address is string => typeof address === 'string');
-  }
-  return undefined;
-};
-
 const normalizeConnectResult = (result: { accounts?: unknown; chainId?: number } | undefined) => {
   if (!result) return undefined;
   return {
-    accounts: normalizeAccounts(result.accounts),
+    accounts: normalizeWalletAccounts(result.accounts),
     chainId: result.chainId,
   } satisfies WalletConnectResult;
 };
@@ -193,9 +166,11 @@ function WagmiWalletConnectionProvider({
 
   const connectWallet = useCallback(
     async (option: WalletOption) => {
-      const connector = resolveConnector(option, connectors);
+      const connector = resolveWalletConnector(option, connectors);
       if (!connector) {
-        throw new Error('No wallet connectors are available.');
+        throw new Error(
+          `${option.name} is not available in this browser. Choose another wallet.`
+        );
       }
       const params: Record<string, unknown> = { connector };
       if (option.strategy) {
@@ -244,7 +219,7 @@ function WagmiWalletConnectionProvider({
     async (message: string, accountAddress?: string) => {
       if (
         accountAddress &&
-        (!account.address || account.address.toLowerCase() !== accountAddress.toLowerCase())
+        !ethereumAddressesEqual(account.address, accountAddress)
       ) {
         throw new Error('The selected wallet account is no longer active. Reconnect it and retry.');
       }
@@ -366,12 +341,14 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
             : typeof wallet?.chainId === 'string'
               ? Number(wallet.chainId.split(':').pop())
               : undefined;
-        return wallet?.address
+        const accounts = normalizeWalletAccounts(wallet?.address ? [wallet.address] : []);
+        const connectedAddress = accounts?.[0];
+        return connectedAddress
           ? {
-              accounts: [wallet.address],
+              accounts,
               chainId: Number.isFinite(chainIdValue) ? chainIdValue : undefined,
               signMessage: async (message: string) =>
-                await signMessageForAccount(message, wallet.address),
+                await signMessageForAccount(message, connectedAddress),
             }
           : undefined;
       } finally {
@@ -413,7 +390,7 @@ function PrivyWalletConnectionProvider({ children }: { children: ReactNode }) {
     async (message: string, accountAddress?: string) => {
       if (
         accountAddress &&
-        (!account.address || account.address.toLowerCase() !== accountAddress.toLowerCase())
+        !ethereumAddressesEqual(account.address, accountAddress)
       ) {
         throw new Error('The selected Privy wallet account is no longer active. Reconnect it and retry.');
       }
@@ -488,8 +465,9 @@ function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode })
       title: 'Connect with Thirdweb',
     });
     const account = wallet.getAccount();
+    const accounts = normalizeWalletAccounts(account?.address ? [account.address] : []);
     return {
-      accounts: account?.address ? [account.address] : undefined,
+      accounts,
       chainId: wallet.getChain()?.id,
       signMessage: account
         ? async (message: string) =>
@@ -519,7 +497,7 @@ function ThirdwebWalletConnectionProvider({ children }: { children: ReactNode })
       }
       if (
         accountAddress &&
-        currentAccount.address.toLowerCase() !== accountAddress.toLowerCase()
+        !ethereumAddressesEqual(currentAccount.address, accountAddress)
       ) {
         throw new Error('The selected Thirdweb account is no longer active. Reconnect it and retry.');
       }

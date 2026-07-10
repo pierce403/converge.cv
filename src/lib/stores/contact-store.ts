@@ -3,17 +3,10 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
 import {
-  fetchFarcasterUserFollowingFromAPI,
-  resolveXmtpAddressFromFarcasterUser,
-  resolveContactName,
-} from '@/lib/farcaster/service';
-import { fetchFarcasterFollowingWithNeynar, fetchNeynarUsersBulk } from '@/lib/farcaster/neynar';
-import {
   hasEthereumHexPrefix,
   isEthereumAddress,
   normalizeEthereumAddress,
 } from '@/lib/utils/ethereum';
-import { useFarcasterStore } from './farcaster-store';
 
 const normalizeInboxId = (inboxId: string): string =>
   normalizeEthereumAddress(inboxId) ?? inboxId.trim().toLowerCase();
@@ -138,24 +131,6 @@ interface ContactState {
   upsertContactProfile: (profile: ContactProfileInput) => Promise<Contact>;
   blockContact: (inboxId: string) => Promise<void>;
   unblockContact: (inboxId: string) => Promise<void>;
-  syncFarcasterContacts: (
-    fid: number,
-    onProgress?: (
-      current: number,
-      total: number,
-      status?: string,
-      details?: FarcasterSyncProgressDetail
-    ) => void
-  ) => Promise<void>;
-}
-
-export type FarcasterSyncAction = 'fetch' | 'process' | 'check' | 'skip' | 'save' | 'update' | 'complete' | 'error';
-
-export interface FarcasterSyncProgressDetail {
-  userName?: string;
-  address?: string;
-  fid?: number;
-  action?: FarcasterSyncAction;
 }
 
 export interface ContactProfileInput {
@@ -167,6 +142,8 @@ export interface ContactProfileInput {
   identities?: ContactIdentity[];
   source?: 'farcaster' | 'inbox' | 'manual';
   metadata?: Partial<Contact>;
+  /** Only deliberate participation/Add Contact actions may create a new row. */
+  persistIfMissing?: boolean;
 }
 
 const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact => {
@@ -198,10 +175,17 @@ const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact =
   return {
     ...existing,
     ...updates,
-    name: updates.name ?? existing.name,
-    avatar: updates.avatar ?? existing.avatar,
-    preferredName: updates.preferredName ?? existing.preferredName,
-    preferredAvatar: updates.preferredAvatar ?? existing.preferredAvatar,
+    name:
+      sanitizeDisplayLabel(updates.name) ??
+      sanitizeDisplayLabel(existing.name) ??
+      sanitizeDisplayLabel(updates.preferredName) ??
+      sanitizeDisplayLabel(existing.preferredName) ??
+      '',
+    avatar: updates.avatar ?? existing.avatar ?? updates.preferredAvatar ?? existing.preferredAvatar,
+    // Legacy private aliases, avatar overrides, and notes are intentionally discarded.
+    preferredName: undefined,
+    preferredAvatar: undefined,
+    notes: undefined,
     addresses,
     identities,
     primaryAddress:
@@ -257,14 +241,12 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
   ]);
   const normalizedIdentities = normalizeContactIdentities(contact.identities ?? []);
 
-  const safePreferredName = sanitizeDisplayLabel(contact.preferredName);
   const safeName = sanitizeDisplayLabel(contact.name);
   const safeFarcasterUsername = sanitizeDisplayLabel(contact.farcasterUsername);
 
   const fallbackName = (() => {
-    if (safePreferredName) return safePreferredName;
-    if (safeFarcasterUsername) return safeFarcasterUsername;
     if (safeName) return safeName;
+    if (safeFarcasterUsername) return safeFarcasterUsername;
     // Never persist an Ethereum address as a "name" fallback.
     if (!isAddressLikeInboxId(normalizedInboxId)) return normalizedInboxId;
     return '';
@@ -274,7 +256,10 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
     ...contact,
     inboxId: normalizedInboxId,
     name: fallbackName,
-    preferredName: safePreferredName,
+    avatar: contact.avatar ?? contact.preferredAvatar,
+    preferredName: undefined,
+    preferredAvatar: undefined,
+    notes: undefined,
     addresses,
     primaryAddress: normalizeContactAddress(contact.primaryAddress) ?? addresses[0],
     identities:
@@ -497,12 +482,9 @@ export const useContactStore = create<ContactState>()(
               console.warn('[Contacts] Refusing to persist contact with address-like inboxId:', profile.inboxId);
               return normaliseContactInput({
                 inboxId: profile.inboxId,
-                name: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName) ?? '',
-                avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
-                preferredName: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName),
-                preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+                name: sanitizeDisplayLabel(profile.displayName) ?? '',
+                avatar: profile.avatarUrl,
                 description: profile.metadata?.description,
-                notes: profile.metadata?.notes,
                 source: profile.source ?? profile.metadata?.source ?? 'inbox',
                 createdAt: profile.metadata?.createdAt ?? Date.now(),
                 isBlocked: profile.metadata?.isBlocked ?? false,
@@ -520,12 +502,9 @@ export const useContactStore = create<ContactState>()(
             console.warn('[Contacts] Failed to resolve inboxId for address-like profile. Skipping persist.', error);
             return normaliseContactInput({
               inboxId: profile.inboxId,
-              name: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName) ?? '',
-              avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
-              preferredName: sanitizeDisplayLabel(profile.displayName) ?? sanitizeDisplayLabel(profile.metadata?.preferredName),
-              preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+              name: sanitizeDisplayLabel(profile.displayName) ?? '',
+              avatar: profile.avatarUrl,
               description: profile.metadata?.description,
-              notes: profile.metadata?.notes,
               source: profile.source ?? profile.metadata?.source ?? 'inbox',
               createdAt: profile.metadata?.createdAt ?? Date.now(),
               isBlocked: profile.metadata?.isBlocked ?? false,
@@ -547,15 +526,15 @@ export const useContactStore = create<ContactState>()(
             ? normalizedProfileIdentities
             : ethereumIdentitiesFromAddresses(computedAddresses);
 
-        const safeDisplayName = sanitizeDisplayLabel(profile.displayName);
-        const safeMetadataPreferredName = sanitizeDisplayLabel(profile.metadata?.preferredName);
-
+        const isPublishedProfile = profile.source !== 'farcaster';
+        const safeDisplayName = isPublishedProfile
+          ? sanitizeDisplayLabel(profile.displayName)
+          : undefined;
+        const publishedAvatar = isPublishedProfile ? profile.avatarUrl : undefined;
         const baseContact: Contact = existing
           ? mergeContactData(existing, {
-            name: safeDisplayName ?? safeMetadataPreferredName ?? existing.name,
-            preferredName: safeDisplayName ?? safeMetadataPreferredName ?? existing.preferredName,
-            avatar: profile.avatarUrl ?? existing.avatar,
-            preferredAvatar: profile.avatarUrl ?? existing.preferredAvatar,
+            name: safeDisplayName ?? existing.name,
+            avatar: publishedAvatar ?? existing.avatar,
             primaryAddress: profile.primaryAddress ?? existing.primaryAddress,
             source: profile.source ?? existing.source,
             addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
@@ -576,13 +555,9 @@ export const useContactStore = create<ContactState>()(
             inboxId: normalizedInboxId,
             name:
               safeDisplayName ??
-              safeMetadataPreferredName ??
               (isAddressLikeInboxId(normalizedInboxId) ? '' : normalizedInboxId),
-            avatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
-            preferredName: safeDisplayName ?? safeMetadataPreferredName,
-            preferredAvatar: profile.avatarUrl ?? profile.metadata?.preferredAvatar,
+            avatar: publishedAvatar,
             description: profile.metadata?.description,
-            notes: profile.metadata?.notes,
             source: profile.source ?? profile.metadata?.source ?? 'inbox',
             createdAt: profile.metadata?.createdAt ?? Date.now(),
             isBlocked: profile.metadata?.isBlocked ?? false,
@@ -605,6 +580,13 @@ export const useContactStore = create<ContactState>()(
           existing && existingNormalizedInboxId && existingNormalizedInboxId !== normalizedInboxId
             ? { ...baseContact, inboxId: normalizedInboxId }
             : baseContact;
+
+        // Published profile discovery is not a contact-creation action. Callers
+        // may use this transient value in conversation/profile UI, but only an
+        // explicit addContact/blockContact action may create durable contact data.
+        if (!existing && !profile.persistIfMissing) {
+          return finalContact;
+        }
 
         set((state) => {
           const withoutLegacyId =
@@ -639,243 +621,6 @@ export const useContactStore = create<ContactState>()(
         return finalContact;
       },
 
-      syncFarcasterContacts: async (
-        fid: number,
-        onProgress?: (
-          current: number,
-          total: number,
-          status?: string,
-          details?: FarcasterSyncProgressDetail
-        ) => void
-      ) => {
-        const report = (
-          current: number,
-          total: number,
-          status?: string,
-          details?: FarcasterSyncProgressDetail
-        ) => {
-          onProgress?.(current, total, status, details);
-        };
-
-        set({ isLoading: true });
-        try {
-
-          report(0, 0, 'Fetching your Farcaster following list...', { action: 'fetch' });
-          const storage = await getStorage();
-          const farcasterState = useFarcasterStore.getState?.();
-          const neynarKey = farcasterState?.getEffectiveNeynarApiKey?.();
-          const xmtp = getXmtpClient();
-          const usingNeynar = Boolean(neynarKey);
-
-          report(
-            0,
-            0,
-            usingNeynar
-              ? 'Using Neynar API to fetch your following list...'
-              : 'Using Farcaster API base (VITE_FARCASTER_API_BASE) to fetch following list...',
-            { action: 'fetch', fid }
-          );
-
-          const followedUsers = usingNeynar
-            ? await fetchFarcasterFollowingWithNeynar(fid, neynarKey)
-            : await fetchFarcasterUserFollowingFromAPI(fid);
-          const total = followedUsers.length;
-          const shorten = (addr?: string | null) =>
-            addr && addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr ?? '';
-
-          if (total === 0) {
-            const reason = usingNeynar
-              ? 'Neynar returned 0 follows. Verify your Neynar API key, plan limits, and Farcaster FID.'
-              : 'No Farcaster following API configured (set VITE_FARCASTER_API_BASE) and no Neynar key available.';
-            report(0, 0, reason, { action: 'error', fid });
-            return;
-          }
-
-          report(0, total, `Found ${total} users you follow. Processing contacts...`, { action: 'fetch' });
-
-          let current = 0;
-          const newContacts: Contact[] = [];
-          const updatedContacts: Contact[] = [];
-          const skippedContacts: number[] = [];
-          const neynarProfilesByFid = (() => {
-            if (!usingNeynar) return null;
-            return new Map<number, Awaited<ReturnType<typeof fetchNeynarUsersBulk>>[number]>();
-          })();
-
-          if (usingNeynar && neynarProfilesByFid) {
-            report(0, total, 'Fetching Farcaster profiles in bulk (Neynar)…', { action: 'fetch', fid });
-            const profiles = await fetchNeynarUsersBulk(
-              followedUsers.map((user) => user.fid).filter((fid) => Number.isFinite(fid) && fid > 0),
-              neynarKey
-            );
-            for (const profile of profiles) {
-              if (profile?.fid) {
-                neynarProfilesByFid.set(profile.fid, profile);
-              }
-            }
-          }
-
-          for (let i = 0; i < followedUsers.length; i++) {
-            const user = followedUsers[i];
-            const userName = user.display_name || user.username || `FID ${user.fid}`;
-
-            report(current, total, `Processing ${userName} (${i + 1}/${total})...`, {
-              action: 'process',
-              fid: user.fid,
-              userName,
-            });
-
-            const xmtpAddress = resolveXmtpAddressFromFarcasterUser(user);
-            if (!xmtpAddress) {
-              skippedContacts.push(user.fid);
-              report(current, total, `Skipping ${userName} - no verified Ethereum address`, {
-                action: 'skip',
-                fid: user.fid,
-                userName,
-              });
-              continue;
-            }
-
-            current++;
-            report(current, total, `Checking ${userName} (${shorten(xmtpAddress)}) for XMTP...`, {
-              action: 'check',
-              fid: user.fid,
-              userName,
-              address: xmtpAddress,
-            });
-
-            // Resolve name with priority (ENS > .fcast.id > .base.eth > Farcaster)
-            const nameResolution = await resolveContactName(user, xmtpAddress);
-
-            const neynarProfile = neynarProfilesByFid?.get(user.fid);
-            const farcasterScore =
-              neynarProfile?.score ?? (user as { score?: number }).score ?? undefined;
-            const farcasterFollowerCount =
-              neynarProfile?.follower_count ?? (user as { follower_count?: number }).follower_count;
-            const farcasterFollowingCount =
-              neynarProfile?.following_count ?? (user as { following_count?: number }).following_count;
-            const farcasterActiveStatus =
-              neynarProfile?.active_status ?? (user as { active_status?: string }).active_status;
-            const farcasterPowerBadge =
-              neynarProfile?.power_badge ?? (user as { power_badge?: boolean }).power_badge;
-
-            const existingContact = get().contacts.find(
-              (contact) =>
-                contact.addresses?.some((addr) => normalizeAddress(addr) === normalizeAddress(xmtpAddress))
-            );
-
-            report(
-              current,
-              total,
-              existingContact
-                ? `Updating existing contact: ${nameResolution.preferredName || nameResolution.name}...`
-                : `Adding new contact: ${nameResolution.preferredName || nameResolution.name}...`,
-              {
-                action: existingContact ? 'update' : 'save',
-                fid: user.fid,
-                userName: nameResolution.preferredName || nameResolution.name || userName,
-                address: xmtpAddress,
-              }
-            );
-
-            const existingInboxId = existingContact?.inboxId;
-            let inboxId =
-              existingInboxId && !isAddressLikeInboxId(existingInboxId)
-                ? existingInboxId
-                : null;
-            let canReceive = true;
-
-            if (!inboxId) {
-              if (xmtp?.isConnected?.() && xmtp?.canMessageWithInbox) {
-                const lookup = await xmtp.canMessageWithInbox(xmtpAddress);
-                inboxId = lookup.inboxId;
-                canReceive = lookup.canMessage;
-              } else {
-                inboxId = await xmtp.resolveInboxIdForAddress?.(xmtpAddress);
-              }
-            }
-
-            if (!inboxId || isAddressLikeInboxId(inboxId)) {
-              skippedContacts.push(user.fid);
-              report(current, total, `Skipping ${userName} - could not resolve XMTP inbox id`, {
-                action: 'skip',
-                fid: user.fid,
-                userName,
-                address: xmtpAddress,
-              });
-              continue;
-            }
-            if (!canReceive) {
-              skippedContacts.push(user.fid);
-              report(current, total, `Skipping ${userName} - no XMTP inbox for ${shorten(inboxId)}`, {
-                action: 'skip',
-                fid: user.fid,
-                userName,
-                address: inboxId,
-              });
-              continue;
-            }
-
-            const contact: Contact = normaliseContactInput({
-              inboxId,
-              name: nameResolution.preferredName || nameResolution.name || inboxId,
-              preferredName: nameResolution.preferredName,
-              avatar: existingContact?.avatar || user.pfp_url,
-              createdAt: existingContact?.createdAt || Date.now(),
-              source: 'farcaster',
-              farcasterUsername: user.username,
-              farcasterFid: user.fid,
-              farcasterScore,
-              farcasterFollowerCount,
-              farcasterFollowingCount,
-              farcasterActiveStatus,
-              farcasterPowerBadge,
-              isInboxOnly: false,
-              addresses: dedupe([xmtpAddress, existingContact?.primaryAddress, ...(existingContact?.addresses ?? [])]),
-              primaryAddress: existingContact?.primaryAddress ?? xmtpAddress,
-              identities: existingContact?.identities ?? [],
-              preferredAvatar: existingContact?.preferredAvatar,
-              notes: existingContact?.notes,
-            } as Contact);
-
-            if (existingContact) {
-              // Update existing contact (merge with Farcaster data)
-              await storage.putContact(contact);
-              set((state) => ({
-                contacts: state.contacts.map((c) =>
-                  normalizeInboxId(c.inboxId) === normalizeInboxId(contact.inboxId) ? contact : c
-                ),
-              }));
-              updatedContacts.push(contact);
-            } else {
-              // Add new contact
-              await storage.putContact(contact);
-              newContacts.push(contact);
-            }
-
-            report(current, total, `Saved: ${nameResolution.preferredName || nameResolution.name}`, {
-              action: existingContact ? 'update' : 'save',
-              fid: user.fid,
-              userName: nameResolution.preferredName || nameResolution.name,
-              address: inboxId,
-            });
-          }
-
-          if (newContacts.length > 0) {
-            set((state) => ({ contacts: [...state.contacts, ...newContacts] }));
-          }
-
-          const summary = `Sync complete! ${newContacts.length} new, ${updatedContacts.length} updated, ${skippedContacts.length} skipped`;
-          console.log(`Synced ${newContacts.length} new Farcaster contacts.`);
-          report(total, total, summary, { action: 'complete' });
-        } catch (error) {
-          console.error('Failed to sync Farcaster contacts:', error);
-          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-          report(0, 0, `Error: ${errorMsg}`, { action: 'error' });
-        } finally {
-          set({ isLoading: false });
-        }
-      },
     }),
     {
       name: 'converge-contacts-storage', // unique name

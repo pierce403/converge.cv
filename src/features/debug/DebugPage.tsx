@@ -471,7 +471,9 @@ export function DebugPage() {
             <p className="mt-2 text-lg font-semibold">
               {isAuthenticated ? 'Authenticated' : 'Not authenticated'}
             </p>
-            <p className="text-sm text-primary-200">{isVaultUnlocked ? 'Vault unlocked' : 'Vault locked'}</p>
+            <p className="text-sm text-primary-200">
+              {isVaultUnlocked ? 'Local identity available' : 'Local identity unavailable'}
+            </p>
           </article>
 
           <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">

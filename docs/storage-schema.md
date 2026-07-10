@@ -12,7 +12,8 @@ If you only want the source-of-truth schema definition in code, start here:
 Converge uses **two IndexedDB databases** (both created through the same `ConvergeDB` schema class):
 
 1) **Global DB**: `ConvergeDB`  
-   Used for **device identity + legacy vault-secret records** (data that should not change when you switch inbox namespaces).
+   Used for **local account identity + legacy vault-secret records**. The local
+   account key is distinct from the XMTP installation key stored in OPFS.
 
 2) **Namespaced data DB**: `ConvergeDB:${namespace}`  
    Used for **conversations, messages, contacts, attachments, and deletion markers** (data that should be scoped to the
@@ -26,8 +27,19 @@ The current `namespace` is persisted in localStorage under `converge.storageName
 
 - Namespace storage: `src/lib/storage/index.ts#L15`
 
+The cross-inbox registry is intentionally small and lives in localStorage under
+`converge.inboxRegistry.v1`, with the selected inbox in
+`converge.currentInboxId.v1`. It has one profile-name/avatar row per XMTP inbox
+so Converge can choose the correct namespace before opening a Dexie database.
+
+App-level push state is stored separately in the raw IndexedDB database
+`ConvergePushState`. The page and service worker share its app preference,
+per-inbox/installation relay registrations, opaque-handle profile names, and
+approximate activity hints. It contains routing metadata, not decrypted message
+content, and is not part of the Dexie schema below.
+
 These databases are not encrypted at rest by Converge. Identity private keys,
-mnemonics, decrypted messages, contacts, and attachment bytes should be treated
+mnemonics, decrypted messages, contacts, attachment bytes, and push routing metadata should be treated
 as plaintext browser-profile data. The `vaultSecrets` table remains in the
 schema for compatibility but no current UI claims that it protects these stores.
 
@@ -159,7 +171,9 @@ Driver entry points:
 - TypeScript type: `src/types/index.ts#L114`
 - Stored in: **global DB**
 
-Purpose: local device identity (wallet address + keys + XMTP identifiers).
+Purpose: local account identities (Converge keys or imported keys plus verified
+XMTP inbox/installation identifiers). The XMTP installation key itself remains
+inside the Browser SDK OPFS database.
 
 Index notes:
 
@@ -215,3 +229,14 @@ XMTP maintains its own local SQLite database under OPFS (files like `xmtp-produc
 That data is not part of Dexie/IndexedDB and is handled separately (see `DexieDriver.clearAllData`):
 
 - OPFS cleanup: `src/lib/storage/dexie-driver.ts#L599`
+
+## Burn Inbox Cleanup
+
+Burn Inbox captures the active installation, closes its client, attempts static
+XMTP revocation, then clears the selected `ConvergeDB:<inbox>` tables, deletes
+the matching global identity rows, removes associated XMTP OPFS files, clears
+inbox-specific browser/profile/push metadata, and resets active Zustand state.
+Local cleanup continues when remote revocation fails. If IndexedDB or OPFS
+deletion itself is blocked, the identity key and registry row remain available
+so the user can close other tabs and retry. Other inbox namespaces remain
+intact.

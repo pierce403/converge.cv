@@ -7,6 +7,7 @@ import { IdentifierKind, type Signer } from '@xmtp/browser-sdk';
 import { toBytes, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { requireEthereumAddress } from '@/lib/utils/ethereum';
+import { canonicalizeHexInput } from '@/lib/utils/hex';
 
 type SignatureCacheEntry = {
   signature: string;
@@ -184,7 +185,7 @@ export function createEOASigner(
     }),
     signMessage: async (message: string) => {
       const signature = await signMessageCached(message);
-      return toBytes(signature);
+      return toBytes(canonicalizeHexInput(signature));
     },
   };
 }
@@ -196,10 +197,13 @@ export function createEOASigner(
 export function createSCWSigner(
   address: `0x${string}`,
   signMessage: (message: string) => Promise<string>,
-  chainId: number = 1
+  chainId: number
 ): Signer {
   const normalizedAddress = requireEthereumAddress(address, 'SCW signer address');
-  const normalizedChainId = Number.isFinite(chainId) ? chainId : 1;
+  if (!Number.isSafeInteger(chainId) || chainId < 0) {
+    throw new Error('SCW signer requires an explicit nonnegative integer chain ID.');
+  }
+  const normalizedChainId = chainId;
   const signMessageCached = createCachedSignMessage(
     `scw:${normalizedAddress}:${normalizedChainId}`,
     signMessage
@@ -214,7 +218,7 @@ export function createSCWSigner(
     }),
     signMessage: async (message: string) => {
       const signature = await signMessageCached(message);
-      return toBytes(signature);
+      return toBytes(canonicalizeHexInput(signature));
     },
     getChainId: () => BigInt(normalizedChainId),
   };
@@ -225,7 +229,7 @@ export function createSCWSigner(
  * This is what we use for the "random wallet" option
  */
 export function createEphemeralSigner(privateKey: Hex): Signer {
-  const account = privateKeyToAccount(privateKey);
+  const account = privateKeyToAccount(canonicalizeHexInput(privateKey));
   const normalizedAddress = requireEthereumAddress(account.address, 'Derived signer address');
   return {
     type: 'EOA',

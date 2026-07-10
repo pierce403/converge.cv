@@ -36,6 +36,12 @@ export function requireEthereumAddress(value: unknown, label = 'Ethereum address
   return normalized;
 }
 
+export function ethereumAddressesEqual(left: unknown, right: unknown): boolean {
+  const normalizedLeft = normalizeEthereumAddress(left);
+  const normalizedRight = normalizeEthereumAddress(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
 export function hasEthereumHexPrefix(value: unknown): boolean {
   return typeof value === 'string' && ETHEREUM_PREFIX.test(value.trim());
 }

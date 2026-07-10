@@ -1,5 +1,6 @@
 import type { InboxState, Identifier, Signer } from '@xmtp/browser-sdk';
 import type { Identity } from '@/types';
+import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
 
 export const XMTP_INSTALLATION_LIMIT = 10;
 
@@ -31,6 +32,7 @@ export type DeviceProvisioningPhase =
   | 'manager-ready'
   | 'registering-installation'
   | 'installation-registered'
+  | 'verifying-installation'
   | 'associating-key'
   | 'association-submitted'
   | 'verifying-association'
@@ -46,10 +48,35 @@ export interface ProvisionDeviceResult {
 const normalizeId = (value: string | null | undefined) => value?.trim().toLowerCase() || null;
 
 const normalizeInstallationId = (value: string | null | undefined) =>
-  value?.trim().toLowerCase().replace(/^0x/, '') || null;
+  value?.trim().replace(/^(?:0x)+/i, '').toLowerCase() || null;
 
-const installationIdsMatch = (left: string | null | undefined, right: string | null | undefined) =>
-  normalizeInstallationId(left) === normalizeInstallationId(right);
+const installationIdsMatch = (left: string | null | undefined, right: string | null | undefined) => {
+  const normalizedLeft = normalizeInstallationId(left);
+  const normalizedRight = normalizeInstallationId(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+};
+
+const identifiersMatch = (left: Identifier, right: Identifier) =>
+  left.identifierKind === right.identifierKind &&
+  left.identifier.trim().toLowerCase().replace(/^(?:0x)+/i, '') ===
+    right.identifier.trim().toLowerCase().replace(/^(?:0x)+/i, '');
+
+const stateHasIdentifier = (state: InboxState | undefined, identifier: Identifier) =>
+  Boolean(
+    state &&
+      (state.accountIdentifiers?.some((candidate) => identifiersMatch(candidate, identifier)) ||
+        (state.recoveryIdentifier && identifiersMatch(state.recoveryIdentifier, identifier)))
+  );
+
+const stateHasInstallation = (
+  state: InboxState | undefined,
+  installationId: string | null | undefined
+) =>
+  Boolean(
+    state?.installations?.some((installation) =>
+      installationIdsMatch(installation.id, installationId)
+    )
+  );
 
 const defaultSleep = async (milliseconds: number) =>
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -89,6 +116,23 @@ async function waitForLocalRegistration(
   return false;
 }
 
+async function waitForInstallationMembership(
+  inboxId: string,
+  installationId: string,
+  fetchInboxState: ProvisionDeviceDependencies['fetchInboxState'],
+  sleep: (milliseconds: number) => Promise<void>
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (stateHasInstallation(await fetchInboxState(inboxId), installationId)) {
+      return true;
+    }
+    if (attempt < 9) {
+      await sleep(Math.min(3_000, 250 * 2 ** attempt));
+    }
+  }
+  return false;
+}
+
 async function waitForAccountIdentifier(
   inboxId: string,
   identifier: Identifier,
@@ -120,10 +164,11 @@ export function signerIdentityKey(identity: {
   walletType?: 'EOA' | 'SCW';
   chainId?: number;
 }): string {
+  const address = normalizeEthereumAddress(identity.address) ?? identity.address.trim().toLowerCase();
   const signerSource = identity.privateKey ? 'local' : 'wallet';
   const walletType = identity.privateKey ? 'EOA' : identity.walletType ?? 'EOA';
-  const chainId = walletType === 'SCW' ? identity.chainId ?? 1 : 0;
-  return `${identity.address.toLowerCase()}|${signerSource}|${walletType}|${chainId}`;
+  const chainId = walletType === 'SCW' ? identity.chainId ?? 'unknown' : 0;
+  return `${address}|${signerSource}|${walletType}|${chainId}`;
 }
 
 export function getClientDbPath(
@@ -133,7 +178,8 @@ export function getClientDbPath(
   if (mode === 'inbox-default') {
     return undefined;
   }
-  return `xmtp-production-${address.toLowerCase()}.db3`;
+  const normalizedAddress = normalizeEthereumAddress(address) ?? address.trim().toLowerCase();
+  return `xmtp-production-${normalizedAddress}.db3`;
 }
 
 export function shouldRequestHistorySync(input: {
@@ -244,6 +290,20 @@ export class StaleInstallationError extends Error {
   }
 }
 
+export class InstallationMembershipPendingError extends Error {
+  readonly inboxId: string;
+  readonly installationId: string;
+
+  constructor(inboxId: string, installationId: string) {
+    super(
+      'XMTP registered this browser locally, but has not yet published it as a member of the target inbox. Converge did not associate the local account key. Wait a moment, then retry Add This Device to resume the same key and installation.'
+    );
+    this.name = 'InstallationMembershipPendingError';
+    this.inboxId = inboxId;
+    this.installationId = installationId;
+  }
+}
+
 /**
  * Bootstrap one browser installation with wallet authority, then associate a fresh
  * local account key with the same inbox. The manager and final local-key client must
@@ -279,6 +339,11 @@ export async function provisionFreshDeviceKey(
   if (!preflightState) {
     throw new Error(
       'XMTP did not return the target inbox state, so Converge could not verify the installation limit.'
+    );
+  }
+  if (!stateHasIdentifier(preflightState, targetIdentifier)) {
+    throw new Error(
+      'The connected wallet resolves to this XMTP inbox, but it is not a current account or recovery authority. Use a wallet that currently controls the inbox.'
     );
   }
   const knownInstallationPresent = preflightState.installations?.some((installation) =>
@@ -360,30 +425,24 @@ export async function provisionFreshDeviceKey(
       await notify('installation-registered');
     }
 
-    let installationVisible = hasManagerInstallation;
+    await notify('verifying-installation');
+    const installationVisible =
+      hasManagerInstallation ||
+      (await waitForInstallationMembership(
+        expected,
+        manager.installationId,
+        dependencies.fetchInboxState,
+        sleep
+      ));
     if (!installationVisible) {
-      try {
-        const refreshedState = await dependencies.fetchInboxState(expected);
-        installationVisible = Boolean(
-          refreshedState?.installations?.some((installation) =>
-            installationIdsMatch(installation.id, manager.installationId)
-          )
-        );
-      } catch (error) {
-        console.info(
-          '[XMTP] Static inbox-state refresh is still unavailable after local installation registration:',
-          error
-        );
-      }
-    }
-    if (!installationVisible) {
-      // Browser SDK 6.1.2 can finish register() before a separate static
-      // identity reader observes the update. The manager's installation-local
-      // isRegistered() result is the V3 readiness signal; later association
-      // checks still require the network identity state to converge.
-      console.info(
-        '[XMTP] Browser installation is registered locally; the static inbox-state reader has not caught up yet.'
-      );
+      // unsafe_addAccount pre-signs its existing-member proof with this
+      // installation key. Publishing before the installation appears in the
+      // inbox state is rejected by XMTP as "Missing existing member".
+      console.info('[XMTP] Device association paused until installation membership is visible', {
+        inboxId: expected,
+        installationId: manager.installationId,
+      });
+      throw new InstallationMembershipPendingError(expected, manager.installationId);
     }
 
     let accountAdded = false;
@@ -407,6 +466,10 @@ export async function provisionFreshDeviceKey(
             await manager.fetchInboxIdByIdentifier(deviceIdentifier)
           );
           if (resolvedAfterError !== expected) {
+            const message = error instanceof Error ? error.message : String(error ?? '');
+            if (/missing existing member/i.test(message)) {
+              throw new InstallationMembershipPendingError(expected, manager.installationId);
+            }
             throw error;
           }
           // The request response was interrupted, but the manager can already

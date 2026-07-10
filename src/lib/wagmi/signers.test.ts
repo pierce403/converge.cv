@@ -48,6 +48,48 @@ describe('wagmi signers', () => {
     expect(signMessage).toHaveBeenCalled();
   });
 
+  it('preserves an explicit legacy SCW chain ID of zero', () => {
+    const signer = createSCWSigner(
+      '0xFACEFACEfacefaceFACEFACEfaceFACEFACE0000',
+      vi.fn(async () => '0x1234'),
+      0
+    );
+
+    expect((signer as { getChainId?: () => bigint }).getChainId?.()).toBe(0n);
+  });
+
+  it('rejects a missing or invalid SCW chain ID instead of assuming mainnet', () => {
+    const signMessage = vi.fn(async () => '0x1234');
+    const callWithoutChainId = createSCWSigner as unknown as (
+      address: `0x${string}`,
+      signer: (message: string) => Promise<string>,
+      chainId?: number
+    ) => unknown;
+
+    expect(() =>
+      callWithoutChainId('0xFACEFACEfacefaceFACEFACEfaceFACEFACE0000', signMessage)
+    ).toThrow(/explicit nonnegative integer chain ID/);
+    expect(() =>
+      createSCWSigner(
+        '0xFACEFACEfacefaceFACEFACEfaceFACEFACE0000',
+        signMessage,
+        Number.NaN
+      )
+    ).toThrow(/explicit nonnegative integer chain ID/);
+    expect(() =>
+      createSCWSigner('0xFACEFACEfacefaceFACEFACEfaceFACEFACE0000', signMessage, 1.5)
+    ).toThrow(/explicit nonnegative integer chain ID/);
+  });
+
+  it('parses case-insensitive and repeated signature prefixes as hexadecimal bytes', async () => {
+    const signer = createEOASigner(
+      '0xABCDEFabcdef1234567890abcdefABCDEF123456',
+      vi.fn(async () => '0X0x1234')
+    );
+
+    await expect(signer.signMessage('hello')).resolves.toEqual(new Uint8Array([0x12, 0x34]));
+  });
+
   it('repairs repeated and case-insensitive prefixes before creating identifiers', async () => {
     const signMessage = vi.fn(async () => '0x1234');
     const signer = createEOASigner(

@@ -2,17 +2,17 @@ import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 
 async function setDisplayNameInModal(page: Page, displayName: string) {
   try {
-    const modalHeader = page.getByText(/make it yours/i);
+    const modalHeader = page.getByText(/choose your inbox profile/i);
     // Wait longer for the modal - XMTP connection can take a while
     await modalHeader.waitFor({ state: 'visible', timeout: 30000 });
     
     // Use the input inside the modal
-    const modal = page.locator('.fixed.inset-0').filter({ hasText: /make it yours/i });
+    const modal = page.locator('.fixed.inset-0').filter({ hasText: /choose your inbox profile/i });
     const input = modal.locator('input[type="text"]');
     await input.fill(displayName);
     
     // Click Save
-    await modal.getByRole('button', { name: /^save$/i }).click();
+    await modal.getByRole('button', { name: /save and continue/i }).click();
     
     // Wait for modal to close
     await modal.waitFor({ state: 'detached', timeout: 10000 });
@@ -35,20 +35,7 @@ async function onboardWithName(page: Page, displayName: string) {
     // Loading indicator not present; continue.
   }
 
-  // Wait for and click the "Create new identity" button
-  console.log(`[Test] onboardWithName: Looking for create identity button for ${displayName}`);
-  const createButton = page.getByRole('button', { name: /create new identity/i });
-  await createButton.waitFor({ state: 'visible', timeout: 30000 });
-  console.log(`[Test] onboardWithName: Clicking create identity button for ${displayName}`);
-  await createButton.click();
-
-  // Wait for main app to load
-  console.log(`[Test] onboardWithName: Waiting for New Chat link for ${displayName}`);
-  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
-  console.log(`[Test] onboardWithName: New Chat link visible for ${displayName}`);
-  
-  // CRITICAL: Wait for XMTP to fully connect (including registration) before proceeding
-  // Check for identity with inboxId in the auth store
+  // True first run creates automatically, then presents the profile editor before Layout.
   console.log(`[Test] onboardWithName: Waiting for XMTP connection to complete for ${displayName}`);
   await page.waitForFunction(
     () => {
@@ -61,8 +48,11 @@ async function onboardWithName(page: Page, displayName: string) {
   );
   console.log(`[Test] onboardWithName: XMTP connection ready for ${displayName}`);
   
-  // Set display name in the "Make it yours" modal when it appears
+  // Set display name in the first-run profile editor, which unlocks the main UI.
   await setDisplayNameInModal(page, displayName);
+
+  console.log(`[Test] onboardWithName: Waiting for New Chat link for ${displayName}`);
+  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
   
   // Get identifier (inboxId or address) - don't wait, just get what's available
   console.log(`[Test] onboardWithName: Getting identifier for ${displayName}`);

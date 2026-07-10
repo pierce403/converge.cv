@@ -112,7 +112,7 @@ Converge splits local data by “namespace” (roughly “which inbox is active�
 
 - Namespace key in localStorage: `converge.storageNamespace.v1` ([`src/lib/storage/index.ts`](../src/lib/storage/index.ts#L15))
 - Dexie DB names:
-  - global DB: `ConvergeDB` (identity/vault)
+  - global DB: `ConvergeDB` (local account identities/legacy vault records)
   - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L293))
 
 ### localStorage — what’s used by conversation flows

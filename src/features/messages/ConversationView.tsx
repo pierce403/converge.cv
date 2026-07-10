@@ -1055,6 +1055,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
                                 avatarUrl: conversationAvatar,
                                 source: 'inbox',
                                 metadata: { createdAt: Date.now() },
+                                persistIfMissing: true,
                               });
                             } catch (e) {
                               alert('Failed to add contact');

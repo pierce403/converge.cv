@@ -82,13 +82,14 @@ describe('keyfile helpers', () => {
   });
 
   it('derives from private key and validates address mismatch', () => {
+    const privateKey = `0x${'12'.repeat(32)}`;
     const keyfile = {
       type: KEYFILE_TYPE,
       version: KEYFILE_VERSION,
       createdAt: new Date().toISOString(),
       identity: {
         address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-        privateKey: '0x1234',
+        privateKey,
       },
       meta: { app: 'Converge', exportedAt: new Date().toISOString() },
     } as any;
@@ -98,7 +99,7 @@ describe('keyfile helpers', () => {
 
     const badKeyfile = {
       ...keyfile,
-      identity: { ...keyfile.identity, address: '0xdeadbeef' },
+      identity: { ...keyfile.identity, address: `0x${'de'.repeat(20)}` },
     };
     expect(() => deriveIdentityFromKeyfile(badKeyfile as any)).toThrow(
       /does not match the expected address/
@@ -106,18 +107,63 @@ describe('keyfile helpers', () => {
   });
 
   it('canonicalizes an uppercase private-key prefix instead of adding a second prefix', () => {
+    const privateKeyBody = '12'.repeat(32);
     const keyfile = {
       type: KEYFILE_TYPE,
       version: KEYFILE_VERSION,
       createdAt: new Date().toISOString(),
       identity: {
         address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-        privateKey: '0X1234',
+        privateKey: `0X${privateKeyBody}`,
       },
       meta: { app: 'Converge', exportedAt: new Date().toISOString() },
     } as any;
 
-    expect(deriveIdentityFromKeyfile(keyfile).privateKey).toBe('0x1234');
+    expect(deriveIdentityFromKeyfile(keyfile).privateKey).toBe(`0x${privateKeyBody}`);
+  });
+
+  it('repairs repeated key and address prefixes from legacy exports', () => {
+    const privateKeyBody = '34'.repeat(32);
+    const keyfile = {
+      type: KEYFILE_TYPE,
+      version: KEYFILE_VERSION,
+      createdAt: new Date().toISOString(),
+      identity: {
+        address: '0x0Xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        privateKey: `0x0X${privateKeyBody}`,
+      },
+      meta: { app: 'Converge', exportedAt: new Date().toISOString() },
+    } as any;
+
+    const derived = deriveIdentityFromKeyfile(keyfile);
+    expect(derived.address).toBe('0xabcdefabcdefabcdefabcdefabcdefabcdefabcd');
+    expect(derived.privateKey).toBe(`0x${privateKeyBody}`);
+  });
+
+  it('rejects malformed key and address lengths before XMTP setup', () => {
+    const base = {
+      type: KEYFILE_TYPE,
+      version: KEYFILE_VERSION,
+      createdAt: new Date().toISOString(),
+      identity: {
+        address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        privateKey: `0x${'56'.repeat(32)}`,
+      },
+      meta: { app: 'Converge', exportedAt: new Date().toISOString() },
+    } as any;
+
+    expect(() =>
+      deriveIdentityFromKeyfile({
+        ...base,
+        identity: { ...base.identity, privateKey: '0x1234' },
+      })
+    ).toThrow(/exactly 32 bytes/);
+    expect(() =>
+      deriveIdentityFromKeyfile({
+        ...base,
+        identity: { ...base.identity, address: '0xdeadbeef' },
+      })
+    ).toThrow(/exactly 20 bytes/);
   });
 
   it('throws on invalid keyfile shape', () => {

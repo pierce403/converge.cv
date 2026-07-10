@@ -52,9 +52,12 @@ import { getThirdwebClient } from '@/lib/wallets/providers';
 import { upload, resolveScheme } from 'thirdweb/storage';
 import { KeyedAsyncCache } from '@/lib/utils/keyed-async-cache';
 import {
+  ethereumAddressesEqual,
   normalizeEthereumAddress as normalizeEthereumAccountAddress,
   requireEthereumAddress,
 } from '@/lib/utils/ethereum';
+import { inboxIdsMatch } from '@/lib/utils/inbox';
+import { canonicalizeHexInput } from '@/lib/utils/hex';
 import type { ClientRegistrationPolicy } from './registration-policy';
 import {
   createConvosInvite,
@@ -85,6 +88,7 @@ import {
 } from './installation-recovery';
 import {
   getClientDbPath,
+  InstallationMembershipPendingError,
   provisionFreshDeviceKey,
   shouldRequestHistorySync,
   signerIdentityKey,
@@ -396,7 +400,9 @@ function createStubInboxState({
 export class XmtpClient {
   private client: Client<unknown> | null = null;
   private identity: XmtpIdentity | null = null;
-  private messageStream: Pick<AsyncStreamProxy<unknown>, 'end' | 'isDone'> | null = null;
+  private messageStream: AsyncStreamProxy<unknown> | null = null;
+  private messageStreamTask: Promise<void> | null = null;
+  private disconnectPromise: Promise<void> | null = null;
   private backgroundDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
   private backgroundDiscoveryInFlight = false;
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
@@ -2783,10 +2789,7 @@ export class XmtpClient {
     const identity = this.identity;
 
     if (identity.privateKey) {
-      const privateKeyHex = identity.privateKey.startsWith('0x')
-        ? identity.privateKey
-        : `0x${identity.privateKey}`;
-      return hexToBytes(privateKeyHex as `0x${string}`);
+      return hexToBytes(canonicalizeHexInput(identity.privateKey));
     }
 
     if (this.inviteDerivedKey && this.inviteDerivedKeyInboxId === creatorInboxId) {
@@ -2794,10 +2797,7 @@ export class XmtpClient {
     }
 
     if (identity.inviteKey && identity.inviteKeyInboxId === creatorInboxId) {
-      const inviteKeyHex = identity.inviteKey.startsWith('0x')
-        ? identity.inviteKey
-        : `0x${identity.inviteKey}`;
-      return hexToBytes(inviteKeyHex as `0x${string}`);
+      return hexToBytes(canonicalizeHexInput(identity.inviteKey));
     }
 
     if (this.inviteDerivedKeyPromise) {
@@ -2814,8 +2814,7 @@ export class XmtpClient {
     this.inviteDerivedKeyPromise = (async () => {
       console.log('[XMTP] Requesting wallet signature to derive invite key...');
       const signatureHexRaw = await signMessage(message);
-      const signatureHex = signatureHexRaw.startsWith('0x') ? signatureHexRaw : `0x${signatureHexRaw}`;
-      const signatureBytes = hexToBytes(signatureHex as `0x${string}`);
+      const signatureBytes = hexToBytes(canonicalizeHexInput(signatureHexRaw));
       const derivedKey = await deriveInvitePrivateKeyFromSignature(signatureBytes, message);
       this.inviteDerivedKey = derivedKey;
       this.inviteDerivedKeyInboxId = creatorInboxId;
@@ -3534,16 +3533,21 @@ export class XmtpClient {
   private async createSigner(identity: XmtpIdentity): Promise<Signer> {
     if (identity.privateKey) {
       console.log('[XMTP] Creating ephemeral signer (generated wallet)');
-      return createEphemeralSigner(identity.privateKey as `0x${string}`);
+      return createEphemeralSigner(canonicalizeHexInput(identity.privateKey));
     }
 
     if (identity.signMessage) {
       if (identity.walletType === 'SCW') {
+        if (!Number.isSafeInteger(identity.chainId) || (identity.chainId ?? -1) < 0) {
+          throw new Error(
+            'Smart contract wallet connections require the wallet network chain ID before XMTP can sign.'
+          );
+        }
         console.log('[XMTP] Creating SCW signer for wallet connection');
         return createSCWSigner(
           identity.address as `0x${string}`,
           identity.signMessage,
-          identity.chainId ?? 1
+          identity.chainId as number
         );
       }
 
@@ -4021,6 +4025,20 @@ export class XmtpClient {
       throw new Error('XMTP SDK does not support account association');
     }
 
+    const currentInboxId = this.client.inboxId;
+    const currentInstallationId = this.client.installationId;
+    if (!currentInboxId || !currentInstallationId) {
+      throw new Error('The connected XMTP client has no usable inbox or installation ID.');
+    }
+    const [currentState] = await Client.fetchInboxStates([currentInboxId], 'production');
+    if (
+      !currentState?.installations?.some((installation) =>
+        installationIdsMatch(installation.id, currentInstallationId)
+      )
+    ) {
+      throw new InstallationMembershipPendingError(currentInboxId, currentInstallationId);
+    }
+
     logNetworkEvent({
       direction: 'outbound',
       event: 'identity:add_account',
@@ -4030,6 +4048,16 @@ export class XmtpClient {
     // The SDK requires true even for a fresh key; the ledger preflight above
     // guarantees that this is an association rather than a reassignment.
     await this.client.unsafe_addAccount(newSigner, true);
+
+    const associatedInboxId = await getInboxIdForIdentifier(
+      await newSigner.getIdentifier(),
+      'production'
+    );
+    if (!associatedInboxId || !inboxIdsMatch(associatedInboxId, currentInboxId)) {
+      throw new Error(
+        'XMTP accepted the account-association request, but the new account is not visible in the inbox state yet. Retry to verify the same account.'
+      );
+    }
 
     logNetworkEvent({
       direction: 'status',
@@ -4132,23 +4160,63 @@ export class XmtpClient {
    * Disconnect from XMTP network
    */
   async disconnect(): Promise<void> {
-    const { setConnectionStatus, setError } = useXmtpStore.getState();
-    this.stopBackgroundDiscoveryLoop();
+    if (this.disconnectPromise) {
+      return await this.disconnectPromise;
+    }
 
-    // streamAllMessages() returns an AsyncStreamProxy. Its cancellation API is
-    // end()/return(), not close(); close() belongs to the XMTP client itself.
+    const pendingDisconnect = this.disconnectInternal();
+    this.disconnectPromise = pendingDisconnect;
+    try {
+      await pendingDisconnect;
+    } finally {
+      if (this.disconnectPromise === pendingDisconnect) {
+        this.disconnectPromise = null;
+      }
+    }
+  }
+
+  private async stopMessageStream(): Promise<void> {
     const messageStream = this.messageStream;
+    const messageStreamTask = this.messageStreamTask;
     this.messageStream = null;
+
+    let streamEnded = !messageStream || messageStream.isDone;
     if (messageStream) {
       try {
         if (!messageStream.isDone) {
           await messageStream.end();
         }
+        streamEnded = true;
         console.log('[XMTP] Message stream closed');
       } catch (error) {
         console.error('[XMTP] Error closing message stream:', error);
       }
     }
+
+    // AsyncStreamProxy.end() releases a pending next(), but message handling may
+    // still be in progress. Do not close the worker/database until that consumer
+    // has returned. If end itself failed, client.close() is the remaining escape
+    // hatch and must not be blocked by a consumer that may never wake up.
+    if (messageStreamTask && streamEnded) {
+      try {
+        await messageStreamTask;
+      } catch (error) {
+        console.error('[XMTP] Error waiting for message stream consumer:', error);
+      }
+    }
+
+    if (this.messageStreamTask === messageStreamTask) {
+      this.messageStreamTask = null;
+    }
+  }
+
+  private async disconnectInternal(): Promise<void> {
+    const { setConnectionStatus, setError } = useXmtpStore.getState();
+    this.stopBackgroundDiscoveryLoop();
+
+    // streamAllMessages() returns an AsyncStreamProxy. Its cancellation API is
+    // end()/return(), not close(); close() belongs to the XMTP client itself.
+    await this.stopMessageStream();
 
     if (!this.client) {
       setConnectionStatus('disconnected');
@@ -4508,7 +4576,7 @@ export class XmtpClient {
           if (storedIdentity) {
             await storage.putIdentity({ ...storedIdentity, lastSyncedAt: syncedAt });
             const authIdentity = useAuthStore.getState().identity;
-            if (authIdentity && authIdentity.address.toLowerCase() === storedIdentity.address.toLowerCase()) {
+            if (authIdentity && ethereumAddressesEqual(authIdentity.address, storedIdentity.address)) {
               useAuthStore.getState().setIdentity({ ...authIdentity, lastSyncedAt: syncedAt });
             }
           }
@@ -5298,6 +5366,10 @@ export class XmtpClient {
       throw new Error('Client not connected');
     }
 
+    if (this.messageStream || this.messageStreamTask) {
+      await this.stopMessageStream();
+    }
+
     try {
       console.log('[XMTP] Starting message stream...');
 
@@ -5317,7 +5389,7 @@ export class XmtpClient {
       });
 
       // Handle incoming messages in the background
-      (async () => {
+      const messageStreamTask = (async () => {
         try {
           console.log('[XMTP] 📻 Stream loop started');
 
@@ -5614,6 +5686,10 @@ export class XmtpClient {
             console.log('[XMTP] Message stream loop stopped');
           }
         } catch (error) {
+          if (this.messageStream !== stream) {
+            console.log('[XMTP] Message stream consumer stopped during shutdown');
+            return;
+          }
           console.error('[XMTP] Message stream error:', error);
           console.error('[XMTP] Error stack:', error instanceof Error ? error.stack : 'no stack');
           logNetworkEvent({
@@ -5623,6 +5699,16 @@ export class XmtpClient {
           });
         }
       })();
+      this.messageStreamTask = messageStreamTask;
+      const clearMessageStreamTask = () => {
+        if (this.messageStream === stream) {
+          this.messageStream = null;
+        }
+        if (this.messageStreamTask === messageStreamTask) {
+          this.messageStreamTask = null;
+        }
+      };
+      void messageStreamTask.then(clearMessageStreamTask, clearMessageStreamTask);
     } catch (error) {
       console.error('[XMTP] Failed to start message stream:', error);
       throw error;
@@ -6361,7 +6447,7 @@ export class XmtpClient {
    * - If not connected, use inbox resolver functions to fetch state without a client.
    */
   async getInboxState(): Promise<InboxState> {
-    const isE2E = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_E2E_TEST === 'true');
+    const isE2E = import.meta.env.VITE_E2E_TEST === 'true';
     const fallbackIdentifier: Identifier | undefined = this.identity?.address
       ? {
         identifier: toEthereumIdentifier(this.identity.address),
@@ -6459,6 +6545,60 @@ export class XmtpClient {
   }
 
   /**
+   * Revoke this browser installation without accepting an arbitrary installation
+   * ID from UI code. XMTP does not allow a connected client to revoke its own
+   * current installation, so capture its recovery signer and ID, close the
+   * client, then use the SDK's static revocation flow.
+   *
+   * The expected IDs make a stale Settings view fail closed instead of revoking
+   * a different inbox or installation.
+   */
+  async revokeCurrentInstallation(options: {
+    expectedInboxId: string;
+    expectedInstallationId?: string;
+  }): Promise<{ inboxId: string; installationId: string }> {
+    if (!this.client) {
+      throw new Error('XMTP is not connected, so this browser installation cannot be revoked here.');
+    }
+
+    const inboxId = this.client.inboxId;
+    const installationId = this.client.installationId;
+    const installationIdBytes = this.client.installationIdBytes;
+    if (!inboxId || !installationId || !installationIdBytes) {
+      throw new Error('The connected XMTP client is missing its inbox or installation ID.');
+    }
+    if (!inboxIdsMatch(inboxId, options.expectedInboxId)) {
+      throw new Error('The connected XMTP client belongs to a different inbox.');
+    }
+    if (
+      options.expectedInstallationId &&
+      !installationIdsMatch(installationId, options.expectedInstallationId)
+    ) {
+      throw new Error('The connected XMTP installation does not match the stored browser installation.');
+    }
+
+    if (!this.identity) {
+      throw new Error('The connected XMTP client is missing its account signer.');
+    }
+
+    const signer = await this.createSigner(this.identity);
+    await this.disconnect();
+    await Client.revokeInstallations(
+      signer,
+      inboxId,
+      [installationIdBytes],
+      'production'
+    );
+    console.log('[XMTP] Current browser installation revoked successfully');
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'installations:revoke_current',
+      details: `Revoked current installation ${installationId}`,
+    });
+    return { inboxId, installationId };
+  }
+
+  /**
    * Get key package statuses for installations
    * @param installationIds - Array of installation ID strings
    */
@@ -6519,13 +6659,15 @@ export class XmtpClient {
       details: 'Listing conversations',
     });
 
+    const conversations = await (await getStorage()).listConversations({ archived: false });
+
     logNetworkEvent({
       direction: 'status',
       event: 'conversations:list:complete',
-      details: 'Conversations list returned 0 results (stub implementation)',
+      details: `Conversations list returned ${conversations.length} newest-first results`,
     });
 
-    return [];
+    return conversations;
   }
 
   /**
