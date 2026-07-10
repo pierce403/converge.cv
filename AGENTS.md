@@ -26,7 +26,7 @@ read the same source of truth.
 - **Storage**: Dexie (IndexedDB wrapper)
 - **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v6.1.2
 - **PWA**: vite-plugin-pwa with Workbox
-- **Deployment**: GitHub Pages (auto-deploy on push to master)
+- **Deployment**: GitHub Pages (auto-deploy on push to main)
 
 ---
 
@@ -36,18 +36,19 @@ read the same source of truth.
 - **User strongly prefers**: Zero friction authentication
 - **Never require passphrases** for onboarding or regular use
 - Incomplete passphrase and passkey paths are hidden; do not expose or document them until encryption and recovery are implemented end to end.
-- "Create new Converge inbox" generates a local key only after the user explicitly chooses that action.
+- A true first visit should create the first local-key inbox automatically, then open the dismissible profile editor. Do not add passphrase or wallet steps to that path.
 - **Exception**: A passphrase may return as an advanced feature only if explicitly requested and fully implemented.
 
 ### 🔓 NO VAULT LOCKING BY DEFAULT
 - App should stay unlocked by default after initial setup
 - The former lock-screen control is hidden because current private material is not encrypted at rest.
 - Don't imply that a UI lock encrypts IndexedDB or the XMTP database.
-- `checkExistingIdentity()` restores an existing identity but does not create one on an empty browser.
+- An intentionally empty state after Burn Inbox must remain empty; do not treat it as a true first visit and silently create a replacement inbox.
 
 ### ⚡ ONE-CLICK ONBOARDING
-- Empty browsers show three explicit choices before any XMTP registration: create a new inbox, add this device to an existing wallet inbox, or restore the same key from a keyfile.
-- "Create new Converge inbox" remains a one-click generated-key flow after the user chooses it.
+- On a true first visit, automatically create/register the first local-key inbox, then show the existing Color Animal name/avatar editor before the main app. The editor is dismissible.
+- Empty onboarding after an intentional final-inbox burn offers create, import, and existing-inbox join without auto-creating another inbox.
+- "Create new Converge inbox" remains a one-click generated-key flow from the Inbox Switcher or empty onboarding.
 - **No manual wallet address entry**
 - **No passphrase setup**
 - **No multi-step wizard** except where wallet approval or installation-limit recovery requires it.
@@ -62,20 +63,38 @@ read the same source of truth.
 
 ---
 
+## Product Decisions (2026-07-10)
+
+- Treat the top-left identity control as an Inbox Switcher with one profile-name/avatar entry per XMTP inbox, not one entry per key. Each inbox is an independent social identity and storage namespace; only the selected inbox connects and syncs.
+- Add Inbox supports Create new inbox, Import keyfile, and Add this device to existing inbox. Import reuses the exact key and its resolved inbox. If that inbox is already loaded, say "This inbox is already loaded" and change nothing.
+- Use "local account key" or "Converge key" for the app-held signer. Reserve "installation" for the XMTP SDK device/app-instance key. Do not expose a message-level key selector; recipients see the sender inbox. A future transaction-signing key selector is a separate wallet feature.
+- Keep plaintext key export in Advanced and never prompt users to write down or export a seed phrase. Loss of the only local copy is an accepted default tradeoff.
+- Warn before wallet/account association that address-to-inbox identity links are publicly queryable and effectively permanent.
+- Burn Inbox lives only in the selected inbox's Settings. After one quick confirmation, attempt installation revocation, then wipe every local inbox-scoped key, database, message, contact, draft, attachment, profile, and cache regardless of revoke success. Explain failed remote revocation and return to empty onboarding after the last inbox.
+- Contacts are separate per inbox, created after active participation, and display the peer's published profile. Do not add private aliases, notes, or custom contact sync. XMTP consent is network-synced per inbox, cached locally, and refreshed when that inbox becomes active.
+- Follow current Convos behavior by default, including profile messages that carry human and agent names, unless a Converge-specific difference is explicitly documented.
+- Notifications are app/browser-level: one browser subscription, one relay registration per loaded inbox/installation, and batched conversation topics per registration. Enable covers all loaded inboxes; disable deletes all registrations before unsubscribing. Inactive pushes set an approximate switcher activity dot without syncing. Visible copy may name the full inbox profile but must not expose sender or message content. Keep this experimental until live delivery and welcome-topic coverage are verified.
+- Notification-tap behavior remains unresolved: do not silently choose between automatic inbox switching and opening with the target inbox highlighted.
+
+`FEATURES.md` contains the user-facing approved target and explicitly separates it from shipped behavior. `ARCHITECTURE.md` is the canonical technical contract for implementation after context compaction.
+
+---
+
 ## Architecture Decisions
 
 ### Identity & Storage
 - **Identities stored in IndexedDB** (via Dexie), NOT localStorage
 - Local app keys are generated with secp256k1 wallet primitives and stored as exportable identity records.
 - Private keys and mnemonics are currently stored unencrypted in IndexedDB. Decrypted messages and attachment bytes are also local plaintext; the XMTP OPFS database is not encrypted by Converge.
-- A local app key is an XMTP account identity. An XMTP installation is a separate SDK-generated device key stored in the inbox-aware XMTP database.
+- A local account key is an XMTP account identity. An XMTP installation is a separate SDK-generated installation key stored in the inbox-aware XMTP database.
 - New identities use the SDK's inbox-aware default database path. Existing identities without a path marker retain the legacy address-based path to avoid installation churn.
 
 ### Authentication Flow
 ```
 App start → checkExistingIdentity() →
   Existing identity: reopen its persisted XMTP database → verify inbox and installation
-  No identity: show onboarding without generating or registering a key
+  True first visit: generate/register the first inbox → open profile editor → open app
+  Intentionally empty after final burn: show empty onboarding without creating an inbox
 
 Create new Converge inbox →
   Generate a fresh local key → explicitly register one inbox/installation → verify and store IDs
@@ -86,7 +105,7 @@ Restore from keyfile →
 Add this device to existing inbox →
   Connect wallet that owns existing inbox →
   Probe target inbox and installation limit without creating a client for the new key →
-  Generate a fresh local device account key →
+  Generate a fresh local account key →
   Register/reuse this browser installation under wallet authority →
   Associate the fresh key only after proving it is unassociated →
   Reopen the same inbox database with the fresh key → verify inbox and installation IDs → request history
@@ -507,16 +526,22 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.4.5 + XMTP device-join registration repair)
+**Last Updated**: 2026-07-10 (app version 0.4.5 + approved multi-inbox product contract)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-10)
 
+### Approved Multi-Inbox Product Contract Checkpoint
+- Recorded the product-intent interview in `FEATURES.md`, `ARCHITECTURE.md`, and the canonical rules above so context compaction or agent handoff does not lose it.
+- The target distinguishes a true first visit from an intentional post-burn empty state, models the top-left control as an inbox switcher, reserves wallet use for authority/admin, and keeps only the selected inbox connected.
+- It also fixes the intended location and wipe semantics for Burn Inbox, establishes Convos-first published profiles and inbox-scoped contacts/consent, and defines notifications as one app-level setting with per-inbox relay records and inactive-inbox activity hints.
+- This is a documentation checkpoint, not a claim that those pending UI/storage/push changes are already shipped. Notification-tap behavior remains the one explicitly unresolved decision.
+
 ### XMTP Device-Join Registration and Stream Lifecycle Repair
 - Bumped Converge from `0.4.4` to `0.4.5` after a real Settings device-join attempt stopped during `registering-installation` even though XMTP had accepted the installation.
 - Root cause: Browser SDK 6.1.2 can return from `register()` before a separate static `Client.fetchInboxStates()` reader observes the new installation. Converge added an approximately 16-second static-ledger gate and incorrectly turned normal replication lag into a fatal retry error.
-- Wallet-approved device joins now require the manager client's own `isRegistered()` readiness after registration and treat only the lagging post-submit static observation as nonfatal. The 10/10 capacity preflight remains strict, and the fresh device key must still converge through the manager resolver, independent resolver, and target inbox identity state before setup completes.
+- Wallet-approved device joins now require the manager client's own `isRegistered()` readiness after registration and treat only the lagging post-submit static observation as nonfatal. The 10/10 capacity preflight remains strict, and the fresh local account key must still converge through the manager resolver, independent resolver, and target inbox identity state before setup completes.
 - Interrupted joins reuse the persisted installation and local database without calling `register()` again when the manager is already locally registered. A returned registration that leaves `isRegistered()` false still fails closed.
 - The pinned SDK predates the April 2026 `waitForRegistrationVisible` quorum option, and published stable 7.0.0 does not contain it either; do not pass that option until upgrading to a release that actually exposes it.
 - `streamAllMessages()` returns an `AsyncStreamProxy`, whose cancellation API is asynchronous `end()`/`return()`. Disconnect now awaits `end()` once before closing the XMTP client instead of calling the nonexistent `close()` method.
@@ -570,7 +595,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### XMTP Device Provisioning and Honest Key Model
 - Bumped Converge from `0.3.9` to `0.4.0` after separating XMTP account identities, inboxes, and installations in onboarding and reconnect behavior.
-- Empty browsers no longer auto-register a generated standalone inbox. Users explicitly choose a new inbox, same-key keyfile restore, or a fresh per-device key joined to an existing wallet-controlled inbox.
+- In version 0.4.0, empty browsers stopped auto-registering a generated standalone inbox and instead offered a new inbox, same-key keyfile restore, or a fresh local account key joined to an existing wallet-controlled inbox. The approved 2026-07-10 target restores automatic creation only for a true first visit.
 - Wallet-approved joins statically resolve the target and fresh identifiers, enforce the 10-installation limit before mutation, register/reuse one inbox-aware browser database, add only a proven-unassociated key, then reconnect and verify the target `inboxId` and exact `installationId`.
 - Pending keys are stored before ledger mutation and resumed after interruption. Failed Settings/switcher provisioning restores the previous active identity and namespace instead of leaving an authenticated half-transition.
 - Wallet and keyfile 10/10 recovery refetch current inbox state immediately before the recovery signature and stop without revocation if capacity is already available.
@@ -657,7 +682,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - The wallet connection flow probes the wallet inbox, blocks at XMTP's 10-installation limit, then calls the browser SDK's `unsafe_addAccount(..., true)` through a temporary manager client to reassign the local app key to the target inbox.
 - After reassignment, Converge persists the local app key with the destination `inboxId`, switches the storage namespace, removes the generated inbox from the visible registry, reconnects using the local key, and syncs history from the existing inbox.
 - The generated inbox is intentionally abandoned after reassignment. This pass removes it from the visible registry but does not aggressively delete every old namespace/OPFS artifact.
-- `FEATURES.md` and root `ARCHITECTURE.md` document this as the current identity architecture; do not reintroduce wallet-primary onboarding without updating those docs.
+- At the time, `FEATURES.md` and root `ARCHITECTURE.md` documented this as current. The approved 2026-07-10 contract now supersedes the startup and reassignment-product assumptions while retaining wallet-optional messaging.
 
 ### App Version Bump
 - Bumped Converge from `0.1.0` to `0.2.0` after the Convos XMTP interop feature work.

@@ -16,14 +16,57 @@ This root file is the canonical architecture and decision tracker for Converge. 
 - Static deployability: GitHub Pages remains sufficient for the Converge app shell.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
 
+## Approved Multi-Inbox Product Contract
+
+This section records the target architecture approved on 2026-07-10. Some of
+it is not implemented yet. Current implementation details below must not be
+mistaken for permission to preserve conflicting behavior.
+
+### First-Run Lifecycle
+
+- A true first visit automatically generates a local account key and registers its new XMTP inbox and first installation. It then opens the existing dismissible profile editor, prefilled with the deterministic Color Animal name, before the main messaging UI.
+- Creating another inbox later selects it immediately and opens the same profile editor.
+- Burning the final loaded inbox creates an intentionally empty state. Startup must distinguish that state from a true first visit and show empty onboarding instead of silently creating a replacement inbox.
+
+### Inbox Registry And Runtime Isolation
+
+- The top-left identity control is an Inbox Switcher. The registry has one entry per XMTP inbox, regardless of how many account identifiers or installations that inbox has.
+- An inbox entry represents an independent social identity with its own profile, contacts, consent cache, conversations, drafts, attachments, keys, and local storage namespace. Its default switcher presentation is profile name and avatar; protocol identifiers stay in details views.
+- Only the selected inbox owns a live XMTP client and performs conversation, message, profile, contact, or consent sync. Switching must completely close the current client and database handles before opening the selected inbox.
+- The registry supports Create new inbox, Import keyfile, and Add this device to existing inbox. Import loads the inbox resolved by the exact imported key. If that inbox is already in the registry, report "This inbox is already loaded" and make no state change.
+- An imported account key that has no XMTP identity update may register its own new inbox. A registered imported key must resolve to its existing inbox and must not be reassigned as part of import.
+
+### Account Keys, Installations, And Wallet Authority
+
+- Use "local account key" or "Converge key" for the exportable secp256k1 key stored by the app. Reserve "installation" or "installation key" for the separate XMTP SDK key in the inbox database.
+- The local account key is the normal application signer. Wallets are optional authority for joining an existing inbox, recovery, and identity administration; routine messaging must not require wallet prompts.
+- XMTP messages are represented to recipients as coming from `senderInboxId`. Converge must not offer a message-level selector for associated account keys. A future transaction-signing key selector belongs to a separate wallet feature.
+- Plaintext key export remains under Advanced settings and is never presented as an onboarding task or backup nag. Permanent loss after losing the only local copy is an accepted default tradeoff.
+- Before associating a wallet or account identifier, the UI must warn that XMTP address-to-inbox associations and identity updates are publicly queryable and effectively permanent.
+
+### Burn Inbox
+
+- Burn Inbox belongs only in the selected inbox's Settings and requires one quick confirmation.
+- The operation first attempts to revoke the current XMTP installation. It then wipes the local account key, XMTP database, messages, contacts, consent cache, drafts, attachments, profile, and every inbox-scoped cache even when remote revocation fails.
+- A revocation failure must not block the local wipe. Report that the remote installation may remain active and should be revoked from another connected device.
+- Burning removes local access and device data. It cannot erase the network inbox, messages already distributed through XMTP, or permanent identity history.
+
+### Contacts, Consent, And Published Profiles
+
+- Contacts and consent projections are namespaced per inbox. Follow current Convos behavior unless a documented Converge-specific decision deliberately differs.
+- Contact creation is action-gated by active participation. Passive network discovery alone does not create a durable private address book.
+- Display the peer's published profile. Do not add private aliases, notes, or a Converge-only cross-device contact-sync protocol.
+- XMTP consent is encrypted network-synchronized inbox state with a local cache. Inactive inboxes do not background-sync consent; they refresh it when selected.
+- Each local inbox owns an independent profile. Convos profile update/snapshot messages remain the cross-client name channel for people and agents; the implementation limitations below still apply to encrypted avatars.
+
 ## XMTP Identity, Inbox, And Installation Model
 
 ### Product Terms
 
-- A Converge local app key is an XMTP account identity backed by a secp256k1 private key.
+- A Converge local account key is an XMTP account identity backed by a secp256k1 private key.
 - An XMTP inbox ID is the stable messaging destination. Multiple account identities can resolve to one inbox.
-- An XMTP installation is the device/app-instance key stored in the Browser SDK SQLite database. It is not the local app key.
-- Create new Converge inbox means a new local account key, a new XMTP inbox, and this browser's first installation.
+- An XMTP installation is the device/app-instance key stored in the Browser SDK SQLite database. It is not the local account key.
+- Create new Converge inbox means a new local account key, a new XMTP inbox, and this browser's first installation for that inbox.
 - Restore from keyfile means reuse the exact private key or mnemonic. A new browser resolves that account to its existing inbox and registers a distinct installation.
 - Add this device to existing inbox means create a fresh local account key, associate it with the target inbox, and reuse one browser installation authorized by a wallet that already controls that inbox.
 
@@ -31,7 +74,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 1. Resolve the wallet identifier through the XMTP identity ledger. A prospective `Client.inboxId` is not proof that a ledger inbox exists.
 2. Check the target inbox installation count before any registration. At 10/10, stop and offer the existing static recovery flow.
-3. Generate the fresh local device account key without creating a client for it.
+3. Generate the fresh local account key without creating a client for it.
 4. Confirm through the ledger that the fresh key has no inbox. If it already resolves anywhere, block; the normal flow never reassigns it.
 5. Open the wallet signer with the SDK's inbox-aware default database path and `disableAutoRegister: true`.
 6. Register that browser installation with the wallet if the manager client is not already registered. On Browser SDK 6.1.2, require the manager's own `isRegistered()` readiness after submission; a separate static inbox-state reader can lag behind a successful `register()` response.
@@ -60,7 +103,7 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - The default UI never moves an already-registered account key.
 - The browser SDK high-level `unsafe_addAccount` implementation rejects an account that already resolves to an inbox, despite the API's reassignment acknowledgement flag.
 - Explicit reassignment would strand that identity's previous inbox and requires a separate lower-level, strongly confirmed workflow. Converge currently refuses it instead of pretending two inboxes can be merged.
-- Settings creates a new device key and leaves the current Converge inbox in the registry.
+- Settings creates a fresh local account key for a wallet-approved join and leaves the current Converge inbox in the registry.
 
 ### Limits And Recovery
 
@@ -113,14 +156,25 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 Converge should use vapid.party as an XMTP-aware Web Push relay:
 
 1. Converge registers a browser `PushSubscription`.
-2. Converge sends the subscription, current XMTP identity, and available XMTP topic HMAC keys directly to vapid.party.
+2. Converge maintains one vapid.party relay registration per loaded inbox and installation on that shared subscription endpoint.
 3. vapid.party watches XMTP message traffic by topic/HMAC filter.
-4. vapid.party sends a minimal Web Push payload.
-5. `public/sw.js` shows a visible notification.
-6. Clicking the notification focuses or opens Converge.
-7. The app syncs XMTP and decrypts messages locally.
+4. vapid.party sends a minimal Web Push payload that identifies the inbox through an opaque local handle.
+5. `public/sw.js` records an approximate per-inbox activity hint and shows a visible notification using the local inbox profile name when available.
+6. Clicking the notification focuses or opens Converge. Whether it switches automatically or only highlights the inbox remains a product TBD.
+7. The app syncs and decrypts only after that inbox is selected.
 
-### Implemented Now In Converge
+### Approved App-Level Subscription Model
+
+- Notification permission and the browser `PushSubscription` are app/browser-wide. There is no per-inbox or per-conversation user toggle.
+- The shared endpoint can have many relay records, each keyed by `subscription.endpoint + inboxId + installationId`. One record contains that inbox's batched conversation topics and HMAC keys; the app does not make one HTTP request per conversation.
+- Enabling notifications upserts every loaded inbox for which Converge has cached valid relay material. A newly created, imported, or joined inbox is upserted when it is active and its topics are available.
+- Inactive inboxes remain registered at the relay but do not open an XMTP client or sync. Last-known topic material is stored in that inbox's local namespace and refreshed only while the inbox is active, including after HMAC-key updates.
+- Disabling notifications deletes every locally known inbox/installation relay record before unsubscribing the shared browser endpoint. Browser notification permission itself remains controlled by browser settings.
+- `isPushEnabled` must reflect the app-level preference and registration state, not merely the existence of a browser endpoint.
+- A push for an inactive inbox stores a pending-activity flag in service-worker-accessible local state and uses a per-inbox notification tag. The Inbox Switcher displays a dot; only a later XMTP sync can determine exact unread state.
+- Visible copy can say "New activity for <full inbox profile name>" but must not include sender or message content. Prefer resolving the profile name locally from an opaque inbox handle rather than sending the profile name through the relay.
+
+### Current Implementation
 
 - `src/lib/push/config.ts` only accepts public config:
   - `VITE_VAPID_PARTY_API_BASE`, defaulting to `https://vapid.party/api`.
@@ -135,6 +189,7 @@ Converge should use vapid.party as an XMTP-aware Web Push relay:
 - `src/lib/xmtp/client.ts` exposes `getPushHmacKeys()` as a thin wrapper around the installed SDK's `hmacKeys()` API.
 - `public/sw.js` shows a generic visible notification and same-origin click URL. It does not decrypt XMTP and does not assume plaintext message content exists.
 - Debug no longer attempts client-side `POST /send`; real test pushes must come from the relay side.
+- This implementation is selected-inbox-only. Its status helper checks only for the shared endpoint, and its disable path deletes the selected inbox record before unsubscribing that endpoint. These are known gaps against the approved app-level model above.
 
 ### Required vapid.party Backend Support
 
@@ -225,7 +280,7 @@ Converge also accepts `{ "publicKey": "..." }` or a plain text key. Until this r
 }
 ```
 
-Converge calls this best-effort, then removes the local browser subscription.
+The endpoint deletes one logical inbox/installation registration. Under the approved app-level model, global disable calls it for every loaded registration and only then removes the shared browser subscription. The current client instead deletes the selected registration and immediately removes the shared endpoint.
 
 ### Minimal Push Payload
 
@@ -235,16 +290,17 @@ vapid.party should send only metadata that the service worker can display withou
 {
   "type": "xmtp.new_message",
   "title": "Converge",
-  "body": "New encrypted message",
+  "body": "New activity",
   "url": "/",
-  "tag": "converge-xmtp-notification",
+  "tag": "converge-xmtp-LOCAL_INBOX_HANDLE",
   "data": {
+    "inboxHandle": "opaque-local-inbox-handle",
     "conversationId": "optional-conversation-id"
   }
 }
 ```
 
-`public/sw.js` also accepts a `{ "payload": { ... } }` wrapper. Click URLs are resolved against Converge's own origin and cross-origin URLs are ignored.
+`public/sw.js` also accepts a `{ "payload": { ... } }` wrapper. The target service worker resolves the local inbox profile name, records the activity hint, and uses the handle for notification coalescing. Click URLs are resolved against Converge's own origin and cross-origin URLs are ignored. Current code does not yet implement the handle or local profile lookup.
 
 ### Privacy And Security Model
 
