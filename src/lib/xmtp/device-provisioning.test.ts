@@ -8,10 +8,12 @@ import {
   InstallationLimitError,
   planClientInstallation,
   provisionFreshDeviceKey,
+  provisionWithStaleInstallationRecovery,
   ReassignmentRequiredError,
   recordInstallationReady,
   shouldRequestHistorySync,
   signerIdentityKey,
+  StaleLocalInstallationError,
   type DeviceProvisioningClient,
 } from './device-provisioning';
 
@@ -42,6 +44,8 @@ function setup(options?: {
   staticInstallationVisibleAfter?: number;
   registerThrowsAfterMutation?: boolean;
   addAccountThrowsAfterMutation?: boolean;
+  addAccountMissingExistingMemberAttempts?: number;
+  addAccountError?: Error;
   targetIsCurrentAuthority?: boolean;
 }) {
   let associatedDeviceInbox = options?.deviceInbox;
@@ -52,6 +56,7 @@ function setup(options?: {
   let delayedVisibilityReads = 0;
   let registrationCanBecomeVisible = locallyRegistered;
   const events: string[] = [];
+  let addAccountAttempts = 0;
   const register = vi.fn(async () => {
     registrationCanBecomeVisible = true;
     if (!options?.registerNoop) {
@@ -69,6 +74,16 @@ function setup(options?: {
     }
   });
   const addAccount = vi.fn(async (newSigner: Signer) => {
+    addAccountAttempts += 1;
+    if (
+      options?.addAccountMissingExistingMemberAttempts !== undefined &&
+      addAccountAttempts <= options.addAccountMissingExistingMemberAttempts
+    ) {
+      throw new Error('Missing existing member');
+    }
+    if (options?.addAccountError) {
+      throw options.addAccountError;
+    }
     events.push('add-account');
     associatedIdentifier = await newSigner.getIdentifier();
     associatedDeviceInbox = targetInbox;
@@ -77,9 +92,15 @@ function setup(options?: {
     }
   });
   const close = vi.fn(async () => undefined);
+  let fetchManagerInboxState = async (): Promise<InboxState> => {
+    throw new Error('Manager inbox-state reader was not initialized.');
+  };
   const manager: DeviceProvisioningClient = {
     inboxId: targetInbox,
     installationId: 'installation-new',
+    preferences: {
+      fetchInboxState: async () => await fetchManagerInboxState(),
+    },
     isRegistered: vi.fn(async () => locallyRegistered),
     register,
     unsafe_addAccount: addAccount,
@@ -118,6 +139,13 @@ function setup(options?: {
           ],
         } as InboxState);
   });
+  fetchManagerInboxState = async () => {
+    const state = await fetchInboxState();
+    if (!state) {
+      throw new Error('Manager inbox state unavailable.');
+    }
+    return state;
+  };
   const createManager = vi.fn(async () => manager);
   const sleep = vi.fn(async () => undefined);
 
@@ -132,6 +160,104 @@ function setup(options?: {
 }
 
 describe('fresh device provisioning', () => {
+  it('replaces one stale local installation without changing the staged key flow', async () => {
+    const stale = new StaleLocalInstallationError(targetInbox, 'installation-stale');
+    const provision = vi
+      .fn<(resumeInstallationId?: string) => Promise<string>>()
+      .mockRejectedValueOnce(stale)
+      .mockResolvedValueOnce('installation-replacement');
+    const reset = vi.fn(async () => undefined);
+
+    await expect(
+      provisionWithStaleInstallationRecovery('installation-stale', provision, reset)
+    ).resolves.toBe('installation-replacement');
+
+    expect(provision.mock.calls).toEqual([['installation-stale'], [undefined]]);
+    expect(reset).toHaveBeenCalledOnce();
+    expect(reset).toHaveBeenCalledWith(stale);
+  });
+
+  it('does not loop when the replacement installation also fails', async () => {
+    const first = new StaleLocalInstallationError(targetInbox, 'installation-stale');
+    const second = new StaleLocalInstallationError(targetInbox, 'installation-replacement');
+    const provision = vi
+      .fn<(resumeInstallationId?: string) => Promise<string>>()
+      .mockRejectedValueOnce(first)
+      .mockRejectedValueOnce(second);
+    const reset = vi.fn(async () => undefined);
+
+    await expect(
+      provisionWithStaleInstallationRecovery('installation-stale', provision, reset)
+    ).rejects.toBe(second);
+
+    expect(provision).toHaveBeenCalledTimes(2);
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
+  it('registers the replacement installation before associating the preserved device key', async () => {
+    const staleHarness = setup({
+      locallyRegistered: true,
+      staticInstallationStaysStale: true,
+    });
+    staleHarness.manager.installationId = 'installation-stale';
+    const replacementHarness = setup();
+    replacementHarness.manager.installationId = 'installation-replacement';
+    const target = signer(targetIdentifier);
+    const device = signer(deviceIdentifier);
+    let attempt = 0;
+    const provision = async (knownInstallationId?: string) => {
+      const harness = attempt++ === 0 ? staleHarness : replacementHarness;
+      return await provisionFreshDeviceKey(target, device, targetInbox, {
+        ...harness.dependencies,
+        knownInstallationId,
+      });
+    };
+
+    const result = await provisionWithStaleInstallationRecovery(
+      'installation-stale',
+      provision,
+      async () => undefined
+    );
+
+    expect(result.installationId).toBe('installation-replacement');
+    expect(staleHarness.register).not.toHaveBeenCalled();
+    expect(staleHarness.addAccount).not.toHaveBeenCalled();
+    expect(replacementHarness.register).toHaveBeenCalledOnce();
+    expect(replacementHarness.addAccount).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks 10/10 capacity before opening a replacement installation', async () => {
+    const staleHarness = setup({
+      locallyRegistered: true,
+      staticInstallationStaysStale: true,
+    });
+    staleHarness.manager.installationId = 'installation-stale';
+    const fullHarness = setup({
+      installationIds: Array.from({ length: 10 }, (_, index) => `installation-${index}`),
+    });
+    let attempt = 0;
+    const provision = async (knownInstallationId?: string) => {
+      const harness = attempt++ === 0 ? staleHarness : fullHarness;
+      return await provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        { ...harness.dependencies, knownInstallationId }
+      );
+    };
+
+    await expect(
+      provisionWithStaleInstallationRecovery(
+        'installation-stale',
+        provision,
+        async () => undefined
+      )
+    ).rejects.toBeInstanceOf(InstallationLimitError);
+
+    expect(fullHarness.dependencies.createManager).not.toHaveBeenCalled();
+    expect(fullHarness.register).not.toHaveBeenCalled();
+  });
+
   it('registers one target-inbox installation before adding a fresh device key', async () => {
     const harness = setup();
 
@@ -369,8 +495,11 @@ describe('fresh device provisioning', () => {
     );
   });
 
-  it('stops before association when a newly registered installation never becomes a member', async () => {
-    const harness = setup({ staticInstallationStaysStale: true });
+  it('stops after bounded association retries when fresh membership never propagates', async () => {
+    const harness = setup({
+      staticInstallationStaysStale: true,
+      addAccountMissingExistingMemberAttempts: 8,
+    });
 
     await expect(
       provisionFreshDeviceKey(
@@ -382,7 +511,26 @@ describe('fresh device provisioning', () => {
     ).rejects.toBeInstanceOf(InstallationMembershipPendingError);
 
     expect(harness.register).toHaveBeenCalledOnce();
-    expect(harness.addAccount).not.toHaveBeenCalled();
+    expect(harness.addAccount).toHaveBeenCalledTimes(8);
+  });
+
+  it('retries Missing existing member with the same fresh installation', async () => {
+    const harness = setup({
+      staticInstallationStaysStale: true,
+      addAccountMissingExistingMemberAttempts: 2,
+    });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      harness.dependencies
+    );
+
+    expect(result.installationRegistered).toBe(true);
+    expect(result.accountAdded).toBe(true);
+    expect(harness.register).toHaveBeenCalledOnce();
+    expect(harness.addAccount).toHaveBeenCalledTimes(3);
   });
 
   it('resumes a locally registered installation after static membership catches up', async () => {
@@ -422,7 +570,7 @@ describe('fresh device provisioning', () => {
           knownInstallationId: 'installation-new',
         }
       )
-    ).rejects.toBeInstanceOf(InstallationMembershipPendingError);
+    ).rejects.toBeInstanceOf(StaleLocalInstallationError);
 
     expect(harness.register).not.toHaveBeenCalled();
     expect(harness.addAccount).not.toHaveBeenCalled();
@@ -442,6 +590,21 @@ describe('fresh device provisioning', () => {
 
     expect(harness.register).toHaveBeenCalledOnce();
     expect(harness.addAccount).not.toHaveBeenCalled();
+  });
+
+  it('does not retry unrelated add-account failures', async () => {
+    const harness = setup({ addAccountError: new Error('signature rejected') });
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        harness.dependencies
+      )
+    ).rejects.toThrow('signature rejected');
+
+    expect(harness.addAccount).toHaveBeenCalledOnce();
   });
 
   it('resumes verification when add-account throws after the association reaches the ledger', async () => {

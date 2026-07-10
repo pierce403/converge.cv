@@ -932,6 +932,12 @@ export function useAuth() {
               }
               await currentStorage.putIdentity({ ...stagedIdentity, installationId });
             },
+            onInstallationReset: async (installationId) => {
+              if (installationIdsMatch(stagedIdentity.installationId, installationId)) {
+                stagedIdentity.installationId = undefined;
+              }
+              await currentStorage.putIdentity({ ...stagedIdentity, installationId: undefined });
+            },
             onPhase: async (phase) => {
               lastProvisioningPhase = phase;
               const messages = {
@@ -942,6 +948,8 @@ export function useAuth() {
                 'installation-registered': 'Installation approved. Preparing the local account key…',
                 'verifying-installation':
                   'Waiting for XMTP to publish this browser installation…',
+                'repairing-installation':
+                  'Replacing an interrupted browser installation…',
                 'associating-key': 'Associating the fresh local account key…',
                 'association-submitted': 'Local account key accepted. Waiting for XMTP confirmation…',
                 'verifying-association': 'Verifying the new key against your existing inbox…',

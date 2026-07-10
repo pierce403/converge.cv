@@ -9,6 +9,9 @@ export type XmtpDbPathMode = 'legacy-address' | 'inbox-default';
 export interface DeviceProvisioningClient {
   inboxId?: string;
   installationId?: string;
+  preferences: {
+    fetchInboxState(): Promise<InboxState>;
+  };
   isRegistered(): Promise<boolean>;
   register(): Promise<unknown>;
   unsafe_addAccount(signer: Signer, allowInboxReassign: boolean): Promise<unknown>;
@@ -33,6 +36,7 @@ export type DeviceProvisioningPhase =
   | 'registering-installation'
   | 'installation-registered'
   | 'verifying-installation'
+  | 'repairing-installation'
   | 'associating-key'
   | 'association-submitted'
   | 'verifying-association'
@@ -81,6 +85,9 @@ const stateHasInstallation = (
 const defaultSleep = async (milliseconds: number) =>
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+const INSTALLATION_MEMBERSHIP_ATTEMPTS = 6;
+const ADD_ACCOUNT_MEMBERSHIP_ATTEMPTS = 8;
+
 const isInstallationLimitLikeError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error ?? '');
   return /too\s*many\s*installations|10\s*\/\s*10|installation limit|already registered 10/i.test(
@@ -107,7 +114,7 @@ async function waitForLocalRegistration(
   manager: DeviceProvisioningClient,
   sleep: (milliseconds: number) => Promise<void>
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (let attempt = 0; attempt < INSTALLATION_MEMBERSHIP_ATTEMPTS; attempt += 1) {
     if (await manager.isRegistered()) {
       return true;
     }
@@ -119,19 +126,44 @@ async function waitForLocalRegistration(
 async function waitForInstallationMembership(
   inboxId: string,
   installationId: string,
+  manager: DeviceProvisioningClient,
   fetchInboxState: ProvisionDeviceDependencies['fetchInboxState'],
   sleep: (milliseconds: number) => Promise<void>
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if (stateHasInstallation(await fetchInboxState(inboxId), installationId)) {
-      return true;
+  for (let attempt = 0; attempt < INSTALLATION_MEMBERSHIP_ATTEMPTS; attempt += 1) {
+    try {
+      if (stateHasInstallation(await manager.preferences.fetchInboxState(), installationId)) {
+        return true;
+      }
+    } catch (error) {
+      console.warn('[XMTP] Manager could not refresh its inbox state', {
+        inboxId,
+        installationId,
+        attempt: attempt + 1,
+        error,
+      });
     }
-    if (attempt < 9) {
+    try {
+      if (stateHasInstallation(await fetchInboxState(inboxId), installationId)) {
+        return true;
+      }
+    } catch (error) {
+      console.warn('[XMTP] Independent inbox-state refresh failed', {
+        inboxId,
+        installationId,
+        attempt: attempt + 1,
+        error,
+      });
+    }
+    if (attempt < INSTALLATION_MEMBERSHIP_ATTEMPTS - 1) {
       await sleep(Math.min(3_000, 250 * 2 ** attempt));
     }
   }
   return false;
 }
+
+const isMissingExistingMemberError = (error: unknown) =>
+  /missing existing member/i.test(error instanceof Error ? error.message : String(error ?? ''));
 
 async function waitForAccountIdentifier(
   inboxId: string,
@@ -296,11 +328,43 @@ export class InstallationMembershipPendingError extends Error {
 
   constructor(inboxId: string, installationId: string) {
     super(
-      'XMTP registered this browser locally, but has not yet published it as a member of the target inbox. Converge did not associate the local account key. Wait a moment, then retry Add This Device to resume the same key and installation.'
+      `XMTP has not propagated browser installation ${installationId} far enough to authorize the local account key. Converge kept the same account key and did not reassign it. Retry Add This Device; if this installation remains absent, Converge will replace only its pending local XMTP database.`
     );
     this.name = 'InstallationMembershipPendingError';
     this.inboxId = inboxId;
     this.installationId = installationId;
+  }
+}
+
+export class StaleLocalInstallationError extends Error {
+  readonly inboxId: string;
+  readonly installationId: string;
+
+  constructor(inboxId: string, installationId: string) {
+    super(
+      `Saved browser installation ${installationId} is locally ready but is not a current member of inbox ${inboxId}. Its pending XMTP database must be replaced before device setup can continue.`
+    );
+    this.name = 'StaleLocalInstallationError';
+    this.inboxId = inboxId;
+    this.installationId = installationId;
+  }
+}
+
+export async function provisionWithStaleInstallationRecovery<T>(
+  knownInstallationId: string | undefined,
+  provision: (resumeInstallationId?: string) => Promise<T>,
+  reset: (error: StaleLocalInstallationError) => Promise<void>
+): Promise<T> {
+  try {
+    return await provision(knownInstallationId);
+  } catch (error) {
+    if (!(error instanceof StaleLocalInstallationError)) {
+      throw error;
+    }
+    await reset(error);
+    // Recover exactly once; a replacement failure must remain visible rather
+    // than creating installation churn.
+    return await provision(undefined);
   }
 }
 
@@ -395,8 +459,33 @@ export async function provisionFreshDeviceKey(
       (installation) => installationIdsMatch(installation.id, manager.installationId)
     );
     const managerAlreadyRegistered = await manager.isRegistered();
+    console.info('[XMTP] Device manager installation check', {
+      inboxId: expected,
+      installationId: manager.installationId,
+      knownInstallationId: dependencies.knownInstallationId ?? null,
+      locallyRegistered: managerAlreadyRegistered,
+      visibleInstallationIds: installations.map((installation) => installation.id),
+    });
 
     let installationRegistered = false;
+    let installationVisible = hasManagerInstallation;
+    if (managerAlreadyRegistered && !installationVisible) {
+      await notify('verifying-installation');
+      installationVisible = await waitForInstallationMembership(
+        expected,
+        manager.installationId,
+        manager,
+        dependencies.fetchInboxState,
+        sleep
+      );
+      if (!installationVisible) {
+        // isRegistered() only reflects the persisted local identity. Reopening a
+        // revoked or interrupted database reports true even when its installation
+        // is absent from the network and register() cannot republish it.
+        throw new StaleLocalInstallationError(expected, manager.installationId);
+      }
+    }
+
     if (!managerAlreadyRegistered) {
       if (installations.length >= XMTP_INSTALLATION_LIMIT && !hasManagerInstallation) {
         throw new InstallationLimitError(expected);
@@ -425,24 +514,22 @@ export async function provisionFreshDeviceKey(
       await notify('installation-registered');
     }
 
-    await notify('verifying-installation');
-    const installationVisible =
-      hasManagerInstallation ||
-      (await waitForInstallationMembership(
+    if (!installationVisible) {
+      await notify('verifying-installation');
+      installationVisible = await waitForInstallationMembership(
         expected,
         manager.installationId,
+        manager,
         dependencies.fetchInboxState,
         sleep
-      ));
+      );
+    }
     if (!installationVisible) {
-      // unsafe_addAccount pre-signs its existing-member proof with this
-      // installation key. Publishing before the installation appears in the
-      // inbox state is rejected by XMTP as "Missing existing member".
-      console.info('[XMTP] Device association paused until installation membership is visible', {
+      console.info('[XMTP] Installation is not visible to inbox-state readers yet', {
         inboxId: expected,
         installationId: manager.installationId,
+        locallyRegistered: await manager.isRegistered(),
       });
-      throw new InstallationMembershipPendingError(expected, manager.installationId);
     }
 
     let accountAdded = false;
@@ -458,30 +545,57 @@ export async function provisionFreshDeviceKey(
         // The SDK requires this acknowledgement even for an unregistered key. The
         // two ledger checks above guarantee that this call is not a reassignment.
         await notify('associating-key');
-        try {
-          await manager.unsafe_addAccount(deviceSigner, true);
-          accountAdded = true;
-        } catch (error) {
-          const resolvedAfterError = normalizeId(
-            await manager.fetchInboxIdByIdentifier(deviceIdentifier)
-          );
-          if (resolvedAfterError !== expected) {
-            const message = error instanceof Error ? error.message : String(error ?? '');
-            if (/missing existing member/i.test(message)) {
+        for (let attempt = 0; attempt < ADD_ACCOUNT_MEMBERSHIP_ATTEMPTS; attempt += 1) {
+          try {
+            await manager.unsafe_addAccount(deviceSigner, true);
+            accountAdded = true;
+            // Server acceptance proves that the current installation was accepted
+            // as an existing member even if a separate state reader is behind.
+            installationVisible = true;
+            break;
+          } catch (error) {
+            const resolvedAfterError = normalizeId(
+              await manager.fetchInboxIdByIdentifier(deviceIdentifier)
+            );
+            if (resolvedAfterError === expected) {
+              // The request response was interrupted, but the manager can already
+              // observe the committed association. Treat it as submitted so the
+              // independent static resolver must also converge before we continue.
+              accountAdded = true;
+              installationVisible = true;
+              console.info(
+                '[XMTP] Device key association became visible while the add-account request was settling; resuming verification.'
+              );
+              break;
+            }
+            if (!isMissingExistingMemberError(error)) {
+              throw error;
+            }
+            if (attempt === ADD_ACCOUNT_MEMBERSHIP_ATTEMPTS - 1) {
               throw new InstallationMembershipPendingError(expected, manager.installationId);
             }
-            throw error;
+            console.info('[XMTP] Waiting for installation membership before retrying association', {
+              inboxId: expected,
+              installationId: manager.installationId,
+              attempt: attempt + 1,
+            });
+            try {
+              installationVisible = stateHasInstallation(
+                await manager.preferences.fetchInboxState(),
+                manager.installationId
+              );
+            } catch {
+              // The add-account response remains authoritative; retry it below.
+            }
+            await sleep(Math.min(3_000, 250 * 2 ** attempt));
           }
-          // The request response was interrupted, but the manager can already
-          // observe the committed association. Treat it as submitted so the
-          // independent static resolver must also converge before we continue.
-          accountAdded = true;
-          console.info(
-            '[XMTP] Device key association became visible while the add-account request was settling; resuming verification.'
-          );
         }
         await notify('association-submitted');
       }
+    }
+
+    if (!installationVisible) {
+      throw new InstallationMembershipPendingError(expected, manager.installationId);
     }
 
     await notify('verifying-association');

@@ -89,12 +89,15 @@ import {
   getClientDbPath,
   InstallationMembershipPendingError,
   provisionFreshDeviceKey,
+  provisionWithStaleInstallationRecovery,
   shouldRequestHistorySync,
   signerIdentityKey,
+  StaleLocalInstallationError,
   type DeviceProvisioningPhase,
   type XmtpDbPathMode,
   type ProvisionDeviceResult,
 } from './device-provisioning';
+import { deleteInboxDefaultDatabase } from './opfs-database';
 import {
   ensureClientRegistration,
   installationIdsMatch,
@@ -221,6 +224,7 @@ export interface DeviceProvisioningOptions {
   expectedInboxId: string;
   knownInstallationId?: string;
   onInstallationReady?: (installationId: string) => Promise<void> | void;
+  onInstallationReset?: (installationId: string) => Promise<void> | void;
   onPhase?: (phase: DeviceProvisioningPhase) => Promise<void> | void;
 }
 
@@ -3955,10 +3959,16 @@ export class XmtpClient {
     expectedInboxId,
     knownInstallationId,
     onInstallationReady,
+    onInstallationReset,
     onPhase,
   }: DeviceProvisioningOptions): Promise<ProvisionDeviceResult> {
     if (!deviceIdentity.privateKey) {
       throw new Error('A fresh local private key is required to add this device.');
+    }
+    if (deviceIdentity.xmtpDbPathMode !== 'inbox-default') {
+      throw new Error(
+        'Device provisioning recovery requires the inbox-aware XMTP database path.'
+      );
     }
 
     if (this.client) {
@@ -3969,18 +3979,15 @@ export class XmtpClient {
     const deviceSigner = await this.createSigner(deviceIdentity);
     const sdkLoggingLevel = getXmtpSdkLogLevel();
 
-    return await provisionFreshDeviceKey(
-      targetSigner,
-      deviceSigner,
-      expectedInboxId,
-      {
+    const provision = async (resumeInstallationId?: string) =>
+      await provisionFreshDeviceKey(targetSigner, deviceSigner, expectedInboxId, {
         resolveInboxId: async (identifier) =>
           await getInboxIdForIdentifier(identifier, 'production'),
         fetchInboxState: async (inboxId) => {
           const states = await Client.fetchInboxStates([inboxId], 'production');
           return states[0];
         },
-        knownInstallationId,
+        knownInstallationId: resumeInstallationId,
         onInstallationReady,
         onPhase,
         createManager: async (signer) =>
@@ -3993,6 +4000,26 @@ export class XmtpClient {
             performanceLogging: false,
             disableAutoRegister: true,
           }),
+      });
+
+    return await provisionWithStaleInstallationRecovery(
+      knownInstallationId,
+      provision,
+      async (error: StaleLocalInstallationError) => {
+        console.warn('[XMTP] Replacing stale pending browser installation', {
+          inboxId: error.inboxId,
+          installationId: error.installationId,
+        });
+        await onPhase?.('repairing-installation');
+        // Clear the persisted expectation before deleting the database so a reload
+        // cannot compare the replacement installation against the stale ID.
+        await onInstallationReset?.(error.installationId);
+        const deleted = await deleteInboxDefaultDatabase(error.inboxId);
+        console.info('[XMTP] Pending inbox database reset complete', {
+          inboxId: error.inboxId,
+          installationId: error.installationId,
+          databaseDeleted: deleted,
+        });
       }
     );
   }

@@ -106,7 +106,9 @@ Add this device to existing inbox →
   Probe target inbox and installation limit without creating a client for the new key →
   Generate a fresh local account key →
   Register/reuse this browser installation under wallet authority →
-  Require that exact installation in the published inbox state →
+  Refresh that exact installation through the manager and independent network state →
+  Retry only XMTP's rejected `Missing existing member` response while a fresh registration propagates →
+  If locally ready but still network-absent, preserve the key and replace the pending default DB/installation once after a new 10/10 check →
   Associate the fresh key only after proving it is unassociated and the wallet is still current authority →
   Reopen the same inbox database with the fresh key → verify inbox and installation IDs → request history
 ```
@@ -230,7 +232,7 @@ pnpm typecheck        # TypeScript type checking
 - Plaintext keyfile export is available only under collapsed Advanced settings; wallet association requires acknowledging that the address-to-inbox link is public and effectively permanent
 - Notifications use one app/browser toggle, one shared PushSubscription, cached per-inbox/installation relay records, and inactive-inbox activity dots. Notification clicks focus/open Converge without switching; live delivery and first-contact coverage remain experimental/unverified
 - Explicit onboarding model for new inbox creation, same-key keyfile restore, and fresh-device-key association with an existing wallet inbox
-- Wallet-approved device provisioning verifies the target inbox, prevents accidental reassignment, reuses one inbox-aware browser database, and persists the final installation ID
+- Wallet-approved device provisioning verifies membership through the manager's own network refresh, prevents accidental reassignment, and persists the final installation ID. A locally ready but network-absent pending default database is replaced at most once while preserving the staged account key and rechecking 10/10 capacity.
 - Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
 - Mobile wallet connectors own their redirect/deep-link lifecycle, can resume with an account-bound signer before chain state arrives, and every XMTP signature is bound to the selected wallet account
 - Explicit wallet choices never fall through to another connector. Bytecode inspection is bounded; if all inspection RPCs fail, onboarding and Settings ask the user to choose regular wallet or smart account, and require a real connected chain for the smart-account choice.
@@ -542,6 +544,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Bumped Converge from `0.5.1` to `0.5.2` for the onboarding entry and wallet-stack cleanup.
 - Onboarding now always starts on the inbox choice screen and never creates an inbox or opens wallet approval automatically. Interrupted device joins appear as an explicit resume action that reuses the pending key and installation.
 - Native Wagmi/Reown is the only wallet connection stack. Privy and Thirdweb wallet-provider UI are removed; Thirdweb remains only as an on-demand uploader for encrypted attachment payloads to IPFS.
+
+### XMTP Pending-Installation Repair
+- Bumped Converge from `0.5.2` to `0.5.3` for stale pending-installation recovery.
+- Wallet-approved joins use `manager.preferences.fetchInboxState()` for the current manager installation's network membership proof. A separate static reader remains an independent convergence check, not the sole authority for deciding whether the manager may sign the next update.
+- After a fresh registration, if `unsafe_addAccount` returns the exact transient `Missing existing member` rejection while state readers converge, Converge refetches manager state and retries only that rejected association within a bounded window. The XMTP server remains the authorization gate.
+- A pending inbox-default XMTP database that is locally ready but still network-absent after bounded registration polling is automatically replaced once. The repair preserves the staged local account key, removes only the unusable pending database/installation marker, refetches the target inbox, and rechecks the 10/10 limit before creating the replacement installation.
+- Network-visible installations, legacy/custom database paths, and repeated failures are never auto-replaced. At 10/10 the replacement stops before client creation and returns to the existing safe recovery flow.
 
 ### XMTP Existing-Member Publication Gate
 - Bumped Converge from `0.5.0` to `0.5.1` after a real deanpierce.eth device join reached `unsafe_addAccount` and XMTP rejected `PublishIdentityUpdate` with `Missing existing member`.
