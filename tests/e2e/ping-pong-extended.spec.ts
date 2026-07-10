@@ -2,14 +2,14 @@ import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 
 async function setDisplayNameInModal(page: Page, displayName: string) {
   try {
-    const modalHeader = page.getByText(/make it yours/i);
+    const modalHeader = page.getByText(/choose your inbox profile/i);
     await modalHeader.waitFor({ state: 'visible', timeout: 30000 });
 
-    const modal = page.locator('.fixed.inset-0').filter({ hasText: /make it yours/i });
+    const modal = page.locator('.fixed.inset-0').filter({ hasText: /choose your inbox profile/i });
     const input = modal.locator('input[type="text"]');
     await input.fill(displayName);
 
-    await modal.getByRole('button', { name: /^save$/i }).click();
+    await modal.getByRole('button', { name: /save and continue/i }).click();
     await modal.waitFor({ state: 'detached', timeout: 10000 });
     console.log(`[Test] Set display name to: ${displayName}`);
   } catch (error) {
@@ -29,11 +29,11 @@ async function onboardWithName(page: Page, displayName: string) {
     // ignore loading screen
   }
 
-  const createButton = page.getByRole('button', { name: /create new identity/i });
+  const createButton = page.getByRole('button').filter({
+    has: page.getByText('Create new Converge inbox', { exact: true }),
+  });
   await createButton.waitFor({ state: 'visible', timeout: 30000 });
   await createButton.click();
-
-  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
 
   await page.waitForFunction(
     () => {
@@ -45,6 +45,7 @@ async function onboardWithName(page: Page, displayName: string) {
   );
 
   await setDisplayNameInModal(page, displayName);
+  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
 
   const identifier = await getIdentifier(page);
   console.log(`[Test] onboardWithName: Got identifier for ${displayName}: ${identifier}`);

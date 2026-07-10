@@ -1,11 +1,10 @@
-import type { WalletProvider } from '@/lib/wallets/providers';
-
 export type WalletSignatureStatusState = 'pending' | 'resolved' | 'rejected';
+export type WalletSignatureProvider = 'native' | 'unknown';
 
 export interface WalletSignatureStatusDetail {
   id: string;
   state: WalletSignatureStatusState;
-  provider: WalletProvider | 'unknown';
+  provider: WalletSignatureProvider;
   startedAt: number;
   endedAt?: number;
   messagePreview: string;
@@ -40,7 +39,7 @@ function emitWalletSignatureStatus(detail: WalletSignatureStatusDetail): void {
 }
 
 export async function runWithWalletSignatureStatus<T>(params: {
-  provider: WalletProvider | 'unknown';
+  provider: WalletSignatureProvider;
   message: string;
   run: () => Promise<T>;
 }): Promise<T> {

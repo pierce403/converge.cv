@@ -33,7 +33,13 @@ test.describe('Regressions', () => {
         // Wait for initial auth check loading to finish
         await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 15000 });
 
-        // True first run creates automatically and holds the main UI behind the profile editor.
+        const createInbox = page.getByRole('button').filter({
+            has: page.getByText('Create new Converge inbox', { exact: true }),
+        });
+        await expect(createInbox).toBeVisible({ timeout: 30000 });
+        await createInbox.click();
+
+        // Explicit creation holds the main UI behind the profile editor.
         await handleOnboardingModal(page);
 
         // Wait for the main UI to be ready (Layout mounted)
@@ -156,15 +162,14 @@ test.describe('Regressions', () => {
         const createButton = page.getByRole('menuitem', { name: /create new inbox/i });
         await createButton.click();
 
-        // Wait for reload/navigation
+        await handleOnboardingModal(page);
+
+        // Wait for the new inbox to finish opening.
         await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 30_000 });
 
         // Reload to ensure identity state is fully synced from storage
         await page.reload();
         await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 30_000 });
-
-        // Handle modal for the new identity
-        await handleOnboardingModal(page);
 
         // Verify we are on a new identity (read directly from store)
         const identity2InboxId = await page.evaluate(() => {

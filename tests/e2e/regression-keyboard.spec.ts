@@ -23,12 +23,14 @@ test('regression: rename identity and send DM to deanpierce.eth', async ({ page 
 
   await page.goto('/');
 
-  const createIdentityButton = page.getByRole('button', { name: /create new identity/i }).first();
+  const createIdentityButton = page.getByRole('button').filter({
+    has: page.getByText('Create new Converge inbox', { exact: true }),
+  });
   await expect(createIdentityButton).toBeVisible({ timeout: 60_000 });
   await createIdentityButton.click();
 
-  // Wait for and interact with the "Make it yours" personalization modal
-  const modalHeading = page.getByRole('heading', { name: /make it yours/i });
+  // Wait for and interact with the first-inbox profile editor.
+  const modalHeading = page.getByRole('heading', { name: /choose your inbox profile/i });
   await expect(modalHeading).toBeVisible({ timeout: 60_000 });
 
   const displayName = createDisplayName();
@@ -37,7 +39,7 @@ test('regression: rename identity and send DM to deanpierce.eth', async ({ page 
   await expect(nameInput).toBeVisible({ timeout: 10_000 });
   await nameInput.fill(displayName);
 
-  const saveButton = page.getByRole('button', { name: /^save$/i });
+  const saveButton = page.getByRole('button', { name: /save and continue/i });
   await expect(saveButton).toBeVisible();
   await saveButton.click();
 

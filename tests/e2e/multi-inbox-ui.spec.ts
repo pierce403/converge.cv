@@ -23,6 +23,34 @@ async function finishProfile(page: import('@playwright/test').Page, name: string
 
 test('first-run profile and profile-based inbox switching', async ({ page }) => {
   await page.goto('/');
+
+  const createInbox = page.getByRole('button').filter({
+    has: page.getByText('Create new Converge inbox', { exact: true }),
+  });
+  await expect(page.getByRole('heading', { name: 'Welcome to Converge' })).toBeVisible();
+  await expect(createInbox).toBeVisible();
+  const addDevice = page.getByRole('button').filter({
+    has: page.getByText('Add this device to existing inbox', { exact: true }),
+  });
+  await expect(addDevice).toBeVisible();
+  await expect(
+    page.getByRole('button').filter({
+      has: page.getByText('Restore from keyfile', { exact: true }),
+    })
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Approve with wallet' })).toHaveCount(0);
+
+  await addDevice.click();
+  await expect(page.getByRole('heading', { name: 'Approve with wallet' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /coinbase wallet|base wallet/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /metamask/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /walletconnect/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /browser wallet/i })).toBeVisible();
+  await expect(page.getByText(/thirdweb|privy/i)).toHaveCount(0);
+  await page.getByRole('button', { name: /back/i }).click();
+  await expect(page.getByRole('heading', { name: 'Welcome to Converge' })).toBeVisible();
+
+  await createInbox.click();
   await finishProfile(page, 'Primary Context');
   await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible();
 

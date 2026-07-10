@@ -35,7 +35,13 @@ async function onboardWithName(page: Page, displayName: string) {
     // Loading indicator not present; continue.
   }
 
-  // True first run creates automatically, then presents the profile editor before Layout.
+  const createInbox = page.getByRole('button').filter({
+    has: page.getByText('Create new Converge inbox', { exact: true }),
+  });
+  await expect(createInbox).toBeVisible({ timeout: 30_000 });
+  await createInbox.click();
+
+  // Explicit creation presents the profile editor before Layout.
   console.log(`[Test] onboardWithName: Waiting for XMTP connection to complete for ${displayName}`);
   await page.waitForFunction(
     () => {

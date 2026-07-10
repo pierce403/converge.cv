@@ -3,11 +3,16 @@ import { test, expect } from '@playwright/test';
 test('layout has stable bottom with no gap and only main scrolls', async ({ page }) => {
   await page.goto('/');
 
-  // Create a new identity via onboarding (click Get Started or similar primary CTA)
-  const start = page.getByRole('button', { name: /get started|generate|create/i });
-  if (await start.isVisible()) {
-    await start.click();
-  }
+  const createInbox = page.getByRole('button').filter({
+    has: page.getByText('Create new Converge inbox', { exact: true }),
+  });
+  await expect(createInbox).toBeVisible({ timeout: 30_000 });
+  await createInbox.click();
+
+  const profileDialog = page.getByRole('dialog', { name: /choose your inbox profile/i });
+  await expect(profileDialog).toBeVisible({ timeout: 60_000 });
+  await profileDialog.getByRole('button', { name: /^continue$/i }).click();
+  await expect(profileDialog).toBeHidden();
 
   // Wait for chats view (presence of New Chat / New Group buttons)
   await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 20000 });
@@ -42,4 +47,3 @@ test('layout has stable bottom with no gap and only main scrolls', async ({ page
   });
   expect(mainOverflowY).toMatch(/auto|scroll/);
 });
-

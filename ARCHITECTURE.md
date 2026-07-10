@@ -11,7 +11,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 ## Product Principles
 
-- One-click onboarding: no passphrase or manual wallet entry by default.
+- Choice-first onboarding: always show the inbox actions before creating an identity or opening a wallet; no passphrase or manual wallet entry by default.
 - Local-first app state with XMTP end-to-end transport encryption; browser data is not encrypted at rest today.
 - Static deployability: GitHub Pages remains sufficient for the Converge app shell.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
@@ -22,11 +22,13 @@ This section records the architecture implemented on 2026-07-10. Lower-level
 protocol notes below explain the implementation and must remain consistent with
 this contract.
 
-### First-Run Lifecycle
+### Onboarding Lifecycle
 
-- A true first visit automatically generates a local account key and registers its new XMTP inbox and first installation. It then opens the existing dismissible profile editor, prefilled with the deterministic Color Animal name, before the main messaging UI.
+- Every unauthenticated visit starts on the inbox choice screen with Create new inbox, Restore from keyfile, and Add this device to existing inbox. Startup must not automatically create an inbox or enter wallet approval.
+- Create new inbox generates a local account key and registers its new XMTP inbox and first installation only after the user chooses it. It then opens the existing dismissible profile editor, prefilled with the deterministic Color Animal name, before the main messaging UI.
 - Creating another inbox later selects it immediately and opens the same profile editor.
-- Burning the final loaded inbox creates an intentionally empty state. Startup must distinguish that state from a true first visit and show empty onboarding instead of silently creating a replacement inbox.
+- Burning the final loaded inbox returns to the same inbox choice screen instead of silently creating a replacement inbox.
+- An interrupted wallet-approved device join is represented by an explicit resume action on the choice screen. Startup may discover the pending record, but it must not open the wallet flow until the user chooses to resume it.
 
 ### Inbox Registry And Runtime Isolation
 
@@ -43,6 +45,7 @@ this contract.
 - XMTP messages are represented to recipients as coming from `senderInboxId`. Converge must not offer a message-level selector for associated account keys. A future transaction-signing key selector belongs to a separate wallet feature.
 - Plaintext key export is implemented under the collapsed Advanced settings section and is never presented as an onboarding task or backup nag. Permanent loss after losing the only local copy is an accepted default tradeoff.
 - Before associating a wallet or account identifier, onboarding and Settings display the public/permanent identity-history warning and require an explicit acknowledgment before approval can continue.
+- Native Wagmi/Reown is the sole wallet connection stack and owns Coinbase/Base, WalletConnect, MetaMask, and injected-wallet deep-link lifecycles. Privy and Thirdweb wallet-provider UI are removed. Thirdweb is loaded only on demand as the IPFS uploader for attachment ciphertext and is not part of wallet authorization.
 
 ### Burn Inbox
 
@@ -88,7 +91,7 @@ this contract.
 
 The manager and final local-key client intentionally share the SDK default path, `xmtp-production-<inbox-id>.db3`. Existing identities without a path-mode marker retain the previous address-based path so upgrading does not create an installation on the next reload.
 
-Provisioning persists the manager installation ID before registration or account association. Registration must make that same manager locally ready and network-visible as a current inbox member before account association begins. The fresh account association must then converge through the manager resolver, the independent network resolver, and the target inbox identity state. Static-reader replication lag is tolerated through bounded polling, never by publishing an update signed by a not-yet-visible installation. Interrupted responses resume the same key and installation instead of starting over. `Client.create` uses explicit `new-inbox`, `existing-inbox`, or `resume-only` registration policy; existing-inbox and reload paths pin the persisted installation ID and fail closed rather than falling back to inbox creation or silently accepting another installation.
+Provisioning persists the manager installation ID before registration or account association. Registration must make that same manager locally ready and network-visible as a current inbox member before account association begins. The fresh account association must then converge through the manager resolver, the independent network resolver, and the target inbox identity state. Static-reader replication lag is tolerated through bounded polling, never by publishing an update signed by a not-yet-visible installation. Interrupted responses preserve the same key and installation instead of starting over, then surface a deliberate resume action on the inbox choice screen; startup never resumes wallet approval automatically. `Client.create` uses explicit `new-inbox`, `existing-inbox`, or `resume-only` registration policy; existing-inbox and reload paths pin the persisted installation ID and fail closed rather than falling back to inbox creation or silently accepting another installation.
 
 The pinned Browser SDK predates XMTP's April 2026 `waitForRegistrationVisible` quorum option, and the option is not present in published stable 7.0.0 either. Until Converge deliberately upgrades to a release that actually exposes it, Converge must not pass that unsupported option. Converge's explicit installation-membership poll provides the equivalent hard gate needed before `unsafe_addAccount`; final association convergence remains a separate proof after publication.
 

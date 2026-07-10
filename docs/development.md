@@ -25,10 +25,12 @@ pnpm preview
 
 Open the app with `?clear_all_data=true` to remove the global/namespaced Dexie
 databases, XMTP OPFS files, push state, registry metadata, caches, and service
-workers before returning to true-first-run onboarding. Deleting only
+workers before returning to the inbox choice screen. Deleting only
 `ConvergeDB` is not a complete multi-inbox reset.
 
 ## Environment variables
 
 - Use `VITE_*` env vars for local configuration.
+- `VITE_WALLETCONNECT_PROJECT_ID` optionally overrides the public Reown project ID used by the native Wagmi WalletConnect connector. Keep the deployed origin allowlisted in the Reown dashboard.
+- `VITE_THIRDWEB_CLIENT_ID` optionally overrides the public Thirdweb client ID used only for encrypted attachment uploads, not wallet connection.
 - Avoid committing secrets. If a service needs credentials, keep them in local env only.

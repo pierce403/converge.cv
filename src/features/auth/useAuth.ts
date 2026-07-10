@@ -666,7 +666,7 @@ export function useAuth() {
           )
         ) {
           console.info(
-            '[Auth] Pending local account key is not associated with its target inbox yet; returning to wallet approval.'
+            '[Auth] Pending local account key is not associated with its target inbox yet; returning to the onboarding choices.'
           );
           return false;
         }

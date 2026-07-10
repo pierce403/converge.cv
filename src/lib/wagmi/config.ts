@@ -3,12 +3,13 @@
  */
 
 import { http, createConfig as createWagmiConfig } from '@wagmi/core';
-import { createConfig as createPrivyConfig } from '@privy-io/wagmi';
 import { mainnet, base, baseSepolia } from '@wagmi/core/chains';
 import { injected, metaMask, coinbaseWallet, walletConnect } from '@wagmi/connectors';
 
 // WalletConnect/Reown project ID from https://cloud.reown.com/
-const projectId = 'de49d3fcfa0a614710c571a3484a4d0f';
+const projectId =
+  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ||
+  'de49d3fcfa0a614710c571a3484a4d0f';
 
 const chains = [mainnet, base, baseSepolia] as const;
 const transports = {
@@ -26,6 +27,12 @@ const nativeConnectors = [
   }),
   walletConnect({
     projectId,
+    metadata: {
+      name: 'Converge',
+      description: 'Private messaging over XMTP',
+      url: 'https://converge.cv',
+      icons: ['https://converge.cv/icons/icon-192.png'],
+    },
     showQrModal: true,
     qrModalOptions: {
       themeMode: 'dark',
@@ -36,10 +43,5 @@ const nativeConnectors = [
 export const wagmiConfigNative = createWagmiConfig({
   chains,
   connectors: nativeConnectors,
-  transports,
-});
-
-export const wagmiConfigPrivy = createPrivyConfig({
-  chains,
   transports,
 });

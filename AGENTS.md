@@ -36,7 +36,7 @@ read the same source of truth.
 - **User strongly prefers**: Zero friction authentication
 - **Never require passphrases** for onboarding or regular use
 - Incomplete passphrase and passkey paths are hidden; do not expose or document them until encryption and recovery are implemented end to end.
-- A true first visit should create the first local-key inbox automatically, then open the dismissible profile editor. Do not add passphrase or wallet steps to that path.
+- A true first visit should show the inbox choice screen. Creating a local-key inbox remains one click, followed by the dismissible profile editor; do not add passphrase or wallet steps to that action.
 - **Exception**: A passphrase may return as an advanced feature only if explicitly requested and fully implemented.
 
 ### 🔓 NO VAULT LOCKING BY DEFAULT
@@ -46,8 +46,8 @@ read the same source of truth.
 - An intentionally empty state after Burn Inbox must remain empty; do not treat it as a true first visit and silently create a replacement inbox.
 
 ### ⚡ ONE-CLICK ONBOARDING
-- On a true first visit, automatically create/register the first local-key inbox, then show the existing Color Animal name/avatar editor before the main app. The editor is dismissible.
-- Empty onboarding after an intentional final-inbox burn offers create, import, and existing-inbox join without auto-creating another inbox.
+- On every unauthenticated visit, show Create new inbox, Restore from keyfile, and Add this device to existing inbox before any identity or wallet action. The Color Animal name/avatar editor follows successful creation and is dismissible.
+- Empty onboarding after an intentional final-inbox burn uses the same choice screen without auto-creating another inbox.
 - "Create new Converge inbox" remains a one-click generated-key flow from the Inbox Switcher or empty onboarding.
 - **No manual wallet address entry**
 - **No passphrase setup**
@@ -93,8 +93,7 @@ read the same source of truth.
 ```
 App start → checkExistingIdentity() →
   Existing identity: reopen its persisted XMTP database → verify inbox and installation
-  True first visit: generate/register the first inbox → open profile editor → open app
-  Intentionally empty after final burn: show empty onboarding without creating an inbox
+  No usable identity: show inbox choice screen without creating an inbox or opening a wallet
 
 Create new Converge inbox →
   Generate a fresh local key → explicitly register one inbox/installation → verify and store IDs
@@ -224,7 +223,7 @@ pnpm typecheck        # TypeScript type checking
 ## Current State (as of this session)
 
 ### ✅ Completed
-- True first-run creation now registers the first inbox before showing the dismissible Color Animal name/avatar editor; the post-burn empty marker prevents silent replacement after the final inbox is burned
+- Choice-first onboarding shows Create, Restore, and Add this device before any identity or wallet action; successful creation registers the inbox before showing the dismissible Color Animal name/avatar editor
 - The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Add this device actions; duplicate imports stop with "This inbox is already loaded"
 - Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
 - Contact persistence is inbox-scoped and action-gated, uses peer-published profiles, and discards legacy private aliases/avatar overrides/notes instead of adding custom contact sync
@@ -240,7 +239,7 @@ pnpm typecheck        # TypeScript type checking
 - New installations request XMTP device history and explain that an older installation may need to be online
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
-- Wallet provider switching (Native / Thirdweb / Privy) with Thirdweb as default; provider selector is available in onboarding + Settings
+- Native Wagmi/Reown is the only wallet connection stack; Thirdweb is retained only for encrypted attachment IPFS storage
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
 - Local identities remain available by default; no lock/vault UI is exposed
@@ -533,11 +532,16 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.5.1 + XMTP installation-membership gate)
+**Last Updated**: 2026-07-10 (app version 0.5.2 + choice-first onboarding and native wallet stack)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-10)
+
+### Choice-First Onboarding And Native Wallet Stack
+- Bumped Converge from `0.5.1` to `0.5.2` for the onboarding entry and wallet-stack cleanup.
+- Onboarding now always starts on the inbox choice screen and never creates an inbox or opens wallet approval automatically. Interrupted device joins appear as an explicit resume action that reuses the pending key and installation.
+- Native Wagmi/Reown is the only wallet connection stack. Privy and Thirdweb wallet-provider UI are removed; Thirdweb remains only as an on-demand uploader for encrypted attachment payloads to IPFS.
 
 ### XMTP Existing-Member Publication Gate
 - Bumped Converge from `0.5.0` to `0.5.1` after a real deanpierce.eth device join reached `unsafe_addAccount` and XMTP rejected `PublishIdentityUpdate` with `Missing existing member`.
@@ -551,7 +555,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Implemented Multi-Inbox Product Contract
 - Bumped Converge from `0.4.5` to `0.5.0` for the complete multi-inbox lifecycle, honest local-key security model, app-level notification state, and inbox-scoped contact behavior.
-- True first run now creates the first local-key inbox before showing the dismissible Color Animal profile editor; burning the final inbox persists an intentional-empty marker so startup offers Create, Import, and Join instead of silently replacing it.
+- Historical `0.5.0` behavior created the first local-key inbox automatically. Version `0.5.2` supersedes that entry with choice-first onboarding; burning the final inbox uses the same choice screen.
 - The top-left control is an Inbox Switcher with one profile-name/avatar row per inbox. It closes the active client before switching and offers Create new inbox, Import keyfile, and Add this device to existing inbox. Duplicate imports stop before mutation with "This inbox is already loaded".
 - Burn Inbox moved to the selected inbox's Settings, closes the client and uses static revocation for the exact current installation, then performs the complete local namespace/key/OPFS/cache wipe even when remote revocation fails. A blocked local wipe preserves the key and registry for retry. Key export is Advanced-only, and wallet association requires acknowledging its public, effectively permanent identity link.
 - Contacts remain isolated per inbox, are created through explicit participation, use peer-published profiles, and discard legacy private aliases/notes. No custom contact-sync protocol was added.
@@ -611,7 +615,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### XMTP Wallet and Onboarding Hardening
 - Bumped Converge from `0.4.0` to `0.4.1` after auditing the shipped provisioning flow against the pinned `@xmtp/browser-sdk` 6.1.2 implementation.
 - Added one strict Ethereum-address boundary used by XMTP signers, identity storage, contacts, member profiles, and UI formatting. Repairable missing/uppercase/repeated prefixes migrate to one lowercase `0x`; malformed values stop before XMTP.
-- Removed Converge's pre-connector mobile Coinbase/Base redirect. Wagmi/Thirdweb now own the wallet request and return lifecycle, provider changes preserve the onboarding step, callbacks dedupe, and signatures verify the active account.
+- Removed Converge's pre-connector mobile Coinbase/Base redirect. The selected connector owns the wallet request and return lifecycle, callbacks dedupe, and signatures verify the active account. Version `0.5.2` standardizes this on native Wagmi/Reown.
 - EIP-7702 delegated EOAs are no longer misclassified as smart-contract wallets. If bytecode inspection fails on every relevant chain, provisioning stops automatic inference and requires an explicit regular-wallet or smart-account choice instead of guessing; smart accounts also require the connector's real chain ID.
 - Existing-inbox setup now shows explicit connection and approval steps plus phase status. It persists the manager installation before mutation, verifies registration and association in live inbox state, tolerates interrupted responses that already reached the ledger, and reopens only the exact approved installation under `resume-only` policy.
 - A remote pending installation whose local inbox database now opens a different ID is marked stale. Retry is blocked until the recovery identity explicitly removes that exact stale ID, including below the installation limit, so setup does not strand an extra slot or revoke an older device unnecessarily.
@@ -619,7 +623,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### XMTP Device Provisioning and Honest Key Model
 - Bumped Converge from `0.3.9` to `0.4.0` after separating XMTP account identities, inboxes, and installations in onboarding and reconnect behavior.
-- In version 0.4.0, empty browsers stopped auto-registering a generated standalone inbox. The 2026-07-10 multi-inbox implementation restores automatic creation only for a true first visit, while the intentional post-burn empty state still offers new inbox, same-key import, and wallet-approved join choices.
+- In version `0.4.0`, empty browsers stopped auto-registering a generated standalone inbox. Version `0.5.0` briefly restored automatic first-visit creation; version `0.5.2` supersedes both with one consistent choice-first entry.
 - Wallet-approved joins statically resolve the target and fresh identifiers, enforce the 10-installation limit before mutation, register/reuse one inbox-aware browser database, add only a proven-unassociated key, then reconnect and verify the target `inboxId` and exact `installationId`.
 - Pending keys are stored before ledger mutation and resumed after interruption. Failed Settings/switcher provisioning restores the previous active identity and namespace instead of leaving an authenticated half-transition.
 - Wallet and keyfile 10/10 recovery refetch current inbox state immediately before the recovery signature and stop without revocation if capacity is already available.
@@ -694,9 +698,9 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Existing Inbox Connector Narrowing
 - Bumped Converge from `0.3.0` to `0.3.1` after narrowing the Settings → Connect Existing Inbox wallet choices.
-- Settings → Connect Existing Inbox now wraps its modal in a native wallet connection provider even when the app-wide wallet provider is Thirdweb or Privy.
+- Historical `0.3.1` behavior isolated this modal from the then-selectable Thirdweb and Privy providers. Version `0.5.2` removes those wallet providers and uses the native Wagmi context app-wide.
 - That modal filters wallet choices to only WalletConnect and Browser Wallet (`injected`) so users approve XMTP reassignment from external wallets such as Rainbow or MetaMask.
-- Thirdweb and embedded-wallet options remain available for their broader provider flows, but they should not be shown in the existing-inbox reassignment modal unless this architecture decision is deliberately changed in `FEATURES.md` and `ARCHITECTURE.md`.
+- Thirdweb now remains only as attachment storage; it is not a wallet provider.
 
 ### Local App Key Startup + Existing Inbox Connection
 - **Historical only:** this `0.3.0` behavior was replaced by the explicit `0.4.0` provisioning model above. Do not restore it.
@@ -843,7 +847,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Wallet Signature Waiting Modal
 - Added a global `WalletSignatureModal` mounted in `Layout` that blocks UI while wallet signatures are pending.
 - Added `runWithWalletSignatureStatus(...)` (`src/lib/wagmi/signature-status.ts`) to emit pending/resolved/rejected events around wallet sign calls.
-- Wrapped native wagmi, Privy, and Thirdweb `signMessage` paths with this tracker so external wallet signature waits are always visible.
+- Wrapped every then-supported wallet `signMessage` path with this tracker. Version `0.5.2` retains the tracker on the sole native Wagmi path.
 - Added tests in `src/lib/wagmi/signature-status.test.ts` for pending→resolved and pending→rejected event flows.
 
 ### Farcaster Contact Name Consistency
@@ -1054,7 +1058,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ## Latest Changes (2025-12-31)
 
 ### Wallet Providers: Native / Thirdweb / Privy
-- Added a wallet provider selector (Native, Thirdweb, Privy) used in onboarding and Settings; selection persists locally and defaults to Thirdweb.
+- Historical: added a wallet provider selector (Native, Thirdweb, Privy) used in onboarding and Settings. Version `0.5.2` removes this selector and both alternate wallet-provider stacks.
 - Thirdweb now uses the standard Connect modal UI (via `thirdweb/react` ConnectButton) with the provided client ID baked in (env override: `VITE_THIRDWEB_CLIENT_ID`).
 - Privy app ID is now baked in as a fallback (`VITE_PRIVY_APP_ID` overrides), so the provider is always available.
 - Added Solana peer deps (`@solana/kit`, `@solana/sysvars`, `@solana-program/system`) to keep Privy’s build pipeline happy.

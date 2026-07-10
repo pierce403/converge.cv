@@ -44,7 +44,7 @@ describe('wallet signature status events', () => {
     try {
       await expect(
         runWithWalletSignatureStatus({
-          provider: 'thirdweb',
+          provider: 'native',
           message: 'A long message '.repeat(40),
           run: async () => {
             throw new Error('User rejected request');

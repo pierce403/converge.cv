@@ -14,7 +14,7 @@ import {
   getInboxDisplayLabel,
 } from '@/lib/stores';
 import type { IdentityProbeResult } from '@/lib/xmtp/client';
-import type { InboxRegistryEntry } from '@/types';
+import type { Identity, InboxRegistryEntry } from '@/types';
 import { resetXmtpClient } from '@/lib/xmtp/client';
 import { assertKeyfileInboxMatch, deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
 import type { KeyfileIdentity } from '@/lib/keyfile';
@@ -31,7 +31,6 @@ import {
   withWalletInspectionTimeout,
   type WalletTypeHint,
 } from '@/lib/wagmi/wallet-inspection';
-import { consumeWalletApprovalIntent } from '@/lib/wagmi/wallet-approval-state';
 import { normalizeEthereumAddress, requireEthereumAddress } from '@/lib/utils/ethereum';
 import { getStorage } from '@/lib/storage';
 import { formatXmtpIdentifier } from '@/lib/xmtp/identifiers';
@@ -43,10 +42,9 @@ import { isUsableNetworkDisplayName } from '@/lib/identity/profile-suggestions';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
 import {
   clearProfileEditorIntent,
+  decideOnboardingEntry,
   findPendingProvisioningIdentity,
-  hasIntentionalEmptyInboxState,
   requestProfileEditor,
-  shouldAutoCreateFirstInbox,
 } from './onboarding-state';
 
 const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
@@ -200,7 +198,6 @@ export function OnboardingPage() {
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
-  const registryHydrated = useInboxRegistryStore((state) => state.isHydrated);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
 
   const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'>('landing');
@@ -224,12 +221,9 @@ export function OnboardingPage() {
   } | null>(null);
   const [keyfileError, setKeyfileError] = useState<string | null>(null);
   const [keyfileName, setKeyfileName] = useState<string | null>(null);
-  const [initialIntentResolved, setInitialIntentResolved] = useState(false);
-  const [hasExplicitOnboardingIntent, setHasExplicitOnboardingIntent] = useState(false);
-  const [hasPendingProvisioning, setHasPendingProvisioning] = useState<boolean | null>(null);
+  const [pendingProvisioning, setPendingProvisioning] = useState<Identity | null>(null);
   const [showInitialProfile, setShowInitialProfile] = useState(false);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
-  const firstRunAttemptedRef = useRef(false);
 
   useEffect(() => {
     hydrateRegistry();
@@ -239,44 +233,45 @@ export function OnboardingPage() {
     signMessageRef.current = signMessage;
   }, [signMessage]);
 
-  // Explicit restore/join links must win over automatic first-inbox creation.
+  // Consume explicit deep-link actions so Back followed by reload stays on choices.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const shouldResumeWalletApproval = consumeWalletApprovalIntent();
-      if (params.get('connect') === '1' || shouldResumeWalletApproval) {
-        setHasExplicitOnboardingIntent(true);
-        setView('wallet');
-      } else if (params.get('action') === 'import') {
-        setHasExplicitOnboardingIntent(true);
-        setView('keyfile');
+      const explicitAction =
+        params.get('connect') === '1'
+          ? 'connect'
+          : params.get('action') === 'import'
+            ? 'import'
+            : undefined;
+      const entryDecision = decideOnboardingEntry({ explicitAction });
+      setView(entryDecision.view);
+      if (entryDecision.legacyActionToConsume === 'connect') {
+        params.delete('connect');
+      } else if (entryDecision.legacyActionToConsume === 'import') {
+        params.delete('action');
+      }
+      const nextSearch = params.toString();
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+      if (nextUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+        window.history.replaceState(window.history.state, '', nextUrl);
       }
     } catch {
       // ignore
-    } finally {
-      setInitialIntentResolved(true);
     }
   }, []);
 
   useEffect(() => {
-    if (!initialIntentResolved) return;
-
     let cancelled = false;
     const inspectPendingProvisioning = async () => {
       try {
         const identities = await (await getStorage()).listIdentities();
         const pending = findPendingProvisioningIdentity(identities);
         if (cancelled) return;
-        setHasPendingProvisioning(Boolean(pending));
-        if (pending?.provisioningMode === 'device-join' && !hasExplicitOnboardingIntent) {
-          setHasExplicitOnboardingIntent(true);
-          setView('wallet');
-        }
+        setPendingProvisioning(pending ?? null);
       } catch (pendingError) {
         console.warn('[Onboarding] Could not inspect pending provisioning state:', pendingError);
         if (!cancelled) {
-          // Fail closed: a storage error must never trigger an unrelated inbox creation.
-          setHasPendingProvisioning(true);
+          setPendingProvisioning(null);
         }
       }
     };
@@ -284,7 +279,7 @@ export function OnboardingPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasExplicitOnboardingIntent, initialIntentResolved]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -348,6 +343,11 @@ export function OnboardingPage() {
     () => [...registryEntries].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),
     [registryEntries]
   );
+  const entryDecision = useMemo(
+    () => decideOnboardingEntry({ pendingProvisioning }),
+    [pendingProvisioning]
+  );
+  const hasPendingDeviceJoin = entryDecision.resumeAction === 'device-join';
   const keyfileRecoveryIdentifier = keyfileProbeResult?.inboxState?.recoveryIdentifier;
   const keyfileRecoveryAddress =
     keyfileRecoveryIdentifier?.identifierKind === IdentifierKind.Ethereum
@@ -516,36 +516,6 @@ export function OnboardingPage() {
       setView('landing');
     }
   };
-
-  useEffect(() => {
-    if (
-      firstRunAttemptedRef.current ||
-      !initialIntentResolved ||
-      hasPendingProvisioning === null ||
-      view !== 'landing' ||
-      !shouldAutoCreateFirstInbox({
-        isRegistryHydrated: registryHydrated,
-        entries: registryEntries,
-        hasExplicitOnboardingIntent,
-        isIntentionalEmpty: hasIntentionalEmptyInboxState(),
-        hasPendingProvisioning,
-      })
-    ) {
-      return;
-    }
-
-    firstRunAttemptedRef.current = true;
-    void handleCreateGeneratedIdentity();
-    // The creation handler deliberately owns retries after this one automatic attempt.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    hasExplicitOnboardingIntent,
-    hasPendingProvisioning,
-    initialIntentResolved,
-    registryEntries,
-    registryHydrated,
-    view,
-  ]);
 
   const finishInitialProfile = () => {
     const currentIdentity = useAuthStore.getState().identity;
@@ -1230,16 +1200,6 @@ export function OnboardingPage() {
 
         <div className="grid gap-4 text-left">
           <button
-            onClick={startConnectFlow}
-            className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
-          >
-            <div className="text-3xl">🔐</div>
-            <div className="mt-2 text-xl font-semibold text-primary-50">Add this device to existing inbox</div>
-            <div className="mt-1 text-sm text-primary-200">
-              Use a wallet that already controls the inbox to approve a new private key for this browser.
-            </div>
-          </button>
-          <button
             onClick={handleCreateGeneratedIdentity}
             className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
           >
@@ -1247,6 +1207,22 @@ export function OnboardingPage() {
             <div className="mt-2 text-xl font-semibold text-primary-50">Create new Converge inbox</div>
             <div className="mt-1 text-sm text-primary-200">
               Generate a local key and register a brand-new XMTP inbox in one step.
+            </div>
+          </button>
+          <button
+            onClick={startConnectFlow}
+            className="w-full rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 transition hover:border-accent-400 hover:bg-primary-900/60"
+          >
+            <div className="text-3xl">🔐</div>
+            <div className="mt-2 text-xl font-semibold text-primary-50">
+              {hasPendingDeviceJoin
+                ? 'Resume adding this device'
+                : 'Add this device to existing inbox'}
+            </div>
+            <div className="mt-1 text-sm text-primary-200">
+              {hasPendingDeviceJoin
+                ? 'A local device key is waiting for approval. Reconnect the wallet that controls the target inbox to continue.'
+                : 'Use a wallet that already controls the inbox to approve a new private key for this browser.'}
             </div>
           </button>
           <button

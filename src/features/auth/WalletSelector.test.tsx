@@ -4,7 +4,6 @@ import { WalletSelector } from './WalletSelector';
 import { WalletInspectionRequiredError } from '@/lib/wagmi/wallet-inspection';
 
 const walletState = vi.hoisted(() => ({
-  provider: 'native' as 'native' | 'thirdweb',
   address: undefined as string | undefined,
   chainId: undefined as number | undefined,
   isConnecting: false,
@@ -17,7 +16,6 @@ const walletState = vi.hoisted(() => ({
       id: 'coinbase',
       name: 'Base Wallet',
       icon: '*',
-      provider: 'native' as const,
     },
   ],
 }));
@@ -26,33 +24,8 @@ vi.mock('@/lib/wagmi', () => ({
   useWalletConnection: () => walletState,
 }));
 
-vi.mock('@/components/WalletProviderSelector', () => ({
-  WalletProviderSelector: () => <div>Provider selector</div>,
-}));
-
-vi.mock('@/components/ThirdwebConnectButton', () => ({
-  ThirdwebConnectButton: ({
-    onConnected,
-  }: {
-    onConnected: (
-      address: string,
-      chainId: number,
-      signMessage: (message: string) => Promise<string>
-    ) => void;
-  }) => (
-    <button
-      onClick={() =>
-        onConnected('0x2222222222222222222222222222222222222222', 8453, async () => '0xsigned')
-      }
-    >
-      Thirdweb test connect
-    </button>
-  ),
-}));
-
 describe('WalletSelector', () => {
   beforeEach(() => {
-    walletState.provider = 'native';
     walletState.address = undefined;
     walletState.chainId = undefined;
     walletState.isConnecting = false;
@@ -110,24 +83,6 @@ describe('WalletSelector', () => {
     await waitFor(() =>
       expect(onWalletConnected).toHaveBeenCalledWith(`0x${body}`, 8453, signMessage)
     );
-  });
-
-  it('forwards an account-bound Thirdweb signer instead of snapshotting provider state', async () => {
-    walletState.provider = 'thirdweb';
-    const onWalletConnected = vi.fn(
-      async (
-        _address: string,
-        _chainId?: number,
-        _signMessage?: (message: string) => Promise<string>
-      ) => undefined
-    );
-    render(<WalletSelector onWalletConnected={onWalletConnected} onBack={() => undefined} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /thirdweb test connect/i }));
-
-    await waitFor(() => expect(onWalletConnected).toHaveBeenCalledTimes(1));
-    const signer = onWalletConnected.mock.calls[0]?.[2];
-    expect(await signer?.('approve')).toBe('0xsigned');
   });
 
   it('continues from a new provider account while the mobile connector is still pending', async () => {
@@ -349,18 +304,7 @@ describe('WalletSelector', () => {
     expect(await screen.findByText('Connection timeout. Please try again.')).toBeInTheDocument();
   });
 
-  it('shows Thirdweb continuation failures inside the wallet selector', async () => {
-    walletState.provider = 'thirdweb';
-    const onWalletConnected = vi.fn().mockRejectedValue(new Error('XMTP probe failed'));
-    render(<WalletSelector onWalletConnected={onWalletConnected} onBack={() => undefined} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /thirdweb test connect/i }));
-
-    expect(await screen.findByText('XMTP probe failed')).toBeInTheDocument();
-  });
-
-  it('can retry a failed Thirdweb check after the account is already connected', async () => {
-    walletState.provider = 'thirdweb';
+  it('can retry a failed wallet check after the account is already connected', async () => {
     walletState.address = '0x2222222222222222222222222222222222222222';
     walletState.chainId = 8453;
     const onWalletConnected = vi

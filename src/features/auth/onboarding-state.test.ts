@@ -1,24 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Identity, InboxRegistryEntry } from '@/types';
+import type { Identity } from '@/types';
 import {
   clearIntentionalEmptyInboxState,
   clearProfileEditorIntent,
+  decideOnboardingEntry,
   findPendingProvisioningIdentity,
   hasIntentionalEmptyInboxState,
   markIntentionalEmptyInboxState,
   profileEditorIntentMatchesIdentity,
   readProfileEditorIntent,
   requestProfileEditor,
-  shouldAutoCreateFirstInbox,
 } from './onboarding-state';
-
-const entry: InboxRegistryEntry = {
-  inboxId: 'inbox-one',
-  displayLabel: 'Orange Orca',
-  primaryDisplayIdentity: 'Orange Orca',
-  lastOpenedAt: 1,
-  hasLocalDB: true,
-};
 
 const identity: Identity = {
   address: '0x1111111111111111111111111111111111111111',
@@ -32,55 +24,6 @@ describe('onboarding state', () => {
     localStorage.clear();
   });
 
-  it('auto-creates only for a hydrated, truly empty first visit', () => {
-    expect(
-      shouldAutoCreateFirstInbox({
-        isRegistryHydrated: true,
-        entries: [],
-        hasExplicitOnboardingIntent: false,
-        isIntentionalEmpty: false,
-        hasPendingProvisioning: false,
-      })
-    ).toBe(true);
-
-    expect(
-      shouldAutoCreateFirstInbox({
-        isRegistryHydrated: true,
-        entries: [entry],
-        hasExplicitOnboardingIntent: false,
-        isIntentionalEmpty: false,
-        hasPendingProvisioning: false,
-      })
-    ).toBe(false);
-    expect(
-      shouldAutoCreateFirstInbox({
-        isRegistryHydrated: true,
-        entries: [],
-        hasExplicitOnboardingIntent: true,
-        isIntentionalEmpty: false,
-        hasPendingProvisioning: false,
-      })
-    ).toBe(false);
-    expect(
-      shouldAutoCreateFirstInbox({
-        isRegistryHydrated: true,
-        entries: [],
-        hasExplicitOnboardingIntent: false,
-        isIntentionalEmpty: true,
-        hasPendingProvisioning: false,
-      })
-    ).toBe(false);
-    expect(
-      shouldAutoCreateFirstInbox({
-        isRegistryHydrated: true,
-        entries: [],
-        hasExplicitOnboardingIntent: false,
-        isIntentionalEmpty: false,
-        hasPendingProvisioning: true,
-      })
-    ).toBe(false);
-  });
-
   it('persists an intentional empty state until a new inbox succeeds', () => {
     markIntentionalEmptyInboxState();
     expect(hasIntentionalEmptyInboxState()).toBe(true);
@@ -89,7 +32,7 @@ describe('onboarding state', () => {
     expect(hasIntentionalEmptyInboxState()).toBe(false);
   });
 
-  it('restores the newest interrupted provisioning flow instead of treating it as first run', () => {
+  it('finds the newest interrupted provisioning flow without auto-opening it', () => {
     const pendingJoin: Identity = {
       ...identity,
       address: '0x2222222222222222222222222222222222222222',
@@ -105,6 +48,41 @@ describe('onboarding state', () => {
     };
 
     expect(findPendingProvisioningIdentity([olderPending, pendingJoin])).toBe(pendingJoin);
+  });
+
+  it('keeps a clean onboarding state on the landing choices', () => {
+    expect(decideOnboardingEntry({})).toEqual({
+      view: 'landing',
+      resumeAction: undefined,
+      legacyActionToConsume: undefined,
+    });
+  });
+
+  it('keeps a pending device join on landing with an explicit resume action', () => {
+    const pendingJoin: Identity = {
+      ...identity,
+      provisioningMode: 'device-join',
+      provisioningPending: true,
+    };
+
+    expect(decideOnboardingEntry({ pendingProvisioning: pendingJoin })).toEqual({
+      view: 'landing',
+      resumeAction: 'device-join',
+      legacyActionToConsume: undefined,
+    });
+  });
+
+  it('consumes legacy entry actions without skipping the landing choices', () => {
+    expect(decideOnboardingEntry({ explicitAction: 'connect' })).toEqual({
+      view: 'landing',
+      resumeAction: undefined,
+      legacyActionToConsume: 'connect',
+    });
+    expect(decideOnboardingEntry({ explicitAction: 'import' })).toEqual({
+      view: 'landing',
+      resumeAction: undefined,
+      legacyActionToConsume: 'import',
+    });
   });
 
   it('persists a profile editor request and matches it by inbox', () => {

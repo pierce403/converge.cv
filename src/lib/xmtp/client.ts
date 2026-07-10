@@ -48,8 +48,7 @@ import type {
 } from '@/types';
 import { bytesToHex, getAddress, hexToBytes } from 'viem';
 import { getStorage } from '@/lib/storage';
-import { getThirdwebClient } from '@/lib/wallets/providers';
-import { upload, resolveScheme } from 'thirdweb/storage';
+import { getAttachmentStorageClient } from './attachment-storage';
 import { KeyedAsyncCache } from '@/lib/utils/keyed-async-cache';
 import {
   ethereumAddressesEqual,
@@ -1815,7 +1814,10 @@ export class XmtpClient {
   }
 
   private async uploadEncryptedAttachmentPayload(payload: Uint8Array, filename: string): Promise<{ uri: string; url: string }> {
-    const client = getThirdwebClient();
+    const [client, { upload, resolveScheme }] = await Promise.all([
+      getAttachmentStorageClient(),
+      import('thirdweb/storage'),
+    ]);
     if (!client) {
       throw new Error('Thirdweb client is not configured');
     }

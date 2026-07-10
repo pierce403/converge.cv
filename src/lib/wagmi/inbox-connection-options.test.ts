@@ -6,7 +6,6 @@ const option = (id: string, name = id): WalletOption => ({
   id,
   name,
   icon: '*',
-  provider: 'native',
 });
 
 describe('getInboxConnectionWalletOptions', () => {
@@ -16,7 +15,7 @@ describe('getInboxConnectionWalletOptions', () => {
       option('metamask', 'MetaMask'),
       option('walletconnect', 'WalletConnect'),
       option('injected', 'Browser Wallet'),
-      option('thirdweb-email', 'Email'),
+      option('unsupported-email', 'Email'),
     ];
 
     expect(getInboxConnectionWalletOptions(options).map((item) => item.id)).toEqual([

@@ -14,7 +14,7 @@ Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP prot
 
 ## Key product principles
 
-- **Friction-free onboarding** (true first run creates an inbox, then opens the dismissible profile editor; no passphrase or wallet prompt)
+- **Choice-first onboarding** (show Create, Restore, and Add this device before any identity or wallet action; successful creation then opens the dismissible profile editor)
 - **Inbox-based account switching** (one profile row per inbox, one connected inbox at a time, isolated local namespaces)
 - **Wallets as optional authority** (wallet approval joins/recover/administers an existing inbox; normal messaging uses the local Converge key)
 - **Local-first** (data persists on-device via IndexedDB)

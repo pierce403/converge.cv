@@ -16,11 +16,17 @@ test('onboarding smoke (simplified)', async ({ page }) => {
 
     await page.goto('/');
 
-    // Try to find a primary CTA and proceed to app shell
-    const start = page.getByRole('button', { name: /get started|create|generate/i });
-    if (await start.isVisible()) {
-      await start.click();
-    }
+    const createInbox = page.getByRole('button').filter({
+      has: page.getByText('Create new Converge inbox', { exact: true }),
+    });
+    await expect(createInbox).toBeVisible({ timeout: 30_000 });
+    await createInbox.click();
+
+    const profileDialog = page.getByRole('dialog', { name: /choose your inbox profile/i });
+    await expect(profileDialog).toBeVisible({ timeout: 60_000 });
+    await profileDialog.getByRole('button', { name: /^continue$/i }).click();
+    await expect(profileDialog).toBeHidden();
+
     await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible({ timeout: 60_000 });
 
     expect(pageErrors, `Unexpected page errors: ${pageErrors.map((err) => err.message).join('; ')}`).toEqual([]);

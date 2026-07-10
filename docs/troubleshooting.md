@@ -6,7 +6,7 @@ If UI state is stuck or you want a clean onboarding run:
 
 Open Converge with `?clear_all_data=true`. The router closes XMTP, deletes all
 Converge IndexedDB namespaces and XMTP OPFS databases, clears browser metadata,
-and returns to true-first-run onboarding.
+and returns to the inbox choice screen.
 
 Deleting only `ConvergeDB` from DevTools is incomplete: namespaced
 `ConvergeDB:<inbox>` databases, `ConvergePushState`, OPFS XMTP databases, and the

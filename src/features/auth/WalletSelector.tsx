@@ -4,8 +4,6 @@
 
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useWalletConnection, type WalletOption } from '@/lib/wagmi';
-import { WalletProviderSelector } from '@/components/WalletProviderSelector';
-import { ThirdwebConnectButton } from '@/components/ThirdwebConnectButton';
 import { formatWalletConnectionError } from './wallet-connection-error';
 import { normalizeEthereumAddress, requireEthereumAddress } from '@/lib/utils/ethereum';
 import {
@@ -32,7 +30,6 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
     chainId,
     isConnecting,
     walletOptions,
-    provider,
     signMessage,
   } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +55,7 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
       walletTypeHint?: WalletTypeHint
     ) => {
       const canonicalAddress = requireEthereumAddress(nextAddress, 'Connected wallet address');
-      const connectionKey = `${provider}:${canonicalAddress}:${walletTypeHint ?? 'inspect'}`;
+      const connectionKey = `native:${canonicalAddress}:${walletTypeHint ?? 'inspect'}`;
       const existing = submittedConnectionRef.current;
       if (existing?.key === connectionKey) {
         if (existing.hasSigner || !signMessageOverride) {
@@ -105,7 +102,7 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
         throw error;
       }
     },
-    [onWalletConnected, provider]
+    [onWalletConnected]
   );
 
   const handleConnect = async (wallet: WalletOption) => {
@@ -176,8 +173,6 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
           Choose a wallet that already controls the XMTP inbox
         </p>
       </div>
-
-      <WalletProviderSelector dense />
 
       {error && (
         <div className="space-y-3 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
@@ -268,48 +263,29 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
       )}
 
       <div className="space-y-3">
-        {provider === 'thirdweb' ? (
-          <ThirdwebConnectButton
-            label="Continue with Thirdweb"
-            className="w-full"
-            onConnected={async (addr, nextChain, signMessageOverride) => {
-              setError(null);
-              try {
-                await emitConnected(addr, nextChain, signMessageOverride);
-              } catch (error) {
-                setError(
-                  error instanceof Error
-                    ? error.message
-                    : 'Failed to continue with connected wallet'
-                );
-              }
-            }}
-          />
-        ) : (
-          walletOptions.map((wallet) => (
-            <button
-              key={wallet.id}
-              onClick={() => handleConnect(wallet)}
-              disabled={isConnecting || connectorPending || wallet.disabled}
-              className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">{wallet.icon}</span>
-                  <div className="text-left">
-                    <div className="font-medium text-primary-50">{wallet.name}</div>
-                    {wallet.description && (
-                      <div className="text-xs text-primary-200">{wallet.description}</div>
-                    )}
-                  </div>
+        {walletOptions.map((wallet) => (
+          <button
+            key={wallet.id}
+            onClick={() => handleConnect(wallet)}
+            disabled={isConnecting || connectorPending || wallet.disabled}
+            className="w-full p-4 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+          >
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">{wallet.icon}</span>
+                <div className="text-left">
+                  <div className="font-medium text-primary-50">{wallet.name}</div>
+                  {wallet.description && (
+                    <div className="text-xs text-primary-200">{wallet.description}</div>
+                  )}
                 </div>
-                {isConnecting && (
-                  <div className="animate-spin w-5 h-5 border-2 border-accent-400 border-t-transparent rounded-full" />
-                )}
               </div>
-            </button>
-          ))
-        )}
+              {isConnecting && (
+                <div className="animate-spin w-5 h-5 border-2 border-accent-400 border-t-transparent rounded-full" />
+              )}
+            </div>
+          </button>
+        ))}
 
         {onImportKeyfile && (
           <button

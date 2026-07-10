@@ -13,8 +13,6 @@ type PendingSignatureRequest = {
 
 const PROVIDER_LABEL: Record<string, string> = {
   native: 'External Wallet',
-  thirdweb: 'Thirdweb Wallet',
-  privy: 'Privy Wallet',
   unknown: 'Wallet',
 };
 

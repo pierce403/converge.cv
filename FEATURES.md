@@ -6,12 +6,13 @@ This section describes the multi-inbox behavior shipped on 2026-07-10. Later
 implementation notes add protocol detail but must not contradict this product
 model.
 
-### First Run And Profiles
+### Onboarding And Profiles
 
-- On a true first visit, Converge automatically generates a local account key, registers a new XMTP inbox and installation, then opens the existing profile editor before contacts or messages.
+- Onboarding always opens on the inbox choice screen with Create new inbox, Restore from keyfile, and Add this device to existing inbox. It does not automatically create an inbox or open a wallet.
+- Choosing Create new inbox generates a local account key and registers a new XMTP inbox and installation. After that inbox is ready, Converge opens the existing profile editor before contacts or messages.
 - The profile editor starts with the deterministic Color Animal name, supports avatar upload, and is dismissible. Dismissing it keeps the generated profile.
 - Creating another inbox later immediately switches to it and opens the same profile editor.
-- An intentionally empty state is different from first run. After burning the last loaded inbox, Converge returns to empty onboarding and does not automatically create a replacement.
+- After burning the last loaded inbox, Converge returns to the same inbox choice screen and does not automatically create a replacement.
 
 ### Inbox Accounts And Switching
 
@@ -20,6 +21,7 @@ model.
 - Switcher entries show the inbox profile name and avatar by default. Inbox IDs, account addresses, installation IDs, and key details belong in technical details views.
 - Only the selected inbox opens an XMTP client and syncs. Switching fully closes the current client before opening the next inbox.
 - Add Inbox offers Create new inbox, Import keyfile, and Add this device to existing inbox.
+- An interrupted Add this device flow appears as a separate resume action on the inbox choice screen. Converge does not drop the user directly into wallet approval on a later visit.
 - Importing a keyfile reuses the exact private key or mnemonic and loads the inbox to which it resolves. An unregistered imported key creates its own new inbox; a registered key reopens its existing inbox and creates only the installation needed by this browser.
 - If an import resolves to an inbox already loaded locally, Converge says "This inbox is already loaded" and changes nothing.
 - Messages are attributed to the sender's XMTP inbox, not a user-selected associated account key. Converge does not expose a "send with key" control. Any future transaction-signing key selector is a separate wallet feature.
@@ -59,14 +61,14 @@ model.
 
 ## Identity Implementation
 
-- A true first visit automatically creates and verifies the first inbox, then holds the main UI behind the dismissible Color Animal name/avatar editor. A durable marker keeps the intentionally empty post-burn state from being mistaken for first run.
+- The inbox choice screen is the only unauthenticated entry point. Create new inbox remains a one-click action from that screen; only a successful creation opens the dismissible Color Animal name/avatar editor and then the main UI.
 - Create new Converge inbox remains one click: Converge generates a secp256k1 local account key, uses the SDK's inbox-aware database path, registers a new XMTP inbox/installation, and opens the app without a passphrase.
 - Generated local keys receive the deterministic Color Animal display-name suggestion used by personalization; legacy generated labels remain replaceable.
 - Restore from keyfile reuses the exact private key or mnemonic. It does not create a separate local account key. On a browser without the XMTP database, the same account resolves to the same inbox and registers a new installation.
 - Add this device to existing inbox generates a fresh local account key only after the user chooses a wallet-controlled inbox. It never registers that fresh key as a temporary standalone inbox.
 - Wallet probing uses the XMTP identity ledger rather than treating the prospective `Client.inboxId` as proof of registration.
 - Fresh-client registration uses `client.isRegistered()` instead of fetching nonexistent inbox state. Converge persists the prospective installation before one allowed `register()` call, then requires the signer and normalized installation ID to appear in network inbox state before completing onboarding.
-- During wallet-approved device joins, Browser SDK 6.1.2 can finish `register()` before a separate static inbox-state reader observes the installation. Local `isRegistered()` state is not sufficient authorization for the next identity update: Converge polls until the exact manager installation appears in the published inbox state and never calls `unsafe_addAccount` while it is absent. A timeout preserves the pending key and installation for an explicit retry.
+- During wallet-approved device joins, Browser SDK 6.1.2 can finish `register()` before a separate static inbox-state reader observes the installation. Local `isRegistered()` state is not sufficient authorization for the next identity update: Converge polls until the exact manager installation appears in the published inbox state and never calls `unsafe_addAccount` while it is absent. A timeout preserves the pending key and installation and exposes an explicit resume action on the inbox choice screen.
 - Reload and restore paths never infer registration from `inboxId` presence and never retry `register()` blindly. They pin the persisted installation ID, so a different local installation is rejected rather than silently replacing it. A settled-but-interrupted mutation resumes the same local database; a `register()` no-op or mismatched installation fails with an actionable error.
 - The wallet signer registers or reuses one inbox-aware browser installation, the fresh unregistered key is associated with `unsafe_addAccount(..., true)`, and the final local-key client must reopen the same inbox and installation before onboarding succeeds.
 - Converge statically verifies that the fresh key has no existing inbox. A registered key is never moved by the normal UI; reassignment would strand its prior inbox and is refused.
@@ -81,10 +83,11 @@ model.
 - If a pending installation remains on the XMTP ledger but its local database now opens a different installation, Converge blocks retry and asks the recovery identity to remove that exact stale installation before touching older devices. Exact recovery never falls back to the oldest device when the stale ID is absent, and pending state is cleared only after fresh ledger reads show the removal.
 - Ethereum identifiers are normalized at signer, storage, contact, member-profile, and display boundaries. Repairable missing, uppercase, or repeated prefixes migrate to one lowercase `0x`; invalid 20-byte addresses are rejected.
 - Registry hydration collapses legacy account-key rows into one entry per inbox. Switching tears down the client, swaps the app-data namespace, and reopens the selected local identity.
-- Wallet providers remain selectable between Native, Thirdweb, and Privy. Wallet approval is authority for an existing inbox, not the default long-term message signer.
-- Mobile wallet deep links are owned by the selected connector so its request can resume after returning to Converge. Native, Privy, and Thirdweb connection results carry an account-bound signer into the immediate XMTP continuation instead of waiting for React wallet state to catch up. Approval signatures are bound to the exact selected account, and provider switches preserve the onboarding wallet-approval view.
+- Native Wagmi/Reown is the only wallet connection stack. It provides Coinbase/Base, WalletConnect, MetaMask, and injected-wallet connectors; the Thirdweb and Privy wallet-provider UI is not part of onboarding or Settings.
+- Thirdweb remains only as the on-demand browser-safe IPFS storage client for already-encrypted attachment payloads. It is not an identity provider, embedded wallet, or WalletConnect dependency.
+- Mobile wallet deep links are owned by the selected native connector so its request can resume after returning to Converge. Connection results carry an account-bound signer into the immediate XMTP continuation instead of waiting for React wallet state to catch up. Approval signatures are bound to the exact selected account.
 - A selected wallet option never falls through to a different installed connector. Wallet bytecode checks run concurrently with a five-second bound; if every RPC check fails, Converge asks whether the connected signer is a regular wallet or smart account instead of guessing. The smart-account choice requires the connector's real chain ID.
-- Wallet continuation errors remain visible instead of being relabeled as generic connection failures. Thirdweb reconnect uses the address, chain, and account-bound signer delivered by its completion callback rather than a stale render snapshot.
+- Wallet continuation errors remain visible instead of being relabeled as generic connection failures. Reconnect uses the address, chain, and account-bound signer delivered by the native connector rather than a stale render snapshot.
 - Network profile fallbacks that merely echo an Ethereum address or 64-character inbox ID are rejected as display names, preserving the generated Color Animal name until a real profile name is available.
 - Deep links return through the chosen onboarding flow and then resume the target route.
 

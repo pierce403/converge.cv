@@ -1,4 +1,4 @@
-import type { Identity, InboxRegistryEntry } from '@/types';
+import type { Identity } from '@/types';
 import { inboxIdsMatch } from '@/lib/utils/inbox';
 import { ethereumAddressesEqual } from '@/lib/utils/ethereum';
 
@@ -11,6 +11,35 @@ export interface ProfileEditorIntent {
   address: string;
   inboxId?: string;
   reason: 'first-inbox' | 'new-inbox';
+}
+
+export type ExplicitOnboardingAction = 'connect' | 'import';
+
+export interface OnboardingEntryDecision {
+  view: 'landing';
+  resumeAction?: 'device-join';
+  legacyActionToConsume?: ExplicitOnboardingAction;
+}
+
+export function decideOnboardingEntry(options: {
+  explicitAction?: ExplicitOnboardingAction;
+  pendingProvisioning?: Identity | null;
+}): OnboardingEntryDecision {
+  const resumeAction =
+    options.pendingProvisioning?.provisioningMode === 'device-join' &&
+    options.pendingProvisioning.provisioningPending === true
+      ? 'device-join'
+      : undefined;
+
+  // Every unauthenticated entry starts on choices. Legacy query parameters are
+  // consumed so they cannot reopen a flow on refresh, but they no longer skip
+  // the landing screen. Likewise, interrupted setup is exposed as a resume
+  // choice instead of triggering redirects or signature prompts on page load.
+  return {
+    view: 'landing',
+    resumeAction,
+    legacyActionToConsume: options.explicitAction,
+  };
 }
 
 export function findPendingProvisioningIdentity(
@@ -59,22 +88,6 @@ export function clearIntentionalEmptyInboxState(): void {
   } catch {
     // Best effort only.
   }
-}
-
-export function shouldAutoCreateFirstInbox(options: {
-  isRegistryHydrated: boolean;
-  entries: InboxRegistryEntry[];
-  hasExplicitOnboardingIntent: boolean;
-  isIntentionalEmpty: boolean;
-  hasPendingProvisioning: boolean;
-}): boolean {
-  return (
-    options.isRegistryHydrated &&
-    options.entries.length === 0 &&
-    !options.hasExplicitOnboardingIntent &&
-    !options.isIntentionalEmpty &&
-    !options.hasPendingProvisioning
-  );
 }
 
 export function requestProfileEditor(intent: ProfileEditorIntent): void {
