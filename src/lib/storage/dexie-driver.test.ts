@@ -114,7 +114,7 @@ describe('DexieDriver identity isolation', () => {
     const globalDb = {
       identity: identityTable,
       transaction: vi.fn(async (...args: unknown[]) => {
-        const callback = args.at(-1) as () => Promise<void>;
+        const callback = args[args.length - 1] as () => Promise<void>;
         await callback();
       }),
     };
@@ -140,7 +140,7 @@ describe('DexieDriver targeted XMTP cleanup', () => {
       contacts: table,
       deletedConversations: table,
       transaction: vi.fn(async (...args: unknown[]) => {
-        const callback = args.at(-1) as () => Promise<void>;
+        const callback = args[args.length - 1] as () => Promise<void>;
         await callback();
       }),
     };

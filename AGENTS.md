@@ -547,6 +547,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - The generic account-association helper applies the same installation-membership preflight, and normalized installation comparison no longer treats two missing IDs as equal.
 - Tests now cover delayed installation visibility, permanent non-visibility, interrupted registration followed by visibility, locally ready but remotely absent installations, and a wallet that resolves historically but is no longer a current authority.
 - Browser SDK stable `7.0.0` retains the same add-account authorization sequence and does not itself fix this race. XMTP merged a later `waitForRegistrationVisible` option, but Converge must keep its app-level published-membership gate until it upgrades to a release that actually exposes and verifies that behavior.
+- The first 0.5.1 Pages run exposed two test-only `Array.prototype.at()` calls that local dependency state allowed but the clean ES2020 CI typecheck rejected. Tests now use target-compatible indexing, and release verification includes a fresh `/tmp` install plus typecheck when local and CI results diverge.
 
 ### Implemented Multi-Inbox Product Contract
 - Bumped Converge from `0.4.5` to `0.5.0` for the complete multi-inbox lifecycle, honest local-key security model, app-level notification state, and inbox-scoped contact behavior.
