@@ -20,6 +20,7 @@ import {
   type RemoteAttachment,
   type ListMessagesOptions,
   type SendMessageOpts,
+  type AsyncStreamProxy,
   LogLevel,
   ContentType,
   ReactionAction,
@@ -395,7 +396,7 @@ function createStubInboxState({
 export class XmtpClient {
   private client: Client<unknown> | null = null;
   private identity: XmtpIdentity | null = null;
-  private messageStreamCloser: { close: () => void } | null = null;
+  private messageStream: Pick<AsyncStreamProxy<unknown>, 'end' | 'isDone'> | null = null;
   private backgroundDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
   private backgroundDiscoveryInFlight = false;
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
@@ -4134,15 +4135,19 @@ export class XmtpClient {
     const { setConnectionStatus, setError } = useXmtpStore.getState();
     this.stopBackgroundDiscoveryLoop();
 
-    // Stop message streaming
-    if (this.messageStreamCloser) {
+    // streamAllMessages() returns an AsyncStreamProxy. Its cancellation API is
+    // end()/return(), not close(); close() belongs to the XMTP client itself.
+    const messageStream = this.messageStream;
+    this.messageStream = null;
+    if (messageStream) {
       try {
-        this.messageStreamCloser.close();
+        if (!messageStream.isDone) {
+          await messageStream.end();
+        }
         console.log('[XMTP] Message stream closed');
       } catch (error) {
         console.error('[XMTP] Error closing message stream:', error);
       }
-      this.messageStreamCloser = null;
     }
 
     if (!this.client) {
@@ -5301,7 +5306,7 @@ export class XmtpClient {
         disableSync: true,
         consentStates: [ConsentState.Allowed, ConsentState.Unknown],
       });
-      this.messageStreamCloser = stream as unknown as { close: () => void };
+      this.messageStream = stream;
 
       console.log('[XMTP] ✅ Message stream started');
 
@@ -5603,7 +5608,11 @@ export class XmtpClient {
             console.log('[XMTP] Custom event dispatched');
           }
 
-          console.warn('[XMTP] 📻 Stream loop ended naturally (this shouldn\'t happen)');
+          if (this.messageStream === stream) {
+            console.warn('[XMTP] 📻 Stream loop ended unexpectedly');
+          } else {
+            console.log('[XMTP] Message stream loop stopped');
+          }
         } catch (error) {
           console.error('[XMTP] Message stream error:', error);
           console.error('[XMTP] Error stack:', error instanceof Error ? error.stack : 'no stack');

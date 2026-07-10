@@ -34,7 +34,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 3. Generate the fresh local device account key without creating a client for it.
 4. Confirm through the ledger that the fresh key has no inbox. If it already resolves anywhere, block; the normal flow never reassigns it.
 5. Open the wallet signer with the SDK's inbox-aware default database path and `disableAutoRegister: true`.
-6. Register that browser installation with the wallet if the installation is not already in the target inbox.
+6. Register that browser installation with the wallet if the manager client is not already registered. On Browser SDK 6.1.2, require the manager's own `isRegistered()` readiness after submission; a separate static inbox-state reader can lag behind a successful `register()` response.
 7. Call `unsafe_addAccount(freshSigner, true)`. The pinned SDK requires `true` even for an unregistered key, so Converge's ledger preflight is the invariant that makes this an association rather than a reassignment.
 8. Wait until the fresh identifier resolves to the target inbox and appears in the target inbox identity state.
 9. Close the wallet manager and reopen the same default inbox database with the fresh signer.
@@ -43,7 +43,9 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 The manager and final local-key client intentionally share the SDK default path, `xmtp-production-<inbox-id>.db3`. Existing identities without a path-mode marker retain the previous address-based path so upgrading does not create an installation on the next reload.
 
-Provisioning persists the manager installation ID before registration or account association. Each network mutation is verified against fresh ledger state, so an interrupted response can resume the same key and installation instead of starting over. `Client.create` uses explicit `new-inbox`, `existing-inbox`, or `resume-only` registration policy; existing-inbox and reload paths fail closed rather than falling back to inbox creation.
+Provisioning persists the manager installation ID before registration or account association. Registration must make that same manager locally ready, while the fresh account association must still converge through the manager resolver, the independent network resolver, and the target inbox identity state. This tolerates static-reader replication lag without treating an unregistered local installation as success. Interrupted responses resume the same key and installation instead of starting over. `Client.create` uses explicit `new-inbox`, `existing-inbox`, or `resume-only` registration policy; existing-inbox and reload paths fail closed rather than falling back to inbox creation.
+
+The pinned Browser SDK predates XMTP's April 2026 `waitForRegistrationVisible` quorum option, and the option is not present in published stable 7.0.0 either. Until Converge deliberately upgrades to a release that actually exposes it, Converge must not pass that unsupported option. The final association convergence checks are the network boundary that prevents a locally ready but unusable device join from being marked complete.
 
 `Client.create({ disableAutoRegister: true })` still assigns a prospective deterministic `inboxId` for a signer that has no identity update. Converge therefore uses `client.isRegistered()` for local registration readiness and resolves the signer independently through the network. It never calls `preferences.fetchInboxState()` as a fresh-inbox existence test. A permitted transition persists the installation first, calls `register()` at most once, then verifies all three facts before completion: the signer resolves to the expected inbox, the signer appears in `accountIdentifiers`, and the normalized installation ID appears in `installations`. Conversation sync and stream startup happen after this identity boundary and are non-fatal to an already verified inbox installation.
 

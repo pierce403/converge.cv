@@ -8,6 +8,7 @@
 - Add this device to existing inbox generates a fresh local account key only after the user chooses a wallet-controlled inbox. It never registers that fresh key as a temporary standalone inbox.
 - Wallet probing uses the XMTP identity ledger rather than treating the prospective `Client.inboxId` as proof of registration.
 - Fresh-client registration uses `client.isRegistered()` instead of fetching nonexistent inbox state. Converge persists the prospective installation before one allowed `register()` call, then requires the signer and normalized installation ID to appear in network inbox state before completing onboarding.
+- During wallet-approved device joins, Browser SDK 6.1.2 can finish `register()` before a separate static inbox-state reader observes the installation. Converge now uses the manager client's own `isRegistered()` result as the post-submit readiness signal and treats that one static replication delay as nonfatal. Capacity still fails closed before registration, and setup still waits for the fresh account key to resolve to the target inbox and appear in its network identity state.
 - Reload and restore paths never infer registration from `inboxId` presence and never retry `register()` blindly. A settled-but-interrupted mutation resumes the same local database; a `register()` no-op or mismatched installation fails with an actionable error.
 - The wallet signer registers or reuses one inbox-aware browser installation, the fresh unregistered key is associated with `unsafe_addAccount(..., true)`, and the final local-key client must reopen the same inbox and installation before onboarding succeeds.
 - Converge statically verifies that the fresh key has no existing inbox. A registered key is never moved by the normal UI; reassignment would strand its prior inbox and is refused.
@@ -90,7 +91,7 @@
 
 ## Local-First Operation
 - Conversation lists, messages, profiles, and inbox registry entries are persisted in IndexedDB (via Dexie) so reopening the app immediately restores history without waiting for the network.
-- Incoming streams apply updates to the local store first, then reconcile with the network by explicitly syncing conversations; resync tools clear and repopulate local caches when needed.
+- Incoming streams apply updates to the local store first, then reconcile with the network by explicitly syncing conversations; resync tools clear and repopulate local caches when needed. Disconnect ends the Browser SDK `AsyncStreamProxy` with its asynchronous `end()` API before closing the client.
 - Private keys, mnemonics, decrypted app data, and the Browser SDK database are stored locally without encryption at rest. Keyfile exports are plaintext sensitive material.
 - New identities use inbox-aware XMTP database paths; legacy identities retain their existing address-based path to avoid installation churn during migration.
 - Recent history backfill deduplicates stored messages, preserves read state for existing threads, and narrows sync windows using per-conversation timestamps to avoid replaying old messages as unread.

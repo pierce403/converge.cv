@@ -35,15 +35,26 @@ function setup(options?: {
   deviceInbox?: string;
   installationIds?: string[];
   omitInboxState?: boolean;
+  locallyRegistered?: boolean;
+  registerNoop?: boolean;
+  staticInstallationStaysStale?: boolean;
   registerThrowsAfterMutation?: boolean;
   addAccountThrowsAfterMutation?: boolean;
 }) {
   let associatedDeviceInbox = options?.deviceInbox;
   let associatedIdentifier = deviceIdentifier;
   const installationIds = [...(options?.installationIds ?? [])];
+  let locallyRegistered =
+    options?.locallyRegistered ?? installationIds.includes('installation-new');
   const register = vi.fn(async () => {
-    if (!installationIds.includes(manager.installationId!)) {
-      installationIds.push(manager.installationId!);
+    if (!options?.registerNoop) {
+      locallyRegistered = true;
+      if (
+        !options?.staticInstallationStaysStale &&
+        !installationIds.includes(manager.installationId!)
+      ) {
+        installationIds.push(manager.installationId!);
+      }
     }
     if (options?.registerThrowsAfterMutation) {
       throw new Error('registration response was interrupted');
@@ -60,6 +71,7 @@ function setup(options?: {
   const manager: DeviceProvisioningClient = {
     inboxId: targetInbox,
     installationId: 'installation-new',
+    isRegistered: vi.fn(async () => locallyRegistered),
     register,
     unsafe_addAccount: addAccount,
     fetchInboxIdByIdentifier: vi.fn(async () => associatedDeviceInbox),
@@ -293,8 +305,11 @@ describe('fresh device provisioning', () => {
     ).rejects.toBeInstanceOf(InstallationLimitError);
   });
 
-  it('resumes when register throws after the installation reaches the ledger', async () => {
-    const harness = setup({ registerThrowsAfterMutation: true });
+  it('resumes when register throws after the manager becomes locally registered', async () => {
+    const harness = setup({
+      registerThrowsAfterMutation: true,
+      staticInstallationStaysStale: true,
+    });
 
     const result = await provisionFreshDeviceKey(
       signer(targetIdentifier),
@@ -305,6 +320,60 @@ describe('fresh device provisioning', () => {
 
     expect(result.installationRegistered).toBe(true);
     expect(result.accountAdded).toBe(true);
+    expect(harness.manager.isRegistered).toHaveBeenCalled();
+  });
+
+  it('continues when the manager is registered before the static identity reader catches up', async () => {
+    const harness = setup({ staticInstallationStaysStale: true });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      harness.dependencies
+    );
+
+    expect(result.installationRegistered).toBe(true);
+    expect(result.accountAdded).toBe(true);
+    expect(harness.manager.isRegistered).toHaveBeenCalled();
+    expect(harness.register).toHaveBeenCalledOnce();
+  });
+
+  it('resumes a locally registered installation without registering again while static state lags', async () => {
+    const harness = setup({
+      locallyRegistered: true,
+      staticInstallationStaysStale: true,
+    });
+
+    const result = await provisionFreshDeviceKey(
+      signer(targetIdentifier),
+      signer(deviceIdentifier),
+      targetInbox,
+      {
+        ...harness.dependencies,
+        knownInstallationId: 'installation-new',
+      }
+    );
+
+    expect(result.installationRegistered).toBe(false);
+    expect(result.accountAdded).toBe(true);
+    expect(harness.register).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when register returns but the local installation remains unregistered', async () => {
+    const harness = setup({ registerNoop: true });
+
+    await expect(
+      provisionFreshDeviceKey(
+        signer(targetIdentifier),
+        signer(deviceIdentifier),
+        targetInbox,
+        harness.dependencies
+      )
+    ).rejects.toThrow('not registered in its local XMTP database');
+
+    expect(harness.register).toHaveBeenCalledOnce();
+    expect(harness.addAccount).not.toHaveBeenCalled();
   });
 
   it('resumes verification when add-account throws after the association reaches the ledger', async () => {

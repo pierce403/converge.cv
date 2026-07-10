@@ -431,7 +431,7 @@ if (!isRegistered) {
 6. Look at recent git history to understand latest changes
 7. Load XMTP LLM + content-type docs into context for reference:
    - https://docs.xmtp.org/chat-apps/intro/build-with-llms
-   - https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
+   - https://docs.xmtp.org/llms/llms-full.txt
    These links help with content-type handling and message classification; prefer using them when extending system-message support.
 
 ### While Working
@@ -483,17 +483,17 @@ if (!isRegistered) {
 
 ### XMTP + LLMs (Always Load In Context)
 - Build with LLMs overview: https://docs.xmtp.org/chat-apps/intro/build-with-llms
-- Full LLMs guide (raw): https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
+- Full LLMs guide (raw): https://docs.xmtp.org/llms/llms-full.txt
 
 These links are high-signal for XMTP behaviors and should be considered required reading for future agents working on AI/agent features. Keep them in working memory while making protocol/UI decisions.
 
 ### XMTP + LLMs (Always Load in Context)
 - Build-with-LLMs overview: https://docs.xmtp.org/chat-apps/intro/build-with-llms
-- Full reference text (raw): https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt
+- Full reference text (raw): https://docs.xmtp.org/llms/llms-full.txt
 
 Guidance:
 - Before starting related work, open and keep these two docs in your session context. If needed, fetch the raw text locally for quick grep:
-  - `curl -L https://raw.githubusercontent.com/xmtp/docs-xmtp-org/main/llms/llms-full.txt -o code/xmtp-llms-full.txt`
+  - `curl -L https://docs.xmtp.org/llms/llms-full.txt -o code/xmtp-llms-full.txt`
 - Treat these as required context when implementing or debugging anything that involves LLMs, assistants, or message flows that may be model-driven.
 
 ### Farcaster / Neynar Docs (Load for Farcaster features)
@@ -507,11 +507,20 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.4.4 + current Convos unified-profile audit)
+**Last Updated**: 2026-07-10 (app version 0.4.5 + XMTP device-join registration repair)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-10)
+
+### XMTP Device-Join Registration and Stream Lifecycle Repair
+- Bumped Converge from `0.4.4` to `0.4.5` after a real Settings device-join attempt stopped during `registering-installation` even though XMTP had accepted the installation.
+- Root cause: Browser SDK 6.1.2 can return from `register()` before a separate static `Client.fetchInboxStates()` reader observes the new installation. Converge added an approximately 16-second static-ledger gate and incorrectly turned normal replication lag into a fatal retry error.
+- Wallet-approved device joins now require the manager client's own `isRegistered()` readiness after registration and treat only the lagging post-submit static observation as nonfatal. The 10/10 capacity preflight remains strict, and the fresh device key must still converge through the manager resolver, independent resolver, and target inbox identity state before setup completes.
+- Interrupted joins reuse the persisted installation and local database without calling `register()` again when the manager is already locally registered. A returned registration that leaves `isRegistered()` false still fails closed.
+- The pinned SDK predates the April 2026 `waitForRegistrationVisible` quorum option, and published stable 7.0.0 does not contain it either; do not pass that option until upgrading to a release that actually exposes it.
+- `streamAllMessages()` returns an `AsyncStreamProxy`, whose cancellation API is asynchronous `end()`/`return()`. Disconnect now awaits `end()` once before closing the XMTP client instead of calling the nonexistent `close()` method.
+- Regression coverage includes stale static state after successful registration, interrupted registration, reload/resume without duplicate registration, local registration failure, 10/10 blocking, and stream cleanup ordering/failure behavior.
 
 ### Convos Profile and Agent-Name Interoperability
 - Bumped Converge from `0.4.2` to `0.4.3` after auditing the current local `convos-ios` profile repository, codecs, merge rules, group-ready lifecycle, and invite-acceptance flow.

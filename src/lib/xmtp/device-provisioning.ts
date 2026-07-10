@@ -8,6 +8,7 @@ export type XmtpDbPathMode = 'legacy-address' | 'inbox-default';
 export interface DeviceProvisioningClient {
   inboxId?: string;
   installationId?: string;
+  isRegistered(): Promise<boolean>;
   register(): Promise<unknown>;
   unsafe_addAccount(signer: Signer, allowInboxReassign: boolean): Promise<unknown>;
   fetchInboxIdByIdentifier(identifier: Identifier): Promise<string | undefined>;
@@ -75,19 +76,12 @@ async function waitForInboxAssociation(
   return false;
 }
 
-async function waitForInstallation(
-  inboxId: string,
-  installationId: string,
-  fetchInboxState: ProvisionDeviceDependencies['fetchInboxState'],
+async function waitForLocalRegistration(
+  manager: DeviceProvisioningClient,
   sleep: (milliseconds: number) => Promise<void>
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const state = await fetchInboxState(inboxId);
-    if (
-      state?.installations?.some((installation) =>
-        installationIdsMatch(installation.id, installationId)
-      )
-    ) {
+    if (await manager.isRegistered()) {
       return true;
     }
     await sleep(Math.min(2_000, 250 * 2 ** attempt));
@@ -335,10 +329,11 @@ export async function provisionFreshDeviceKey(
     const hasManagerInstallation = installations.some(
       (installation) => installationIdsMatch(installation.id, manager.installationId)
     );
+    const managerAlreadyRegistered = await manager.isRegistered();
 
     let installationRegistered = false;
-    if (!hasManagerInstallation) {
-      if (installations.length >= XMTP_INSTALLATION_LIMIT) {
+    if (!managerAlreadyRegistered) {
+      if (installations.length >= XMTP_INSTALLATION_LIMIT && !hasManagerInstallation) {
         throw new InstallationLimitError(expected);
       }
       await notify('registering-installation');
@@ -348,24 +343,47 @@ export async function provisionFreshDeviceKey(
         if (isInstallationLimitLikeError(error)) {
           throw new InstallationLimitError(expected);
         }
-        const stateAfterError = await dependencies.fetchInboxState(expected);
-        const registrationSettled = stateAfterError?.installations?.some((installation) =>
-          installationIdsMatch(installation.id, manager.installationId)
-        );
+        const registrationSettled = await manager.isRegistered();
         if (!registrationSettled) {
           throw error;
         }
         console.info(
-          '[XMTP] Browser installation became visible while register() was settling; resuming device setup.'
+          '[XMTP] Browser installation became locally registered while register() was settling; resuming device setup.'
         );
       }
-      installationRegistered = true;
-      if (!(await waitForInstallation(expected, manager.installationId, dependencies.fetchInboxState, sleep))) {
+      installationRegistered = !hasManagerInstallation;
+      if (!(await waitForLocalRegistration(manager, sleep))) {
         throw new Error(
-          'XMTP accepted the browser installation, but it is not visible on the identity ledger yet. Retry to resume this same installation.'
+          'XMTP registration returned, but this browser installation is not registered in its local XMTP database. Retry to resume this same installation.'
         );
       }
       await notify('installation-registered');
+    }
+
+    let installationVisible = hasManagerInstallation;
+    if (!installationVisible) {
+      try {
+        const refreshedState = await dependencies.fetchInboxState(expected);
+        installationVisible = Boolean(
+          refreshedState?.installations?.some((installation) =>
+            installationIdsMatch(installation.id, manager.installationId)
+          )
+        );
+      } catch (error) {
+        console.info(
+          '[XMTP] Static inbox-state refresh is still unavailable after local installation registration:',
+          error
+        );
+      }
+    }
+    if (!installationVisible) {
+      // Browser SDK 6.1.2 can finish register() before a separate static
+      // identity reader observes the update. The manager's installation-local
+      // isRegistered() result is the V3 readiness signal; later association
+      // checks still require the network identity state to converge.
+      console.info(
+        '[XMTP] Browser installation is registered locally; the static inbox-state reader has not caught up yet.'
+      );
     }
 
     let accountAdded = false;
