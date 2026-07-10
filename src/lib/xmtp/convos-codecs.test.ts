@@ -25,7 +25,18 @@ describe('Convos XMTP codecs', () => {
       name: 'Alice',
       encryptedImage: undefined,
       memberKind: undefined,
-      metadata: undefined,
+      metadata: {},
+    });
+  });
+
+  it('decodes an empty profile update as an empty authoritative metadata map', () => {
+    const codec = new ConvosProfileUpdateCodec();
+
+    expect(codec.decode(codec.encode({}))).toEqual({
+      name: undefined,
+      encryptedImage: undefined,
+      memberKind: undefined,
+      metadata: {},
     });
   });
 

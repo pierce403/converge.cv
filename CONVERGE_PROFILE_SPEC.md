@@ -1,8 +1,14 @@
 # Converge DM Profile Spec
 
 ## Scope
-- **Groups**: Converge delegates group profile management to Convos-style `appData` metadata and intends to stay aligned with Convos' schema and behavior. See `CONVOS_PROFILE_SPEC.md` for details.
-- **DMs**: Converge manages DM profile data itself using a custom XMTP content type.
+- **MLS groups**: Converge uses Convos `profile_update` and `profile_snapshot`
+  messages as the primary profile channel. `group.appData` is a legacy
+  lower-authority read fallback, not the current primary format. See
+  `CONVOS_PROFILE_SPEC.md` for the source-verified model and known differences.
+- **Legacy DMs and the self-DM**: Converge manages profile data using its own
+  custom XMTP content type. New user-initiated one-to-one chats are normally
+  Convos-style single-peer groups, so this DM format primarily supports old DM
+  threads, allowed DM peers, and same-inbox recovery.
 
 ## DM Profile Content Type
 Converge publishes DM profile metadata as a silent XMTP message using a custom content type:
@@ -37,11 +43,14 @@ The codec sanitizes fields before encoding:
 
 Implementation: `src/lib/xmtp/profile-codec.ts`
 
-## Sending Rules (DMs)
+## Sending Rules (Legacy DMs)
 Converge only sends DM profile updates when the user explicitly acts (consent-safe):
 
 1. **Save to self-DM** (`saveProfile`)
-   - Sends the profile payload to the user's self-DM for cross-device recovery.
+   - Sends the profile payload to the user's self-DM as a recovery/sync source.
+   - Availability on a new installation still depends on XMTP history delivery;
+     the matching inbox ID alone does not guarantee that the old message is
+     already local.
 2. **Broadcast to allowed DMs** (`saveProfile`)
    - Best-effort broadcast to peers with consent state **Allowed**.
 3. **Ensure profile is present when sending a DM** (`ensureProfileSent`)
@@ -51,6 +60,8 @@ Converge only sends DM profile updates when the user explicitly acts (consent-sa
 Important:
 - **No automatic sending** in response to inbound messages.
 - Profile messages are sent with `shouldPush: false`.
+- An explicit profile save separately publishes the Convos profile update to
+  allowed groups; it does not make this DM JSON format authoritative in groups.
 
 Implementation: `src/lib/xmtp/client.ts` (`saveProfile`, `ensureProfileSent`)
 
@@ -70,6 +81,7 @@ Implementation:
 - `src/lib/xmtp/client.ts` (stream/backfill skip)
 
 ## Summary
-- **Groups**: use Convos `appData` profiles (shared, interoperable).
-- **DMs**: use Converge’s `converge.cv/profile:1.0` content type.
+- **Groups**: use Convos profile update/snapshot messages, with appData read only
+  as a compatibility fallback.
+- **Legacy DMs/self-DM**: use Converge's `converge.cv/profile:1.0` content type.
 - Profile messages are silent, consent-safe, and excluded from normal chat history.

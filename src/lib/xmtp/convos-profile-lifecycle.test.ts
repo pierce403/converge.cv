@@ -272,6 +272,69 @@ describe('Convos profile publication lifecycle', () => {
     ]));
   });
 
+  it('applies an empty profile update as a scoped metadata revocation', async () => {
+    const xmtp = new XmtpClient();
+    const identity = setIdentity();
+    const group = {
+      id: 'group-empty-profile-update',
+      sync: vi.fn(async () => undefined),
+      members: vi.fn(async () => [{ inboxId: ownInbox }, { inboxId: agentInbox }]),
+      messages: vi.fn(async () => []),
+      send: vi.fn(async () => 'message-id'),
+      appData: '',
+    };
+    (xmtp as unknown as { client: unknown; identity: unknown }).client = {
+      inboxId: ownInbox,
+      conversations: { getConversationById: vi.fn(async () => group) },
+    };
+    (xmtp as unknown as { client: unknown; identity: unknown }).identity = identity;
+    storageMocks.getConversation.mockResolvedValue({
+      id: group.id,
+      peerId: group.id,
+      createdAt: 1,
+      lastMessageAt: 1,
+      unreadCount: 0,
+      pinned: false,
+      archived: false,
+      isGroup: true,
+      memberInboxes: [ownInbox, agentInbox],
+      groupMembers: [{
+        inboxId: agentInbox,
+        displayName: 'Release Agent',
+        memberKind: 1,
+        profileMetadata: {
+          connections: '{"grants":["chat"]}',
+          timezone: 'UTC',
+          attestation: 'signed',
+        },
+        profileSource: 'profileUpdate',
+        profileUpdatedAt: 10,
+      }],
+    });
+
+    await (xmtp as unknown as {
+      processProfileSideChannel: (message: unknown) => Promise<boolean>;
+    }).processProfileSideChannel({
+      conversationId: group.id,
+      senderInboxId: agentInbox,
+      sentAtNs: 20_000_000n,
+      contentType: ContentTypeConvosProfileUpdate,
+      content: {},
+    });
+
+    const persistedCalls = storageMocks.putConversation.mock.calls;
+    const persisted = persistedCalls[persistedCalls.length - 1]?.[0];
+    expect(persisted?.groupMembers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        inboxId: agentInbox,
+        displayName: 'Release Agent',
+        memberKind: 1,
+        profileMetadata: { attestation: 'signed' },
+        profileSource: 'profileUpdate',
+      }),
+    ]));
+  });
+
   it('persists an approved requester profile locally before relying on snapshot delivery', async () => {
     const xmtp = new XmtpClient();
     storageMocks.getConversation.mockResolvedValue({

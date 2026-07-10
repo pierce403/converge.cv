@@ -228,7 +228,7 @@ pnpm typecheck        # TypeScript type checking
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
 - Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends a Convos `join_request` custom content payload to the creator inbox via XMTP DM
 - Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
-- Convos profile compatibility now treats self-authored `profile_update` and roster `profile_snapshot` messages as primary, with compressed protobuf `appData` as a legacy fallback.
+- Convos profile compatibility now treats self-authored `profile_update` and roster `profile_snapshot` messages as primary, with compressed protobuf `appData` as a legacy fallback. Current Convos iOS resolves canonical name/member kind by inbox while keeping encrypted avatar slots per conversation; Converge's wire implementation is compatible but its stored relayed profile state remains conversation-scoped.
 - New one-to-one chats now use Convos-style single-peer XMTP groups; legacy DMs remain readable and invite requests still use creator DMs.
 - Group activation/sends/profile saves publish the sender's Convos `profile_update`; group creation and member additions publish roster snapshots so newly joined MLS members can see existing names and agents.
 - Convos typing indicators, profile updates/snapshots, thinking messages, and join requests are registered as SDK custom content types and handled without surfacing side-channel bubbles.
@@ -507,7 +507,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.4.3 + Convos profile/snapshot interoperability)
+**Last Updated**: 2026-07-10 (app version 0.4.4 + current Convos unified-profile audit)
 **Updated By**: AI Agent
 
 
@@ -515,13 +515,24 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Convos Profile and Agent-Name Interoperability
 - Bumped Converge from `0.4.2` to `0.4.3` after auditing the current local `convos-ios` profile repository, codecs, merge rules, group-ready lifecycle, and invite-acceptance flow.
-- Important model: names are not XMTP identity/inbox properties. Convos recognizes names through silent group `profile_update` and `profile_snapshot` protobuf messages; compressed `group.appData` is a lower-authority compatibility fallback.
+- Important model: names are not XMTP identity/inbox properties. Convos recognizes names through silent group `profile_update` and `profile_snapshot` protobuf messages; compressed `group.appData` is a lower-authority compatibility fallback. Since the July 6 unified-profile rewrite, current Convos iOS stores canonical name, member kind, and general received metadata by inbox while keeping encrypted avatars per conversation.
 - Profile precedence is `profile_update > profile_snapshot > appData > contact`; same-source updates use XMTP `sentAt`, and blank names do not clear known names. Converge now persists this provenance with group members so history replay cannot regress names.
 - Local names such as "Orange Orca" publish when a group becomes active, before sends, and after profile saves. New groups and every successful member addition/invite acceptance send a current-roster snapshot for MLS post-join visibility.
 - Typed join-request profiles are retained locally through approval and included in the post-add snapshot instead of being discarded. Inbound snapshots refresh the authoritative XMTP roster before filtering so member-add event ordering cannot drop the new name.
 - Agent `memberKind=1` and typed metadata maps now encode/decode and survive inbound state plus outbound snapshots. Message labels, typing, mentions, member settings, and single-peer group titles prefer the resolved Convos profile name over placeholder contacts.
 - Profile publication reads legacy appData as a fallback but does not rewrite the shared blob because the SDK has no compare-and-swap and a profile write could clobber concurrent group metadata. Invite-tag edits remain a separate explicit operation.
 - Snapshot publication requires a successful group sync and authoritative roster read; it aborts instead of relaying stale or phantom members. Tests cover these failures along with precedence/recency, empty metadata semantics, typed agent metadata, concurrent/reload publication deduplication, cached-roster races, and post-join snapshots.
+
+### Current Convos Unified-Profile Source Audit
+- Bumped Converge from `0.4.3` to `0.4.4` after checking the profile specification and implementation against the latest upstream source rather than the stale ADR.
+- Revalidated the profile contract against `convos-ios origin/dev@590d2689` rather than the partially stale upstream ADR 005. The relevant recent changes are `0dc31f48` (2026-07-06, unified profiles) and `b4e62896` (2026-07-08, scoped grant/timezone metadata).
+- `CONVOS_PROFILE_SPEC.md` now separates the unchanged wire schema from Convos' current local storage: global `DBProfile` identity by inbox, global local `DBMyProfile`, per-conversation encrypted `DBProfileAvatar`, and per-conversation outgoing `connections`/`timezone` overlays.
+- Current Convos publication is lazy per conversation, durably retried, stamped only after delivery, and still best-effort mirrored into appData. Converge intentionally does not mirror profile writes into appData because the Browser SDK lacks Convos' atomic metadata helper.
+- Current Convos snapshot triggers also include verified already-member invite replays and a post-device-pair broadcast to all allowed groups. Converge does not yet implement that post-pair profile fan-out or Convos' durable profile retry queue.
+- Agent kind `1` is an unverified declaration. Convos verifies `attestation`, `attestation_ts`, and `attestation_kid` against a trusted keyset and prevents verified kinds from being downgraded; Converge does not yet implement this trust step.
+- Two upstream transitional risks were recorded in the spec instead of copied: direct-add/invite seeding still targets legacy `DBMemberProfile`, and received conversation-scoped metadata still lands in global `DBProfile.metadata`.
+- Corrected `CONVERGE_PROFILE_SPEC.md` and `docs/contacts.md`: groups are message-primary with appData fallback, while `converge.cv/profile:1.0` is the structured legacy-DM/self-DM channel; `cv:profile:` is accepted only as legacy cleanup input.
+- Fixed two implementation drifts found during the source audit: appData decoding now accepts both raw-DEFLATE (iOS) and zlib-wrapped bodies, and a fieldless `ProfileUpdate` now reaches the scoped `connections`/`timezone` clear merge instead of being discarded.
 
 ## Latest Changes (2026-07-09)
 

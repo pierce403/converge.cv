@@ -46,8 +46,11 @@ function toBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/g, '');
 }
 
-async function compressConvosPayload(payload: Uint8Array): Promise<Uint8Array> {
-  const compressionStream = new CompressionStream('deflate');
+async function compressConvosPayload(
+  payload: Uint8Array,
+  format: 'deflate' | 'deflate-raw' = 'deflate',
+): Promise<Uint8Array> {
+  const compressionStream = new CompressionStream(format);
   const writer = compressionStream.writable.getWriter();
   await writer.write(payload as unknown as BufferSource);
   await writer.close();
@@ -108,6 +111,18 @@ describe('convos invite metadata utils', () => {
     expect(parsed.isEncoded).toBe(true);
     expect(parsed.isCompressed).toBe(true);
     expect(parsed.tag).toBe('compressed-tag');
+  });
+
+  it('parses raw-DEFLATE appData payloads emitted by Convos iOS', async () => {
+    const protobufPayload = encodeStringField(1, 'ios-compressed-tag');
+    const compressed = await compressConvosPayload(protobufPayload, 'deflate-raw');
+    const encoded = toBase64Url(compressed);
+
+    const parsed = await parseConvosGroupAppData(encoded);
+
+    expect(parsed.isEncoded).toBe(true);
+    expect(parsed.isCompressed).toBe(true);
+    expect(parsed.tag).toBe('ios-compressed-tag');
   });
 
   it('extracts and parses current popup.convos.org v2 invite links', () => {

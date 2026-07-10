@@ -86,17 +86,21 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
   - `convos.org/typing_indicator:1.0`
   - `convos.org/join_request:1.0`
 - Profile update/snapshot and typing/thinking side channels are handled silently and are not persisted as visible chat bubbles.
-- Convos names are not XMTP identity properties. Profile state follows Convos precedence (`profile_update > profile_snapshot > appData > contact`), with the XMTP timestamp breaking ties and blank names unable to clear known names.
+- Convos names are application profile data, not XMTP identity properties. Current Convos iOS unifies name, member kind, and general received metadata locally by `inboxId`; encrypted avatar slots remain per conversation, and the profile transport is still an MLS group message that must reach each participant/installation.
+- Profile state follows Convos precedence (`profile_update > profile_snapshot > appData > contact`), with the XMTP timestamp breaking ties, lower sources filling gaps only, blank names unable to clear known names, and direct empty metadata updates clearing only the conversation-managed `connections`/`timezone` keys.
 - Group activation, group sends, and explicit profile saves publish the local display name through a self-authored Convos `profile_update`; legacy `group.appData` profiles are read as a lower-authority fallback but are not rewritten by profile publication.
 - Group creation, direct member additions, and invite acceptance publish a current-roster `profile_snapshot` after the membership change so the new MLS member can learn pre-join names.
 - Inbound snapshots refresh `group.members()` before roster filtering, and invite approval persists the requester profile locally before publishing, preventing membership-event ordering from dropping a newly added name.
-- Profile protobuf support round-trips agent `memberKind` and typed metadata values. Stored member profiles retain provenance and timestamps, and message/typing/mention/member surfaces prefer the Convos group profile over placeholder contacts.
+- Profile protobuf support round-trips agent `memberKind` and typed metadata values. `memberKind = 1` is only a generic agent declaration; Converge does not yet implement Convos' attestation verification. Stored member profiles retain provenance and timestamps, and message/typing/mention/member surfaces prefer the Convos group profile over placeholder contacts.
 - Profile publication does not rewrite the full `group.appData` blob because XMTP exposes no compare-and-swap for concurrent metadata updates. Invite-tag edits remain a separate explicit metadata operation.
+- The appData reader accepts both current iOS raw-DEFLATE and tooling zlib-wrapped frames. A fieldless direct profile update remains meaningful and runs the scoped-metadata clear path.
 - Invite claiming sends a Convos `join_request` payload with the current local profile name. Invite approval retains that requester profile and includes it in the post-add snapshot.
 
 ### Current Limitations
 
 - Existing local DM rows are not migrated into Convos-style groups. Starting a chat prefers an existing single-peer group but reuses a matching legacy DM when no group exists, avoiding duplicate threads.
+- Unlike current Convos iOS, Converge does not yet maintain a trust-aware canonical profile repository for all relayed sources: group member state remains conversation-scoped, while direct self-authored updates also refresh the global contact name.
+- Converge does not yet run Convos' post-pair profile snapshot broadcast across every allowed group or its durable per-conversation profile retry queue.
 - Converge does not decrypt Convos encrypted profile images yet. It preserves encrypted refs in appData but only uses plaintext display names and legacy plaintext avatar URLs for rendering.
 - No live Converge-to-Convos end-to-end regression was run in this implementation pass. Local tests cover protobuf metadata, source precedence, activation publication, and a post-join snapshot containing a local user, requester, and named agent; real cross-client delivery still needs manual verification with Convos.
 

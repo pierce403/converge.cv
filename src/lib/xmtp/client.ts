@@ -1360,20 +1360,21 @@ export class XmtpClient {
       const inboxId = typeof anyMsg['senderInboxId'] === 'string'
         ? normalizeConvosInboxId(anyMsg['senderInboxId'])
         : '';
-      if (!inboxId) return [];
-      return displayName || encryptedImageUrl || decoded?.memberKind || decoded?.metadata
-        ? [{
-            inboxId,
-            source: 'profileUpdate',
-            sentAt,
-            name: displayName,
-            encryptedImageUrl,
-            encryptedImageSalt: decoded?.encryptedImage?.salt,
-            encryptedImageNonce: decoded?.encryptedImage?.nonce,
-            memberKind: decoded?.memberKind,
-            metadata: decoded?.metadata ?? {},
-          }]
-        : [];
+      if (!inboxId || !decoded) return [];
+      // An otherwise empty ProfileUpdate is still meaningful in Convos: proto3
+      // cannot distinguish an omitted metadata map from an empty one, and the
+      // latter clears only conversation-scoped keys during merge.
+      return [{
+        inboxId,
+        source: 'profileUpdate',
+        sentAt,
+        name: displayName,
+        encryptedImageUrl,
+        encryptedImageSalt: decoded.encryptedImage?.salt,
+        encryptedImageNonce: decoded.encryptedImage?.nonce,
+        memberKind: decoded.memberKind,
+        metadata: decoded.metadata ?? {},
+      }];
     }
 
     if (contentTypeMatches(contentType, ContentTypeConvosProfileSnapshot)) {

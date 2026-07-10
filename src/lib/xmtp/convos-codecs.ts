@@ -361,7 +361,10 @@ function parseProfileUpdateBytes(bytes: Uint8Array): ConvosProfileUpdateContent 
         ? parseEncryptedImage(encryptedImageField.value)
         : undefined,
       memberKind: typeof memberKindField?.value === 'number' ? memberKindField.value : undefined,
-      metadata: parseMetadata(fields, 4),
+      // Proto3 maps do not preserve presence. Convos therefore interprets an
+      // omitted map on ProfileUpdate as an empty authoritative map, which clears
+      // only its conversation-scoped metadata keys during merge.
+      metadata: parseMetadata(fields, 4) ?? {},
     };
   } catch {
     return {};

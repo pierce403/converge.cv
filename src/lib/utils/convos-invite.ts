@@ -359,12 +359,22 @@ async function decompressConvosMetadataPayload(data: Uint8Array): Promise<Uint8A
     return null;
   }
 
-  const decompressed = await transformBytes(compressedPayload, new DecompressionStream('deflate'));
-  if (!decompressed || decompressed.length !== expectedSize) {
-    return null;
+  // Convos iOS emits raw DEFLATE while convos-cli/herald have emitted the
+  // zlib-wrapped form called "deflate" by the Web Streams API. Current readers
+  // accept both formats for interoperability.
+  for (const format of ['deflate', 'deflate-raw'] as const) {
+    let stream: DecompressionStream;
+    try {
+      stream = new DecompressionStream(format);
+    } catch {
+      continue;
+    }
+    const decompressed = await transformBytes(compressedPayload, stream);
+    if (decompressed?.length === expectedSize) {
+      return decompressed;
+    }
   }
-
-  return decompressed;
+  return null;
 }
 
 function decodeHex(value: string): Uint8Array | null {

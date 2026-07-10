@@ -10,7 +10,9 @@ This document explains how Converge.cv creates, stores, merges, and refreshes co
   - the active inbox namespace (`converge.storageNamespace.v1`)
   - small settings blobs (ex: Farcaster settings)
   - a stub for the contacts store persistence (`converge-contacts-storage` stores `{}` by design)
-- **XMTP is the canonical source** for inbox ID ↔ address links and inbox profile identity state.
+- **XMTP is the canonical source** for inbox ID ↔ account-identifier links.
+  Display names are app-level data learned from Convos group profile messages,
+  Converge legacy-DM profile messages, local contacts, and enrichment sources.
 - **Farcaster and ENS enrich the same `Contact` record**, using merge rules that preserve user edits.
 
 ## Data model (schema)
@@ -178,11 +180,12 @@ This leaves IndexedDB as the canonical contact database.
 
 ## Merging identity data: XMTP + ENS + Farcaster
 
-### XMTP: canonical inboxId + identity state
+### XMTP: canonical inboxId + account identity state
 
 The XMTP wrapper exposes two important calls used throughout the app:
 
-- `deriveInboxIdFromAddress(address)` resolves an Ethereum address → XMTP inbox ID (uses Utils fallback + timeout):
+- `deriveInboxIdFromAddress(address)` resolves an Ethereum address to its XMTP
+  inbox ID through the shared cached resolver:
   [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L705)
 - `fetchInboxProfile(inboxIdOrAddress)` returns a normalized profile object that includes:
   - `displayName`
@@ -192,10 +195,16 @@ The XMTP wrapper exposes two important calls used throughout the app:
   - `identities[]`
   [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L758)
 
-Important detail: Converge also supports **profile broadcasts** via a message prefix:
+Important detail: Converge also supports silent app-level profile messages:
 
-- Prefix constant: `cv:profile:` ([`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L168))
-- `fetchInboxProfile` prefers a recent profile message from the DM history when available:
+- Legacy DMs use the structured `converge.cv/profile:1.0` custom content type.
+  Old `cv:profile:` text is accepted only as a migration/cleanup format and is
+  not sent by current code.
+- Convos-style groups use `convos.org/profile_update:1.0` and
+  `convos.org/profile_snapshot:1.0`; see
+  [`CONVOS_PROFILE_SPEC.md`](../CONVOS_PROFILE_SPEC.md).
+- `fetchInboxProfile` can prefer a recent structured profile message from local
+  DM history when available:
   [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L866)
 
 ### ENS: display name enrichment
