@@ -264,7 +264,8 @@ describe('Convos profile publication lifecycle', () => {
       content: { profiles: [{ inboxId: requesterInbox, name: 'Blue Bear' }] },
     });
 
-    const persisted = storageMocks.putConversation.mock.calls.at(-1)?.[0];
+    const persistedCalls = storageMocks.putConversation.mock.calls;
+    const persisted = persistedCalls[persistedCalls.length - 1]?.[0];
     expect(group.sync).toHaveBeenCalledOnce();
     expect(persisted?.groupMembers).toEqual(expect.arrayContaining([
       expect.objectContaining({ inboxId: requesterInbox, displayName: 'Blue Bear' }),
@@ -302,7 +303,8 @@ describe('Convos profile publication lifecycle', () => {
       42,
     );
 
-    const persisted = storageMocks.putConversation.mock.calls.at(-1)?.[0];
+    const persistedCalls = storageMocks.putConversation.mock.calls;
+    const persisted = persistedCalls[persistedCalls.length - 1]?.[0];
     expect(persisted?.memberInboxes).toContain(requesterInbox);
     expect(persisted?.groupMembers).toEqual(expect.arrayContaining([
       expect.objectContaining({
