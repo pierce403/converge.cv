@@ -29,7 +29,7 @@ This app is configured to deploy automatically to GitHub Pages via GitHub Action
 ### Automatic Deployment
 
 Every push to the `main` branch triggers:
-1. Frozen-lockfile install with pnpm 10.5.2
+1. Frozen-lockfile install with the pnpm version pinned by `packageManager`
 2. TypeScript type checking
 3. ESLint code quality checks
 4. Vitest regression suite

@@ -86,7 +86,7 @@ Use `pnpm test --run` for a one-shot Vitest run. Plain `pnpm test` starts watch 
 
 ## Deployment
 
-Pushes to `main` use pnpm 10.5.2 with the frozen lockfile, then run typecheck, lint, Vitest, build, and deploy through GitHub Pages. The static app is served at [https://converge.cv](https://converge.cv). See [DEPLOYMENT.md](./DEPLOYMENT.md) for details.
+Pushes to `main` use the pnpm version pinned by `packageManager` with the frozen lockfile, then run typecheck, lint, Vitest, build, and deploy through GitHub Pages. The static app is served at [https://converge.cv](https://converge.cv). See [DEPLOYMENT.md](./DEPLOYMENT.md) for details.
 
 ## Project Layout
 
