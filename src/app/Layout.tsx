@@ -10,6 +10,7 @@ import { useAuthStore, useConversationStore, useContactStore, useInboxRegistrySt
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient } from '@/lib/xmtp';
+import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation';
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
@@ -711,6 +712,40 @@ export function Layout() {
           }
         }
 
+        // A message only identifies its sender, not whether its conversation is a DM
+        // or group. Ask XMTP before applying sender-based DM assumptions so a new
+        // group cannot become a permanently DM-shaped local record.
+        if (!conversation) {
+          try {
+            const groupDetails = await getXmtpClient().fetchGroupDetails(conversationId);
+            if (groupDetails) {
+              const createdAt = message.sentAt || Date.now();
+              const groupConversation: Conversation = {
+                id: conversationId,
+                peerId: conversationId,
+                topic: conversationId,
+                createdAt,
+                lastMessageAt: createdAt,
+                lastMessagePreview: '',
+                unreadCount: 0,
+                pinned: false,
+                archived: false,
+                lastMessageId: message.id,
+                lastMessageSender: message.senderAddress,
+                lastReadAt: preservedReadState?.lastReadAt ?? 0,
+                lastReadMessageId: preservedReadState?.lastReadMessageId ?? undefined,
+                ...groupDetailsToConversationUpdates(groupDetails),
+              };
+              addConversation(groupConversation);
+              await storage.putConversation(groupConversation);
+              conversation = groupConversation;
+              console.log('[Layout] Classified unknown XMTP conversation as a group:', conversationId);
+            }
+          } catch (classificationError) {
+            console.warn('[Layout] Failed to classify unknown XMTP conversation:', classificationError);
+          }
+        }
+
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
 
@@ -943,15 +978,18 @@ export function Layout() {
         const { conversationId, content } = custom.detail || {};
         if (!conversationId) return;
 
-        // Attempt lightweight local patch for metadata fields first
+        // Attempt a lightweight local patch first, then refresh every group update
+        // from XMTP so event-shape changes cannot leave local state stale.
         const any = (content as Record<string, unknown>) || {};
         const changes = (any['metadataFieldChanges'] as Array<{ fieldName: string; newValue?: string }> | undefined) || [];
-        const added = (any['addedInboxes'] as Array<{ inboxId: string }> | undefined) || [];
-        const removed = (any['removedInboxes'] as Array<{ inboxId: string }> | undefined) || [];
 
         const storage = await getStorage();
         const existing = await storage.getConversation(conversationId);
-        const updates: Partial<Conversation> = {};
+        const updates: Partial<Conversation> = {
+          isGroup: true,
+          peerId: conversationId,
+          topic: conversationId,
+        };
         for (const c of changes) {
           const field = (c.fieldName || '').toString();
           const val = (c.newValue ?? '').toString().trim();
@@ -962,89 +1000,43 @@ export function Layout() {
           else if (field === 'group_image_url_square') updates.groupImage = val || undefined;
           else if (field === 'description') updates.groupDescription = val || undefined;
         }
-        if (Object.keys(updates).length && existing) {
+        if (existing) {
           await storage.putConversation({ ...existing, ...updates });
           useConversationStore.getState().updateConversation(conversationId, updates);
+        } else {
+          const now = Date.now();
+          const groupConversation: Conversation = {
+            id: conversationId,
+            topic: conversationId,
+            peerId: conversationId,
+            createdAt: now,
+            lastMessageAt: now,
+            lastMessagePreview: '',
+            unreadCount: 0,
+            pinned: false,
+            archived: false,
+            isGroup: true,
+            ...updates,
+          };
+          await storage.putConversation(groupConversation);
+          useConversationStore.getState().addConversation(groupConversation);
         }
 
-        // If membership changed or no metadata changes detected, refresh authoritative details
-        const membershipChanged = added.length > 0 || removed.length > 0;
-        const appDataChanged = changes.some((change) => change.fieldName?.toLowerCase().includes('app'));
-        if (membershipChanged || changes.length === 0 || appDataChanged) {
-          try {
-            const xmtp = getXmtpClient();
-            const details = await xmtp.fetchGroupDetails(conversationId);
-            if (details) {
-              // Map GroupDetails -> Partial<Conversation> (mirror with safe field updates)
-              const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId));
-              const uniqueMembers = Array.from(new Set(memberIdentifiers.filter(Boolean)));
-              const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
-              const adminInboxes = Array.from(new Set(details.adminInboxes));
-              const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
-              const groupMembers = details.members.map((m) => ({
-                inboxId: m.inboxId,
-                address: m.address,
-                permissionLevel: m.permissionLevel,
-                isAdmin: m.isAdmin,
-                isSuperAdmin: m.isSuperAdmin,
-                displayName: m.displayName,
-                avatar: m.avatar,
-                memberKind: m.memberKind,
-                profileMetadata: m.profileMetadata,
-                profileSource: m.profileSource,
-                profileUpdatedAt: m.profileUpdatedAt,
-                encryptedProfileImageUrl: m.encryptedProfileImageUrl,
-                encryptedProfileImageSalt: m.encryptedProfileImageSalt,
-                encryptedProfileImageNonce: m.encryptedProfileImageNonce,
-              }));
-              const merged: Partial<Conversation> = {
-                members: uniqueMembers,
-                memberInboxes,
-                adminInboxes,
-                superAdminInboxes,
-                groupMembers,
-              };
-              const name = details.name?.trim();
-              if (name) {
-                merged.groupName = name;
-                merged.groupNameDerived = false;
-              }
-              const img = details.imageUrl?.trim();
-              if (img) merged.groupImage = img;
-              const desc = details.description?.trim();
-              if (desc) merged.groupDescription = desc;
-              if (details.permissions) {
-                merged.groupPermissions = {
-                  policyType: details.permissions.policyType,
-                  policySet: { ...details.permissions.policySet },
-                };
-              }
-              const current = existing || (await storage.getConversation(conversationId));
-              if (current) {
-                await storage.putConversation({ ...current, ...merged });
-                useConversationStore.getState().updateConversation(conversationId, merged);
-              } else {
-                const now = Date.now();
-                const conversation: Conversation = {
-                  id: conversationId,
-                  topic: conversationId,
-                  peerId: conversationId,
-                  createdAt: now,
-                  lastMessageAt: now,
-                  lastMessagePreview: '',
-                  unreadCount: 0,
-                  pinned: false,
-                  archived: false,
-                  isGroup: true,
-                  ...merged,
-                };
-                await storage.putConversation(conversation);
-                useConversationStore.getState().addConversation(conversation);
-              }
+        // Even metadata events are refreshed authoritatively. This also fills member
+        // state and heals records created by older versions as DM-shaped entries.
+        try {
+          const xmtp = getXmtpClient();
+          const details = await xmtp.fetchGroupDetails(conversationId);
+          if (details) {
+            const current = await storage.getConversation(conversationId);
+            const authoritative = groupDetailsToConversationUpdates(details, current);
+            if (current) {
+              await storage.putConversation({ ...current, ...authoritative });
+              useConversationStore.getState().updateConversation(conversationId, authoritative);
             }
-          } catch (err) {
-            console.warn('[Layout] Failed to refresh group details after update', err);
           }
+        } catch (err) {
+          console.warn('[Layout] Failed to refresh group details after update', err);
         }
       } catch (err) {
         console.warn('[Layout] Failed to handle xmtp:group-updated event', err);

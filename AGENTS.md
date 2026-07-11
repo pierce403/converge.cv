@@ -534,11 +534,18 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.5.2 + choice-first onboarding and native wallet stack)
+**Last Updated**: 2026-07-10 (app version 0.5.4 + group and RemoteAttachment interoperability)
 **Updated By**: AI Agent
 
 
 ## Latest Changes (2026-07-10)
+
+### Group And RemoteAttachment Interoperability
+- Bumped Converge from `0.5.3` to `0.5.4` after live Convos testing exposed group-shape, cross-installation update, participant-discovery, and image-send failures.
+- Treat SDK conversation type as authoritative. Unknown inbound groups are classified before sender-based DM guards, normal sync repairs older DM-shaped rows, and one shared hydrator persists complete metadata, membership, admins, permissions, and explicit metadata clears.
+- Do not discard a streamed event merely because `senderInboxId` matches the active inbox. Another Convos/Converge installation can author that event; process it and deduplicate by authoritative message ID.
+- Keep XMTP group transport separate from presentation. Generic single-peer Convos groups can look like direct chats, while real groups never reuse peer display fields and visibly expose Group Info plus the participant roster.
+- Convos supports the standard XMTP `RemoteAttachment` type. Converge now verifies the uploaded HTTPS ciphertext by retrieving and decrypting it before publish, and propagates upload/publish failures so the UI marks them failed instead of leaving deceptive local pending images.
 
 ### Choice-First Onboarding And Native Wallet Stack
 - Bumped Converge from `0.5.1` to `0.5.2` for the onboarding entry and wallet-stack cleanup.

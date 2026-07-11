@@ -16,6 +16,7 @@ import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { ConversationDetailsModal } from '@/features/conversations/ConversationDetailsModal';
 import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
+import { getConversationPresentation } from '@/lib/utils/conversation-presentation';
 import { useAuth } from '@/features/auth';
 
 export function ChatList() {
@@ -191,26 +192,16 @@ export function ChatList() {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto">
         {activeConversations.map((conversation) => {
+          const presentation = getConversationPresentation(conversation, identity?.inboxId);
+          const isTrueGroup = presentation.kind === 'group';
           const contact = getContactForConversation(conversation);
           const defaultContactInfo = !conversation.isGroup
             ? getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId)
             : undefined;
 
-          const groupName = (() => {
-            if (!conversation.isGroup) return undefined;
-            const current = conversation.groupName?.trim();
-            const isGeneric = conversation.groupNameDerived || !current || /^(chat|group chat|group with \d+ members)$/i.test(current);
-            if (!isGeneric) return current;
-            const myInbox = identity?.inboxId?.toLowerCase();
-            const peers = (conversation.groupMembers ?? []).filter(
-              (member) => member.inboxId?.toLowerCase() !== myInbox,
-            );
-            return peers.length === 1 && peers[0].displayName
-              ? peers[0].displayName
-              : conversation.displayName || current || 'Group Chat';
-          })();
+          const groupName = conversation.isGroup ? presentation.title : undefined;
           const displayName = conversation.isGroup
-            ? groupName || 'Group Chat'
+            ? groupName || 'Group chat'
             : contact?.preferredName
               || contact?.name
               || conversation.displayName
@@ -218,7 +209,7 @@ export function ChatList() {
               || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
 
           const avatarSource = conversation.isGroup
-            ? conversation.groupImage || conversation.displayAvatar
+            ? presentation.avatar
             : conversation.displayAvatar || contact?.preferredAvatar || contact?.avatar || defaultContactInfo?.avatar;
 
           const fallbackAvatarLabel = conversation.isGroup
@@ -305,7 +296,7 @@ export function ChatList() {
                   }}
                   className="w-12 h-12 rounded-full bg-primary-700/80 flex items-center justify-center flex-shrink-0 text-lg hover:ring-2 hover:ring-accent-400 transition-all"
                 >
-                  {conversation.isGroup && !avatarSource ? (
+                  {isTrueGroup && !avatarSource ? (
                     <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 0 016 0zm-6 0a3 0 10-6 0 3 3 0 006 0z" />
                     </svg>
@@ -320,7 +311,31 @@ export function ChatList() {
                   className="flex-1 min-w-0 ml-3"
                 >
                   <div className="flex items-baseline justify-between mb-1">
-                    <h3 className="text-sm font-semibold truncate">{displayName}</h3>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <h3 className="text-sm font-semibold truncate">{displayName}</h3>
+                      {isTrueGroup && (
+                        <span
+                          className="flex flex-shrink-0 items-center gap-1 text-xs text-primary-300"
+                          title={presentation.memberCount ? `${presentation.memberCount} members` : 'Group chat'}
+                        >
+                          <svg
+                            className="h-3.5 w-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            aria-hidden="true"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M15 7a3 3 0 11-6 0 3 3 0 016 0z"
+                            />
+                          </svg>
+                          <span>{presentation.memberCount ? `${presentation.memberCount} members` : 'Group'}</span>
+                        </span>
+                      )}
+                    </div>
                     <span className="text-xs text-primary-300 ml-2 flex-shrink-0">
                       {formatDistanceToNow(conversation.lastMessageAt)}
                     </span>

@@ -7,7 +7,8 @@ import { PermissionPolicy, PermissionUpdateType } from '@xmtp/browser-sdk';
 import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupDetails } from '@/lib/xmtp';
-import type { Conversation, DeletedConversationRecord, GroupMember } from '@/types';
+import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation';
+import type { Conversation, DeletedConversationRecord } from '@/types';
 import { DEFAULT_CONTACTS } from '@/lib/default-contacts';
 import { getAddress } from 'viem';
 
@@ -33,60 +34,13 @@ const normalizeIdentifier = (value: string): string => {
   return trimmed;
 };
 
-export const groupDetailsToConversationUpdates = (details: GroupDetails): Partial<Conversation> => {
-  const memberIdentifiers = details.members.map((member) =>
-    member.address ? normalizeIdentifier(member.address) : member.inboxId
-  );
-  const uniqueMembers = Array.from(new Set(memberIdentifiers.filter((value) => Boolean(value))));
-  const uniqueAdmins = Array.from(new Set(details.adminAddresses.map(normalizeIdentifier)));
-  const memberInboxes = details.members.map((member) => member.inboxId).filter(Boolean);
-  const adminInboxes = Array.from(new Set(details.adminInboxes));
-  const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
-  const groupMembers: GroupMember[] = details.members.map((member) => ({
-    inboxId: member.inboxId,
-    address: member.address ? normalizeIdentifier(member.address) : undefined,
-    permissionLevel: member.permissionLevel,
-    isAdmin: member.isAdmin,
-    isSuperAdmin: member.isSuperAdmin,
-    displayName: member.displayName,
-    avatar: member.avatar,
-    memberKind: member.memberKind,
-    profileMetadata: member.profileMetadata,
-    profileSource: member.profileSource,
-    profileUpdatedAt: member.profileUpdatedAt,
-    encryptedProfileImageUrl: member.encryptedProfileImageUrl,
-    encryptedProfileImageSalt: member.encryptedProfileImageSalt,
-    encryptedProfileImageNonce: member.encryptedProfileImageNonce,
-  }));
+export { groupDetailsToConversationUpdates };
 
-  const updates: Partial<Conversation> = {
-    members: uniqueMembers,
-    admins: uniqueAdmins,
-    memberInboxes,
-    adminInboxes,
-    superAdminInboxes,
-    groupMembers,
-  };
-  const name = details.name?.trim();
-  if (name) {
-    updates.groupName = name;
-    updates.groupNameDerived = false;
-  }
-  const img = details.imageUrl?.trim();
-  if (img) updates.groupImage = img;
-  const desc = details.description?.trim();
-  if (desc) updates.groupDescription = desc;
-  if (details.inviteTag) {
-    updates.inviteTag = details.inviteTag;
-  }
-  if (details.permissions) {
-    updates.groupPermissions = {
-      policyType: details.permissions.policyType,
-      policySet: { ...details.permissions.policySet },
-    };
-  }
-  return updates;
-};
+const groupDetailsToCurrentConversationUpdates = (details: GroupDetails): Partial<Conversation> =>
+  groupDetailsToConversationUpdates(
+    details,
+    useConversationStore.getState().conversations.find((conversation) => conversation.id === details.id)
+  );
 
 export function useConversations() {
   const conversations = useConversationStore((state) => state.conversations);
@@ -497,6 +451,7 @@ export function useConversations() {
           createdAt: Date.now(),
           isGroup: Boolean(xmtpConv.isGroup),
           groupName: xmtpConv.isGroup ? profileDisplayName || 'Chat' : undefined,
+          groupNameDerived: xmtpConv.isGroup ? xmtpConv.groupNameDerived : undefined,
           memberInboxes: xmtpConv.isGroup && !actualPeerId.startsWith('0x')
             ? [
                 useAuthStore.getState().identity?.inboxId,
@@ -596,7 +551,7 @@ export function useConversations() {
         try {
           const details = await xmtp.fetchGroupDetails(conversation.id);
           if (details) {
-            const updates = groupDetailsToConversationUpdates(details);
+            const updates = groupDetailsToCurrentConversationUpdates(details);
             conversation = { ...conversation, ...updates };
           }
         } catch (error) {
@@ -842,7 +797,7 @@ export function useConversations() {
         const details = await xmtp.addMembersToGroup(conversationId, membersToAdd);
 
         if (details) {
-          const updates = groupDetailsToConversationUpdates(details);
+          const updates = groupDetailsToCurrentConversationUpdates(details);
           await updateConversationAndPersist(conversationId, updates);
         }
       } catch (error) {
@@ -879,7 +834,7 @@ export function useConversations() {
         const details = await xmtp.removeMembersFromGroup(conversationId, normalizedEntries);
 
         if (details) {
-          const updates = groupDetailsToConversationUpdates(details);
+          const updates = groupDetailsToCurrentConversationUpdates(details);
           await updateConversationAndPersist(conversationId, updates);
         }
       } catch (error) {
@@ -913,7 +868,7 @@ export function useConversations() {
         const details = await xmtp.promoteMemberToAdmin(conversationId, normalizedAddress);
 
         if (details) {
-          const updates = groupDetailsToConversationUpdates(details);
+          const updates = groupDetailsToCurrentConversationUpdates(details);
           await updateConversationAndPersist(conversationId, updates);
         }
       } catch (error) {
@@ -935,7 +890,7 @@ export function useConversations() {
         const details = await xmtp.demoteAdminToMember(conversationId, normalizedAddress);
 
         if (details) {
-          const updates = groupDetailsToConversationUpdates(details);
+          const updates = groupDetailsToCurrentConversationUpdates(details);
           await updateConversationAndPersist(conversationId, updates);
         }
       } catch (error) {
@@ -957,7 +912,7 @@ export function useConversations() {
         if (!details) {
           return null;
         }
-        const updates = groupDetailsToConversationUpdates(details);
+        const updates = groupDetailsToCurrentConversationUpdates(details);
         await updateConversationAndPersist(conversationId, updates);
         return updates;
       } catch (error) {
@@ -985,7 +940,7 @@ export function useConversations() {
         });
 
         // Build authoritative updates if available
-        const authoritative = details ? groupDetailsToConversationUpdates(details) : {};
+        const authoritative = details ? groupDetailsToCurrentConversationUpdates(details) : {};
 
         // Apply optimistic fields we just set if SDK hasn't reflected them yet
         const mergedUpdates: Partial<Conversation> = {
@@ -993,6 +948,7 @@ export function useConversations() {
           groupName: updates.groupName ?? authoritative.groupName,
           groupImage: updates.groupImage ?? authoritative.groupImage,
           groupDescription: updates.groupDescription ?? authoritative.groupDescription,
+          ...(updates.groupName !== undefined ? { groupNameDerived: false } : {}),
         };
 
         await updateConversationAndPersist(conversationId, mergedUpdates);
@@ -1021,7 +977,7 @@ export function useConversations() {
         if (!source) {
           return null;
         }
-        const updates = groupDetailsToConversationUpdates(source);
+        const updates = groupDetailsToCurrentConversationUpdates(source);
         await updateConversationAndPersist(conversationId, updates);
         return updates;
       } catch (error) {

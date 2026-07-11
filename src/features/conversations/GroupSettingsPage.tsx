@@ -990,7 +990,7 @@ export function GroupSettingsPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <h1 className="text-xl font-bold">Group Settings</h1>
+        <h1 className="text-xl font-bold">Group info</h1>
         <button
           onClick={handleSave}
           className="btn-primary text-sm px-3 py-1 ml-auto"
@@ -1001,9 +1001,9 @@ export function GroupSettingsPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 bg-primary-950/30">
-        <div className="max-w-md mx-auto space-y-6">
+        <div className="max-w-md mx-auto flex flex-col gap-6">
           {error && (
-            <div className="bg-red-900/20 border border-red-500 text-red-400 px-4 py-2 rounded-lg text-sm">
+            <div className="order-[-2] bg-red-900/20 border border-red-500 text-red-400 px-4 py-2 rounded-lg text-sm">
               {error}
             </div>
           )}
@@ -1236,15 +1236,18 @@ export function GroupSettingsPage() {
           </div>
 
           {/* Member Management */}
-          <div>
-            <h2 className="text-lg font-semibold mb-2">Member Management</h2>
+          <div className="order-[-1] flex flex-col">
+            <h2 className="text-lg font-semibold mb-1">Participants ({memberEntries.length})</h2>
+            <p className="mb-3 text-sm text-primary-300">
+              Everyone in this group can view the participant list.
+            </p>
             {!canCurrentUserAddMembers && !canCurrentUserRemoveMembers && (
               <p className="text-sm text-primary-300 mb-4">
                 You don&apos;t have permission to add or remove members in this group.
               </p>
             )}
             {canCurrentUserAddMembers && (
-              <div className="flex flex-col gap-2 mb-4">
+              <div className="order-last mt-4 flex flex-col gap-2">
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -1285,7 +1288,11 @@ export function GroupSettingsPage() {
               </div>
             )}
             <ul className="bg-primary-900/70 rounded-lg p-3 space-y-2">
-              {memberEntries.map((member) => {
+              {memberEntries.length === 0 ? (
+                <li className="px-3 py-4 text-center text-sm text-primary-300">
+                  Participant list unavailable while this group is syncing.
+                </li>
+              ) : memberEntries.map((member) => {
                 const isSelf =
                   (identity?.address && member.address?.toLowerCase() === identity.address.toLowerCase()) ||
                   (identity?.inboxId && member.inboxId.toLowerCase() === identity.inboxId.toLowerCase());

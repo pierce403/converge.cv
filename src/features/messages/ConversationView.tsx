@@ -16,6 +16,7 @@ import { Menu, Transition, Portal } from '@headlessui/react';
 import { evaluateContactAgainstFilters } from '@/lib/farcaster/filters';
 import type { MentionCandidate } from '@/lib/utils/mentions';
 import { getXmtpClient } from '@/lib/xmtp';
+import { getConversationPresentation } from '@/lib/utils/conversation-presentation';
 
 const formatIdentifier = (value: string) => {
   if (!value) {
@@ -108,16 +109,31 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
   }, [contacts]);
 
   const conversation = conversations.find((c) => c.id === id);
+  const conversationPresentation = useMemo(
+    () => (conversation ? getConversationPresentation(conversation, identity?.inboxId) : null),
+    [conversation, identity?.inboxId],
+  );
 
   const composerRef = useRef<HTMLDivElement>(null);
   const lastMarkedRef = useRef<number>(0);
 
   const isCurrentUserAdmin = useMemo(() => {
-    if (!conversation?.isGroup || !identity?.address || !conversation.admins) {
+    if (!conversation?.isGroup) {
       return false;
     }
-    return conversation.admins.includes(identity.address);
-  }, [conversation, identity]);
+    const ownInbox = identity?.inboxId?.toLowerCase();
+    if (
+      ownInbox &&
+      [...(conversation.adminInboxes ?? []), ...(conversation.superAdminInboxes ?? [])]
+        .some((inboxId) => inboxId.toLowerCase() === ownInbox)
+    ) {
+      return true;
+    }
+    const ownAddress = identity?.address?.toLowerCase();
+    return Boolean(
+      ownAddress && conversation.admins?.some((address) => address.toLowerCase() === ownAddress),
+    );
+  }, [conversation, identity?.address, identity?.inboxId]);
 
   const isGroupMember = useMemo(() => {
     if (!conversation?.isGroup) {
@@ -556,30 +572,21 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       return '';
     }
     if (conversation.isGroup) {
-      const current = conversation.groupName?.trim();
-      const isGeneric = conversation.groupNameDerived || !current || /^(chat|group chat|group with \d+ members)$/i.test(current);
-      if (!isGeneric) return current;
-      const myInbox = identity?.inboxId?.toLowerCase();
-      const peers = (conversation.groupMembers ?? []).filter(
-        (member) => member.inboxId?.toLowerCase() !== myInbox,
-      );
-      return peers.length === 1 && peers[0].displayName
-        ? peers[0].displayName
-        : conversation.displayName || current || 'Group Chat';
+      return conversationPresentation?.title || 'Group chat';
     }
     return conversation.displayName
       || contact?.preferredName
       || contact?.name
       || defaultContactInfo?.name
       || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
-  }, [conversation, contact, defaultContactInfo, identity?.inboxId]);
+  }, [conversation, conversationPresentation, contact, defaultContactInfo]);
 
   const conversationAvatar = useMemo(() => {
     if (!conversation) {
       return undefined;
     }
     if (conversation.isGroup) {
-      return conversation.groupImage || conversation.displayAvatar;
+      return conversationPresentation?.avatar;
     }
     return (
       conversation.displayAvatar ||
@@ -587,7 +594,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       contact?.avatar ||
       defaultContactInfo?.avatar
     );
-  }, [conversation, contact, defaultContactInfo]);
+  }, [conversation, conversationPresentation, contact, defaultContactInfo]);
 
   const groupMemberProfiles = useMemo(() => {
     const map = new Map<string, { displayName?: string; avatar?: string; address?: string }>();
@@ -901,23 +908,56 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
             <button
               onClick={() => navigate(`/chat/${conversation.id}/settings`)}
               className="w-10 h-10 rounded-full bg-primary-800/70 flex items-center justify-center flex-shrink-0 hover:ring-2 hover:ring-accent-400 transition-all"
-              title="Group Settings"
+              title="Group info"
             >
               {conversationAvatar ? (
-                renderAvatar(conversationAvatar, conversation.groupName || 'Group')
-              ) : (
+                renderAvatar(conversationAvatar, conversationDisplayName || 'Group')
+              ) : conversationPresentation?.kind === 'group' ? (
                 <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.653.146-1.28.422-1.857m0 0a5 5 0 019.156 0M12 10a3 3 0 11-6 0 3 3 0 016 0zm-6 0a3 0 10-6 0 3 3 0 6 0z" />
                 </svg>
+              ) : (
+                renderAvatar(undefined, conversationDisplayName || 'Chat')
               )}
             </button>
             <div className="flex-1 min-w-0 text-left flex items-center justify-between">
-              <h2 className="font-semibold truncate text-primary-50">{conversationDisplayName}</h2>
+              <button
+                onClick={() => navigate(`/chat/${conversation.id}/settings`)}
+                className="min-w-0 flex-1 text-left hover:opacity-80 transition-opacity"
+                title="Group info"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <h2 className="font-semibold truncate text-primary-50">{conversationDisplayName}</h2>
+                  {conversationPresentation?.kind === 'group' && (
+                    <svg
+                      className="h-4 w-4 flex-shrink-0 text-primary-300"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      aria-label="Group chat"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.146-1.28-.422-1.857M7 20H2v-2a3 3 0 015.356-1.857M15 7a3 3 0 11-6 0 3 3 0 016 0z"
+                      />
+                    </svg>
+                  )}
+                </div>
+                <p className="text-xs text-primary-300">
+                  {conversationPresentation?.kind === 'group'
+                    ? conversationPresentation.memberCount
+                      ? `${conversationPresentation.memberCount} members`
+                      : 'Group chat'
+                    : 'XMTP messaging'}
+                </p>
+              </button>
               {isCurrentUserAdmin && (
                 <button
                   onClick={() => navigate(`/chat/${conversation.id}/settings`)}
                   className="p-2 text-primary-200 hover:text-primary-50 hover:bg-primary-900/50 rounded-lg transition-colors"
-                  title="Group Settings"
+                  title="Group info"
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -978,6 +1018,16 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
             >
               <Portal>
                 <Menu.Items className="fixed right-2 top-14 z-[10000] w-56 origin-top-right rounded-lg border border-primary-800/60 bg-primary-950/95 p-2 text-sm shadow-2xl backdrop-blur">
+                  <Menu.Item>
+                    {({ active }) => (
+                      <button
+                        onClick={() => navigate(`/chat/${conversation.id}/settings`)}
+                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
+                      >
+                        Group info
+                      </button>
+                    )}
+                  </Menu.Item>
                   <Menu.Item>
                     {({ active }) => (
                       <button

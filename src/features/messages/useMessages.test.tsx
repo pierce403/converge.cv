@@ -10,11 +10,15 @@ const xmtpMock = {
   resolveInboxIdForAddress: vi.fn(),
   refreshInboxProfile: vi.fn(),
   sendMessage: vi.fn(),
+  sendAttachment: vi.fn(),
   sendReadReceipt: vi.fn(),
 };
 
 const mockStorage = {
   putMessage: vi.fn(async () => undefined),
+  putAttachment: vi.fn(async () => undefined),
+  getAttachment: vi.fn(async () => null),
+  deleteAttachment: vi.fn(async () => undefined),
   updateMessageStatus: vi.fn(async () => undefined),
   deleteMessage: vi.fn(async () => undefined),
 };
@@ -99,6 +103,14 @@ describe('useMessages resolver usage', () => {
       sentAt: Date.now(),
       isLocalFallback: false,
     });
+    xmtpMock.sendAttachment.mockResolvedValue({
+      id: 'remote-attachment-1',
+      conversationId: 'c1',
+      senderAddress: 'self-inbox',
+      content: 'photo.png',
+      sentAt: Date.now(),
+      isLocalFallback: false,
+    });
     xmtpMock.sendReadReceipt.mockResolvedValue(undefined);
   });
 
@@ -156,6 +168,45 @@ describe('useMessages resolver usage', () => {
         type: 'ui:toast',
       }),
     );
+    dispatchSpy.mockRestore();
+  });
+
+  it('marks an attachment failed and surfaces the XMTP publish error', async () => {
+    const publishError = new Error('Uploaded attachment could not be verified');
+    xmtpMock.sendAttachment.mockRejectedValueOnce(publishError);
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    const bytes = new Uint8Array([1, 2, 3]);
+    const file = {
+      name: 'photo.png',
+      type: 'image/png',
+      size: bytes.byteLength,
+      arrayBuffer: async () => bytes.buffer,
+    } as File;
+    await act(async () => {
+      await api!.sendAttachment('c1', file);
+    });
+
+    const messages = useMessageStore.getState().messagesByConversation.c1;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'attachment',
+      body: 'photo.png',
+      status: 'failed',
+    });
+    expect(mockStorage.updateMessageStatus).toHaveBeenCalledWith(messages[0].id, 'failed');
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'ui:toast',
+        detail: publishError.message,
+      }),
+    );
+
     dispatchSpy.mockRestore();
   });
 

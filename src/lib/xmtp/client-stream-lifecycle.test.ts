@@ -11,7 +11,13 @@ type StreamMessage = {
   id: string;
   conversationId: string;
   senderInboxId: string;
-  content: string;
+  content: unknown;
+  contentType?: {
+    authorityId: string;
+    typeId: string;
+    versionMajor: number;
+    versionMinor: number;
+  };
   sentAtNs: bigint;
 };
 
@@ -183,6 +189,77 @@ describe('XmtpClient message stream cleanup', () => {
     await disconnect;
 
     expect(events).toEqual(['stream:end', 'consumer:done', 'client:close']);
+  });
+
+  it('dispatches an application message sent by another installation in the same inbox', async () => {
+    const xmtp = new XmtpClient();
+    const stream = new ControlledStream({
+      id: 'same-inbox-message',
+      conversationId: 'conversation-1',
+      senderInboxId: 'self-inbox',
+      content: 'sent from another installation',
+      sentAtNs: 2n,
+    });
+    attachStreamingClient(xmtp, stream, vi.fn(async () => undefined));
+
+    const received = new Promise<CustomEvent>((resolve) => {
+      window.addEventListener('xmtp:message', (event) => resolve(event as CustomEvent), { once: true });
+    });
+
+    await xmtp.startMessageStream();
+    const event = await received;
+
+    expect(event.detail).toMatchObject({
+      conversationId: 'conversation-1',
+      message: {
+        id: 'same-inbox-message',
+        senderAddress: 'self-inbox',
+        content: 'sent from another installation',
+      },
+      isHistory: false,
+    });
+
+    await xmtp.disconnect();
+  });
+
+  it('dispatches a group update sent by another installation in the same inbox', async () => {
+    const xmtp = new XmtpClient();
+    const content = {
+      initiatedByInboxId: 'self-inbox',
+      addedInboxes: [],
+      removedInboxes: [],
+      metadataFieldChanges: [
+        { fieldName: 'group_name', oldValue: 'Old name', newValue: 'New name' },
+      ],
+    };
+    const stream = new ControlledStream({
+      id: 'same-inbox-group-update',
+      conversationId: 'group-1',
+      senderInboxId: 'self-inbox',
+      content,
+      contentType: {
+        authorityId: 'xmtp.org',
+        typeId: 'groupUpdated',
+        versionMajor: 1,
+        versionMinor: 0,
+      },
+      sentAtNs: 3n,
+    });
+    attachStreamingClient(xmtp, stream, vi.fn(async () => undefined));
+
+    const received = new Promise<CustomEvent>((resolve) => {
+      window.addEventListener('xmtp:group-updated', (event) => resolve(event as CustomEvent), { once: true });
+    });
+
+    await xmtp.startMessageStream();
+    const event = await received;
+
+    expect(event.detail).toEqual({
+      conversationId: 'group-1',
+      content,
+    });
+
+    await xmtp.disconnect();
   });
 
   it('coalesces concurrent disconnects so the client closes once', async () => {

@@ -106,13 +106,15 @@ model.
 - Inline replies render a quoted header that resolves the referenced message body when available, while normal text is linkified so URLs open in a new tab.
 - Reactions are grouped and pinned to the bottom of each bubble with counts, aligning left/right based on message ownership.
 - New one-to-one chats are created as Convos-style single-peer XMTP MLS groups, while legacy DMs remain readable and invite-claim transport still uses a DM to the invite creator.
+- Conversation presentation is separate from XMTP transport shape: single-peer Convos groups retain the compact direct-chat treatment, while actual multi-person groups use only group metadata, show a group marker and participant count, and never inherit a stale peer name or avatar.
 - Composer controls now keep the send button vertically centered with the message textarea at one-line height on mobile/PWA, preventing a bottom-offset send button.
 - Composer activity sends Convos-compatible `convos.org/typing_indicator:1.0` messages with `shouldPush:false`, and inbound typing indicators are shown transiently without being persisted as chat history.
-- Image attachments can be picked from the paper-clip button, encrypted client-side, uploaded to IPFS via Thirdweb storage, and sent over XMTP RemoteAttachment with inline image rendering and local IndexedDB caching.
+- Image attachments can be picked from the paper-clip button, encrypted client-side, uploaded to IPFS via Thirdweb storage, and sent over the standard XMTP RemoteAttachment type with inline image rendering and local IndexedDB caching. Before publishing, Converge retrieves and decrypts the uploaded ciphertext over HTTPS; upload or publish failures become visible failed messages instead of local-only images that appear sent.
 - Group chat composer supports @-mentions with live member suggestions; mentions render inline with highlight styling and incoming messages that mention you are visually emphasized.
 - Conversations load the most recent messages first and lazily prepend older history only when the user scrolls upward, keeping large threads fast while preserving full local storage history.
 - Conversation list updates are now idempotent while history is loading: duplicate DM rows are collapsed by conversation ID and canonical peer key so replayed/backfilled message events cannot flood the chat list.
 - New inbound conversations are now discovered continuously while connected: XMTP runs a throttled background discovery sync and immediately refreshes the in-memory chat list from IndexedDB after sync writes, so first-time DMs appear without reload/manual resync.
+- Messages and group updates authored by another installation of the active inbox are processed instead of being discarded as local echoes. Message IDs remain the deduplication boundary for events also produced by the current browser.
 - Read receipts are emitted only for non-self DMs and are throttled by last send time, preventing cross-client metadata spam (for example repeated `{}` rows in xmtp.chat during self-chat testing).
 - Desktop-width chat routes now render a persistent split view: conversation list on the left, selected conversation on the right, with mobile behavior unchanged.
 - Avatar rendering now prevents raw URL/data payload strings from being printed as text in avatar slots; non-image avatar values are treated as short glyphs only (otherwise initials fallback).
@@ -140,6 +142,8 @@ model.
 - Single-peer Convos groups use the peer's resolved profile name in chat lists, headers, message labels, typing text, and mentions instead of leaving the conversation titled "Chat".
 
 ## Group Management
+- Group Info is available from the chat header and overflow menu to every participant. It leads with the current participant count and roster; admins additionally get metadata, permission, invite/removal, and promotion controls.
+- Group metadata and membership are refreshed from authoritative XMTP group state after every group update. Normal sync also repairs older group conversations that were accidentally stored as DM-shaped records, and remote metadata clears remove stale local values.
 - Group settings expose metadata editing for name, image, and description alongside XMTP permission updates, member invites/removals, and admin promotions/demotions.
 - Join policy options map to XMTP permission policies (members, admins, super admins, closed) with descriptive guidance, while group avatar uploads are downscaled to fit XMTP metadata limits.
 - Group creation uses XMTP identifier-based APIs (address identifiers) so new groups are real network conversations, and membership-change events trigger group refreshes to surface newly joined groups promptly.

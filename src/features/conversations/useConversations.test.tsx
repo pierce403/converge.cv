@@ -12,9 +12,11 @@ const xmtpMock = {
   addMembersToGroup: vi.fn(),
   createConversation: vi.fn(),
   removeMembersFromGroup: vi.fn(),
+  updateGroupMetadata: vi.fn(),
   resolveInboxIdForAddress: vi.fn(),
   isConnected: vi.fn(() => false),
   getInboxId: vi.fn(() => null),
+  refreshInboxProfile: vi.fn(),
 };
 
 const mockStorage = {
@@ -28,6 +30,7 @@ const mockStorage = {
   unmarkConversationDeletion: vi.fn(async () => undefined),
   unmarkPeerDeletion: vi.fn(async () => undefined),
   deleteConversation: vi.fn(async () => undefined),
+  putContact: vi.fn(async () => undefined),
   vacuum: vi.fn(async () => undefined),
 };
 
@@ -77,9 +80,11 @@ describe('useConversations controls', () => {
     xmtpMock.addMembersToGroup.mockReset();
     xmtpMock.createConversation.mockReset();
     xmtpMock.removeMembersFromGroup.mockReset();
+    xmtpMock.updateGroupMetadata.mockReset();
     xmtpMock.resolveInboxIdForAddress.mockReset();
     xmtpMock.isConnected.mockReset();
     xmtpMock.getInboxId.mockReset();
+    xmtpMock.refreshInboxProfile.mockReset();
     xmtpMock.isConnected.mockReturnValue(false);
     xmtpMock.getInboxId.mockReturnValue(null);
     mockStorage.listConversations.mockResolvedValue([]);
@@ -196,6 +201,42 @@ describe('createConversation existing-peer reuse', () => {
     expect(result).toBe(legacyDm);
     expect(xmtpMock.createConversation).not.toHaveBeenCalled();
   });
+
+  it('preserves the derived-title marker returned for a new Convos direct group', async () => {
+    mockStorage.listConversations.mockResolvedValue([]);
+    xmtpMock.createConversation.mockResolvedValue({
+      id: 'convos-direct-group',
+      peerId: peerInboxId,
+      topic: 'convos-direct-group',
+      isGroup: true,
+      displayName: 'Orange Orca',
+      displayAvatar: undefined,
+      groupNameDerived: true,
+    });
+    xmtpMock.refreshInboxProfile.mockResolvedValue({
+      inboxId: peerInboxId,
+      displayName: 'Orange Orca',
+      addresses: [],
+      identities: [],
+    });
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let result: Conversation | null = null;
+    await act(async () => {
+      result = await api!.createConversation(peerInboxId);
+    });
+
+    expect(result).toMatchObject({
+      id: 'convos-direct-group',
+      isGroup: true,
+      groupName: 'Orange Orca',
+      groupNameDerived: true,
+    });
+  });
 });
 
 describe('group membership operations', () => {
@@ -302,6 +343,68 @@ describe('group membership operations', () => {
 
     expect(xmtpMock.removeMembersFromGroup).toHaveBeenCalledWith('g1', ['inbox-b']);
     expect(conversationRecord.memberInboxes).toEqual(['inbox-a']);
+  });
+});
+
+describe('group metadata operations', () => {
+  it('turns a derived direct-chat title into an explicit name after a local rename', async () => {
+    conversationRecord = {
+      id: 'g1',
+      peerId: 'peer-inbox',
+      topic: 'g1',
+      lastMessageAt: 1,
+      unreadCount: 0,
+      pinned: false,
+      archived: false,
+      createdAt: 1,
+      isGroup: true,
+      groupName: 'Orange Orca',
+      groupNameDerived: true,
+    };
+    useConversationStore.setState({ conversations: [conversationRecord] });
+    xmtpMock.updateGroupMetadata.mockResolvedValue(null);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.updateGroupMetadata('g1', { groupName: 'Project Room' });
+    });
+
+    expect(conversationRecord.groupName).toBe('Project Room');
+    expect(conversationRecord.groupNameDerived).toBe(false);
+  });
+
+  it('clears the derived-title marker when the local group name is cleared', async () => {
+    conversationRecord = {
+      id: 'g1',
+      peerId: 'peer-inbox',
+      topic: 'g1',
+      lastMessageAt: 1,
+      unreadCount: 0,
+      pinned: false,
+      archived: false,
+      createdAt: 1,
+      isGroup: true,
+      groupName: 'Orange Orca',
+      groupNameDerived: true,
+    };
+    useConversationStore.setState({ conversations: [conversationRecord] });
+    xmtpMock.updateGroupMetadata.mockResolvedValue(null);
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.updateGroupMetadata('g1', { groupName: '' });
+    });
+
+    expect(conversationRecord.groupName).toBe('');
+    expect(conversationRecord.groupNameDerived).toBe(false);
   });
 });
 

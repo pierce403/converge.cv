@@ -49,6 +49,8 @@ import type {
 import { bytesToHex, getAddress, hexToBytes } from 'viem';
 import { getStorage } from '@/lib/storage';
 import { getAttachmentStorageClient } from './attachment-storage';
+import { createRemoteAttachment, verifyUploadedRemoteAttachment } from './remote-attachment';
+import { groupDetailsToConversationUpdates } from './group-conversation';
 import { KeyedAsyncCache } from '@/lib/utils/keyed-async-cache';
 import {
   ethereumAddressesEqual,
@@ -1088,6 +1090,43 @@ export class XmtpClient {
     return null;
   }
 
+  private dispatchGroupUpdatedEvents(message: {
+    id: string;
+    conversationId: string;
+    senderInboxId: string;
+    sentAtNs?: bigint;
+    content?: unknown;
+  }): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('xmtp:group-updated', {
+        detail: {
+          conversationId: message.conversationId,
+          content: message.content,
+        },
+      })
+    );
+
+    const body = this.formatGroupUpdatedLabel(message.content) || 'Group updated';
+    const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
+    window.dispatchEvent(
+      new CustomEvent('xmtp:system', {
+        detail: {
+          conversationId: message.conversationId,
+          system: {
+            id: `sys_${message.id}`,
+            senderInboxId: message.senderInboxId,
+            body,
+            sentAt,
+          },
+        },
+      })
+    );
+  }
+
   /**
    * Revoke the oldest installation(s) for an arbitrary signer-owned inbox without
    * registering a new installation. Used when connecting the local app key to a
@@ -1912,22 +1951,6 @@ export class XmtpClient {
         this.identity?.address ??
         'local-sender',
       content,
-      sentAt: now,
-      isLocalFallback: true,
-    };
-  }
-
-  private createLocalAttachmentMessage(conversationId: string, attachment: Attachment): XmtpMessage {
-    const now = Date.now();
-    return {
-      id: this.generateLocalId('local-attachment'),
-      conversationId,
-      senderAddress:
-        this.identity?.inboxId ??
-        this.identity?.address ??
-        'local-sender',
-      content: attachment.filename ?? 'Attachment',
-      attachment,
       sentAt: now,
       isLocalFallback: true,
     };
@@ -4458,64 +4481,28 @@ export class XmtpClient {
     }
     console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
 
-    // Ensure group conversations are present in local storage even if no messages were backfilled yet
+    // Reconcile every SDK group with local storage. The SDK's conversation type is
+    // authoritative; older clients could create DM-shaped rows before learning that
+    // a conversation was a group.
     try {
       const myInboxLower = this.client?.inboxId?.toLowerCase?.() ?? this.identity?.inboxId?.toLowerCase?.();
       for (const c of convos as Array<{ id?: string; createdAtNs?: bigint }>) {
         const id = c?.id as string | undefined;
         if (!id) continue;
         const exists = await storage.getConversation(id);
-        // Never classify known DM ids as groups
         if (dmIdSet.has(id)) {
           continue;
         }
-        if (exists?.isGroup) {
-          try {
-            const existingGroup = await this.getGroupConversation(id);
-            if (existingGroup) {
-              const details = await this.buildGroupDetails(id, existingGroup);
-              const groupMembers: StoredGroupMember[] = details.members.map((member) => ({
-                inboxId: member.inboxId,
-                address: member.address,
-                permissionLevel: member.permissionLevel,
-                isAdmin: member.isAdmin,
-                isSuperAdmin: member.isSuperAdmin,
-                displayName: member.displayName,
-                avatar: member.avatar,
-                memberKind: member.memberKind,
-                profileMetadata: member.profileMetadata,
-                profileSource: member.profileSource,
-                profileUpdatedAt: member.profileUpdatedAt,
-                encryptedProfileImageUrl: member.encryptedProfileImageUrl,
-                encryptedProfileImageSalt: member.encryptedProfileImageSalt,
-                encryptedProfileImageNonce: member.encryptedProfileImageNonce,
-              }));
-              const updates: Partial<Conversation> = {
-                members: Array.from(new Set(details.members.map((member) => member.address ?? member.inboxId))),
-                memberInboxes: details.members.map((member) => member.inboxId),
-                adminInboxes: Array.from(new Set(details.adminInboxes)),
-                superAdminInboxes: Array.from(new Set(details.superAdminInboxes)),
-                groupMembers,
-              };
-              const nextConversation = { ...exists, ...updates };
-              await storage.putConversation(nextConversation);
-              useConversationStore.getState().updateConversation(id, updates);
-              await this.ensureConvosGroupProfilePublished(id, existingGroup);
-            }
-          } catch (error) {
-            console.warn('[XMTP] Failed to refresh existing group profiles during sync:', id, error);
-          }
-          continue;
-        }
-        if (exists) continue;
-        // Probe if this is a group by checking for group APIs on the conversation
+
+        // Probe the SDK object even when a local row already exists. Local shape is
+        // not a reliable discriminator after an inbound-message race.
         let group = null as Awaited<ReturnType<typeof this.getGroupConversation>> | null;
         try {
           group = await this.getGroupConversation(id);
         } catch {
           group = null;
         }
-        if (!group) continue; // Not a group (DMs will be created via message backfill)
+        if (!group) continue;
 
         try {
           const details = await this.buildGroupDetails(id, group);
@@ -4527,61 +4514,47 @@ export class XmtpClient {
               (member) => member.inboxId && member.inboxId.toLowerCase() === myInboxLower
             );
           })();
-          if (!isMember) {
+          if (!exists && !isMember) {
             console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
             continue;
           }
+
           const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
-          const memberIdentifiers = details.members.map((m) => (m.address ? m.address : m.inboxId)).filter(Boolean);
-          const uniqueMembers = Array.from(new Set(memberIdentifiers));
-          const memberInboxes = details.members.map((m) => m.inboxId).filter(Boolean);
-          const adminInboxes = Array.from(new Set(details.adminInboxes));
-          const superAdminInboxes = Array.from(new Set(details.superAdminInboxes));
-          const groupMembers = details.members.map((m) => ({
-            inboxId: m.inboxId,
-            address: m.address,
-            permissionLevel: m.permissionLevel,
-            isAdmin: m.isAdmin,
-            isSuperAdmin: m.isSuperAdmin,
-            displayName: m.displayName,
-            avatar: m.avatar,
-            memberKind: m.memberKind,
-            profileMetadata: m.profileMetadata,
-            profileSource: m.profileSource,
-            profileUpdatedAt: m.profileUpdatedAt,
-            encryptedProfileImageUrl: m.encryptedProfileImageUrl,
-            encryptedProfileImageSalt: m.encryptedProfileImageSalt,
-            encryptedProfileImageNonce: m.encryptedProfileImageNonce,
-          }));
+          const authoritative = groupDetailsToConversationUpdates(details, exists);
           const conversation: Conversation = {
+            ...(exists ?? {
+              id,
+              peerId: id,
+              topic: id,
+              createdAt,
+              lastMessageAt: createdAt,
+              lastMessagePreview: '',
+              unreadCount: 0,
+              pinned: false,
+              archived: false,
+            }),
+            ...authoritative,
             id,
-            topic: id,
-            peerId: id,
-            createdAt,
-            lastMessageAt: createdAt,
-            unreadCount: 0,
-            pinned: false,
-            archived: false,
-            isGroup: true,
-            groupName: details.name?.trim() || undefined,
-            groupImage: details.imageUrl?.trim() || undefined,
-            groupDescription: details.description?.trim() || undefined,
-            inviteTag: details.inviteTag,
-            members: uniqueMembers,
-            memberInboxes,
-            adminInboxes,
-            superAdminInboxes,
-            groupMembers,
           };
           await storage.putConversation(conversation);
+
+          if (exists) {
+            useConversationStore.getState().updateConversation(id, authoritative);
+          }
+
           try {
             await this.ensureConvosGroupProfilePublished(id, group);
           } catch (error) {
-            console.warn('[XMTP] Failed to publish profile for newly discovered group (non-fatal):', error);
+            console.warn('[XMTP] Failed to publish profile for synced group (non-fatal):', error);
           }
-          logNetworkEvent({ direction: 'status', event: 'conversations:sync:group_added', details: `Inserted group ${id}` });
+
+          logNetworkEvent({
+            direction: 'status',
+            event: exists ? 'conversations:sync:group_updated' : 'conversations:sync:group_added',
+            details: `${exists ? 'Updated' : 'Inserted'} group ${id}`,
+          });
         } catch (persistErr) {
-          console.warn('[XMTP] Failed to persist group conversation after sync', persistErr);
+          console.warn('[XMTP] Failed to reconcile group conversation after sync', id, persistErr);
         }
       }
     } catch (ensureErr) {
@@ -5428,8 +5401,16 @@ export class XmtpClient {
               continue;
             }
 
-            // Skip messages sent by us (they're already in the UI from sendMessage)
-            if (this.client && message.senderInboxId === this.client.inboxId) {
+            // Inbox authorship does not identify the installation. Messages from
+            // this inbox may have been sent by another connected device.
+            const streamedTypeId = this.getContentTypeIdFromAny(message);
+            const streamedType = (streamedTypeId || '').toLowerCase();
+            if (streamedType.includes('group') && streamedType.includes('updated')) {
+              try {
+                this.dispatchGroupUpdatedEvents(message);
+              } catch (error) {
+                console.warn('[XMTP] Failed to dispatch group-updated events', error);
+              }
               continue;
             }
 
@@ -7086,15 +7067,13 @@ export class XmtpClient {
     }
 
     if (!this.client) {
-      console.warn('[XMTP] Client not connected; queuing attachment locally for conversation', conversationId);
-      const localMessage = this.createLocalAttachmentMessage(conversationId, attachment);
       logNetworkEvent({
         direction: 'status',
-        event: 'attachments:send:offline',
-        details: `Stored local attachment for ${conversationId}`,
+        event: 'attachments:send:disconnected',
+        details: `Cannot send attachment on ${conversationId} while disconnected`,
         payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
       });
-      return localMessage;
+      throw new Error('XMTP is not connected. Reconnect before sending an attachment.');
     }
 
     logNetworkEvent({
@@ -7130,16 +7109,8 @@ export class XmtpClient {
         attachment.filename ?? 'attachment'
       );
 
-      const remoteAttachment: RemoteAttachment = {
-        url,
-        contentDigest: encrypted.contentDigest,
-        salt: encrypted.salt,
-        nonce: encrypted.nonce,
-        secret: encrypted.secret,
-        scheme: 'https://',
-        contentLength: encrypted.contentLength ?? attachment.content.byteLength,
-        filename: attachment.filename,
-      };
+      const remoteAttachment = createRemoteAttachment(encrypted, url, attachment.filename);
+      await verifyUploadedRemoteAttachment(remoteAttachment);
 
       const messageId = await conversation.sendRemoteAttachment(remoteAttachment);
       const message: XmtpMessage = {
@@ -7166,15 +7137,18 @@ export class XmtpClient {
         throw new Error('XMTP identity needs reinitialization. Reconnect your wallet and try again.');
       }
 
-      console.warn('[XMTP] Failed to send attachment via XMTP, storing locally:', error);
-      const fallbackMessage = this.createLocalAttachmentMessage(conversationId, attachment);
+      console.error('[XMTP] Failed to send attachment via XMTP:', error);
       logNetworkEvent({
         direction: 'status',
-        event: 'attachments:send:offline',
-        details: `Stored local attachment for ${conversationId} after send failure`,
-        payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
+        event: 'attachments:send:failed',
+        details: `Failed to send attachment on ${conversationId}`,
+        payload: this.formatPayload({
+          filename: attachment.filename,
+          size: attachment.content.byteLength,
+          error: error instanceof Error ? error.message : String(error),
+        }),
       });
-      return fallbackMessage;
+      throw error;
     }
   }
 

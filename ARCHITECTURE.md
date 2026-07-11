@@ -132,7 +132,10 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 ### Implemented Now In Converge
 
 - New user-initiated one-to-one chats use Convos' current single-peer MLS group pattern instead of creating a fresh DM. The stored `peerId` remains the other inbox ID for contact lookup, but `isGroup` is true so messages publish into a group conversation that Convos can list.
+- XMTP conversation type and UI presentation are deliberately separate. A generic two-member MLS group can present as a direct chat; a named or multi-person group presents as a group, never falls back to peer-specific display fields, and exposes its participant count and Group Info roster.
 - Legacy DMs remain readable and sendable. Invite-claim transport still uses a DM to the invite creator because Convos' join flow sends a request to the creator, not to the target group.
+- SDK group state is authoritative over the local conversation shape. Unknown inbound messages are classified through the SDK before sender-based DM assumptions, and every normal sync probes non-DM SDK conversations so historical DM-shaped group rows are promoted and fully hydrated with metadata, members, admins, and permissions.
+- A matching `senderInboxId` identifies the social inbox, not the browser installation. Live messages and `GroupUpdated` events from another installation of the active inbox are processed; authoritative XMTP message IDs deduplicate a current-browser publish echoed by the stream.
 - Converge registers these Convos custom content types with the XMTP SDK:
   - `convos.org/profile_update:1.0`
   - `convos.org/profile_snapshot:1.0`
@@ -145,6 +148,7 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - Group creation, direct member additions, and invite acceptance publish a current-roster `profile_snapshot` after the membership change so the new MLS member can learn pre-join names.
 - Inbound snapshots refresh `group.members()` before roster filtering, and invite approval persists the requester profile locally before publishing, preventing membership-event ordering from dropping a newly added name.
 - Profile protobuf support round-trips agent `memberKind` and typed metadata values. `memberKind = 1` is only a generic agent declaration; Converge does not yet implement Convos' attestation verification. Stored member profiles retain provenance and timestamps, and message/typing/mention/member surfaces prefer the Convos group profile over placeholder contacts.
+- Single-image interoperability uses XMTP's standard `RemoteAttachment`. Converge encrypts locally, uploads ciphertext to an HTTPS-readable store, then retrieves and decrypts that exact descriptor before publishing; a storage or XMTP failure is surfaced and never represented as a successfully posted local-only image.
 - Profile publication does not rewrite the full `group.appData` blob because XMTP exposes no compare-and-swap for concurrent metadata updates. Invite-tag edits remain a separate explicit metadata operation.
 - The appData reader accepts both current iOS raw-DEFLATE and tooling zlib-wrapped frames. A fieldless direct profile update remains meaningful and runs the scoped-metadata clear path.
 - Invite claiming sends a Convos `join_request` payload with the current local profile name. Invite approval retains that requester profile and includes it in the post-add snapshot.
