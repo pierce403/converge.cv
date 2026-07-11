@@ -28,7 +28,6 @@ import {
   SortDirection,
   encodeText,
   encryptAttachment,
-  decryptAttachment,
   getInboxIdForIdentifier,
   PermissionPolicy,
   PermissionUpdateType,
@@ -50,6 +49,7 @@ import { bytesToHex, getAddress, hexToBytes } from 'viem';
 import { getStorage } from '@/lib/storage';
 import { getAttachmentStorageClient } from './attachment-storage';
 import { createRemoteAttachment, verifyUploadedRemoteAttachment } from './remote-attachment';
+import { fetchIncomingAttachment } from './incoming-attachment';
 import { groupDetailsToConversationUpdates } from './group-conversation';
 import { KeyedAsyncCache } from '@/lib/utils/keyed-async-cache';
 import {
@@ -282,6 +282,17 @@ export interface XmtpMessage {
   convosJoinRequest?: ConvosJoinRequestContent;
 }
 
+export class AttachmentConsentError extends Error {
+  constructor(public readonly consentState: ConsentState) {
+    super(
+      consentState === ConsentState.Denied
+        ? 'Attachments are blocked for this conversation.'
+        : 'Accept this conversation before loading attachments.'
+    );
+    this.name = 'AttachmentConsentError';
+  }
+}
+
 export type MessageCallback = (message: XmtpMessage) => void;
 export type Unsubscribe = () => void;
 
@@ -410,6 +421,9 @@ export class XmtpClient {
   private disconnectPromise: Promise<void> | null = null;
   private backgroundDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
   private backgroundDiscoveryInFlight = false;
+  private attachmentPreferenceSyncClient: Client<unknown> | null = null;
+  private attachmentPreferenceSyncPromise: Promise<void> | null = null;
+  private attachmentPreferenceSyncedAt = 0;
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
   private static readonly BACKGROUND_DISCOVERY_INTERVAL_MS = 60 * 1000;
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
@@ -1844,16 +1858,115 @@ export class XmtpClient {
     return (t.includes('remote') && t.includes('attachment')) || t.includes('remotestaticattachment');
   }
 
-  async loadRemoteAttachment(remoteAttachment: RemoteAttachment): Promise<Attachment> {
-    if (!remoteAttachment?.url) {
-      throw new Error('Remote attachment is missing a URL');
+  async getConversationConsentState(conversationId: string): Promise<ConsentState> {
+    if (!this.client) {
+      throw new Error('XMTP is not connected. Reconnect before loading attachments.');
     }
-    const response = await fetch(remoteAttachment.url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch attachment (${response.status})`);
+    const conversation = await this.client.conversations.getConversationById(conversationId);
+    if (!conversation) {
+      return ConsentState.Unknown;
     }
-    const payload = new Uint8Array(await response.arrayBuffer());
-    return await decryptAttachment(payload, remoteAttachment);
+    return await conversation.consentState();
+  }
+
+  private async syncAttachmentConsentPreferences(activeClient: Client<unknown>): Promise<void> {
+    if (this.client !== activeClient) {
+      throw new Error('The active inbox changed before consent could be refreshed.');
+    }
+    if (
+      this.attachmentPreferenceSyncClient === activeClient &&
+      Date.now() - this.attachmentPreferenceSyncedAt < 5_000
+    ) {
+      return;
+    }
+    if (
+      this.attachmentPreferenceSyncClient === activeClient &&
+      this.attachmentPreferenceSyncPromise
+    ) {
+      return await this.attachmentPreferenceSyncPromise;
+    }
+
+    const syncPromise = activeClient.preferences.sync().then(() => undefined);
+    this.attachmentPreferenceSyncClient = activeClient;
+    this.attachmentPreferenceSyncPromise = syncPromise;
+    try {
+      await syncPromise;
+      if (this.client !== activeClient) {
+        throw new Error('The active inbox changed before consent could be refreshed.');
+      }
+      this.attachmentPreferenceSyncedAt = Date.now();
+    } finally {
+      if (this.attachmentPreferenceSyncPromise === syncPromise) {
+        this.attachmentPreferenceSyncPromise = null;
+      }
+    }
+  }
+
+  async updateConversationConsentState(
+    conversationId: string,
+    consentState: ConsentState,
+  ): Promise<void> {
+    if (!this.client) {
+      throw new Error('XMTP is not connected. Reconnect before updating conversation consent.');
+    }
+    const conversation = await this.client.conversations.getConversationById(conversationId);
+    if (!conversation) {
+      throw new Error('Conversation not found. Sync this inbox and try again.');
+    }
+    await conversation.updateConsentState(consentState);
+    this.attachmentPreferenceSyncedAt = 0;
+  }
+
+  async loadRemoteAttachment(
+    conversationId: string,
+    remoteAttachment: RemoteAttachment,
+    expectedInboxId?: string,
+  ): Promise<Attachment> {
+    const activeClient = this.client;
+    if (!activeClient) {
+      throw new Error('XMTP is not connected. Reconnect before loading attachments.');
+    }
+    if (expectedInboxId && !inboxIdsMatch(activeClient.inboxId, expectedInboxId)) {
+      throw new Error('The active inbox changed before the attachment could be loaded.');
+    }
+    const decoded = await fetchIncomingAttachment(remoteAttachment, {
+      authorize: async () => {
+        if (
+          this.client !== activeClient ||
+          (expectedInboxId && !inboxIdsMatch(activeClient.inboxId, expectedInboxId))
+        ) {
+          throw new Error('The active inbox changed before the attachment could be loaded.');
+        }
+        await this.syncAttachmentConsentPreferences(activeClient);
+        const conversation = await activeClient.conversations.getConversationById(conversationId);
+        const consentState = conversation
+          ? await conversation.consentState()
+          : ConsentState.Unknown;
+        if (
+          this.client !== activeClient ||
+          (expectedInboxId && !inboxIdsMatch(activeClient.inboxId, expectedInboxId))
+        ) {
+          throw new Error('The active inbox changed before the attachment could be loaded.');
+        }
+        if (consentState !== ConsentState.Allowed) {
+          throw new AttachmentConsentError(consentState);
+        }
+      },
+    });
+    if (
+      this.client !== activeClient ||
+      (expectedInboxId && !inboxIdsMatch(activeClient.inboxId, expectedInboxId))
+    ) {
+      throw new Error('The active inbox changed while the attachment was loading.');
+    }
+    const currentConversation = await activeClient.conversations.getConversationById(conversationId);
+    const currentConsentState = currentConversation
+      ? await currentConversation.consentState()
+      : ConsentState.Unknown;
+    if (currentConsentState !== ConsentState.Allowed) {
+      throw new AttachmentConsentError(currentConsentState);
+    }
+    return decoded;
   }
 
   private async uploadEncryptedAttachmentPayload(payload: Uint8Array, filename: string): Promise<{ uri: string; url: string }> {
@@ -7104,6 +7217,11 @@ export class XmtpClient {
       }
 
       const encrypted = await encryptAttachment(attachment);
+      if (encrypted.payload.byteLength > MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Encrypted attachment exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB wire limit. Choose a slightly smaller image.`
+        );
+      }
       const { url } = await this.uploadEncryptedAttachmentPayload(
         encrypted.payload,
         attachment.filename ?? 'attachment'

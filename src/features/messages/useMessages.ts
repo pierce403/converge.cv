@@ -3,17 +3,50 @@
  */
 
 import { useCallback } from 'react';
+import { ConsentState, type RemoteAttachment } from '@xmtp/browser-sdk';
 import { useMessageStore, useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
-import type { Message, Attachment as StoredAttachment, Conversation } from '@/types';
+import {
+  ALLOWED_INCOMING_IMAGE_MIME_TYPES,
+  classifyTrustedAttachmentHost,
+  MAX_INCOMING_ATTACHMENT_BYTES,
+  validateIncomingAttachmentContent,
+  validateIncomingAttachmentUrl,
+} from '@/lib/xmtp/incoming-attachment';
+import type {
+  Message,
+  Attachment as StoredAttachment,
+  Conversation,
+  StoredRemoteAttachmentEnvelope,
+} from '@/types';
 import { getAddress, isAddress } from 'viem';
 import { isLikelyConvosInviteCode, tryParseConvosInvite } from '@/lib/utils/convos-invite';
 
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB safety cap
+const MAX_ATTACHMENT_BYTES = MAX_INCOMING_ATTACHMENT_BYTES;
+const MAX_INBOX_ATTACHMENT_CACHE_BYTES = 100 * 1024 * 1024;
+const SUPPORTED_ATTACHMENT_MIME_TYPES = new Set<string>(ALLOWED_INCOMING_IMAGE_MIME_TYPES);
 const MESSAGE_PAGE_SIZE = 50;
 const XMTP_INBOX_WITH_0X_REGEX = /^0x[a-f0-9]{64}$/i;
+
+export interface LoadAttachmentOptions {
+  allowUntrusted?: boolean;
+}
+
+export interface LoadedAttachment {
+  attachment: StoredAttachment;
+  data: ArrayBuffer;
+}
+
+export class AttachmentHostApprovalError extends Error {
+  constructor(public readonly hostname: string) {
+    super(`Loading this image requires approval for ${hostname}.`);
+    this.name = 'AttachmentHostApprovalError';
+  }
+}
+
+const attachmentDownloadRequests = new Map<string, Promise<LoadedAttachment>>();
 
 const normalizeIdentityKey = (value?: string | null): string => {
   const trimmed = value?.trim().toLowerCase() || '';
@@ -28,6 +61,50 @@ const toArrayBuffer = (data: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(data.byteLength);
   copy.set(data);
   return copy.buffer;
+};
+
+const remoteAttachmentEnvelope = (
+  id: string,
+  messageId: string,
+  conversationId: string,
+  attachment: RemoteAttachment,
+): StoredRemoteAttachmentEnvelope => ({
+  id,
+  messageId,
+  conversationId,
+  url: attachment.url,
+  contentDigest: attachment.contentDigest,
+  secret: new Uint8Array(attachment.secret),
+  salt: new Uint8Array(attachment.salt),
+  nonce: new Uint8Array(attachment.nonce),
+  scheme: attachment.scheme,
+  contentLength: attachment.contentLength,
+  filename: attachment.filename,
+});
+
+const inspectRemoteAttachmentDescriptor = (
+  attachment: RemoteAttachment,
+): { sourceHost?: string; failureReason?: string } => {
+  try {
+    const url = validateIncomingAttachmentUrl(attachment.url);
+    const scheme = attachment.scheme.trim().toLowerCase();
+    if (scheme !== 'https' && scheme !== 'https://') {
+      throw new Error('Remote attachment metadata does not use HTTPS');
+    }
+    if (
+      !Number.isSafeInteger(attachment.contentLength) ||
+      attachment.contentLength <= 0 ||
+      attachment.contentLength > MAX_ATTACHMENT_BYTES
+    ) {
+      throw new Error(`Remote attachment exceeds the ${MAX_ATTACHMENT_BYTES}-byte limit`);
+    }
+    return { sourceHost: url.hostname.toLowerCase() };
+  } catch (error) {
+    return {
+      failureReason:
+        error instanceof Error ? error.message : 'Remote attachment metadata is invalid',
+    };
+  }
 };
 
 const formatInviteSummary = (
@@ -513,9 +590,14 @@ export function useMessages() {
         return;
       }
 
-      if (!file.type.startsWith('image/')) {
+      const normalizedMimeType = file.type.split(';', 1)[0].trim().toLowerCase();
+      if (!SUPPORTED_ATTACHMENT_MIME_TYPES.has(normalizedMimeType)) {
         try {
-          window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Please select an image file.' }));
+          window.dispatchEvent(
+            new CustomEvent('ui:toast', {
+              detail: 'Please select a JPEG, PNG, or WebP image.',
+            })
+          );
         } catch {
           // ignore
         }
@@ -545,13 +627,34 @@ export function useMessages() {
           return;
         }
 
+        const filename = file.name || 'image';
+        const mimeType = normalizedMimeType;
+        const fileBuffer = await file.arrayBuffer();
+        try {
+          validateIncomingAttachmentContent({
+            content: new Uint8Array(fileBuffer),
+            filename,
+            mimeType,
+          });
+        } catch (validationError) {
+          console.warn('[useMessages] Refusing unsafe outbound image:', validationError);
+          try {
+            window.dispatchEvent(
+              new CustomEvent('ui:toast', {
+                detail: 'Image must be a valid static JPEG, PNG, or WebP within the safety limits.',
+              })
+            );
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
         await ensureContactForConversation(conversation);
 
         const now = Date.now();
         const localMessageId = `msg_${now}_${Math.random().toString(36).substr(2, 9)}`;
         const attachmentId = `att_${localMessageId}`;
-        const filename = file.name || 'image';
-        const mimeType = file.type || 'application/octet-stream';
 
         const message: Message = {
           id: localMessageId,
@@ -570,13 +673,17 @@ export function useMessages() {
         const storage = await getStorage();
         await storage.putMessage(message);
 
-        const fileBuffer = await file.arrayBuffer();
         const attachmentMeta: StoredAttachment = {
           id: attachmentId,
           messageId: localMessageId,
           filename,
           mimeType,
           size: fileBuffer.byteLength,
+          cacheState: 'cached',
+          cachedBytes: fileBuffer.byteLength,
+          cachedAt: now,
+          lastAccessedAt: now,
+          evictable: false,
         };
         await storage.putAttachment(attachmentMeta, fileBuffer);
 
@@ -584,61 +691,13 @@ export function useMessages() {
         let latestMessageSentAt = message.sentAt;
         let latestMessageSender = message.sender;
 
+        let sentMessage: XmtpMessage;
         try {
-          const xmtp = getXmtpClient();
-          const sentMessage = await xmtp.sendAttachment(conversationId, {
+          sentMessage = await getXmtpClient().sendAttachment(conversationId, {
             filename,
             mimeType,
             content: new Uint8Array(fileBuffer),
           });
-
-          const resolvedId = sentMessage.id || message.id;
-          const resolvedSentAt = sentMessage.sentAt ?? message.sentAt;
-          const finalStatus: Message['status'] = sentMessage.isLocalFallback ? 'pending' : 'sent';
-          const finalAttachmentId = `att_${resolvedId}`;
-          const finalMessage: Message = {
-            ...message,
-            id: resolvedId,
-            sentAt: resolvedSentAt,
-            status: finalStatus,
-            attachmentId: finalAttachmentId,
-          };
-          latestMessageId = finalMessage.id;
-          latestMessageSentAt = finalMessage.sentAt;
-          latestMessageSender = finalMessage.sender;
-
-          const remoteMeta = sentMessage.remoteAttachment;
-          if (resolvedId !== message.id) {
-            removeMessage(message.id);
-            await storage.deleteMessage(message.id);
-            addMessage(conversationId, finalMessage);
-            await storage.putMessage(finalMessage);
-
-            const storedAttachment = await storage.getAttachment(attachmentId);
-            if (storedAttachment) {
-              const updatedAttachment: StoredAttachment = {
-                ...storedAttachment.attachment,
-                id: finalAttachmentId,
-                messageId: resolvedId,
-                storageRef: remoteMeta?.url ?? storedAttachment.attachment.storageRef,
-                sha256: remoteMeta?.contentDigest ?? storedAttachment.attachment.sha256,
-              };
-              await storage.putAttachment(updatedAttachment, storedAttachment.data);
-              await storage.deleteAttachment(attachmentId);
-            }
-          } else {
-            updateMessage(resolvedId, { status: finalStatus, sentAt: resolvedSentAt, attachmentId: finalAttachmentId });
-            await storage.updateMessageStatus(resolvedId, finalStatus);
-            const storedAttachment = await storage.getAttachment(attachmentId);
-            if (storedAttachment && remoteMeta) {
-              const updatedAttachment: StoredAttachment = {
-                ...storedAttachment.attachment,
-                storageRef: remoteMeta.url,
-                sha256: remoteMeta.contentDigest,
-              };
-              await storage.putAttachment(updatedAttachment, storedAttachment.data);
-            }
-          }
         } catch (xmtpError) {
           console.error('Failed to send attachment via XMTP:', xmtpError);
           updateMessage(message.id, { status: 'failed' });
@@ -646,6 +705,79 @@ export function useMessages() {
           try {
             const msg = xmtpError instanceof Error ? xmtpError.message : 'Failed to send attachment.';
             window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg }));
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        const resolvedId = sentMessage.id || message.id;
+        const resolvedSentAt = sentMessage.sentAt ?? message.sentAt;
+        const finalStatus: Message['status'] = sentMessage.isLocalFallback ? 'pending' : 'sent';
+        const finalAttachmentId = `att_${resolvedId}`;
+        const finalMessage: Message = {
+          ...message,
+          id: resolvedId,
+          sentAt: resolvedSentAt,
+          status: finalStatus,
+          attachmentId: finalAttachmentId,
+        };
+        latestMessageId = finalMessage.id;
+        latestMessageSentAt = finalMessage.sentAt;
+        latestMessageSender = finalMessage.sender;
+
+        const remoteMeta = sentMessage.remoteAttachment;
+        const remoteDescriptor = remoteMeta
+          ? inspectRemoteAttachmentDescriptor(remoteMeta)
+          : undefined;
+        const finalAttachment: StoredAttachment = {
+          ...attachmentMeta,
+          id: finalAttachmentId,
+          messageId: resolvedId,
+          storageRef: remoteMeta?.url,
+          sha256: remoteMeta?.contentDigest,
+          sourceHost: remoteDescriptor?.sourceHost,
+          cacheState: 'cached',
+          failureReason: remoteDescriptor?.failureReason,
+          evictable: Boolean(remoteMeta && !remoteDescriptor?.failureReason),
+        };
+
+        if (resolvedId !== message.id) {
+          removeMessage(message.id);
+          addMessage(conversationId, finalMessage);
+        } else {
+          updateMessage(resolvedId, {
+            status: finalStatus,
+            sentAt: resolvedSentAt,
+            attachmentId: finalAttachmentId,
+          });
+        }
+
+        try {
+          // Atomically replace the optimistic row so an IndexedDB failure can
+          // leave the old local row or the authoritative row, never both.
+          await storage.reconcilePublishedAttachment({
+            optimisticMessageId: message.id,
+            message: finalMessage,
+            attachment: finalAttachment,
+            data: fileBuffer,
+            remoteEnvelope: remoteMeta
+              ? remoteAttachmentEnvelope(
+                finalAttachmentId,
+                resolvedId,
+                conversationId,
+                remoteMeta,
+              )
+              : undefined,
+          });
+        } catch (storageError) {
+          console.error('Attachment sent, but local cache reconciliation failed:', storageError);
+          try {
+            window.dispatchEvent(
+              new CustomEvent('ui:toast', {
+                detail: 'Image sent, but its local cache could not be updated.',
+              })
+            );
           } catch {
             // ignore
           }
@@ -810,11 +942,92 @@ export function useMessages() {
     ) => {
       try {
         const isHistory = options?.isHistory ?? false;
+        const storage = await getStorage();
+        const remoteAttachment = xmtpMessage.remoteAttachment;
+        const inlineAttachment = xmtpMessage.attachment;
+        const attachmentId = `att_${xmtpMessage.id}`;
+
+        // Persist only the encrypted descriptor on receipt. This deliberately
+        // happens before de-duplication so older metadata-only rows can repair
+        // themselves when XMTP returns the same message again.
+        if (remoteAttachment) {
+          try {
+            const descriptor = inspectRemoteAttachmentDescriptor(remoteAttachment);
+            const existingMetadata = await storage.getAttachmentMetadata(attachmentId);
+            let metadata: StoredAttachment;
+            if (!existingMetadata) {
+              metadata = {
+                id: attachmentId,
+                messageId: xmtpMessage.id,
+                filename: remoteAttachment.filename ?? 'Image attachment',
+                mimeType: 'application/octet-stream',
+                size:
+                  Number.isSafeInteger(remoteAttachment.contentLength) &&
+                  remoteAttachment.contentLength > 0
+                    ? remoteAttachment.contentLength
+                    : 0,
+                storageRef: remoteAttachment.url,
+                sha256: remoteAttachment.contentDigest,
+                sourceHost: descriptor.sourceHost,
+                cacheState: descriptor.failureReason ? 'blocked' : 'metadata',
+                cachedBytes: 0,
+                evictable: true,
+                failureReason: descriptor.failureReason,
+              };
+            } else {
+              const legacyData = existingMetadata.cacheState === undefined
+                ? await storage.getAttachmentData(attachmentId)
+                : undefined;
+              metadata = {
+                ...existingMetadata,
+                storageRef: remoteAttachment.url,
+                sha256: remoteAttachment.contentDigest,
+                sourceHost: existingMetadata.sourceHost ?? descriptor.sourceHost,
+                failureReason: descriptor.failureReason ?? existingMetadata.failureReason,
+                cacheState:
+                  descriptor.failureReason
+                    ? 'blocked'
+                    : existingMetadata.cacheState ?? (legacyData ? 'cached' : 'metadata'),
+                cachedBytes: legacyData?.byteLength ?? existingMetadata.cachedBytes ?? 0,
+                cachedAt:
+                  legacyData && !existingMetadata.cachedAt
+                    ? Date.now()
+                    : existingMetadata.cachedAt,
+                lastAccessedAt:
+                  legacyData && !existingMetadata.lastAccessedAt
+                    ? Date.now()
+                    : existingMetadata.lastAccessedAt,
+                evictable: !descriptor.failureReason,
+              };
+            }
+            if (descriptor.failureReason) {
+              await storage.evictAttachmentData(attachmentId);
+              metadata = {
+                ...metadata,
+                cacheState: 'blocked',
+                cachedBytes: 0,
+                cachedAt: undefined,
+                evictable: false,
+              };
+            }
+            await storage.putRemoteAttachmentEnvelope(
+              remoteAttachmentEnvelope(
+                attachmentId,
+                xmtpMessage.id,
+                conversationId,
+                remoteAttachment,
+              )
+            );
+            await storage.putAttachmentMetadata(metadata);
+          } catch (attachmentError) {
+            console.warn('[useMessages] Failed to persist attachment metadata:', attachmentError);
+          }
+        }
+
         const inMemory = messagesByConversation[conversationId] || [];
         if (inMemory.some((m) => m.id === xmtpMessage.id)) {
           return;
         }
-        const storage = await getStorage();
         try {
           const existing = await storage.getMessage(xmtpMessage.id);
           if (existing) {
@@ -823,71 +1036,34 @@ export function useMessages() {
         } catch {
           // ignore storage lookup errors; proceed with processing
         }
-        const remoteAttachment = xmtpMessage.remoteAttachment;
-        const inlineAttachment = xmtpMessage.attachment;
         if (remoteAttachment || inlineAttachment) {
-          const attachmentId = `att_${xmtpMessage.id}`;
-          let stored = await storage.getAttachment(attachmentId);
+          let metadata = await storage.getAttachmentMetadata(attachmentId);
 
-          if (!stored) {
+          if (inlineAttachment && !metadata) {
             try {
-              if (inlineAttachment) {
-                const buffer = toArrayBuffer(inlineAttachment.content);
-                const meta: StoredAttachment = {
-                  id: attachmentId,
-                  messageId: xmtpMessage.id,
-                  filename: inlineAttachment.filename ?? 'Attachment',
-                  mimeType: inlineAttachment.mimeType,
-                  size: inlineAttachment.content.byteLength,
-                };
-                await storage.putAttachment(meta, buffer);
-                stored = { attachment: meta, data: buffer };
-              } else if (remoteAttachment) {
-                if (remoteAttachment.contentLength > MAX_ATTACHMENT_BYTES) {
-                  try {
-                    window.dispatchEvent(
-                      new CustomEvent('ui:toast', {
-                        detail: `Attachment too large (${Math.round(remoteAttachment.contentLength / (1024 * 1024))}MB).`,
-                      })
-                    );
-                  } catch {
-                    // ignore toast errors
-                  }
-                } else {
-                  const decoded = await getXmtpClient().loadRemoteAttachment(remoteAttachment);
-                  const buffer = toArrayBuffer(decoded.content);
-                  const meta: StoredAttachment = {
-                    id: attachmentId,
-                    messageId: xmtpMessage.id,
-                    filename: decoded.filename ?? 'Attachment',
-                    mimeType: decoded.mimeType,
-                    size: decoded.content.byteLength,
-                    storageRef: remoteAttachment.url,
-                    sha256: remoteAttachment.contentDigest,
-                  };
-                  await storage.putAttachment(meta, buffer);
-                  stored = { attachment: meta, data: buffer };
-                }
-              }
-            } catch (attachmentError) {
-              console.warn('[useMessages] Failed to load attachment:', attachmentError);
-            }
-          } else if (remoteAttachment && !stored.attachment.storageRef) {
-            try {
-              const updated: StoredAttachment = {
-                ...stored.attachment,
-                storageRef: remoteAttachment.url,
-                sha256: remoteAttachment.contentDigest,
+              const buffer = toArrayBuffer(inlineAttachment.content);
+              const now = Date.now();
+              const inlineMetadata: StoredAttachment = {
+                id: attachmentId,
+                messageId: xmtpMessage.id,
+                filename: inlineAttachment.filename ?? 'Attachment',
+                mimeType: inlineAttachment.mimeType,
+                size: inlineAttachment.content.byteLength,
+                cacheState: 'cached',
+                cachedBytes: inlineAttachment.content.byteLength,
+                cachedAt: now,
+                lastAccessedAt: now,
+                evictable: false,
               };
-              await storage.putAttachment(updated, stored.data);
-              stored = { attachment: updated, data: stored.data };
-            } catch (err) {
-              // ignore metadata update errors
+              await storage.putAttachment(inlineMetadata, buffer);
+              metadata = inlineMetadata;
+            } catch (attachmentError) {
+              console.warn('[useMessages] Failed to persist inline attachment:', attachmentError);
             }
           }
 
           const attachmentName =
-            stored?.attachment.filename || inlineAttachment?.filename || remoteAttachment?.filename || 'Attachment';
+            metadata?.filename || inlineAttachment?.filename || remoteAttachment?.filename || 'Attachment';
 
           const message: Message = {
             id: xmtpMessage.id,
@@ -1083,6 +1259,138 @@ export function useMessages() {
   );
 
   /**
+   * Fetch, authenticate, decrypt, and cache a remote attachment after the UI
+   * has established both conversation consent and host-approval policy.
+   */
+  const allowConversation = useCallback(
+    async (conversationId: string, clearLocalContactBlock = false): Promise<void> => {
+      await getXmtpClient().updateConversationConsentState(
+        conversationId,
+        ConsentState.Allowed,
+      );
+
+      if (!clearLocalContactBlock) return;
+      const conversation = useConversationStore
+        .getState()
+        .conversations.find((candidate) => candidate.id === conversationId);
+      if (!conversation || conversation.isGroup) return;
+
+      const contactStore = useContactStore.getState();
+      const peerContact =
+        contactStore.getContactByInboxId(conversation.peerId) ??
+        contactStore.getContactByAddress(conversation.peerId);
+      if (peerContact?.isBlocked) {
+        await contactStore.unblockContact(peerContact.inboxId);
+      }
+    },
+    [],
+  );
+
+  const denyConversation = useCallback(async (conversationId: string): Promise<void> => {
+    await getXmtpClient().updateConversationConsentState(
+      conversationId,
+      ConsentState.Denied,
+    );
+  }, []);
+
+  const loadAttachment = useCallback(
+    async (
+      conversationId: string,
+      attachmentId: string,
+      options: LoadAttachmentOptions = {},
+    ): Promise<LoadedAttachment> => {
+      const storage = await getStorage();
+      const metadata = await storage.getAttachmentMetadata(attachmentId);
+      if (!metadata) {
+        throw new Error('Attachment metadata is unavailable on this device.');
+      }
+      if (metadata.cacheState === 'blocked') {
+        throw new Error(metadata.failureReason || 'This attachment is blocked by the download policy.');
+      }
+
+      const cachedData = await storage.getAttachmentData(attachmentId);
+      if (cachedData) {
+        const accessed: StoredAttachment = {
+          ...metadata,
+          cacheState: 'cached',
+          cachedBytes: cachedData.byteLength,
+          lastAccessedAt: Date.now(),
+        };
+        return { attachment: accessed, data: cachedData };
+      }
+
+      const envelope = await storage.getRemoteAttachmentEnvelope(attachmentId);
+      if (!envelope || envelope.conversationId !== conversationId) {
+        throw new Error('The encrypted attachment descriptor is unavailable on this device.');
+      }
+
+      const url = validateIncomingAttachmentUrl(envelope.url);
+      const trust = classifyTrustedAttachmentHost(url);
+      if (trust === 'untrusted' && !options.allowUntrusted) {
+        throw new AttachmentHostApprovalError(url.hostname.toLowerCase());
+      }
+
+      const expectedInboxId = identity?.inboxId;
+      const requestKey = `${expectedInboxId ?? identity?.address ?? 'unknown'}:${conversationId}:${attachmentId}`;
+      const existingRequest = attachmentDownloadRequests.get(requestKey);
+      if (existingRequest) {
+        return await existingRequest;
+      }
+
+      const request = (async (): Promise<LoadedAttachment> => {
+        try {
+          const decoded = await getXmtpClient().loadRemoteAttachment(
+            conversationId,
+            envelope as RemoteAttachment,
+            expectedInboxId,
+          );
+          const data = toArrayBuffer(decoded.content);
+
+          const now = Date.now();
+          const cachedMetadata: StoredAttachment = {
+            ...metadata,
+            filename: decoded.filename ?? metadata.filename,
+            mimeType: decoded.mimeType,
+            size: decoded.content.byteLength,
+            sourceHost: url.hostname.toLowerCase(),
+            cacheState: 'cached',
+            cachedBytes: data.byteLength,
+            cachedAt: now,
+            lastAccessedAt: now,
+            evictable: true,
+            failureReason: undefined,
+          };
+          await storage.cacheRemoteAttachment(
+            cachedMetadata,
+            data,
+            MAX_INBOX_ATTACHMENT_CACHE_BYTES,
+          );
+          return { attachment: cachedMetadata, data };
+        } catch (error) {
+          const failureReason =
+            error instanceof Error ? error.message : 'The image could not be loaded safely.';
+          try {
+            await storage.markAttachmentFailed(attachmentId, failureReason);
+          } catch {
+            // Preserve the original download failure.
+          }
+          throw error;
+        }
+      })();
+
+      attachmentDownloadRequests.set(requestKey, request);
+      try {
+        return await request;
+      } finally {
+        if (attachmentDownloadRequests.get(requestKey) === request) {
+          attachmentDownloadRequests.delete(requestKey);
+        }
+      }
+    },
+    [identity?.address, identity?.inboxId],
+  );
+
+  /**
    * Delete a message
    */
   const deleteMessage = useCallback(
@@ -1109,6 +1417,9 @@ export function useMessages() {
     reactToMessage,
     sendReadReceiptFor,
     receiveMessage,
+    allowConversation,
+    denyConversation,
+    loadAttachment,
     deleteMessage,
   };
 }

@@ -24,8 +24,17 @@ import type {
   VaultSecrets,
   Identity,
   DeletedConversationRecord,
+  StoredRemoteAttachmentEnvelope,
 } from '@/types';
-import type { ClearAllDataResult, StorageDriver, PageOpts, Query } from './interface';
+import type {
+  AttachmentCachePruneOptions,
+  AttachmentCachePruneResult,
+  ClearAllDataResult,
+  PublishedAttachmentReconciliation,
+  StorageDriver,
+  PageOpts,
+  Query,
+} from './interface';
 import type { Contact } from '../stores/contact-store';
 import { identityAddressNeedsRepair, normalizeIdentityAddresses } from '@/lib/identity/normalize';
 import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
@@ -35,11 +44,14 @@ interface AttachmentData {
   data: ArrayBuffer;
 }
 
+const ATTACHMENT_ACCESS_TOUCH_INTERVAL_MS = 60_000;
+
 class ConvergeDB extends Dexie {
   conversations!: Table<Conversation, string>;
   messages!: Table<Message, string>;
   attachments!: Table<Attachment, string>;
   attachmentData!: Table<AttachmentData, string>;
+  remoteAttachments!: Table<StoredRemoteAttachmentEnvelope, string>;
   identity!: Table<Identity, string>;
   vaultSecrets!: Table<VaultSecrets, string>;
   contacts!: Table<Contact, string>;
@@ -352,6 +364,54 @@ class ConvergeDB extends Dexie {
           }
         }
       });
+
+    // v10: persist encrypted RemoteAttachment envelopes separately from cached
+    // plaintext bytes, and index cache metadata for per-inbox LRU eviction.
+    this.version(10)
+      .stores({
+        conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt',
+        messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]',
+        attachments: 'id, messageId, cacheState, lastAccessedAt, [cacheState+lastAccessedAt]',
+        attachmentData: 'id',
+        remoteAttachments: '&id, messageId, conversationId',
+        identity: 'address, inboxId',
+        vaultSecrets: 'method',
+        contacts: '&inboxId, primaryAddress, *addresses',
+        contacts_v3: null,
+        deletedConversations: '&conversationId, peerId',
+        ignoredConversations: null,
+      })
+      .upgrade(async (transaction) => {
+        const attachmentsTable = transaction.table('attachments');
+        const dataTable = transaction.table('attachmentData');
+        const attachments = await attachmentsTable.toArray() as Attachment[];
+        for (const attachment of attachments) {
+          if (attachment.cacheState !== undefined) continue;
+          const cached = await dataTable.get(attachment.id) as AttachmentData | undefined;
+          if (attachment.storageRef) {
+            // Pre-policy remote bytes were never signature/dimension validated.
+            // Drop them; history replay restores the encrypted descriptor and
+            // the normal loader can fetch a validated replacement.
+            await dataTable.delete(attachment.id);
+            await attachmentsTable.put({
+              ...attachment,
+              cacheState: 'metadata',
+              cachedBytes: 0,
+              cachedAt: undefined,
+              evictable: true,
+            });
+          } else {
+            await attachmentsTable.put({
+              ...attachment,
+              cacheState: cached ? 'cached' : 'metadata',
+              cachedBytes: cached?.data.byteLength ?? 0,
+              cachedAt: cached ? Date.now() : undefined,
+              lastAccessedAt: cached ? Date.now() : undefined,
+              evictable: false,
+            });
+          }
+        }
+      });
   }
 }
 
@@ -409,10 +469,30 @@ export class DexieDriver implements StorageDriver {
   }
 
   async deleteConversation(id: string): Promise<void> {
-    await this.dataDb.transaction('rw', [this.dataDb.conversations, this.dataDb.messages], async () => {
-      await this.dataDb.conversations.delete(id);
-      await this.dataDb.messages.where('conversationId').equals(id).delete();
-    });
+    await this.dataDb.transaction(
+      'rw',
+      [
+        this.dataDb.conversations,
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
+      ],
+      async () => {
+        const messages = await this.dataDb.messages.where('conversationId').equals(id).toArray();
+        const messageIds = new Set(messages.map((message) => message.id));
+        const attachments = await this.dataDb.attachments
+          .filter((attachment) => messageIds.has(attachment.messageId))
+          .toArray();
+        const attachmentIds = attachments.map((attachment) => attachment.id);
+
+        await this.dataDb.conversations.delete(id);
+        await this.dataDb.messages.bulkDelete(messages.map((message) => message.id));
+        await this.dataDb.attachments.bulkDelete(attachmentIds);
+        await this.dataDb.attachmentData.bulkDelete(attachmentIds);
+        await this.dataDb.remoteAttachments.where('conversationId').equals(id).delete();
+      }
+    );
   }
 
   async markConversationDeleted(record: DeletedConversationRecord): Promise<void> {
@@ -526,7 +606,23 @@ export class DexieDriver implements StorageDriver {
   }
 
   async deleteMessage(id: string): Promise<void> {
-    await this.dataDb.messages.delete(id);
+    await this.dataDb.transaction(
+      'rw',
+      [
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
+      ],
+      async () => {
+        const attachments = await this.dataDb.attachments.where('messageId').equals(id).toArray();
+        const attachmentIds = attachments.map((attachment) => attachment.id);
+        await this.dataDb.messages.delete(id);
+        await this.dataDb.attachments.bulkDelete(attachmentIds);
+        await this.dataDb.attachmentData.bulkDelete(attachmentIds);
+        await this.dataDb.remoteAttachments.bulkDelete(attachmentIds);
+      }
+    );
   }
 
   async updateMessageStatus(id: string, status: Message['status']): Promise<void> {
@@ -543,16 +639,79 @@ export class DexieDriver implements StorageDriver {
       .filter((m) => m.expiresAt !== undefined && m.expiresAt < now)
       .toArray();
 
-    await this.dataDb.messages.bulkDelete(expired.map((m) => m.id));
+    await this.dataDb.transaction(
+      'rw',
+      [
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
+      ],
+      async () => {
+        const messageIds = new Set(expired.map((message) => message.id));
+        const attachments = await this.dataDb.attachments
+          .filter((attachment) => messageIds.has(attachment.messageId))
+          .toArray();
+        const attachmentIds = attachments.map((attachment) => attachment.id);
+        await this.dataDb.messages.bulkDelete(Array.from(messageIds));
+        await this.dataDb.attachments.bulkDelete(attachmentIds);
+        await this.dataDb.attachmentData.bulkDelete(attachmentIds);
+        await this.dataDb.remoteAttachments.bulkDelete(attachmentIds);
+      }
+    );
     return expired.length;
   }
 
   // Attachments
   async putAttachment(attachment: Attachment, data: ArrayBuffer): Promise<void> {
     await this.dataDb.transaction('rw', [this.dataDb.attachments, this.dataDb.attachmentData], async () => {
-      await this.dataDb.attachments.put(attachment);
+      await this.dataDb.attachments.put({
+        ...attachment,
+        cacheState: 'cached',
+        cachedBytes: data.byteLength,
+        cachedAt: attachment.cachedAt ?? Date.now(),
+        lastAccessedAt: attachment.lastAccessedAt ?? Date.now(),
+      });
       await this.dataDb.attachmentData.put({ id: attachment.id, data });
     });
+  }
+
+  async putAttachmentMetadata(attachment: Attachment): Promise<void> {
+    await this.dataDb.attachments.put(attachment);
+  }
+
+  async markAttachmentFailed(id: string, failureReason: string): Promise<boolean> {
+    return await this.dataDb.transaction('rw', this.dataDb.attachments, async () => {
+      const attachment = await this.dataDb.attachments.get(id);
+      if (!attachment || attachment.cacheState === 'blocked') {
+        return false;
+      }
+      await this.dataDb.attachments.update(id, {
+        cacheState: 'failed',
+        cachedBytes: 0,
+        failureReason,
+      });
+      return true;
+    });
+  }
+
+  async getAttachmentMetadata(id: string): Promise<Attachment | undefined> {
+    return await this.dataDb.attachments.get(id);
+  }
+
+  async getAttachmentData(id: string): Promise<ArrayBuffer | undefined> {
+    const row = await this.dataDb.attachmentData.get(id);
+    if (row) {
+      const attachment = await this.dataDb.attachments.get(id);
+      const now = Date.now();
+      if (
+        attachment &&
+        now - (attachment.lastAccessedAt ?? 0) >= ATTACHMENT_ACCESS_TOUCH_INTERVAL_MS
+      ) {
+        await this.dataDb.attachments.update(id, { lastAccessedAt: now });
+      }
+    }
+    return row?.data;
   }
 
   async getAttachment(
@@ -570,11 +729,241 @@ export class DexieDriver implements StorageDriver {
     return { attachment, data: attachmentData.data };
   }
 
-  async deleteAttachment(id: string): Promise<void> {
+  async putRemoteAttachmentEnvelope(envelope: StoredRemoteAttachmentEnvelope): Promise<void> {
+    await this.dataDb.remoteAttachments.put(envelope);
+  }
+
+  async getRemoteAttachmentEnvelope(
+    id: string
+  ): Promise<StoredRemoteAttachmentEnvelope | undefined> {
+    return await this.dataDb.remoteAttachments.get(id);
+  }
+
+  async evictAttachmentData(id: string): Promise<void> {
     await this.dataDb.transaction('rw', [this.dataDb.attachments, this.dataDb.attachmentData], async () => {
-      await this.dataDb.attachments.delete(id);
       await this.dataDb.attachmentData.delete(id);
+      const attachment = await this.dataDb.attachments.get(id);
+      if (attachment) {
+        await this.dataDb.attachments.put({
+          ...attachment,
+          cacheState: 'metadata',
+          cachedBytes: 0,
+          cachedAt: undefined,
+        });
+      }
     });
+  }
+
+  async getAttachmentCacheUsage(): Promise<number> {
+    const dataIds = new Set(
+      (await this.dataDb.attachmentData.toCollection().primaryKeys()).map(String)
+    );
+    const attachments = await this.dataDb.attachments.toArray();
+    return attachments.reduce((total, attachment) => {
+      if (!dataIds.has(attachment.id)) return total;
+      return total + Math.max(0, attachment.cachedBytes ?? attachment.size ?? 0);
+    }, 0);
+  }
+
+  async pruneAttachmentCache(
+    options: AttachmentCachePruneOptions
+  ): Promise<AttachmentCachePruneResult> {
+    const maxBytes = Math.max(0, Math.floor(options.maxBytes));
+    const requiredBytes = Math.max(0, Math.floor(options.requiredBytes ?? 0));
+    const protectedIds = new Set(options.protectedIds ?? []);
+    const evictedIds: string[] = [];
+
+    return await this.dataDb.transaction(
+      'rw',
+      [this.dataDb.attachments, this.dataDb.attachmentData],
+      async () => {
+        const dataIds = new Set(
+          (await this.dataDb.attachmentData.toCollection().primaryKeys()).map(String)
+        );
+        const attachments = await this.dataDb.attachments.toArray();
+        let usageBytes = attachments.reduce((total, attachment) => {
+          if (!dataIds.has(attachment.id)) return total;
+          return total + Math.max(0, attachment.cachedBytes ?? attachment.size ?? 0);
+        }, 0);
+
+        const candidates = attachments
+          .filter(
+            (attachment) =>
+              dataIds.has(attachment.id) &&
+              attachment.evictable === true &&
+              !protectedIds.has(attachment.id)
+          )
+          .sort(
+            (a, b) =>
+              (a.lastAccessedAt ?? a.cachedAt ?? 0) -
+              (b.lastAccessedAt ?? b.cachedAt ?? 0)
+          );
+
+        for (const attachment of candidates) {
+          if (usageBytes + requiredBytes <= maxBytes) break;
+          const cachedBytes = Math.max(0, attachment.cachedBytes ?? attachment.size ?? 0);
+          await this.dataDb.attachmentData.delete(attachment.id);
+          await this.dataDb.attachments.put({
+            ...attachment,
+            cacheState: 'metadata',
+            cachedBytes: 0,
+            cachedAt: undefined,
+          });
+          usageBytes = Math.max(0, usageBytes - cachedBytes);
+          evictedIds.push(attachment.id);
+        }
+
+        if (usageBytes + requiredBytes > maxBytes) {
+          throw new Error('The per-inbox attachment cache is full');
+        }
+
+        return { usageBytes, evictedIds };
+      }
+    );
+  }
+
+  async cacheRemoteAttachment(
+    attachment: Attachment,
+    data: ArrayBuffer,
+    maxBytes: number,
+  ): Promise<AttachmentCachePruneResult> {
+    const normalizedMaxBytes = Math.max(0, Math.floor(maxBytes));
+    return await this.dataDb.transaction(
+      'rw',
+      [this.dataDb.attachments, this.dataDb.attachmentData],
+      async () => {
+        const currentAttachment = await this.dataDb.attachments.get(attachment.id);
+        if (
+          !currentAttachment ||
+          currentAttachment.messageId !== attachment.messageId ||
+          currentAttachment.cacheState === 'blocked'
+        ) {
+          throw new Error('The attachment was removed or blocked before its download completed');
+        }
+        const dataIds = new Set(
+          (await this.dataDb.attachmentData.toCollection().primaryKeys()).map(String)
+        );
+        const attachments = await this.dataDb.attachments.toArray();
+        let usageBytes = attachments.reduce((total, candidate) => {
+          if (!dataIds.has(candidate.id)) return total;
+          return total + Math.max(0, candidate.cachedBytes ?? candidate.size ?? 0);
+        }, 0);
+        const previous = attachments.find((candidate) => candidate.id === attachment.id);
+        const previousBytes = dataIds.has(attachment.id)
+          ? Math.max(0, previous?.cachedBytes ?? previous?.size ?? 0)
+          : 0;
+        const evictedIds: string[] = [];
+        const candidates = attachments
+          .filter(
+            (candidate) =>
+              candidate.id !== attachment.id &&
+              dataIds.has(candidate.id) &&
+              candidate.evictable === true
+          )
+          .sort(
+            (a, b) =>
+              (a.lastAccessedAt ?? a.cachedAt ?? 0) -
+              (b.lastAccessedAt ?? b.cachedAt ?? 0)
+          );
+
+        for (const candidate of candidates) {
+          if (usageBytes - previousBytes + data.byteLength <= normalizedMaxBytes) break;
+          const cachedBytes = Math.max(0, candidate.cachedBytes ?? candidate.size ?? 0);
+          await this.dataDb.attachmentData.delete(candidate.id);
+          await this.dataDb.attachments.put({
+            ...candidate,
+            cacheState: 'metadata',
+            cachedBytes: 0,
+            cachedAt: undefined,
+          });
+          usageBytes = Math.max(0, usageBytes - cachedBytes);
+          evictedIds.push(candidate.id);
+        }
+
+        if (usageBytes - previousBytes + data.byteLength > normalizedMaxBytes) {
+          throw new Error('The per-inbox attachment cache is full');
+        }
+
+        const now = Date.now();
+        await this.dataDb.attachments.put({
+          ...attachment,
+          cacheState: 'cached',
+          cachedBytes: data.byteLength,
+          cachedAt: attachment.cachedAt ?? now,
+          lastAccessedAt: attachment.lastAccessedAt ?? now,
+        });
+        await this.dataDb.attachmentData.put({ id: attachment.id, data });
+        usageBytes = usageBytes - previousBytes + data.byteLength;
+        return { usageBytes, evictedIds };
+      }
+    );
+  }
+
+  async reconcilePublishedAttachment(input: PublishedAttachmentReconciliation): Promise<void> {
+    await this.dataDb.transaction(
+      'rw',
+      [
+        this.dataDb.conversations,
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
+      ],
+      async () => {
+        const now = Date.now();
+        await this.dataDb.messages.put(input.message);
+        await this.dataDb.attachments.put({
+          ...input.attachment,
+          cacheState: 'cached',
+          cachedBytes: input.data.byteLength,
+          cachedAt: input.attachment.cachedAt ?? now,
+          lastAccessedAt: input.attachment.lastAccessedAt ?? now,
+        });
+        await this.dataDb.attachmentData.put({
+          id: input.attachment.id,
+          data: input.data,
+        });
+        if (input.remoteEnvelope) {
+          await this.dataDb.remoteAttachments.put(input.remoteEnvelope);
+        }
+
+        if (input.optimisticMessageId !== input.message.id) {
+          const staleAttachments = await this.dataDb.attachments
+            .where('messageId')
+            .equals(input.optimisticMessageId)
+            .toArray();
+          const staleAttachmentIds = staleAttachments
+            .map((attachment) => attachment.id)
+            .filter((id) => id !== input.attachment.id);
+          await this.dataDb.messages.delete(input.optimisticMessageId);
+          await this.dataDb.attachments.bulkDelete(staleAttachmentIds);
+          await this.dataDb.attachmentData.bulkDelete(staleAttachmentIds);
+          await this.dataDb.remoteAttachments.bulkDelete(staleAttachmentIds);
+        }
+
+        const conversation = await this.dataDb.conversations.get(input.message.conversationId);
+        if (conversation) {
+          await this.dataDb.conversations.update(input.message.conversationId, {
+            lastMessageAt: input.message.sentAt,
+            lastMessagePreview: '📎 Attachment',
+            lastMessageId: input.message.id,
+            lastMessageSender: input.message.sender,
+          });
+        }
+      }
+    );
+  }
+
+  async deleteAttachment(id: string): Promise<void> {
+    await this.dataDb.transaction(
+      'rw',
+      [this.dataDb.attachments, this.dataDb.attachmentData, this.dataDb.remoteAttachments],
+      async () => {
+        await this.dataDb.attachments.delete(id);
+        await this.dataDb.attachmentData.delete(id);
+        await this.dataDb.remoteAttachments.delete(id);
+      }
+    );
   }
 
   // Identity
@@ -704,6 +1093,7 @@ export class DexieDriver implements StorageDriver {
         this.dataDb.messages,
         this.dataDb.attachments,
         this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
         this.dataDb.contacts,
         this.dataDb.deletedConversations,
       ], async () => {
@@ -711,6 +1101,7 @@ export class DexieDriver implements StorageDriver {
         await this.dataDb.messages.clear();
         await this.dataDb.attachments.clear();
         await this.dataDb.attachmentData.clear();
+        await this.dataDb.remoteAttachments.clear();
         await this.dataDb.contacts.clear();
         await this.dataDb.deletedConversations.clear();
         console.log('[Storage] ✅ All IndexedDB data cleared');
@@ -782,6 +1173,14 @@ export class DexieDriver implements StorageDriver {
 
     const orphaned = attachments.filter((a: Attachment) => !messageIds.has(a.messageId));
     await Promise.all(orphaned.map((a) => this.deleteAttachment(a.id)));
+
+    const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
+    const orphanedEnvelopes = await this.dataDb.remoteAttachments
+      .filter((envelope) => !attachmentIds.has(envelope.id))
+      .toArray();
+    await this.dataDb.remoteAttachments.bulkDelete(
+      orphanedEnvelopes.map((envelope) => envelope.id)
+    );
   }
 
   async getStorageSize(): Promise<number> {

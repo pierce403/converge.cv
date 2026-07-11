@@ -9,6 +9,7 @@ import type {
   VaultSecrets,
   Identity,
   DeletedConversationRecord,
+  StoredRemoteAttachmentEnvelope,
 } from '@/types';
 import type { Contact } from '../stores/contact-store';
 
@@ -28,6 +29,25 @@ export interface Query {
 export interface ClearAllDataResult {
   deletedOpfsDatabases: string[];
   opfsWarning?: string;
+}
+
+export interface AttachmentCachePruneOptions {
+  maxBytes: number;
+  requiredBytes?: number;
+  protectedIds?: string[];
+}
+
+export interface AttachmentCachePruneResult {
+  usageBytes: number;
+  evictedIds: string[];
+}
+
+export interface PublishedAttachmentReconciliation {
+  optimisticMessageId: string;
+  message: Message;
+  attachment: Attachment;
+  data: ArrayBuffer;
+  remoteEnvelope?: StoredRemoteAttachmentEnvelope;
 }
 
 export interface StorageDriver {
@@ -66,7 +86,22 @@ export interface StorageDriver {
 
   // Attachments
   putAttachment(attachment: Attachment, data: ArrayBuffer): Promise<void>;
+  putAttachmentMetadata(attachment: Attachment): Promise<void>;
+  markAttachmentFailed(id: string, failureReason: string): Promise<boolean>;
+  getAttachmentMetadata(id: string): Promise<Attachment | undefined>;
+  getAttachmentData(id: string): Promise<ArrayBuffer | undefined>;
   getAttachment(id: string): Promise<{ attachment: Attachment; data: ArrayBuffer } | undefined>;
+  putRemoteAttachmentEnvelope(envelope: StoredRemoteAttachmentEnvelope): Promise<void>;
+  getRemoteAttachmentEnvelope(id: string): Promise<StoredRemoteAttachmentEnvelope | undefined>;
+  evictAttachmentData(id: string): Promise<void>;
+  getAttachmentCacheUsage(): Promise<number>;
+  pruneAttachmentCache(options: AttachmentCachePruneOptions): Promise<AttachmentCachePruneResult>;
+  cacheRemoteAttachment(
+    attachment: Attachment,
+    data: ArrayBuffer,
+    maxBytes: number,
+  ): Promise<AttachmentCachePruneResult>;
+  reconcilePublishedAttachment(input: PublishedAttachmentReconciliation): Promise<void>;
   deleteAttachment(id: string): Promise<void>;
 
   // Identity

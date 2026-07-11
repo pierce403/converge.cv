@@ -63,7 +63,7 @@ read the same source of truth.
 
 ---
 
-## Product Decisions (2026-07-10)
+## Product Decisions (updated 2026-07-11)
 
 - Treat the top-left identity control as an Inbox Switcher with one profile-name/avatar entry per XMTP inbox, not one entry per key. Each inbox is an independent social identity and storage namespace; only the selected inbox connects and syncs.
 - Add Inbox supports Create new inbox, Import keyfile, and Add this device to existing inbox. Import reuses the exact key and its resolved inbox. If that inbox is already loaded, say "This inbox is already loaded" and change nothing.
@@ -75,6 +75,7 @@ read the same source of truth.
 - Follow current Convos behavior by default, including profile messages that carry human and agent names, unless a Converge-specific difference is explicitly documented.
 - Notifications are app/browser-level: one browser subscription, one relay registration per loaded inbox/installation, and batched conversation topics per registration. Enable covers all loaded inboxes; disable deletes all registrations before unsubscribing. Inactive pushes set an approximate switcher activity dot without syncing. Visible copy may name the full inbox profile but must not expose sender or message content. Keep this experimental until live delivery and welcome-topic coverage are verified.
 - Notification clicks open or focus Converge without automatically switching inboxes. The target inbox remains marked with an approximate activity dot until the user selects it.
+- Inbound RemoteAttachments are descriptor-first: receipt/history sync must never contact the attachment host. Only an XMTP-allowed conversation can fetch after a coalesced preferences sync inside the download slot; trusted hosts auto-load only for visible bubbles, unknown hosts require a hostname-labelled click, and every fetched payload must pass the bounded HTTPS/decrypt/static-raster policy documented in `FEATURES.md`. Attachment Accept and conversation Block/Unblock publish XMTP consent. Keep Thirdweb as the outbound ciphertext host until a separate hosting feature is requested.
 
 `FEATURES.md` contains the shipped user-facing contract. `ARCHITECTURE.md` is the canonical technical implementation contract after context compaction.
 
@@ -262,7 +263,7 @@ pnpm typecheck        # TypeScript type checking
 - Convos typing indicators, profile updates/snapshots, thinking messages, and join requests are registered as SDK custom content types and handled without surfacing side-channel bubbles.
 - XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
-- Image attachments (paperclip picker → encrypted RemoteAttachment upload via Thirdweb IPFS, inline rendering, IndexedDB caching)
+- Image attachments use encrypted XMTP RemoteAttachment payloads hosted through Thirdweb IPFS. Incoming descriptors are stored without fetching; allowed/visible trusted-host images use bounded authenticated raster downloads, unknown hosts require explicit approval, and recoverable plaintext bytes use a 100 MiB per-inbox LRU cache.
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
 - Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
 - Static PWA push registration is wired to the intended app-level vapid.party XMTP relay contract without shipping any vapid.party API key:
@@ -304,7 +305,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-07-10): `pnpm test --run` passes (73 files, 376 tests).
+- Current Vitest status (2026-07-11): `pnpm test --run` passes (79 files, 493 tests).
 
 ---
 
@@ -534,8 +535,18 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-10 (app version 0.5.4 + group and RemoteAttachment interoperability)
+**Last Updated**: 2026-07-11 (app version 0.5.5 + consent-aware attachment downloads)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-07-11)
+
+### Consent-Aware Attachment Downloads
+- Bumped Converge from `0.5.4` to `0.5.5` for the inbound RemoteAttachment security policy.
+- Receipt and history processing persist only inbox-scoped attachment metadata plus the encrypted XMTP descriptor; they never fetch remote bytes. Replayed descriptors can repair older metadata-only rows.
+- Remote loads refresh XMTP preferences inside the bounded download slot, recheck active-inbox consent, require a visible bubble for trusted-host auto-load or an explicit hostname-labelled action for unknown hosts, and enforce HTTPS/privacy fetch settings, no redirects, timeout/concurrency controls, actual streamed byte bounds, digest/decryption, static JPEG/PNG/WebP signatures, and dimension limits. Attachment Accept/Unblock plus conversation Block/Unblock now publish protocol consent; group attachment consent never changes an individual member's local block.
+- Plaintext remote bytes use a 100 MiB per-inbox LRU cache whose reservation/eviction/write is atomic and preserves the encrypted descriptor. Cache completion/failure cannot resurrect a deleted or blocked row; conversation/message expiry and deletion cascade through attachment metadata, payloads, and descriptors. The v10 migration drops unvalidated legacy remote bytes.
+- Attachment blobs render only as image sources, never navigation links. `FEATURES.md` records the guarantees and limitations, including host network-metadata exposure, DNS/browser boundaries, image decoder risk, and unencrypted local storage.
 
 
 ## Latest Changes (2026-07-10)

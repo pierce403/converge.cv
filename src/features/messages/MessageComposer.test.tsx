@@ -10,6 +10,15 @@ describe('MessageComposer', () => {
     expect(sendButton.className).not.toContain('self-end');
   });
 
+  it('limits the image picker to the formats the receiver validates', () => {
+    const { container } = render(<MessageComposer onSend={vi.fn()} />);
+
+    expect(container.querySelector('input[type="file"]')).toHaveAttribute(
+      'accept',
+      'image/jpeg,image/png,image/webp',
+    );
+  });
+
   it('sends trimmed message when tapping the send button', () => {
     const onSend = vi.fn();
 

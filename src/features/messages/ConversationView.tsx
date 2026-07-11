@@ -80,7 +80,15 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
   const hasLoadedConversation = useMessageStore(
     (state) => state.loadedConversations[conversationId] ?? false,
   );
-  const { sendMessage, sendAttachment, loadMessages, loadOlderMessages, sendReadReceiptFor } = useMessages();
+  const {
+    allowConversation,
+    denyConversation,
+    sendMessage,
+    sendAttachment,
+    loadMessages,
+    loadOlderMessages,
+    sendReadReceiptFor,
+  } = useMessages();
   const { identity } = useAuthStore(); // Get current user identity
   const contacts = useContactStore((state) => state.contacts);
   const isContact = useContactStore((state) => state.isContact);
@@ -1125,9 +1133,10 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
                         <button
                           onClick={async () => {
                             try {
+                              await allowConversation(conversation.id);
                               await useContactStore.getState().unblockContact(conversation.peerId);
                             } catch (e) {
-                              alert('Failed to unblock');
+                              alert('Failed to allow this conversation');
                             }
                           }}
                           className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
@@ -1138,9 +1147,10 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
                         <button
                           onClick={async () => {
                             try {
+                              await denyConversation(conversation.id);
                               await useContactStore.getState().blockContact(conversation.peerId);
                             } catch (e) {
-                              alert('Failed to block');
+                              alert('Failed to block this conversation');
                             }
                           }}
                           className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}

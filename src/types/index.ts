@@ -126,6 +126,32 @@ export interface Attachment {
   storageRef?: string;
   sha256?: string;
   thumbnailRef?: string;
+  sourceHost?: string;
+  cacheState?: 'metadata' | 'cached' | 'failed' | 'blocked';
+  cachedBytes?: number;
+  cachedAt?: number;
+  lastAccessedAt?: number;
+  evictable?: boolean;
+  failureReason?: string;
+}
+
+/**
+ * The encrypted RemoteAttachment descriptor needed to fetch an attachment
+ * again after a reload or local cache eviction. This record is stored only in
+ * the active inbox's namespaced IndexedDB, never in global identity state.
+ */
+export interface StoredRemoteAttachmentEnvelope {
+  id: string;
+  messageId: string;
+  conversationId: string;
+  url: string;
+  contentDigest: string;
+  secret: Uint8Array;
+  salt: Uint8Array;
+  nonce: Uint8Array;
+  scheme: string;
+  contentLength: number;
+  filename?: string;
 }
 
 export interface VaultSecrets {

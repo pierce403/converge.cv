@@ -109,7 +109,7 @@ model.
 - Conversation presentation is separate from XMTP transport shape: single-peer Convos groups retain the compact direct-chat treatment, while actual multi-person groups use only group metadata, show a group marker and participant count, and never inherit a stale peer name or avatar.
 - Composer controls now keep the send button vertically centered with the message textarea at one-line height on mobile/PWA, preventing a bottom-offset send button.
 - Composer activity sends Convos-compatible `convos.org/typing_indicator:1.0` messages with `shouldPush:false`, and inbound typing indicators are shown transiently without being persisted as chat history.
-- Image attachments can be picked from the paper-clip button, encrypted client-side, uploaded to IPFS via Thirdweb storage, and sent over the standard XMTP RemoteAttachment type with inline image rendering and local IndexedDB caching. Before publishing, Converge retrieves and decrypts the uploaded ciphertext over HTTPS; upload or publish failures become visible failed messages instead of local-only images that appear sent.
+- JPEG, PNG, and WebP image attachments can be picked from the paper-clip button, validated by signature/static-image/dimension rules, encrypted client-side, uploaded to IPFS via Thirdweb storage, and sent over the standard XMTP RemoteAttachment type. The encrypted payload must also fit the 10 MiB wire limit. Before publishing, Converge retrieves and decrypts the uploaded ciphertext over HTTPS; upload or publish failures become visible failed messages instead of local-only images that appear sent. A successful XMTP publish remains sent even if later local-cache reconciliation fails. Inbound messages store only the encrypted descriptor until the download policy below permits a fetch.
 - Group chat composer supports @-mentions with live member suggestions; mentions render inline with highlight styling and incoming messages that mention you are visually emphasized.
 - Conversations load the most recent messages first and lazily prepend older history only when the user scrolls upward, keeping large threads fast while preserving full local storage history.
 - Conversation list updates are now idempotent while history is loading: duplicate DM rows are collapsed by conversation ID and canonical peer key so replayed/backfilled message events cannot flood the chat list.
@@ -118,6 +118,27 @@ model.
 - Read receipts are emitted only for non-self DMs and are throttled by last send time, preventing cross-client metadata spam (for example repeated `{}` rows in xmtp.chat during self-chat testing).
 - Desktop-width chat routes now render a persistent split view: conversation list on the left, selected conversation on the right, with mobile behavior unchanged.
 - Avatar rendering now prevents raw URL/data payload strings from being printed as text in avatar slots; non-image avatar values are treated as short glyphs only (otherwise initials fallback).
+
+### Attachment Download Security
+
+#### Expected Properties
+
+- Receiving, streaming, or backfilling an XMTP RemoteAttachment stores its encrypted URL/key envelope and display metadata in the active inbox namespace without contacting the attachment host. A message does not download a file merely because it appeared in history.
+- Before a queued download is allowed to contact its host, Converge coalesces `client.preferences.sync()` for the visible download batch (at most a five-second freshness window) and then reads that conversation's XMTP consent state. `Unknown` and `Denied` conversations do not fetch attachment bytes. The attachment bubble offers protocol-level Accept or Unblock actions; conversation Block/Unblock controls publish `Denied`/`Allowed` respectively instead of changing only a local contact flag. Unblocking a group never clears an individual member's local contact block.
+- For an allowed conversation, a known Converge, Convos, Thirdweb, or configured IPFS gateway may auto-load only after its message bubble intersects the viewport. Every other valid host requires an explicit button that names the hostname. No `IntersectionObserver` means no automatic download.
+- Remote URLs must be canonical public-looking HTTPS URLs with no credentials, fragment, non-default port, obvious local hostname, or literal private/reserved IP address. Fetches omit credentials and referrers, bypass the HTTP cache, reject redirects, time out after 15 seconds, and share a global concurrency limit of two.
+- The encrypted response is streamed and stopped above 10 MiB. Both its actual length and any HTTP `Content-Length` must agree with the XMTP descriptor; sender-declared size alone is never trusted. XMTP attachment decryption and digest verification must succeed before content is cached or rendered.
+- Only static JPEG, PNG, and WebP images are rendered. The decrypted MIME type must match file signatures, dimensions are limited to 8192 pixels per side and 32 million pixels total, animated PNG/WebP is rejected, and SVG/HTML/other active or unsupported formats never receive a preview URL.
+- Image object URLs are used only as `<img>` sources and are revoked when the bubble changes or unmounts. Converge does not expose an untrusted attachment blob as a navigation/download link.
+- Each inbox has a 100 MiB plaintext attachment cache admission budget. Space reservation, least-recently-used remote eviction, and the new payload write share one IndexedDB transaction, so concurrent downloads cannot independently overcommit the budget. Eviction preserves the encrypted descriptor for a policy-checked retry; non-recoverable local/failed-send bytes are not silently evicted. A completed download cannot recreate an attachment deleted while it was in flight.
+
+#### Limitations
+
+- Explicitly or automatically fetching an attachment reveals the browser's network address and request timing to the selected HTTPS host. A "trusted" host classification permits automatic contact; it does not mean Converge trusts the sender or skips content validation.
+- Static URL validation cannot prove where a public hostname will resolve later, prevent every DNS-rebinding case, or replace browser CORS/Private Network Access enforcement. The policy blocks obvious local targets but is not a general browser network sandbox.
+- Validated raster bytes still pass through the browser's image decoders. Converge reduces the accepted format and resource surface but does not provide antivirus scanning, media transcoding, or a guarantee that browser decoders have no vulnerabilities.
+- Attachment envelopes and decrypted cache bytes are stored unencrypted in the selected inbox's IndexedDB namespace. Burning that inbox removes them locally; browser/profile compromise or XSS while the app is available remains in scope for the local-security warning.
+- Thirdweb/IPFS remains the only outbound hosting path for now. The uploaded object is encrypted ciphertext, but sending and later retrieval still depend on that provider's availability, quota/payment policy, and retention behavior; this release does not add alternate hosts or cache-control selection.
 
 ## Conversation Controls
 - Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp.
