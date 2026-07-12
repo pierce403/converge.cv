@@ -18,6 +18,7 @@ import {
   enablePushForCurrentUser,
   getAppPushStatus,
   getPushPermissionStatus,
+  preparePushBrowserResources,
   type AppPushStatus,
 } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
@@ -114,6 +115,7 @@ export function SettingsPage() {
   const [pushStatus, setPushStatus] = useState<'unknown' | AppPushStatus['state']>('unknown');
   const [pushDetails, setPushDetails] = useState<AppPushStatus | null>(null);
   const [isPushLoading, setIsPushLoading] = useState(false);
+  const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [showConnectorList, setShowConnectorList] = useState(false);
@@ -214,12 +216,29 @@ export function SettingsPage() {
       setPushStatus(status.state);
     };
     checkPushStatus();
+    if (getPushPermissionStatus() !== 'unsupported') {
+      void preparePushBrowserResources()
+        .then(() => setPushPreparation('ready'))
+        .catch(() => setPushPreparation('retry'));
+    }
   }, []);
 
   const handleEnablePush = async () => {
     if (isPushLoading) return;
     setIsPushLoading(true);
     try {
+      if (pushPreparation !== 'ready') {
+        setPushPreparation('preparing');
+        try {
+          await preparePushBrowserResources();
+          setPushPreparation('ready');
+          alert('Notification support is ready. Turn the switch on again to approve notifications.');
+        } catch (error) {
+          setPushPreparation('retry');
+          alert(`Unable to prepare notifications: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        return;
+      }
       const result = await enablePushForCurrentUser();
 
       if (result.success) {
@@ -227,7 +246,7 @@ export function SettingsPage() {
         setPushDetails(status);
         setPushStatus(status.state);
         alert(
-          `Experimental notifications enabled for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. Live delivery and first-contact coverage are not yet verified.`
+          `Experimental notifications registered for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. End-to-end delivery is verified, but continuous automatic delivery still needs the always-on XMTP listener.`
         );
       } else {
         const status = await getAppPushStatus();
@@ -904,10 +923,11 @@ export function SettingsPage() {
 
   const shouldShowReconnect = connectionStatus === 'error' || connectionStatus === 'disconnected';
   const walletNeedsReconnect = Boolean(identity && !identity.privateKey && !isWalletConnected);
-  const pushIsOn = pushStatus === 'enabled' || pushStatus === 'partial';
+  const pushIsOn = pushDetails?.enabledPreference ?? pushStatus === 'enabled';
   const pushDescription = (() => {
     if (pushStatus === 'unsupported') return 'Not supported in this browser';
     if (pushStatus === 'unknown') return 'Checking notification status...';
+    if (!pushIsOn && pushPreparation === 'preparing') return 'Preparing notification support...';
     if (pushStatus === 'partial') {
       if (pushDetails?.pendingDeletionCount) {
         return `Notifications are off; ${pushDetails.pendingDeletionCount} relay cleanup ${pushDetails.pendingDeletionCount === 1 ? 'request is' : 'requests are'} pending`;
@@ -1352,7 +1372,11 @@ export function SettingsPage() {
                       aria-checked={pushIsOn}
                       aria-label={pushIsOn ? 'Disable notifications' : 'Enable notifications'}
                       onClick={pushIsOn ? handleDisablePush : handleEnablePush}
-                      disabled={isPushLoading || pushStatus === 'unknown'}
+                      disabled={
+                        isPushLoading ||
+                        pushStatus === 'unknown' ||
+                        (!pushIsOn && pushPreparation === 'preparing')
+                      }
                       className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-50 ${
                         pushIsOn ? 'bg-accent-500' : 'bg-primary-700'
                       }`}

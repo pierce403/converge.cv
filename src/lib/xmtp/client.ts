@@ -21,6 +21,7 @@ import {
   type ListMessagesOptions,
   type SendMessageOpts,
   type AsyncStreamProxy,
+  type UserPreferenceUpdate,
   LogLevel,
   ContentType,
   ReactionAction,
@@ -6537,31 +6538,93 @@ export class XmtpClient {
   }
 
   /**
-   * Get XMTP conversation HMAC keys for Web Push relay registration.
+   * Get a fresh, consent-filtered XMTP conversation HMAC-key snapshot.
    *
-   * In @xmtp/browser-sdk@6.1.2 this is exposed as `client.conversations.hmacKeys()`.
-   * A separate documented welcome-topic helper is not exposed here, so callers should
-   * treat this as the locally verifiable conversation topic set only.
+   * Browser SDK 6.1.2 returns bare MLS group IDs from `hmacKeys()`. Calling the
+   * method on each consented conversation preserves every backing MLS group for
+   * stitched DMs while excluding denied conversations.
    */
-  async getPushHmacKeys(): Promise<unknown> {
-    if (!this.client) {
+  async getPushHmacKeys(): Promise<Map<string, HmacKey[]>> {
+    const activeClient = this.client;
+    if (!activeClient) {
       return new Map<string, HmacKey[]>();
     }
 
-    const conversations = this.client.conversations as unknown as {
-      hmacKeys?: () => Promise<Map<string, HmacKey[]>>;
-      getHmacKeys?: () => Promise<Map<string, HmacKey[]>>;
+    await activeClient.preferences.sync();
+    if (this.client !== activeClient) {
+      return new Map<string, HmacKey[]>();
+    }
+
+    const conversations = activeClient.conversations as unknown as {
+      list: (options: { consentStates: ConsentState[]; includeDuplicateDms: boolean }) => Promise<Array<{
+        hmacKeys: () => Promise<Map<string, HmacKey[]>>;
+      }>>;
     };
 
-    if (typeof conversations.hmacKeys === 'function') {
-      return await conversations.hmacKeys();
+    const pushableConversations = await conversations.list({
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      includeDuplicateDms: true,
+    });
+    if (this.client !== activeClient) {
+      return new Map<string, HmacKey[]>();
     }
 
-    if (typeof conversations.getHmacKeys === 'function') {
-      return await conversations.getHmacKeys();
+    const snapshots = await Promise.all(
+      pushableConversations.map((conversation) => conversation.hmacKeys()),
+    );
+    if (this.client !== activeClient) {
+      return new Map<string, HmacKey[]>();
     }
 
-    return new Map<string, HmacKey[]>();
+    const merged = new Map<string, HmacKey[]>();
+    for (const snapshot of snapshots) {
+      for (const [groupId, keys] of snapshot) {
+        const normalizedGroupId = groupId.trim().toLowerCase();
+        const existing = merged.get(normalizedGroupId) ?? [];
+        const fingerprints = new Set(
+          existing.map((entry) => `${entry.epoch.toString()}:${Array.from(entry.key).join(',')}`),
+        );
+        for (const key of keys) {
+          const fingerprint = `${key.epoch.toString()}:${Array.from(key.key).join(',')}`;
+          if (!fingerprints.has(fingerprint)) {
+            existing.push(key);
+            fingerprints.add(fingerprint);
+          }
+        }
+        merged.set(normalizedGroupId, existing);
+      }
+    }
+    return merged;
+  }
+
+  /** Watch preference changes that can alter the relay's topic/key snapshot. */
+  async watchPushTopicChanges(onChange: () => void): Promise<() => Promise<void>> {
+    const activeClient = this.client;
+    if (!activeClient) {
+      return async () => undefined;
+    }
+
+    const stream = await activeClient.preferences.streamPreferences({
+      disableSync: true,
+      onValue: (updates: UserPreferenceUpdate[]) => {
+        if (
+          updates.some(
+            (update) => update.type === 'HmacKeyUpdate' || update.type === 'ConsentUpdate',
+          )
+        ) {
+          onChange();
+        }
+      },
+      onError: (error) => {
+        console.warn('[Push] XMTP preference stream error', error);
+      },
+    });
+
+    return async () => {
+      if (!stream.isDone) {
+        await stream.end().then(() => undefined).catch(() => undefined);
+      }
+    };
   }
 
   /**

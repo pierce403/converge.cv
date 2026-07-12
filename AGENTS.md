@@ -73,7 +73,7 @@ read the same source of truth.
 - Burn Inbox lives only in the selected inbox's Settings. After one quick confirmation, attempt installation revocation, then wipe every local inbox-scoped key, database, message, contact, draft, attachment, profile, and cache regardless of revoke success. Explain failed remote revocation and return to empty onboarding after the last inbox.
 - Contacts are separate per inbox, created after active participation, and display the peer's published profile. Do not add private aliases, notes, or custom contact sync. XMTP consent is network-synced per inbox, cached locally, and refreshed when that inbox becomes active.
 - Follow current Convos behavior by default, including profile messages that carry human and agent names, unless a Converge-specific difference is explicitly documented.
-- Notifications are app/browser-level: one browser subscription, one relay registration per loaded inbox/installation, and batched conversation topics per registration. Enable covers all loaded inboxes; disable deletes all registrations before unsubscribing. Inactive pushes set an approximate switcher activity dot without syncing. Visible copy may name the full inbox profile but must not expose sender or message content. Keep this experimental until live delivery and welcome-topic coverage are verified.
+- Notifications are app/browser-level: one physical browser subscription, one logical relay registration per loaded inbox/installation, and batched conversation topics per registration. Enable covers all loaded inboxes; disable deletes all logical registrations before unsubscribing. Inactive pushes set an approximate switcher activity dot without syncing. Visible copy may name the full inbox profile from local state but must not expose that name, the sender, or message content to the relay. Real group/welcome delivery is verified; keep this experimental until an always-on listener is deployed and mobile/PWA reliability is characterized.
 - Notification clicks open or focus Converge without automatically switching inboxes. The target inbox remains marked with an approximate activity dot until the user selects it.
 - Inbound RemoteAttachments are descriptor-first: receipt/history sync must never contact the attachment host. Only an XMTP-allowed conversation can fetch after a coalesced preferences sync inside the download slot; trusted hosts auto-load only for visible bubbles, unknown hosts require a hostname-labelled click, and every fetched payload must pass the bounded HTTPS/decrypt/static-raster policy documented in `FEATURES.md`. Attachment Accept and conversation Block/Unblock publish XMTP consent. Keep Thirdweb as the outbound ciphertext host until a separate hosting feature is requested.
 
@@ -231,7 +231,7 @@ pnpm typecheck        # TypeScript type checking
 - Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
 - Contact persistence is inbox-scoped and action-gated, uses peer-published profiles, and discards legacy private aliases/avatar overrides/notes instead of adding custom contact sync
 - Plaintext keyfile export is available only under collapsed Advanced settings; wallet association requires acknowledging that the address-to-inbox link is public and effectively permanent
-- Notifications use one app/browser toggle, one shared PushSubscription, cached per-inbox/installation relay records, and inactive-inbox activity dots. Notification clicks focus/open Converge without switching; live delivery and first-contact coverage remain experimental/unverified
+- Notifications use one app/browser toggle, one shared physical `PushSubscription`, cached logical per-inbox/installation relay records, and inactive-inbox activity dots. Active-inbox registration canonicalizes MLS group topics, preserves every HMAC epoch, and adds the deterministic installation welcome topic. Notification clicks always focus/open Converge's root without switching. Real production group/welcome delivery is verified, but automatic delivery remains experimental because no always-on XMTP listener is deployed.
 - Explicit onboarding model for new inbox creation, same-key keyfile restore, and fresh-device-key association with an existing wallet inbox
 - Wallet-approved device provisioning verifies membership through the manager's own network refresh, prevents accidental reassignment, and persists the final installation ID. A locally ready but network-absent pending default database is replaced at most once while preserving the staged account key and rechecking 10/10 capacity.
 - Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
@@ -268,10 +268,13 @@ pnpm typecheck        # TypeScript type checking
 - Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
 - Static PWA push registration is wired to the intended app-level vapid.party XMTP relay contract without shipping any vapid.party API key:
   - public config only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`;
-  - `Enable notifications` registers `/sw.js`, requests browser permission, creates/reuses one `PushSubscription`, and upserts cached `inboxId`/`installationId` plus conversation HMAC topics for every loaded inbox with available material;
-  - disable deletes every cached relay record before unsubscribing, retaining failed deletion tombstones for retry;
-  - the service worker stores opaque per-inbox activity hints, uses the locally cached profile name, and focuses/opens Converge without auto-switching; plaintext XMTP message content is not sent through push.
-- Push delivery is not end-to-end verified yet because current public vapid.party docs/source still expose generic API-key endpoints; XMTP-aware public endpoints must ship before live delivery can be claimed.
+  - `Enable notifications` registers `/sw.js`, requests browser permission, creates/reuses one physical `PushSubscription`, and upserts logical registrations for every loaded inbox with available material;
+  - the active inbox synchronizes preferences, includes Allowed/Unknown conversations and stitched-DM backing groups, preserves every distinct HMAC epoch, canonicalizes group topics, and adds `/xmtp/mls/1/w-<installation-id>/proto`;
+  - sync/conversation changes plus XMTP HMAC-key and consent updates trigger debounced, serialized refreshes that preserve a trailing newest snapshot;
+  - disable deletes every cached logical relay record before unsubscribing, retaining failed deletion tombstones for retry;
+  - the service worker stores opaque per-inbox activity hints, resolves the profile name only from local state, and always focuses/opens the Converge root without accepting relay navigation; plaintext XMTP message content is not sent through push.
+- vapid.party's contract separates one physical endpoint from logical inbox/installation registrations and accepts minimal opaque delivery events. A 2026-07-12 live test passed with real production XMTP clients, the official v3 listener, production D1/Queue, FCM, and Converge's live service worker. No always-on XMTP listener is deployed yet, so the feature remains experimental and is not continuously delivering.
+- XMTP protocol runtime:
   - **XMTP SDK v6.1.2 on protocol v3**: ✅ Fully working!
   - **Upgraded from v5.0.1 → v6.1.2** (January 25, 2026)
   - Following xmtp.chat reference implementation
@@ -286,7 +289,7 @@ pnpm typecheck        # TypeScript type checking
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
 - Video + multi-file attachments (image attachments are now supported)
 - Re-enable non-push PWA features (install prompt, update notifications/full app-shell service worker) when ready.
-- Push follow-up: implement/verify vapid.party XMTP public endpoints (`/xmtp/vapid-public-key`, `/xmtp/subscriptions`) and run a real push delivery test before claiming notifications are complete.
+- Push follow-up: deploy an always-on XMTP listener with durable PostgreSQL into vapid.party's authenticated delivery ingest, then characterize installed-PWA and mobile platform reliability before claiming notifications are complete.
 - **Default Contacts/Bots**: `src/lib/default-contacts.ts` has placeholder addresses for suggested bots (Welcome Bot, Base Agent, ENS Resolver, etc.). Replace with actual XMTP-enabled addresses when available. Check:
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
@@ -305,7 +308,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-07-11): `pnpm test --run` passes (79 files, 493 tests).
+- Current Vitest status (2026-07-12): `pnpm test --run` passes (80 files, 508 tests).
 
 ---
 
@@ -535,8 +538,18 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-11 (app version 0.5.5 + consent-aware attachment downloads)
+**Last Updated**: 2026-07-12 (app version 0.5.5 + XMTP push registration hardening)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-07-12)
+
+### XMTP Push Topic And Service-Worker Hardening
+- Browser SDK 6.1.2 returns raw MLS group IDs from its HMAC-key APIs. Push registration now synchronizes preferences, collects Allowed/Unknown conversations with duplicate-DM backing groups, canonicalizes group topics, preserves every distinct HMAC epoch, and appends the installation's deterministic no-HMAC welcome topic.
+- Active-inbox relay snapshots refresh after sync/conversation changes and XMTP HMAC-key or consent events. Refresh work is debounced, serialized, and coalesced while retaining a trailing newest snapshot. Disable/Burn synchronously invalidate stale work and abort bounded relay requests; permission/VAPID preparation stays outside the lock, and post-POST persistence failures roll back or retain a tombstone. Inactive inboxes remain cached without opening additional XMTP clients.
+- One physical browser endpoint supports logical registrations for multiple inboxes/installations. Endpoint rotation cleans up the old logical registration, while deleting one logical inbox leaves other registrations on that endpoint intact.
+- Push payloads identify an inbox only by an opaque local handle. The service worker resolves profile copy locally, records approximate activity, and ignores all relay-supplied navigation by always opening/focusing the Converge root.
+- The public registration and authenticated delivery contracts do not replace an XMTP listener. Real production welcome/group delivery passed through a disposable official v3 listener, temporary PostgreSQL, the production relay, FCM, and Converge's live service worker; no always-on listener is deployed, so continuous delivery remains experimental and unclaimed.
 
 
 ## Latest Changes (2026-07-11)
@@ -586,7 +599,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - The top-left control is an Inbox Switcher with one profile-name/avatar row per inbox. It closes the active client before switching and offers Create new inbox, Import keyfile, and Add this device to existing inbox. Duplicate imports stop before mutation with "This inbox is already loaded".
 - Burn Inbox moved to the selected inbox's Settings, closes the client and uses static revocation for the exact current installation, then performs the complete local namespace/key/OPFS/cache wipe even when remote revocation fails. A blocked local wipe preserves the key and registry for retry. Key export is Advanced-only, and wallet association requires acknowledging its public, effectively permanent identity link.
 - Contacts remain isolated per inbox, are created through explicit participation, use peer-published profiles, and discard legacy private aliases/notes. No custom contact-sync protocol was added.
-- Notifications now use one browser subscription plus cached per-inbox/installation relay records. Inactive pushes create approximate switcher dots and locally named generic notifications without syncing. Clicking focuses/opens Converge without automatically switching inboxes. Live relay delivery and welcome-topic coverage remain experimental and unverified.
+- Notifications now use one browser subscription plus cached per-inbox/installation relay records. Inactive pushes create approximate switcher dots and locally named generic notifications without syncing. Clicking focuses/opens Converge without automatically switching inboxes. This historical 0.5.0 implementation did not yet include the canonical group/welcome-topic hardening documented in the 2026-07-12 entry; live relay delivery remains experimental.
 - Reload and manual reconnect pin the persisted installation ID; a different local installation is rejected instead of being accepted and written over the saved identity. The Vite E2E flag now uses a statically replaceable expression, and the multi-inbox smoke covers desktop and mobile viewports without touching production XMTP.
 - Explicit wallet choices now fail closed when their connector is unavailable instead of opening a different wallet. Mobile continuation can advance from an account-bound signer before chain state arrives; failed bytecode inspection offers an explicit regular-wallet/smart-account choice, with a real chain ID required for smart accounts.
 - Cryptographic key/signature inputs and installation IDs canonicalize missing, uppercase, and repeated `0x` prefixes before parsing. SCW signer creation never defaults an unknown chain to mainnet, and disconnect waits for in-flight stream handling before closing the XMTP worker/database.
@@ -774,7 +787,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - `public/sw.js` now treats push payloads as metadata only, shows generic "New encrypted message" fallback copy, preserves same-origin click URLs, and focuses/opens Converge for local XMTP sync/decryption.
 - The stale `src/lib/sw-bridge` push helper is now a compatibility shim over `@/lib/push` instead of carrying a placeholder VAPID key.
 - Debug push tooling no longer attempts client-side `/send`; real push tests must be initiated by the relay/backend side.
-- Limitation: no live end-to-end push delivery was claimed; current public vapid.party source still documents generic API-key endpoints, so the XMTP endpoints must be deployed before real delivery can pass.
+- Historical limitation: no live end-to-end push delivery was claimed in this 2026-07-09 pass, when public vapid.party source still documented only generic API-key endpoints. See the 2026-07-12 entry for the current contract and remaining listener requirement.
 
 ## Latest Changes (2026-07-07)
 

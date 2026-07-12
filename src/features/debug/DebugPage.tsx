@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useAuthStore,
@@ -17,6 +17,7 @@ import {
   registerServiceWorkerForPush,
   enablePushForCurrentUser,
   disablePush,
+  preparePushBrowserResources,
   VAPID_PARTY_API_BASE,
   VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
   VAPID_PUBLIC_KEY,
@@ -67,6 +68,7 @@ export function DebugPage() {
   const [swScope, setSwScope] = useState<string>('');
   const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
   const [backendReachable, setBackendReachable] = useState<string>('unknown');
+  const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
   const [isKeyExplorerOpen, setIsKeyExplorerOpen] = useState(false);
   const [isIgnoredModalOpen, setIsIgnoredModalOpen] = useState(false);
   const [inviteInput, setInviteInput] = useState('');
@@ -75,6 +77,24 @@ export function DebugPage() {
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
   const [inviteSending, setInviteSending] = useState(false);
   const [deepSyncRunning, setDeepSyncRunning] = useState(false);
+
+  useEffect(() => {
+    if (typeof Notification === 'undefined') {
+      setPushPreparation('retry');
+      return;
+    }
+    let cancelled = false;
+    void preparePushBrowserResources()
+      .then(() => {
+        if (!cancelled) setPushPreparation('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setPushPreparation('retry');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function refreshPushStatus() {
     try {
@@ -85,18 +105,28 @@ export function DebugPage() {
         setSwRegistered(true);
         setSwScope(reg.scope || '');
         const sub = await reg.pushManager.getSubscription();
-        setSubscriptionEndpoint(sub?.endpoint || '');
+        setSubscriptionEndpoint(sub?.endpoint ? new URL(sub.endpoint).host : '');
       } else {
         setSwRegistered(false);
         setSwScope('');
         setSubscriptionEndpoint('');
       }
-      // Check vapid.party public health without using any client-side secret.
+      // Check both the generic Worker health and the public XMTP push surface.
       try {
         const healthUrl = `${VAPID_PARTY_API_BASE}/health`;
-        const res = await fetch(healthUrl, { method: 'GET' });
-        setBackendReachable(`${res.status} ${res.ok ? 'OK' : 'ERR'}`);
-        logNetworkEvent({ direction: 'status', event: 'push:health', details: `GET vapid.party health -> ${res.status}` });
+        const keyUrl = `${VAPID_PARTY_API_BASE}${VAPID_PARTY_XMTP_PUBLIC_KEY_PATH}`;
+        const [health, key] = await Promise.all([
+          fetch(healthUrl, { method: 'GET' }),
+          fetch(keyUrl, { method: 'GET' }),
+        ]);
+        setBackendReachable(
+          `health ${health.status}; XMTP VAPID ${key.status} ${health.ok && key.ok ? 'OK' : 'ERR'}`,
+        );
+        logNetworkEvent({
+          direction: 'status',
+          event: 'push:health',
+          details: `GET health -> ${health.status}; GET XMTP VAPID key -> ${key.status}`,
+        });
       } catch (e) {
         setBackendReachable('unreachable');
         logNetworkEvent({ direction: 'status', event: 'push:health', details: 'vapid.party health unreachable' });
@@ -426,25 +456,46 @@ export function DebugPage() {
               <button
                 type="button"
                 onClick={async () => {
+                  if (pushPreparation !== 'ready') {
+                    setPushPreparation('preparing');
+                    try {
+                      await preparePushBrowserResources();
+                      setPushPreparation('ready');
+                    } catch (error) {
+                      setPushPreparation('retry');
+                      logNetworkEvent({
+                        direction: 'status',
+                        event: 'push:prepare',
+                        details: error instanceof Error ? error.message : 'preparation failed',
+                      });
+                    }
+                    return;
+                  }
                   const result = await enablePushForCurrentUser();
                   logNetworkEvent({
                     direction: 'outbound',
                     event: 'push:enable',
                     details: result.success ? `registered ${result.topicCount ?? 0} topic(s)` : result.error || 'failed',
-                    payload: result.endpoint ? JSON.stringify({ endpoint: result.endpoint }) : undefined,
+                    payload: result.endpoint
+                      ? JSON.stringify({ endpointHost: new URL(result.endpoint).host })
+                      : undefined,
                   });
                   await refreshPushStatus();
                 }}
                 className="btn-primary"
-                disabled={!identity}
+                disabled={!identity || pushPreparation === 'preparing'}
               >
-                Enable Push
+                {pushPreparation === 'retry' ? 'Retry Push Setup' : 'Enable Push'}
               </button>
               <button
                 type="button"
                 onClick={async () => {
-                  await disablePush();
-                  logNetworkEvent({ direction: 'outbound', event: 'push:disable', details: 'unsubscribed' });
+                  const disabled = await disablePush();
+                  logNetworkEvent({
+                    direction: 'outbound',
+                    event: 'push:disable',
+                    details: disabled ? 'relay records deleted and browser unsubscribed' : 'cleanup incomplete',
+                  });
                   await refreshPushStatus();
                 }}
                 className="btn-secondary"

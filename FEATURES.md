@@ -52,12 +52,12 @@ model.
 ### App-Level Notifications
 
 - Notifications are one app/browser-level setting, not separate per-inbox or per-conversation toggles.
-- One browser `PushSubscription` is shared by relay registrations keyed per loaded inbox and installation. Each registration batches that inbox's known XMTP conversation topics.
+- One physical browser `PushSubscription` is shared by logical relay registrations keyed per loaded inbox and installation. Deleting one logical registration does not remove another inbox that uses the same endpoint.
 - Enabling notifications registers every loaded inbox while keeping only the selected inbox connected to XMTP. Disabling notifications deletes every loaded-inbox relay registration before unsubscribing the shared browser endpoint.
 - Push for an inactive inbox records an approximate pending-activity hint and lights that inbox in the switcher. It does not connect, sync, or claim an exact unread count until the user selects that inbox.
-- Visible notification copy may use the full inbox profile name, for example "New activity for Orange Orca," but does not expose the sender or message body.
-- Clicking a notification opens or focuses Converge without automatically switching inboxes. The activity dot remains on the target inbox until the user selects it.
-- Delivery remains experimental until the vapid.party routes, topic refresh, and new-conversation welcome-topic coverage pass a live end-to-end test.
+- Visible notification copy may use the full locally cached inbox profile name, for example "New activity for Orange Orca." The relay receives only an opaque inbox handle and does not receive the profile name, sender, or message body.
+- Clicking a notification always opens or focuses Converge's root page without automatically switching inboxes. Relay payloads cannot select a route, inbox, conversation, or external URL; the activity dot remains until the user selects the inbox.
+- End-to-end welcome and group delivery has been verified with real production XMTP clients, the official v3 notification server, the production relay, a real Chrome FCM subscription, and Converge's live service worker. Delivery remains experimental because that listener used disposable local PostgreSQL and is not deployed as an always-on production service.
 
 ## Identity Implementation
 
@@ -172,13 +172,18 @@ model.
 
 ## Experimental Web Push Implementation
 - Push enablement checks browser capabilities, requests Notification permission, registers the service worker, and creates or reuses one app/browser `PushSubscription` using the vapid.party VAPID public key.
-- Converge caches one logical relay registration per loaded inbox/installation and batches each inbox's locally exposed conversation HMAC topic keys from `client.conversations.hmacKeys()`. Only the active inbox is connected; inactive inboxes reuse their last cached registration material.
+- Converge caches one logical relay registration per loaded inbox/installation on the shared physical endpoint. Only the active inbox is connected; inactive inboxes reuse their last cached registration material.
+- Before collecting active-inbox topics, Converge syncs XMTP preferences and includes Allowed and Unknown conversations, including every backing group of stitched/duplicate DMs. Denied conversations are excluded.
+- Browser SDK 6.1.2 exposes bare MLS group IDs. Converge canonicalizes them as `/xmtp/mls/1/g-<group-id>/proto`, merges every distinct HMAC epoch returned per conversation, and adds `/xmtp/mls/1/w-<installation-id>/proto` as the deterministic no-HMAC welcome topic.
+- Topic snapshots refresh after active-inbox sync/conversation changes and on XMTP HMAC-key or consent updates. Refreshes are debounced, serialized, and coalesced per inbox/installation while preserving one trailing newest snapshot, so a slow relay POST cannot drop a later key rotation. Disable and Burn invalidate stale work synchronously, abort active relay requests, and are never held behind a notification permission prompt.
 - Push config is public-only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`. Converge remains a static PWA with no backend.
-- The service worker maps an opaque inbox handle to a locally cached profile name, shows copy such as "New activity for Orange Orca," and stores an approximate per-inbox activity hint. The switcher renders that hint as a dot without opening or syncing the inactive inbox.
-- Notification clicks preserve same-origin URLs and only open/focus Converge. They do not switch inboxes; selecting the dotted inbox performs the XMTP sync and determines the real unread state.
-- End-to-end push delivery still requires vapid.party to ship the XMTP-aware public endpoints documented in `ARCHITECTURE.md`; do not present live push delivery as complete until a real relay test passes.
+- The relay payload contains only the push type and opaque inbox handle. The service worker maps that handle to a locally cached profile name, shows copy such as "New activity for Orange Orca," and stores an approximate per-inbox activity hint. The switcher renders that hint as a dot without opening or syncing the inactive inbox.
+- Notification clicks discard relay-supplied navigation and always open/focus the Converge root. They do not switch inboxes; selecting the dotted inbox performs the XMTP sync and determines the real unread state.
+- The vapid.party contract supports public VAPID lookup, logical per-inbox registration on a shared endpoint, logical deletion, and authenticated ciphertext-envelope delivery. An always-on XMTP listener is still required to feed that delivery endpoint and is not deployed yet.
+- Live verification covers two logical inboxes sharing one browser endpoint, deterministic welcome and canonical group topics, multiple HMAC epochs, duplicate and `shouldPush:false` suppression, independent logical deletion, a genuine XMTP production welcome, a genuine inbound group message, recipient-own-message suppression, opaque activity, and local-only notification copy.
 - Enabling push no longer forces a page reload (service worker takeover should not disconnect wallet-backed identities).
 - Disabling notifications attempts to delete every cached inbox/installation relay record before unsubscribing the shared endpoint. Failed relay deletions remain as local tombstones for later cleanup; the app-level status reports expected versus registered inboxes.
+- Relay requests, including response parsing, are bounded to five seconds. If a relay POST succeeds but local persistence fails, Converge attempts an immediate DELETE and retains a cleanup tombstone when that rollback cannot be confirmed.
 
 ## Local-First Operation
 - Conversation lists, messages, profiles, and inbox-scoped data are persisted in IndexedDB (via Dexie); the small cross-inbox registry is stored in localStorage so the switcher can choose a namespace before opening it.

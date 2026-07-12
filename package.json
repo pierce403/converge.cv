@@ -14,6 +14,7 @@
     "test": "vitest",
     "test:coverage": "rm -rf coverage && vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:push:live": "node scripts/probe-live-push-relay.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -59,9 +59,11 @@ A keyfile or browser profile containing this data must be protected as sensitive
 
 ## Push Status
 
-Web Push support is experimental. One app/browser toggle manages a shared `PushSubscription` plus one cached relay record per loaded inbox/installation. Inactive-inbox pushes create an approximate activity dot without connecting or syncing that inbox, and visible copy can use its locally cached profile name without exposing sender or message content. Clicking a notification opens or focuses Converge but does not automatically switch inboxes.
+Web Push support is experimental. One app/browser toggle manages one physical `PushSubscription` plus a logical relay registration for each loaded inbox/installation. Only the selected inbox connects to XMTP. Inactive-inbox pushes record an approximate activity dot without connecting, syncing, or claiming an exact unread count.
 
-Live end-to-end delivery and welcome/new-conversation topic coverage have not been verified against vapid.party. The app must not claim that push delivery is complete until a real relay test passes.
+For the active inbox, Converge registers canonical MLS group topics with every HMAC-key epoch exposed by XMTP and adds the installation's deterministic welcome topic for new conversations. The relay receives an opaque inbox handle, not the profile name or message plaintext. The service worker resolves notification copy from the locally cached profile, and every notification click opens or focuses Converge's root page; relay data cannot select an inbox, conversation, or external URL.
+
+On July 12, 2026, the full path was verified with a real Chrome FCM subscription, real XMTP production inboxes, and the official XMTP v3 notification server: installation welcomes and inbound group messages reached the live Converge service worker, while the recipient's own message was suppressed. The listener and its temporary PostgreSQL database ran only for that test. No always-on listener is deployed, so automatic delivery is not continuously available and the user-facing feature remains experimental.
 
 ## Development
 

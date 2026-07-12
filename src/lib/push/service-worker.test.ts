@@ -23,6 +23,9 @@ describe('push service worker privacy contract', () => {
 
   it('focuses the app without encoding an inbox switch decision in the click URL', () => {
     expect(source).toContain("self.addEventListener('notificationclick'");
+    expect(source).toContain("const url = self.location.origin + '/'");
+    expect(source).not.toMatch(/payload\.(?:url|clickUrl)/);
+    expect(source).not.toMatch(/notification\?\.data\?\.url/);
     expect(source).not.toMatch(/[?&](?:inbox|inboxId|inboxHandle)=/);
   });
 });

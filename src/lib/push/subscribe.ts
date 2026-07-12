@@ -118,11 +118,20 @@ export type PushRegistrationSyncState = {
 
 type FetchLike = typeof fetch;
 const PUSH_ACTIVITY_CLEARED_EVENT = 'converge.push.activity-cleared';
+const PUSH_REGISTRATION_CHANGED_EVENT = 'converge.push.registration-changed';
+const XMTP_GROUP_ID_PATTERN = /^[0-9a-f]{64}$/i;
+const XMTP_GROUP_TOPIC_PATTERN = /^\/xmtp\/mls\/1\/g-([0-9a-f]{64})\/proto$/i;
+const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 5_000;
+const invalidatedPushRegistrationKeys = new Set<string>();
+const activeRelayRequestControllers = new Set<AbortController>();
+let pushMutationTail: Promise<void> = Promise.resolve();
+let pushMutationGeneration = 0;
 
 export type PushRuntimeOptions = {
   apiBase?: string;
   fetchFn?: FetchLike;
   stateStore?: PushStateStore;
+  requestTimeoutMs?: number;
 };
 
 export type EnablePushOptions = PushRuntimeOptions & {
@@ -132,16 +141,86 @@ export type EnablePushOptions = PushRuntimeOptions & {
   loadedInboxIds?: string[];
   registrations?: InboxPushRegistrationInput[];
   vapidPublicKey?: string;
+  permissionPromise?: Promise<NotificationPermission>;
+  browserResourcesPromise?: Promise<PushBrowserResources>;
+  browserSubscriptionPromise?: Promise<PushBrowserSubscription>;
+  mutationGeneration?: number;
 };
 
 export type DisablePushOptions = PushRuntimeOptions & {
   identity?: Partial<XmtpPushIdentity>;
 };
 
+type QueuedPushRefreshRequest = {
+  input: InboxPushRegistrationInput;
+  opts: PushRuntimeOptions;
+  fingerprint: string;
+  mutationGeneration: number;
+};
+
+type PushRefreshQueue = {
+  latest: QueuedPushRefreshRequest;
+  revision: number;
+  promise: Promise<PushSubscriptionResult>;
+};
+
+const pushRefreshQueues = new Map<string, PushRefreshQueue>();
+
+function serializePushMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = pushMutationTail.then(operation, operation);
+  pushMutationTail = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 function joinApiPath(base: string, path: string): string {
   const normalizedBase = base.replace(/\/+$/, '');
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   return `${normalizedBase}${normalizedPath}`;
+}
+
+async function fetchRelayWithTimeout<T>(
+  fetchFn: FetchLike,
+  url: string,
+  init: RequestInit,
+  consume: (response: Response) => Promise<T>,
+  timeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => {
+      reject(
+        controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new Error('vapid.party request was cancelled'),
+      );
+    }, { once: true });
+  });
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`vapid.party request timed out after ${timeoutMs}ms`);
+      controller.abort(error);
+      reject(error);
+    }, Math.max(1, timeoutMs));
+  });
+  activeRelayRequestControllers.add(controller);
+  try {
+    return await Promise.race([
+      fetchFn(url, { ...init, signal: controller.signal }).then(consume),
+      abortPromise,
+      timeoutPromise,
+    ]);
+  } finally {
+    activeRelayRequestControllers.delete(controller);
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function supersedePushMutations(): void {
+  pushMutationGeneration += 1;
+  for (const controller of activeRelayRequestControllers) {
+    controller.abort(new Error('Push operation was superseded by a later disable or inbox removal'));
+  }
 }
 
 export function isPushRegistrationRefreshReady(state: PushRegistrationSyncState): boolean {
@@ -233,9 +312,67 @@ function hmacMapEntries(value: unknown): Array<[string, unknown]> {
 }
 
 export function normalizeXmtpHmacKeys(value: unknown): XmtpPushTopic[] {
-  return hmacMapEntries(value)
-    .map(([topic, entries]) => ({ topic, hmacKeys: normalizeHmacKeyEntries(entries) }))
-    .filter((topic) => topic.topic.trim() && topic.hmacKeys.length > 0);
+  return normalizeGroupTopics(
+    hmacMapEntries(value).map(([topic, entries]) => ({
+      topic,
+      hmacKeys: normalizeHmacKeyEntries(entries),
+    })),
+  );
+}
+
+export function normalizeXmtpGroupTopic(value: string): string | null {
+  const candidate = value.trim();
+  if (XMTP_GROUP_ID_PATTERN.test(candidate)) {
+    return `/xmtp/mls/1/g-${candidate.toLowerCase()}/proto`;
+  }
+  const match = candidate.match(XMTP_GROUP_TOPIC_PATTERN);
+  return match ? `/xmtp/mls/1/g-${match[1].toLowerCase()}/proto` : null;
+}
+
+function mergeHmacKeys(target: XmtpPushHmacKey[], source: XmtpPushHmacKey[]): void {
+  const seen = new Set(target.map((entry) => `${entry.epoch}\0${entry.key}`));
+  for (const entry of source) {
+    const epoch = entry.epoch.trim();
+    const key = entry.key.trim();
+    const fingerprint = `${epoch}\0${key}`;
+    if (!epoch || !key || seen.has(fingerprint)) continue;
+    target.push({ epoch, key });
+    seen.add(fingerprint);
+  }
+}
+
+function normalizeGroupTopics(topics: XmtpPushTopic[]): XmtpPushTopic[] {
+  const byTopic = new Map<string, XmtpPushHmacKey[]>();
+  for (const entry of topics) {
+    const topic = normalizeXmtpGroupTopic(entry.topic);
+    if (!topic) continue;
+    const keys = byTopic.get(topic) ?? [];
+    mergeHmacKeys(keys, entry.hmacKeys);
+    if (keys.length > 0) byTopic.set(topic, keys);
+  }
+  return Array.from(byTopic, ([topic, hmacKeys]) => ({ topic, hmacKeys }));
+}
+
+export function normalizeXmtpPushTopics(
+  topics: XmtpPushTopic[],
+  installationId: string,
+): XmtpPushTopic[] {
+  const normalized = normalizeGroupTopics(topics);
+  const normalizedInstallationId = normalizeXmtpInstallationId(installationId);
+  if (!normalizedInstallationId) {
+    throw new Error('XMTP installation ID must be a 32-byte hexadecimal value');
+  }
+  normalized.push({
+    topic: `/xmtp/mls/1/w-${normalizedInstallationId}/proto`,
+    hmacKeys: [],
+  });
+  return normalized;
+}
+
+function normalizeXmtpInstallationId(value: string): string | null {
+  const candidate = value.trim().toLowerCase();
+  const unprefixed = candidate.startsWith('0x') ? candidate.slice(2) : candidate;
+  return /^[0-9a-f]{64}$/.test(unprefixed) ? unprefixed : null;
 }
 
 export function serializePushSubscription(subscription: PushSubscription): SerializedPushSubscription {
@@ -275,6 +412,17 @@ function emitPushActivityCleared(inboxId?: string): void {
       detail: { inboxId: inboxId ? normalizeInboxId(inboxId) : undefined },
     }),
   );
+}
+
+function emitPushRegistrationChanged(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(PUSH_REGISTRATION_CHANGED_EVENT));
+}
+
+export function listenForPushRegistrationChanged(callback: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  window.addEventListener(PUSH_REGISTRATION_CHANGED_EVENT, callback);
+  return () => window.removeEventListener(PUSH_REGISTRATION_CHANGED_EVENT, callback);
 }
 
 export function buildVapidPartyXmtpRegistrationPayload({
@@ -324,30 +472,123 @@ async function getVapidPublicKey({
   apiBase = VAPID_PARTY_API_BASE,
   vapidPublicKey = VAPID_PUBLIC_KEY,
   fetchFn = fetch,
+  requestTimeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
 }: {
   apiBase?: string;
   vapidPublicKey?: string;
   fetchFn?: FetchLike;
+  requestTimeoutMs?: number;
 } = {}): Promise<string> {
   if (vapidPublicKey && vapidPublicKey.length > 10) return vapidPublicKey;
-  const response = await fetchFn(joinApiPath(apiBase, VAPID_PARTY_XMTP_PUBLIC_KEY_PATH), {
-    method: 'GET',
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch vapid.party public VAPID key: ${response.status}. Set VITE_VAPID_PUBLIC_KEY until the public XMTP key endpoint is deployed.`,
-    );
+  return fetchRelayWithTimeout(
+    fetchFn,
+    joinApiPath(apiBase, VAPID_PARTY_XMTP_PUBLIC_KEY_PATH),
+    { method: 'GET' },
+    async (response) => {
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch vapid.party public VAPID key: ${response.status}. Set VITE_VAPID_PUBLIC_KEY until the public XMTP key endpoint is deployed.`,
+        );
+      }
+      const contentType = response.headers.get('Content-Type') ?? '';
+      if (contentType.includes('application/json')) {
+        const json = await response.json();
+        const key = json?.data?.publicKey ?? json?.publicKey;
+        if (typeof key === 'string' && key.trim()) return key.trim();
+      } else {
+        const text = (await response.text()).trim();
+        if (text) return text;
+      }
+      throw new Error('vapid.party public VAPID key response did not include a publicKey');
+    },
+    requestTimeoutMs,
+  );
+}
+
+type PushBrowserResources = {
+  serviceWorker: ServiceWorkerRegistration;
+  applicationServerKey: Uint8Array;
+};
+
+type PushBrowserSubscription = {
+  subscription: PushSubscription;
+  created: boolean;
+};
+
+let defaultBrowserResourcesPromise: Promise<PushBrowserResources> | null = null;
+
+function usesDefaultPushResources(options: EnablePushOptions): boolean {
+  return !options.apiBase && !options.fetchFn && !options.vapidPublicKey && !options.requestTimeoutMs;
+}
+
+/** Preload the service worker and public key before the user clicks Enable. */
+export function preparePushBrowserResources(
+  options: Pick<EnablePushOptions, 'apiBase' | 'fetchFn' | 'vapidPublicKey' | 'requestTimeoutMs'> = {},
+): Promise<PushBrowserResources> {
+  if (!hasPushSupport()) {
+    return Promise.reject(new Error('Notifications not supported in this browser'));
   }
-  const contentType = response.headers.get('Content-Type') ?? '';
-  if (contentType.includes('application/json')) {
-    const json = await response.json();
-    const key = json?.data?.publicKey ?? json?.publicKey;
-    if (typeof key === 'string' && key.trim()) return key.trim();
-  } else {
-    const text = (await response.text()).trim();
-    if (text) return text;
+  if (usesDefaultPushResources(options) && defaultBrowserResourcesPromise) {
+    return defaultBrowserResourcesPromise;
   }
-  throw new Error('vapid.party public VAPID key response did not include a publicKey');
+
+  const promise = Promise.all([
+    ensureServiceWorkerRegistration(),
+    getVapidPublicKey({
+      apiBase: options.apiBase,
+      vapidPublicKey: options.vapidPublicKey,
+      fetchFn: options.fetchFn,
+      requestTimeoutMs: options.requestTimeoutMs,
+    }),
+  ]).then(([serviceWorker, publicKey]) => ({
+    serviceWorker,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  }));
+
+  if (usesDefaultPushResources(options)) {
+    defaultBrowserResourcesPromise = promise;
+    void promise.catch(() => {
+      if (defaultBrowserResourcesPromise === promise) defaultBrowserResourcesPromise = null;
+    });
+  }
+  return promise;
+}
+
+function applicationServerKeyMatches(
+  subscription: PushSubscription,
+  expected: Uint8Array,
+): boolean {
+  const current = unknownToBytes(subscription.options?.applicationServerKey);
+  if (!current || current.byteLength !== expected.byteLength) return false;
+  return current.every((value, index) => value === expected[index]);
+}
+
+async function createBrowserPushSubscription(
+  options: EnablePushOptions,
+): Promise<PushBrowserSubscription> {
+  const permissionPromise = options.permissionPromise ?? Notification.requestPermission();
+  const resourcesPromise =
+    options.browserResourcesPromise ?? preparePushBrowserResources(options);
+  const [permission, resources] = await Promise.all([permissionPromise, resourcesPromise]);
+  if (permission !== 'granted') {
+    throw new Error(`Notification permission ${permission}`);
+  }
+
+  let subscription = await resources.serviceWorker.pushManager.getSubscription();
+  if (subscription && !applicationServerKeyMatches(subscription, resources.applicationServerKey)) {
+    const removed = await subscription.unsubscribe();
+    if (!removed) throw new Error('The browser could not replace its outdated push subscription');
+    subscription = null;
+  }
+  if (subscription) return { subscription, created: false };
+
+  return {
+    subscription: await resources.serviceWorker.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: resources.applicationServerKey as BufferSource,
+    }),
+    created: true,
+  };
 }
 
 async function collectCurrentIdentity(override?: Partial<XmtpPushIdentity>): Promise<XmtpPushIdentity> {
@@ -403,24 +644,16 @@ function usableInboxHandle(value: string | undefined, inboxId: string): string |
 
 function normalizeIdentity(identity: XmtpPushIdentity): XmtpPushIdentity {
   const inboxId = normalizeInboxId(identity.inboxId);
-  const installationId = identity.installationId.trim();
-  if (!inboxId || !installationId) throw new Error('Inbox and installation IDs are required for push');
+  const installationId = normalizeXmtpInstallationId(identity.installationId);
+  if (!inboxId) throw new Error('XMTP inbox ID is required for push');
+  if (!installationId) {
+    throw new Error('XMTP installation ID must be a 32-byte hexadecimal value');
+  }
   return {
     inboxId,
     installationId,
     address: identity.address?.trim() || undefined,
   };
-}
-
-function normalizeTopics(topics: XmtpPushTopic[]): XmtpPushTopic[] {
-  return topics
-    .map((entry) => ({
-      topic: entry.topic.trim(),
-      hmacKeys: entry.hmacKeys
-        .map((key) => ({ epoch: key.epoch.trim(), key: key.key.trim() }))
-        .filter((key) => key.epoch && key.key),
-    }))
-    .filter((entry) => entry.topic && entry.hmacKeys.length > 0);
 }
 
 export async function cacheInboxPushRegistration(
@@ -454,7 +687,7 @@ export async function cacheInboxPushRegistration(
     identity,
     inboxHandle,
     displayName,
-    topics: normalizeTopics(input.topics),
+    topics: normalizeXmtpPushTopics(input.topics, identity.installationId),
     updatedAt: now,
     pendingDeletion: false,
   };
@@ -511,41 +744,91 @@ function selectOneRegistrationPerInbox(
 
 async function registerWithVapidParty(
   payload: VapidPartyXmtpRegistrationPayload,
-  { apiBase = VAPID_PARTY_API_BASE, fetchFn = fetch }: PushRuntimeOptions = {},
+  {
+    apiBase = VAPID_PARTY_API_BASE,
+    fetchFn = fetch,
+    requestTimeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
+  }: PushRuntimeOptions = {},
 ): Promise<{ registrationId?: string }> {
-  const response = await fetchFn(joinApiPath(apiBase, VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    throw new Error(`vapid.party XMTP registration failed: ${response.status}${errorText ? `: ${errorText}` : ''}`);
-  }
-  const contentType = response.headers.get('Content-Type') ?? '';
-  if (!contentType.includes('application/json')) return {};
-  const json = await response.json();
-  const registrationId = json?.data?.id ?? json?.id;
-  return typeof registrationId === 'string' ? { registrationId } : {};
+  return fetchRelayWithTimeout(
+    fetchFn,
+    joinApiPath(apiBase, VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    async (response) => {
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`vapid.party XMTP registration failed: ${response.status}${errorText ? `: ${errorText}` : ''}`);
+      }
+      const contentType = response.headers.get('Content-Type') ?? '';
+      if (!contentType.includes('application/json')) return {};
+      const json = await response.json();
+      const registrationId =
+        json?.data?.subscriptionId ?? json?.data?.id ?? json?.subscriptionId ?? json?.id;
+      return typeof registrationId === 'string' ? { registrationId } : {};
+    },
+    requestTimeoutMs,
+  );
 }
 
 async function unregisterWithVapidParty(
   endpoint: string,
   identity: XmtpPushIdentity,
-  { apiBase = VAPID_PARTY_API_BASE, fetchFn = fetch }: PushRuntimeOptions = {},
+  {
+    apiBase = VAPID_PARTY_API_BASE,
+    fetchFn = fetch,
+    requestTimeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
+  }: PushRuntimeOptions = {},
 ): Promise<void> {
-  const response = await fetchFn(joinApiPath(apiBase, VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH), {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      version: 1,
-      app: { id: 'converge.cv', origin: getOrigin() },
-      endpoint,
-      identity,
-      deletedAt: new Date().toISOString(),
-    }),
-  });
-  if (!response.ok) throw new Error(`vapid.party XMTP unsubscribe failed: ${response.status}`);
+  return fetchRelayWithTimeout(
+    fetchFn,
+    joinApiPath(apiBase, VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH),
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version: 1,
+        app: { id: 'converge.cv', origin: getOrigin() },
+        endpoint,
+        identity,
+        deletedAt: new Date().toISOString(),
+      }),
+    },
+    async (response) => {
+      if (!response.ok) throw new Error(`vapid.party XMTP unsubscribe failed: ${response.status}`);
+    },
+    requestTimeoutMs,
+  );
+}
+
+function staleEndpointRegistrationKey(registration: CachedInboxPushRegistration): string {
+  const suffix = typeof globalThis.crypto.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}`;
+  return `${registration.key}:stale-endpoint:${suffix}`;
+}
+
+async function removeReplacedEndpointRegistration(
+  cached: CachedInboxPushRegistration,
+  currentEndpoint: string,
+  store: PushStateStore,
+  opts: PushRuntimeOptions,
+): Promise<void> {
+  if (!cached.endpoint || cached.endpoint === currentEndpoint) return;
+  try {
+    await unregisterWithVapidParty(cached.endpoint, cached.identity, opts);
+  } catch (error) {
+    console.warn('[Push] Could not delete a replaced browser endpoint relay record', error);
+    await store.putRegistration({
+      ...cached,
+      key: staleEndpointRegistrationKey(cached),
+      pendingDeletion: true,
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 async function removeSupersededInboxRegistrations(
@@ -581,56 +864,94 @@ async function removeSupersededInboxRegistrations(
 }
 
 /** Enable the shared browser subscription and upsert every loaded inbox with cached material. */
-export async function enablePushForLoadedInboxes(
+export function enablePushForLoadedInboxes(
   registrations: InboxPushRegistrationInput[],
   opts: Omit<EnablePushOptions, 'registrations' | 'identity' | 'topics' | 'displayName'> = {},
+): Promise<PushSubscriptionResult> {
+  const mutationGeneration = opts.mutationGeneration ?? pushMutationGeneration;
+  const browserSubscriptionPromise =
+    opts.browserSubscriptionPromise ?? createBrowserPushSubscription(opts);
+  return browserSubscriptionPromise
+    .then((browserSubscription) =>
+      serializePushMutation(() =>
+        performEnablePushForLoadedInboxes(registrations, {
+          ...opts,
+          browserSubscriptionPromise: Promise.resolve(browserSubscription),
+          mutationGeneration,
+        })
+      )
+    )
+    .catch((error) => {
+      console.error('[Push] Failed to enable push notifications:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    });
+}
+
+async function performEnablePushForLoadedInboxes(
+  registrations: InboxPushRegistrationInput[],
+  opts: Omit<EnablePushOptions, 'registrations' | 'identity' | 'topics' | 'displayName'>,
 ): Promise<PushSubscriptionResult> {
   if (!hasPushSupport()) return { success: false, error: 'Notifications not supported in this browser' };
   const store = opts.stateStore ?? getPushStateStore();
   let createdSubscription = false;
   let subscription: PushSubscription | null = null;
+  let registeredInboxCount = 0;
+  let browserSubscriptionPromise: Promise<PushBrowserSubscription> | undefined;
 
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') return { success: false, error: `Notification permission ${permission}` };
-
-    const cachedInputs = await Promise.all(
-      registrations.map((input) => cacheInboxPushRegistration(input, { stateStore: store })),
-    );
-    const preferredKeys = new Set(cachedInputs.map((entry) => entry.key));
-    const loadedInboxIds = [
-      ...(opts.loadedInboxIds ?? defaultLoadedInboxIds()),
-      ...cachedInputs.map((entry) => entry.identity.inboxId),
-    ];
-    const allCached = await store.listRegistrations();
-    const selected = selectOneRegistrationPerInbox(allCached, loadedInboxIds, preferredKeys);
-    if (selected.length === 0) {
-      return { success: false, error: 'No loaded inbox has cached push registration material' };
+    if (opts.mutationGeneration !== pushMutationGeneration) {
+      const staleBrowserSubscription = await opts.browserSubscriptionPromise?.catch(() => undefined);
+      if (staleBrowserSubscription?.created) {
+        await staleBrowserSubscription.subscription.unsubscribe().catch(() => undefined);
+      }
+      return { success: false, error: 'Notification setup was superseded by a later disable or inbox removal' };
     }
-
-    const serviceWorker = await ensureServiceWorkerRegistration();
-    const publicKey = await getVapidPublicKey({
-      apiBase: opts.apiBase,
-      vapidPublicKey: opts.vapidPublicKey,
-      fetchFn: opts.fetchFn,
-    });
-    subscription = await serviceWorker.pushManager.getSubscription();
-    if (!subscription) {
-      subscription = await serviceWorker.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
-      });
-      createdSubscription = true;
+    for (const input of registrations) {
+      const registrationIdentity = normalizeIdentity(input.identity);
+      invalidatedPushRegistrationKeys.delete(pushRegistrationKey(registrationIdentity));
+    }
+    // Browser subscription starts independently of XMTP topic collection so a
+    // slow preference sync cannot consume the click's transient user activation.
+    browserSubscriptionPromise =
+      opts.browserSubscriptionPromise ?? createBrowserPushSubscription(opts);
+    const preparationPromise = (async () => {
+      const cachedInputs = await Promise.all(
+        registrations.map((input) => cacheInboxPushRegistration(input, { stateStore: store })),
+      );
+      const preferredKeys = new Set(cachedInputs.map((entry) => entry.key));
+      const loadedInboxIds = [
+        ...(opts.loadedInboxIds ?? defaultLoadedInboxIds()),
+        ...cachedInputs.map((entry) => entry.identity.inboxId),
+      ];
+      const allCached = await store.listRegistrations();
+      const selected = selectOneRegistrationPerInbox(allCached, loadedInboxIds, preferredKeys);
+      if (selected.length === 0) {
+        throw new Error('No loaded inbox has cached push registration material');
+      }
+      return selected;
+    })();
+    const [{ subscription: browserSubscription, created }, selected] = await Promise.all([
+      browserSubscriptionPromise,
+      preparationPromise,
+    ]);
+    subscription = browserSubscription;
+    createdSubscription = created;
+    if (opts.mutationGeneration !== pushMutationGeneration) {
+      if (createdSubscription) await subscription.unsubscribe().catch(() => undefined);
+      return { success: false, error: 'Notification setup was superseded by a later disable or inbox removal' };
     }
 
     const serialized = serializePushSubscription(subscription);
     const failedInboxIds: string[] = [];
     const registrationIds: string[] = [];
     let topicCount = 0;
-    let registeredInboxCount = 0;
 
     for (const cached of selected) {
+      let remoteRegistered = false;
       try {
+        if (opts.mutationGeneration !== pushMutationGeneration) {
+          throw new Error('Notification setup was superseded by a later disable or inbox removal');
+        }
         const registeredAt = new Date().toISOString();
         const payload = buildVapidPartyXmtpRegistrationPayload({
           identity: cached.identity,
@@ -640,9 +961,10 @@ export async function enablePushForLoadedInboxes(
           registeredAt,
         });
         const registered = await registerWithVapidParty(payload, opts);
-        if (registered.registrationId) registrationIds.push(registered.registrationId);
-        topicCount += cached.topics.length;
-        registeredInboxCount += 1;
+        remoteRegistered = true;
+        if (opts.mutationGeneration !== pushMutationGeneration) {
+          throw new Error('Notification setup was superseded by a later disable or inbox removal');
+        }
         const persistedRegistration = {
           ...cached,
           endpoint: subscription.endpoint,
@@ -651,10 +973,31 @@ export async function enablePushForLoadedInboxes(
           updatedAt: Date.now(),
           pendingDeletion: false,
         };
+        await removeReplacedEndpointRegistration(cached, subscription.endpoint, store, opts);
         await store.putRegistration(persistedRegistration);
         await removeSupersededInboxRegistrations(persistedRegistration, store, opts);
+        if (registered.registrationId) registrationIds.push(registered.registrationId);
+        topicCount += cached.topics.length;
+        registeredInboxCount += 1;
       } catch (error) {
         console.warn('[Push] Failed to register loaded inbox', cached.identity.inboxId, error);
+        if (remoteRegistered) {
+          try {
+            await unregisterWithVapidParty(subscription.endpoint, cached.identity, opts);
+          } catch (rollbackError) {
+            console.warn('[Push] Failed to roll back a partially persisted relay registration', rollbackError);
+            try {
+              await store.putRegistration({
+                ...cached,
+                endpoint: subscription.endpoint,
+                pendingDeletion: true,
+                updatedAt: Date.now(),
+              });
+            } catch (tombstoneError) {
+              console.warn('[Push] Failed to retain relay rollback tombstone', tombstoneError);
+            }
+          }
+        }
         failedInboxIds.push(cached.identity.inboxId);
       }
     }
@@ -665,6 +1008,7 @@ export async function enablePushForLoadedInboxes(
       endpoint: enabled ? subscription.endpoint : undefined,
       updatedAt: Date.now(),
     });
+    emitPushRegistrationChanged();
     if (!enabled && createdSubscription) await subscription.unsubscribe().catch(() => undefined);
 
     return {
@@ -678,7 +1022,13 @@ export async function enablePushForLoadedInboxes(
       error: failedInboxIds.length > 0 ? `Failed to register ${failedInboxIds.length} loaded inbox${failedInboxIds.length === 1 ? '' : 'es'}` : undefined,
     };
   } catch (error) {
-    if (createdSubscription && subscription) await subscription.unsubscribe().catch(() => undefined);
+    const browserSubscription =
+      subscription && createdSubscription
+        ? { subscription, created: true }
+        : await browserSubscriptionPromise?.catch(() => undefined);
+    if (browserSubscription?.created && registeredInboxCount === 0) {
+      await browserSubscription.subscription.unsubscribe().catch(() => undefined);
+    }
     console.error('[Push] Failed to enable push notifications:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
@@ -686,28 +1036,125 @@ export async function enablePushForLoadedInboxes(
 
 /** Compatibility entry point. It refreshes the active inbox, then includes cached inactive inboxes. */
 export async function enablePushForCurrentUser(opts: EnablePushOptions = {}): Promise<PushSubscriptionResult> {
+  if (!hasPushSupport()) {
+    return { success: false, error: 'Notifications not supported in this browser' };
+  }
+  const mutationGeneration = pushMutationGeneration;
+  // Start permission/subscription synchronously, before XMTP topic collection.
+  const browserSubscriptionPromise =
+    opts.browserSubscriptionPromise ?? createBrowserPushSubscription(opts);
   try {
     const current: InboxPushRegistrationInput = {
       identity: await collectCurrentIdentity(opts.identity),
       topics: await collectCurrentTopics(opts.topics),
       displayName: currentDisplayName(opts.displayName),
     };
-    return enablePushForLoadedInboxes([current, ...(opts.registrations ?? [])], opts);
+    return enablePushForLoadedInboxes([current, ...(opts.registrations ?? [])], {
+      ...opts,
+      browserSubscriptionPromise,
+      mutationGeneration,
+    });
   } catch (error) {
+    const browserSubscription = await browserSubscriptionPromise.catch(() => undefined);
+    if (browserSubscription?.created) {
+      await browserSubscription.subscription.unsubscribe().catch(() => undefined);
+    }
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
 /** Refresh one active inbox without prompting or creating a new browser subscription. */
-export async function refreshPushRegistrationForInbox(
+export function refreshPushRegistrationForInbox(
   input: InboxPushRegistrationInput,
   opts: PushRuntimeOptions = {},
 ): Promise<PushSubscriptionResult> {
+  const identity = normalizeIdentity(input.identity);
+  const key = [
+    opts.apiBase ?? VAPID_PARTY_API_BASE,
+    identity.inboxId,
+    identity.installationId,
+  ].join('|');
+  const request: QueuedPushRefreshRequest = {
+    input,
+    opts,
+    fingerprint: pushRefreshFingerprint(input),
+    mutationGeneration: pushMutationGeneration,
+  };
+  const existing = pushRefreshQueues.get(key);
+  if (existing) {
+    if (existing.latest.fingerprint !== request.fingerprint) {
+      existing.latest = request;
+      existing.revision += 1;
+    }
+    return existing.promise;
+  }
+
+  const queue = {
+    latest: request,
+    revision: 1,
+    promise: Promise.resolve({ success: false } as PushSubscriptionResult),
+  } satisfies PushRefreshQueue;
+  queue.promise = runPushRefreshQueue(queue).finally(() => {
+    if (pushRefreshQueues.get(key) === queue) pushRefreshQueues.delete(key);
+  });
+  pushRefreshQueues.set(key, queue);
+  return queue.promise;
+}
+
+function pushRefreshFingerprint(input: InboxPushRegistrationInput): string {
+  const identity = normalizeIdentity(input.identity);
+  const topics = normalizeXmtpPushTopics(input.topics, identity.installationId)
+    .map((topic) => ({
+      topic: topic.topic,
+      hmacKeys: [...topic.hmacKeys].sort((left, right) =>
+        `${left.epoch}\0${left.key}`.localeCompare(`${right.epoch}\0${right.key}`)
+      ),
+    }))
+    .sort((left, right) => left.topic.localeCompare(right.topic));
+  return JSON.stringify({
+    identity,
+    topics,
+    displayName: input.displayName?.trim() || '',
+    inboxHandle: input.inboxHandle?.trim() || '',
+  });
+}
+
+async function runPushRefreshQueue(queue: PushRefreshQueue): Promise<PushSubscriptionResult> {
+  let result: PushSubscriptionResult = { success: false };
+  for (;;) {
+    const revision = queue.revision;
+    const request = queue.latest;
+    result = await serializePushMutation(() =>
+      performPushRegistrationRefresh(request.input, request.opts, request.mutationGeneration)
+    );
+    if (queue.revision === revision) return result;
+  }
+}
+
+async function performPushRegistrationRefresh(
+  input: InboxPushRegistrationInput,
+  opts: PushRuntimeOptions,
+  mutationGeneration: number,
+): Promise<PushSubscriptionResult> {
   const store = opts.stateStore ?? getPushStateStore();
   try {
-    const cached = await cacheInboxPushRegistration(input, { stateStore: store });
+    const identity = normalizeIdentity(input.identity);
+    const key = pushRegistrationKey(identity);
+    if (mutationGeneration !== pushMutationGeneration) {
+      return { success: false, error: 'Push refresh was superseded by a later disable or inbox removal' };
+    }
+    if (invalidatedPushRegistrationKeys.has(key)) {
+      return { success: false, error: 'Push registration was removed for this inbox installation' };
+    }
     const preferences = await store.getPreferences();
-    if (!preferences.enabled) return { success: true, registeredInboxCount: 0, topicCount: cached.topics.length };
+    if (!preferences.enabled) {
+      return {
+        success: true,
+        registeredInboxCount: 0,
+        topicCount: normalizeXmtpPushTopics(input.topics, identity.installationId).length,
+      };
+    }
+    const cached = await cacheInboxPushRegistration(input, { stateStore: store });
     if (!hasPushSupport()) return { success: false, error: 'Notifications not supported in this browser' };
     const registration = await navigator.serviceWorker.getRegistration();
     const subscription = await registration?.pushManager.getSubscription();
@@ -731,6 +1178,7 @@ export async function refreshPushRegistrationForInbox(
       updatedAt: Date.now(),
       pendingDeletion: false,
     };
+    await removeReplacedEndpointRegistration(cached, subscription.endpoint, store, opts);
     await store.putRegistration(persistedRegistration);
     await removeSupersededInboxRegistrations(persistedRegistration, store, opts);
     await store.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: Date.now() });
@@ -837,7 +1285,12 @@ export async function isPushEnabled(): Promise<boolean> {
 }
 
 /** Delete every known relay record before removing the one shared browser endpoint. */
-export async function disablePush(opts: DisablePushOptions = {}): Promise<boolean> {
+export function disablePush(opts: DisablePushOptions = {}): Promise<boolean> {
+  supersedePushMutations();
+  return serializePushMutation(() => performDisablePush(opts));
+}
+
+async function performDisablePush(opts: DisablePushOptions): Promise<boolean> {
   const store = opts.stateStore ?? getPushStateStore();
   try {
     const [preferences, serviceWorker, cached] = await Promise.all([
@@ -880,6 +1333,7 @@ export async function disablePush(opts: DisablePushOptions = {}): Promise<boolea
 
     const unsubscribed = subscription ? await subscription.unsubscribe() : true;
     await store.setPreferences({ enabled: false, updatedAt: Date.now() });
+    emitPushRegistrationChanged();
     try {
       await store.clearActivity();
     } finally {
@@ -894,13 +1348,46 @@ export async function disablePush(opts: DisablePushOptions = {}): Promise<boolea
 }
 
 /** Remove one inbox's relay/cache state, for example while burning a local inbox. */
-export async function removePushRegistrationForInbox(
+export function removePushRegistrationForInbox(
   inboxId: string,
   opts: PushRuntimeOptions = {},
 ): Promise<boolean> {
-  const store = opts.stateStore ?? getPushStateStore();
   const normalized = normalizeInboxId(inboxId);
-  if (!normalized) return false;
+  if (!normalized) return Promise.resolve(false);
+  supersedePushMutations();
+  invalidatePushRefreshesForInbox(normalized);
+  return serializePushMutation(() => performRemovePushRegistrationForInbox(normalized, opts));
+}
+
+function invalidatePushRefreshesForInbox(inboxId: string): void {
+  const xmtp = getXmtpClient();
+  const storedIdentity = useAuthStore.getState().identity;
+  const currentInboxId = xmtp.getInboxId() ?? storedIdentity?.inboxId;
+  const currentInstallationId = xmtp.getInstallationId() ?? storedIdentity?.installationId;
+  if (currentInboxId && currentInstallationId && normalizeInboxId(currentInboxId) === inboxId) {
+    try {
+      invalidatedPushRegistrationKeys.add(pushRegistrationKey(normalizeIdentity({
+        inboxId: currentInboxId,
+        installationId: currentInstallationId,
+        address: xmtp.getAddress() ?? storedIdentity?.address,
+      })));
+    } catch {
+      // Invalid legacy identifiers cannot produce a usable push registration.
+    }
+  }
+  for (const queue of pushRefreshQueues.values()) {
+    const identity = normalizeIdentity(queue.latest.input.identity);
+    if (identity.inboxId === inboxId) {
+      invalidatedPushRegistrationKeys.add(pushRegistrationKey(identity));
+    }
+  }
+}
+
+async function performRemovePushRegistrationForInbox(
+  normalized: string,
+  opts: PushRuntimeOptions,
+): Promise<boolean> {
+  const store = opts.stateStore ?? getPushStateStore();
   let relayCleanupSucceeded = true;
   try {
     const [recordsResult, profileResult, preferencesResult, serviceWorkerResult] = await Promise.allSettled([
@@ -920,6 +1407,11 @@ export async function removePushRegistrationForInbox(
       relayCleanupSucceeded = false;
     }
     const records = recordsResult.status === 'fulfilled' ? recordsResult.value : [];
+    for (const record of records) {
+      if (normalizeInboxId(record.identity.inboxId) === normalized) {
+        invalidatedPushRegistrationKeys.add(record.key);
+      }
+    }
     const profile = profileResult.status === 'fulfilled' ? profileResult.value : undefined;
     const preferences =
       preferencesResult.status === 'fulfilled'

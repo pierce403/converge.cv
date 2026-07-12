@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVisualViewport } from '@/lib/utils/useVisualViewport';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DebugLogPanel } from '@/components/DebugLogPanel';
@@ -33,7 +33,9 @@ import {
 } from '@/features/auth/onboarding-state';
 import {
   clearPushActivityForInbox,
+  getAppPushStatus,
   isPushRegistrationRefreshReady,
+  listenForPushRegistrationChanged,
   refreshPushRegistrationForCurrentInbox,
   updatePushInboxProfile,
 } from '@/lib/push';
@@ -45,6 +47,9 @@ export function Layout() {
   const location = useLocation();
   const identity = useAuthStore((state) => state.identity);
   const { addConversation, updateConversation } = useConversationStore();
+  const pushConversationFingerprint = useConversationStore((state) =>
+    state.conversations.map((conversation) => conversation.id).sort().join('|')
+  );
   const { receiveMessage } = useMessages();
   const loadContacts = useContactStore((state) => state.loadContacts);
   const { signMessage: walletSignMessage, chainId: walletChainId, isConnected: walletConnected } = useWalletConnection();
@@ -57,6 +62,12 @@ export function Layout() {
   const [isChecking, setIsChecking] = useState(false);
   const [inviteQueue, setInviteQueue] = useState<InviteRequest[]>([]);
   const [showHistorySyncNotice, setShowHistorySyncNotice] = useState(false);
+  const [pushRegistrationRevision, setPushRegistrationRevision] = useState(0);
+  const [pushTopicRevision, setPushTopicRevision] = useState<{
+    inboxId: string;
+    revision: number;
+  } | null>(null);
+  const previousPushConversations = useRef<{ inboxId: string; fingerprint: string } | null>(null);
 
   useEffect(() => {
     if (
@@ -468,6 +479,115 @@ export function Layout() {
       console.warn('[Push] Failed to update the local notification profile name', error);
     });
   }, [identity?.displayName, identity?.inboxId]);
+
+  useEffect(
+    () => listenForPushRegistrationChanged(() => setPushRegistrationRevision((value) => value + 1)),
+    [],
+  );
+
+  useEffect(() => {
+    const inboxId = identity?.inboxId ?? '';
+    const previous = previousPushConversations.current;
+    previousPushConversations.current = { inboxId, fingerprint: pushConversationFingerprint };
+    if (
+      inboxId &&
+      previous?.inboxId === inboxId &&
+      previous.fingerprint !== pushConversationFingerprint
+    ) {
+      setPushTopicRevision((current) => ({
+        inboxId,
+        revision: current?.inboxId === inboxId ? current.revision + 1 : 1,
+      }));
+    }
+  }, [identity?.inboxId, pushConversationFingerprint]);
+
+  useEffect(() => {
+    if (
+      connectionStatus !== 'connected' ||
+      !identity?.installationId ||
+      !isPushRegistrationRefreshReady({
+        connectionStatus,
+        syncStatus,
+        lastConnected,
+        lastSyncedAt,
+      })
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let stopStream: (() => Promise<void>) | undefined;
+    void getAppPushStatus().then(async (status) => {
+      if (cancelled || !status.enabledPreference) return;
+      stopStream = await getXmtpClient().watchPushTopicChanges(() => {
+        const inboxId = identity.inboxId;
+        if (!inboxId) return;
+        setPushTopicRevision((current) => ({
+          inboxId,
+          revision: current?.inboxId === inboxId ? current.revision + 1 : 1,
+        }));
+      });
+      if (cancelled) await stopStream();
+    }).catch((error) => {
+      console.warn('[Push] Failed to watch XMTP topic changes', error);
+    });
+
+    return () => {
+      cancelled = true;
+      if (stopStream) void stopStream();
+    };
+  }, [
+    connectionStatus,
+    identity?.inboxId,
+    identity?.installationId,
+    lastConnected,
+    lastSyncedAt,
+    pushRegistrationRevision,
+    syncStatus,
+  ]);
+
+  useEffect(() => {
+    if (
+      pushTopicRevision?.inboxId !== identity?.inboxId ||
+      connectionStatus !== 'connected' ||
+      !identity?.inboxId ||
+      !identity.installationId ||
+      !isPushRegistrationRefreshReady({
+        connectionStatus,
+        syncStatus,
+        lastConnected,
+        lastSyncedAt,
+      })
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void getAppPushStatus().then((status) => {
+        if (!status.enabledPreference) return;
+        return refreshPushRegistrationForCurrentInbox({
+          displayName: identity.displayName,
+        }).then((result) => {
+          if (!result.success) {
+            console.warn('[Push] Failed to refresh changed XMTP topics', result.error);
+          }
+        });
+      }).catch((error) => {
+        console.warn('[Push] Failed to refresh changed XMTP topics', error);
+      });
+    }, 1_500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    connectionStatus,
+    identity?.displayName,
+    identity?.inboxId,
+    identity?.installationId,
+    lastConnected,
+    lastSyncedAt,
+    pushTopicRevision,
+    syncStatus,
+  ]);
 
   useEffect(() => {
     if (

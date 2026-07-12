@@ -30,16 +30,6 @@ function unwrapPayload(data) {
   return data && typeof data === 'object' ? data : {};
 }
 
-function sameOriginUrl(value) {
-  const candidate = typeof value === 'string' && value.trim() ? value.trim() : '/';
-  try {
-    const url = new URL(candidate, self.location.origin);
-    return url.origin === self.location.origin ? url.href : self.location.origin + '/';
-  } catch {
-    return self.location.origin + '/';
-  }
-}
-
 function validInboxHandle(value) {
   if (typeof value !== 'string') return null;
   const handle = value.trim();
@@ -148,7 +138,9 @@ self.addEventListener('push', (event) => {
 
       const displayName = localProfileName(profile);
       const body = displayName ? `New activity for ${displayName}` : 'New activity';
-      const url = sameOriginUrl(payload.url || payload.clickUrl || '/');
+      // Notification clicks only open/focus Converge. The relay cannot select an
+      // inbox, conversation, or route on the user's behalf.
+      const url = self.location.origin + '/';
       const tag = inboxHandle
         ? `converge-xmtp-${inboxHandle}`
         : 'converge-xmtp-unresolved';
@@ -170,7 +162,7 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = sameOriginUrl(event.notification?.data?.url || '/');
+  const url = self.location.origin + '/';
   event.waitUntil(
     (async () => {
       const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

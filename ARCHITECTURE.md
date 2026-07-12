@@ -174,7 +174,7 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
 
 1. Converge registers a browser `PushSubscription`.
 2. Converge maintains one vapid.party relay registration per loaded inbox and installation on that shared subscription endpoint.
-3. vapid.party watches XMTP message traffic by topic/HMAC filter.
+3. An always-on XMTP listener watches message and welcome traffic and forwards matching encrypted envelopes to vapid.party's authenticated delivery ingest.
 4. vapid.party sends a minimal Web Push payload that identifies the inbox through an opaque local handle.
 5. `public/sw.js` records an approximate per-inbox activity hint and shows a visible notification using the local inbox profile name when available.
 6. Clicking the notification focuses or opens Converge without automatically switching inboxes.
@@ -183,13 +183,13 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
 ### App-Level Subscription Model
 
 - Notification permission and the browser `PushSubscription` are app/browser-wide. There is no per-inbox or per-conversation user toggle.
-- The shared endpoint can have many relay records, each keyed by `subscription.endpoint + inboxId + installationId`. One record contains that inbox's batched conversation topics and HMAC keys; the app does not make one HTTP request per conversation.
+- The relay stores the physical Web Push endpoint separately from logical registrations keyed by `subscription.endpoint + inboxId + installationId`. One physical endpoint can therefore serve many loaded inboxes, and deleting one logical registration leaves the others intact.
 - Enabling notifications upserts every loaded inbox for which Converge has cached valid relay material. A newly created, imported, or joined inbox is upserted when it is active and its topics are available.
-- Inactive inboxes remain registered at the relay but do not open an XMTP client or sync. Last-known topic material is stored in that inbox's local namespace and refreshed only while the inbox is active, including after HMAC-key updates.
+- Inactive inboxes remain registered at the relay but do not open an XMTP client or sync. Last-known topic material is stored in that inbox's local namespace and refreshed only while the inbox is active.
 - Disabling notifications deletes every locally known inbox/installation relay record before unsubscribing the shared browser endpoint. Browser notification permission itself remains controlled by browser settings.
 - `isPushEnabled` must reflect the app-level preference and registration state, not merely the existence of a browser endpoint.
 - A push for an inactive inbox stores a pending-activity flag in service-worker-accessible local state and uses a per-inbox notification tag. The Inbox Switcher displays a dot; only a later XMTP sync can determine exact unread state.
-- Visible copy can say "New activity for <full inbox profile name>" but must not include sender or message content. Prefer resolving the profile name locally from an opaque inbox handle rather than sending the profile name through the relay.
+- Visible copy can say "New activity for <full inbox profile name>" but must not include sender or message content. The profile name is resolved locally from an opaque inbox handle and is never sent through the relay registration or push payload.
 
 ### Client Implementation
 
@@ -200,22 +200,23 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
   - registers/reuses `/sw.js`;
   - requests `Notification` permission from the Settings/Debug user action;
   - creates/reuses a `PushSubscription` with the vapid.party public VAPID key;
-  - gathers the active `inboxId`, `installationId`, address, profile name, and locally exposed conversation HMAC keys;
+  - gathers the active `inboxId`, `installationId`, address, local profile name, and consent-filtered conversation HMAC keys;
   - caches one registration per loaded inbox/installation in `ConvergePushState` and upserts every loaded inbox with available material;
   - tracks app-level enabled/partial/disabled status instead of treating endpoint existence as sufficient;
   - deletes every cached relay record before unsubscribing globally and retains failed deletions as retryable tombstones;
   - POSTs/DELETEs versioned XMTP registration payloads without `X-API-Key`.
-- `src/lib/xmtp/client.ts` exposes `getPushHmacKeys()` as a thin wrapper around the installed SDK's `hmacKeys()` API.
+- `src/lib/xmtp/client.ts` synchronizes preferences, lists Allowed and Unknown conversations with `includeDuplicateDms: true`, calls each conversation's `hmacKeys()`, and merges all backing MLS groups and every distinct HMAC epoch. Denied conversations are excluded.
+- Browser SDK 6.1.2 returns raw 32-byte group IDs as map keys. `src/lib/push/subscribe.ts` canonicalizes those IDs as `/xmtp/mls/1/g-<group-id>/proto` and deterministically appends `/xmtp/mls/1/w-<installation-id>/proto` with no HMAC key for installation welcomes.
+- The active client watches XMTP `HmacKeyUpdate` and `ConsentUpdate` preference events. Conversation/sync changes and those preference changes trigger a debounced relay refresh. Relay mutations are serialized; concurrent refresh calls coalesce but retain one trailing newest snapshot. Disable/Burn synchronously advance a mutation generation and abort active relay requests, while permission/VAPID preparation stays outside the mutation lock, so stale Enable/refresh work cannot restore deleted state or block local cleanup.
+- Relay fetch and body parsing are bounded to five seconds. A successful registration POST is counted only after local persistence completes; a later local failure triggers DELETE rollback, with a pending-deletion tombstone retained when rollback cannot be confirmed.
 - `public/sw.js` stores opaque-handle activity in `ConvergePushState`, resolves a locally cached inbox profile name, uses a per-inbox notification tag, and posts activity hints to open clients. It never decrypts XMTP or expects plaintext message content.
 - `InboxSwitcher` loads and listens for those approximate activity hints, shows a dot for inactive inboxes, and clears the hint when that inbox is selected.
-- Notification clicks validate the same-origin URL and focus/open Converge. They intentionally do not select the target inbox; the user chooses the dotted inbox before XMTP sync/decryption.
+- Notification clicks ignore all relay-supplied navigation and focus/open `self.location.origin + '/'`. They cannot select an inbox, conversation, same-origin subroute, or external URL; the user chooses the dotted inbox before XMTP sync/decryption.
 - Debug no longer attempts client-side `POST /send`; real test pushes must come from the relay side.
 
-### Required vapid.party Backend Support
+### vapid.party Relay Contract
 
-The public vapid.party code and OpenAPI currently expose generic Web Push endpoints (`/api/subscribe`, `/api/send`, `/api/vapid/public-key`) that require `X-API-Key`. Converge does not use those from the browser because that would expose a secret.
-
-vapid.party needs these public XMTP-aware endpoints:
+Converge uses public XMTP-aware registration routes without shipping a vapid.party secret. The companion relay contract also has an authenticated internal delivery ingest for an XMTP listener. The public routes register routing metadata; by themselves they do not watch the XMTP network or produce automatic pushes.
 
 #### Public VAPID Key
 
@@ -228,7 +229,7 @@ vapid.party needs these public XMTP-aware endpoints:
 { "success": true, "data": { "publicKey": "BASE64URL_VAPID_PUBLIC_KEY" } }
 ```
 
-Converge also accepts `{ "publicKey": "..." }` or a plain text key. Until this route is deployed, set `VITE_VAPID_PUBLIC_KEY`.
+Converge also accepts `{ "publicKey": "..." }` or a plain text key. `VITE_VAPID_PUBLIC_KEY` remains an optional cached/fallback value.
 
 #### Register Or Update Subscription
 
@@ -264,10 +265,15 @@ Converge also accepts `{ "publicKey": "..." }` or a plain text key. Until this r
     "topicSource": "conversations.hmacKeys",
     "topics": [
       {
-        "topic": "/xmtp/mls/1/...",
+        "topic": "/xmtp/mls/1/g-64_HEX_GROUP_ID/proto",
         "hmacKeys": [
-          { "epoch": "1", "key": "BASE64URL_HMAC_KEY" }
+          { "epoch": "8", "key": "BASE64URL_HMAC_KEY" },
+          { "epoch": "9", "key": "BASE64URL_HMAC_KEY" }
         ]
+      },
+      {
+        "topic": "/xmtp/mls/1/w-64_HEX_INSTALLATION_ID/proto",
+        "hmacKeys": []
       }
     ]
   },
@@ -307,43 +313,36 @@ The endpoint deletes one logical inbox/installation registration. Global disable
 
 ### Minimal Push Payload
 
-vapid.party should send only metadata that the service worker can display without message plaintext:
+vapid.party sends only the event type and opaque local inbox handle:
 
 ```json
 {
   "type": "xmtp.new_message",
-  "title": "Converge",
-  "body": "New activity",
-  "url": "/",
-  "tag": "converge-xmtp-LOCAL_INBOX_HANDLE",
-  "data": {
-    "inboxHandle": "opaque-local-inbox-handle",
-    "conversationId": "optional-conversation-id"
-  }
+  "inboxHandle": "opaque-local-inbox-handle"
 }
 ```
 
-`public/sw.js` also accepts a `{ "payload": { ... } }` wrapper. The service worker resolves the local inbox profile name, records the activity hint, and uses the handle for notification coalescing. Click URLs are resolved against Converge's own origin and cross-origin URLs are ignored. Clicking opens/focuses the app but does not automatically switch inboxes.
+`public/sw.js` also accepts a `{ "payload": { ... } }` wrapper for compatibility. It resolves the local inbox profile name, records the activity hint, and uses the handle for notification coalescing. It constructs the title, body, tag, and root URL locally; relay-supplied copy or navigation has no effect. Clicking opens/focuses the app but does not automatically switch inboxes.
 
 ### Privacy And Security Model
 
 - vapid.party receives Web Push endpoint data, XMTP inbox/installation identifiers, conversation topics, and HMAC keys needed to filter encrypted XMTP traffic.
+- vapid.party receives an opaque inbox handle but not the local profile name. Human-readable notification copy stays in the browser.
 - vapid.party must not receive decrypted XMTP message bodies, attachment contents, private keys, wallet signatures for message content, or local database state.
 - Push payloads must not include plaintext message content. The service worker shows generic copy and opens Converge for local sync/decryption.
-- HMAC/topic material is sensitive metadata. It enables notification routing, not decryption. Store it server-side with least privilege, rotate on each registration update, and delete on unsubscribe.
+- HMAC/topic material is sensitive metadata. It enables notification routing, not decryption. Store it server-side with least privilege, atomically replace the registered snapshot while preserving every currently supplied epoch, and delete it with the logical registration.
 - Converge must remain static; adding a Converge backend is a non-goal.
 
 ### Current Limitations
 
-- No real end-to-end push delivery has been verified from vapid.party. Do not claim push notifications are complete until a live relay test passes.
-- `@xmtp/browser-sdk` 6.1.2 exposes `conversations.hmacKeys()`; Converge verified that locally. A separate documented welcome-topic helper was not found. This may limit notification coverage for brand-new inbound conversations while the app is fully closed.
-- The current public vapid.party deployment/source still documents API-key generic endpoints, not the XMTP public endpoints above. Converge will fail gracefully until those routes exist or `VITE_VAPID_PUBLIC_KEY` plus `/xmtp/subscriptions` are deployed.
+- No always-on XMTP listener is deployed to feed message/welcome envelopes into vapid.party's authenticated delivery ingest. Public registration success therefore does not imply automatic XMTP push delivery.
+- The complete path was exercised on 2026-07-12 using real production XMTP sender/recipient inboxes, the official v3 notification server with temporary PostgreSQL, vapid.party's production D1/Queue worker, a real Chrome FCM subscription, and the live Converge service worker. A genuine installation welcome and inbound group message produced opaque activity and locally named notifications; three HMAC epochs were accepted, and the recipient's own message produced no delivery.
+- A separate production relay probe verified two logical inboxes sharing one physical endpoint, duplicate and `shouldPush:false` suppression, deletion of one logical registration without affecting the other, and complete registration cleanup. These tests prove the contract and delivery path, but do not make delivery continuous after the disposable listener exits.
 - Browser Web Push reliability depends on platform policy. iOS/iPadOS Home Screen web apps support Web Push on 16.4+, but delivery remains subject to OS/browser limits.
 
 ### Follow-Up Checklist
 
-- Implement the vapid.party `/xmtp/vapid-public-key` and `/xmtp/subscriptions` routes.
-- Add relay-side XMTP stream/filter workers that use registered topics/HMAC keys without decrypting content.
-- Add relay-side expiry/rotation cleanup for subscription endpoints and old HMAC epochs.
-- Verify live push delivery with a real installed PWA and document exact tested platforms.
-- Revisit XMTP welcome/new-conversation topic coverage once the SDK exposes a documented helper or vapid.party has another reliable first-contact signal.
+- Deploy an always-on XMTP listener with durable state and connect it to vapid.party's authenticated ciphertext-envelope ingest.
+- Add production expiry, retry, dead-letter, and observability policy for physical endpoints, logical registrations, and delivery attempts.
+- Verify the same delivery matrix on supported mobile platforms and installed PWAs; the 2026-07-12 automated test used headless Google Chrome on Linux.
+- Keep notification copy experimental until the persistent listener is deployed and platform reliability is characterized.
