@@ -243,6 +243,7 @@ pnpm typecheck        # TypeScript type checking
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
 - The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; patched direct/transitive releases produce a zero-finding `pnpm audit --audit-level low` without changing the XMTP or Wagmi major versions
+- GitHub Pages, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
 - Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)

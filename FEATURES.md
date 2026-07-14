@@ -144,6 +144,7 @@ model.
 
 - Converge's installed graph excludes unused `@xmtp/proto`, Dexie React hooks, PWA/Workbox packages, test helpers, patch tooling, and the full Thirdweb SDK. The hand-maintained service worker and Browser SDK integration remain unchanged.
 - Vite 6.4.3, Vitest 3.2.7, PostCSS 8.5.19, React Router 6.30.4, and scoped patched transitive releases replace the vulnerable versions reported on 2026-07-14. Wallet/XMTP major versions remain pinned to avoid turning an advisory cleanup into an untested protocol migration.
+- GitHub Pages, CodeQL, and dormant Socket workflows use current Node 24-based action majors; application build steps run on Node.js 22 instead of the retired Node.js 20 release.
 - `pnpm audit --audit-level low` must return zero findings alongside the normal typecheck, lint, test, and production-build gates.
 
 ## Conversation Controls
