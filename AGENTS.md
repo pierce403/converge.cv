@@ -25,7 +25,7 @@ read the same source of truth.
 - **State Management**: Zustand
 - **Storage**: Dexie (IndexedDB wrapper)
 - **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v6.1.2
-- **PWA**: vite-plugin-pwa with Workbox
+- **PWA**: hand-maintained service worker and web app manifest
 - **Deployment**: GitHub Pages (auto-deploy on push to main)
 
 ---
@@ -242,7 +242,8 @@ pnpm typecheck        # TypeScript type checking
 - New installations request XMTP device history and explain that an older installation may need to be online
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
-- Native Wagmi/Reown is the only wallet connection stack; Thirdweb is retained only for encrypted attachment IPFS storage
+- The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; patched direct/transitive releases produce a zero-finding `pnpm audit --audit-level low` without changing the XMTP or Wagmi major versions
+- Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
 - Local identities remain available by default; no lock/vault UI is exposed
@@ -263,7 +264,7 @@ pnpm typecheck        # TypeScript type checking
 - Convos typing indicators, profile updates/snapshots, thinking messages, and join requests are registered as SDK custom content types and handled without surfacing side-channel bubbles.
 - XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
 - Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
-- Image attachments use encrypted XMTP RemoteAttachment payloads hosted through Thirdweb IPFS. Incoming descriptors are stored without fetching; allowed/visible trusted-host images use bounded authenticated raster downloads, unknown hosts require explicit approval, and recoverable plaintext bytes use a 100 MiB per-inbox LRU cache.
+- Image attachments use encrypted XMTP RemoteAttachment payloads hosted through Thirdweb IPFS via a narrow direct HTTPS upload transport. Incoming descriptors are stored without fetching; allowed/visible trusted-host images use bounded authenticated raster downloads, unknown hosts require explicit approval, and recoverable plaintext bytes use a 100 MiB per-inbox LRU cache.
 - Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
 - Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
 - Static PWA push registration is wired to the intended app-level vapid.party XMTP relay contract without shipping any vapid.party API key:
@@ -308,7 +309,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-07-12): `pnpm test --run` passes (80 files, 508 tests).
+- Current Vitest status (2026-07-14): `pnpm test --run` passes (81 files, 512 tests).
 
 ---
 
@@ -574,7 +575,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Choice-First Onboarding And Native Wallet Stack
 - Bumped Converge from `0.5.1` to `0.5.2` for the onboarding entry and wallet-stack cleanup.
 - Onboarding now always starts on the inbox choice screen and never creates an inbox or opens wallet approval automatically. Interrupted device joins appear as an explicit resume action that reuses the pending key and installation.
-- Native Wagmi/Reown is the only wallet connection stack. Privy and Thirdweb wallet-provider UI are removed; Thirdweb remains only as an on-demand uploader for encrypted attachment payloads to IPFS.
+- Native Wagmi/Reown is the only wallet connection stack. Privy and Thirdweb wallet-provider UI are removed; encrypted attachment payloads use only Thirdweb's direct storage HTTP contract.
 
 ### XMTP Pending-Installation Repair
 - Bumped Converge from `0.5.2` to `0.5.3` for stale pending-installation recovery.
@@ -1099,7 +1100,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 
 ### Wallet Providers: Native / Thirdweb / Privy
 - Historical: added a wallet provider selector (Native, Thirdweb, Privy) used in onboarding and Settings. Version `0.5.2` removes this selector and both alternate wallet-provider stacks.
-- Thirdweb now uses the standard Connect modal UI (via `thirdweb/react` ConnectButton) with the provided client ID baked in (env override: `VITE_THIRDWEB_CLIENT_ID`).
+- Historical: Thirdweb used its standard Connect modal UI. Version `0.5.2` removed that wallet path, and version `0.5.6` removed the full SDK; `VITE_THIRDWEB_CLIENT_ID` now only overrides the public client ID used by the direct encrypted-attachment storage request.
 - Privy app ID is now baked in as a fallback (`VITE_PRIVY_APP_ID` overrides), so the provider is always available.
 - Added Solana peer deps (`@solana/kit`, `@solana/sysvars`, `@solana-program/system`) to keep Privy’s build pipeline happy.
 

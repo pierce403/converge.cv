@@ -48,7 +48,7 @@ import type {
 } from '@/types';
 import { bytesToHex, getAddress, hexToBytes } from 'viem';
 import { getStorage } from '@/lib/storage';
-import { getAttachmentStorageClient } from './attachment-storage';
+import { uploadEncryptedAttachment } from './attachment-storage';
 import { createRemoteAttachment, verifyUploadedRemoteAttachment } from './remote-attachment';
 import { fetchIncomingAttachment } from './incoming-attachment';
 import { groupDetailsToConversationUpdates } from './group-conversation';
@@ -1970,24 +1970,8 @@ export class XmtpClient {
     return decoded;
   }
 
-  private async uploadEncryptedAttachmentPayload(payload: Uint8Array, filename: string): Promise<{ uri: string; url: string }> {
-    const [client, { upload, resolveScheme }] = await Promise.all([
-      getAttachmentStorageClient(),
-      import('thirdweb/storage'),
-    ]);
-    if (!client) {
-      throw new Error('Thirdweb client is not configured');
-    }
-    const payloadCopy = new Uint8Array(payload);
-    const file = new File([payloadCopy], filename || 'attachment', { type: 'application/octet-stream' });
-    const uri = await upload({
-      client,
-      files: [file],
-      uploadWithoutDirectory: true,
-    });
-    const resolvedUri = Array.isArray(uri) ? uri[0] : uri;
-    const url = resolveScheme({ client, uri: resolvedUri });
-    return { uri: resolvedUri, url };
+  private async uploadEncryptedAttachmentPayload(payload: Uint8Array): Promise<{ uri: string; url: string }> {
+    return uploadEncryptedAttachment(payload);
   }
 
   private formatPayload(payload: unknown): string {
@@ -7285,10 +7269,7 @@ export class XmtpClient {
           `Encrypted attachment exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB wire limit. Choose a slightly smaller image.`
         );
       }
-      const { url } = await this.uploadEncryptedAttachmentPayload(
-        encrypted.payload,
-        attachment.filename ?? 'attachment'
-      );
+      const { url } = await this.uploadEncryptedAttachmentPayload(encrypted.payload);
 
       const remoteAttachment = createRemoteAttachment(encrypted, url, attachment.filename);
       await verifyUploadedRemoteAttachment(remoteAttachment);

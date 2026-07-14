@@ -35,7 +35,7 @@ New installations explicitly request XMTP device history. A pre-existing install
 - End-to-end encrypted XMTP text messaging on the production network
 - Convos-compatible single-peer groups, group messaging, profiles, typing, invites, and metadata
 - Real-time message streams plus local IndexedDB conversation and message caches
-- Image attachments encrypted before IPFS upload through Thirdweb storage
+- Image attachments encrypted before upload through Thirdweb's IPFS storage API
 - Multiple local inboxes with isolated app-data namespaces
 - Inbox-scoped contacts that use peer-published profiles and are created after active participation
 - Settings-only Burn Inbox with static installation revocation, complete local wipe, and blocked-cleanup retry handling
