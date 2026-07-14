@@ -170,11 +170,11 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 
 ### Goal
 
-Converge's client-side integration treats vapid.party as an XMTP-aware Web Push relay:
+Converge's client-side integration treats XMTP alert registration as an app-scoped logical layer and vapid.party Web Push as the current delivery adapter:
 
 1. Converge registers a browser `PushSubscription`.
-2. Converge maintains one vapid.party relay registration per loaded inbox and installation on that shared subscription endpoint.
-3. An always-on XMTP listener watches message and welcome traffic and forwards matching encrypted envelopes to vapid.party's authenticated delivery ingest.
+2. Converge maintains one `converge.cv`-scoped logical XMTP alert registration per loaded inbox and installation on that shared subscription endpoint.
+3. A singleton Cloudflare Container XMTP listener watches message and welcome traffic and forwards matching encrypted envelopes to vapid.party's authenticated delivery ingest.
 4. vapid.party sends a minimal Web Push payload that identifies the inbox through an opaque local handle.
 5. `public/sw.js` records an approximate per-inbox activity hint and shows a visible notification using the local inbox profile name when available.
 6. Clicking the notification focuses or opens Converge without automatically switching inboxes.
@@ -183,6 +183,7 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
 ### App-Level Subscription Model
 
 - Notification permission and the browser `PushSubscription` are app/browser-wide. There is no per-inbox or per-conversation user toggle.
+- The app scope is part of every registration and deletion. Standard Web Push endpoint/key data is provider-neutral: Converge does not branch on FCM, APNs, or another browser push vendor.
 - The relay stores the physical Web Push endpoint separately from logical registrations keyed by `subscription.endpoint + inboxId + installationId`. One physical endpoint can therefore serve many loaded inboxes, and deleting one logical registration leaves the others intact.
 - Enabling notifications upserts every loaded inbox for which Converge has cached valid relay material. A newly created, imported, or joined inbox is upserted when it is active and its topics are available.
 - Inactive inboxes remain registered at the relay but do not open an XMTP client or sync. Last-known topic material is stored in that inbox's local namespace and refreshed only while the inbox is active.
@@ -209,10 +210,11 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
   - gathers the active `inboxId`, `installationId`, address, local profile name, and consent-filtered conversation HMAC keys;
   - caches one registration per loaded inbox/installation in `ConvergePushState` and upserts every loaded inbox with available material;
   - tracks app-level enabled/partial/disabled status instead of treating endpoint existence as sufficient;
+  - checks coarse public relay health separately and marks end-to-end delivery ready only when the response explicitly confirms the listener and registration bridge are ready. A healthy Worker with no XMTP readiness field remains `unknown`;
   - deletes every cached relay record before unsubscribing globally and retains failed deletions as retryable tombstones;
   - POSTs/DELETEs versioned XMTP registration payloads without `X-API-Key`.
 - `src/lib/xmtp/client.ts` synchronizes preferences, lists Allowed and Unknown conversations with `includeDuplicateDms: true`, calls each conversation's `hmacKeys()`, and merges all backing MLS groups and every distinct HMAC epoch. Denied conversations are excluded.
-- Browser SDK 6.1.2 returns raw 32-byte group IDs as map keys. `src/lib/push/subscribe.ts` canonicalizes those IDs as `/xmtp/mls/1/g-<group-id>/proto` and deterministically appends `/xmtp/mls/1/w-<installation-id>/proto` with no HMAC key for installation welcomes.
+- Browser SDK 6.1.2 returns raw 16-byte group IDs (32 lowercase hex characters) as map keys. `src/lib/push/subscribe.ts` accepts only that raw shape or the full `/xmtp/mls/1/g-<32-hex-group-id>/proto` shape, canonicalizes the result to lowercase, and deterministically appends `/xmtp/mls/1/w-<64-hex-installation-id>/proto` with no HMAC key for installation welcomes.
 - The active client watches XMTP `HmacKeyUpdate` and `ConsentUpdate` preference events. Conversation/sync changes and those preference changes trigger a debounced relay refresh. Relay mutations are serialized; concurrent refresh calls coalesce but retain one trailing newest snapshot. Disable/Burn synchronously advance a mutation generation and abort active relay requests, while permission/VAPID preparation stays outside the mutation lock, so stale Enable/refresh work cannot restore deleted state or block local cleanup.
 - Relay fetch and body parsing are bounded to five seconds. A successful registration POST is counted only after local persistence completes; a later local failure triggers DELETE rollback, with a pending-deletion tombstone retained when rollback cannot be confirmed.
 - `public/sw.js` stores opaque-handle activity in `ConvergePushState`, resolves a locally cached inbox profile name, uses a per-inbox notification tag, and posts activity hints to open clients. It never decrypts XMTP or expects plaintext message content.
@@ -222,7 +224,9 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
 
 ### vapid.party Relay Contract
 
-Converge uses public XMTP-aware registration routes without shipping a vapid.party secret. The companion relay contract also has an authenticated internal delivery ingest for an XMTP listener. The public routes register routing metadata; by themselves they do not watch the XMTP network or produce automatic pushes.
+Converge uses public XMTP-aware registration routes without shipping a vapid.party secret. The version-1 compatibility route is app-scoped to `converge.cv` and carries standard Web Push as its delivery adapter. The companion relay contract has an authenticated internal delivery ingest for the singleton XMTP listener. The Cloudflare-only production stack is a Worker API, D1 registration/bridge state, a delivery Queue, and a singleton Cloudflare Container running the listener. The public routes register routing metadata; by themselves they do not watch the XMTP network or produce automatic pushes.
+
+The generic service boundary is the app-scoped XMTP alert registration: app, inbox, installation, topics, HMAC epochs, and opaque delivery metadata. A Farcaster Mini App or another delivery provider can use the same listener-side XMTP matching model later, but it needs its own app-scoped authenticated registration and delivery adapter. Converge's public compatibility route must not be reused to enroll another app silently.
 
 #### Public VAPID Key
 
@@ -236,6 +240,37 @@ Converge uses public XMTP-aware registration routes without shipping a vapid.par
 ```
 
 Converge also accepts `{ "publicKey": "..." }` or a plain text key. `VITE_VAPID_PUBLIC_KEY` remains an optional cached/fallback value.
+
+#### Public Delivery Readiness
+
+`GET {VITE_VAPID_PARTY_API_BASE}/health`
+
+The relay's ordinary Worker health and XMTP delivery readiness are independent. The public response may include this coarse, secret-free state:
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "xmtp": {
+      "deliveryReady": true,
+      "listener": {
+        "configured": true,
+        "status": "ready",
+        "lastCheckedAt": "2026-07-14T00:00:00.000Z"
+      },
+      "bridge": {
+        "status": "synced",
+        "pendingRegistrationCount": 0,
+        "failedRegistrationCount": 0,
+        "lastSuccessfulSyncAt": "2026-07-14T00:00:00.000Z"
+      }
+    }
+  }
+}
+```
+
+`deliveryReady` is true only when the listener is configured and recently ready and the registration bridge has no pending or failed rows. Listener status is derived server-side from an authenticated Cloudflare Container heartbeat; bridge counts describe the durable D1 snapshot/cursor state. Converge treats an absent field as `unknown`, an unreachable or explicitly non-ready pipeline as unavailable/degraded, and never derives readiness from HTTP 200, VAPID lookup, a browser endpoint, or a successful registration POST. The public response must not expose Container URLs, bearer tokens, database credentials, or delivery endpoint secrets. On 2026-07-14, after deployment of the Cloudflare-only stack, production public health reported `deliveryReady: true`, listener `ready`, bridge `synced`, and zero pending or failed registrations. A post-deployment real-Chrome canary then verified genuine welcome/group delivery and suppression behavior.
 
 #### Register Or Update Subscription
 
@@ -271,7 +306,7 @@ Converge also accepts `{ "publicKey": "..." }` or a plain text key. `VITE_VAPID_
     "topicSource": "conversations.hmacKeys",
     "topics": [
       {
-        "topic": "/xmtp/mls/1/g-64_HEX_GROUP_ID/proto",
+        "topic": "/xmtp/mls/1/g-32_HEX_GROUP_ID/proto",
         "hmacKeys": [
           { "epoch": "8", "key": "BASE64URL_HMAC_KEY" },
           { "epoch": "9", "key": "BASE64URL_HMAC_KEY" }
@@ -341,9 +376,10 @@ vapid.party sends only the event type and opaque local inbox handle:
 
 ### Current Limitations
 
-- No always-on XMTP listener is deployed to feed message/welcome envelopes into vapid.party's authenticated delivery ingest. Public registration success therefore does not imply automatic XMTP push delivery.
-- The complete path was exercised on 2026-07-12 using real production XMTP sender/recipient inboxes, the official v3 notification server with temporary PostgreSQL, vapid.party's production D1/Queue worker, a real Chrome FCM subscription, and the live Converge service worker. A genuine installation welcome and inbound group message produced opaque activity and locally named notifications; three HMAC epochs were accepted, and the recipient's own message produced no delivery.
-- A separate production relay probe verified two logical inboxes sharing one physical endpoint, duplicate and `shouldPush:false` suppression, deletion of one logical registration without affecting the other, and complete registration cleanup. These tests prove the contract and delivery path, but do not make delivery continuous after the disposable listener exits.
+- Continuous delivery is an operational property, not a client registration property. The UI must treat the pipeline as unknown or unavailable whenever the public health response does not explicitly report `deliveryReady: true`.
+- The Cloudflare Worker, D1 registration bridge, delivery Queue, and singleton Container listener are deployed. The listener uses XMTP `SubscribeAll`, which provides no replay cursor; messages arriving during a restart or disconnected interval can therefore miss their approximate push hint. XMTP conversation sync remains the authoritative recovery path after the app opens.
+- The complete path was exercised on 2026-07-12 using real production XMTP sender/recipient inboxes, the official v3 notification server with temporary PostgreSQL, vapid.party's production D1/Queue worker, a real Chrome Web Push subscription, and the live Converge service worker. A genuine installation welcome and inbound group message produced opaque activity and locally named notifications; three HMAC epochs were accepted, and the recipient's own message produced no delivery.
+- Production probes verified shared physical endpoints, independent logical deletion, genuine welcome/group delivery, three HMAC epochs, recipient-own-message and `shouldPush:false` suppression, and complete registration cleanup. These tests prove the contract at a point in time; live readiness still comes from public health and can regress independently.
 - Browser Web Push reliability depends on platform policy. iOS/iPadOS Home Screen web apps support Web Push on 16.4+, but delivery remains subject to OS/browser limits.
 - Chromium's generic `AbortError: Registration failed - push service error` is emitted by the browser provider before relay registration. It can mean a pending provider operation, origin-specific stale state after VAPID rotation, a disabled push provider, or another provider-side failure. `Notification.permission === 'granted'` and existing notifications from other apps do not prove that the provider can create a new subscription for this origin.
 - Brave is identified with `navigator.brave.isBrave()`. The site's notification permission prompt controls only whether `converge.cv` may display notifications; it does not expose or enable Brave's separate browser-wide provider. When Brave returns this exact `AbortError`, verify **Use Google services for push messaging** in `brave://settings/privacy`, fully quit every Brave process and installed Converge window, relaunch, and retry. `chrome://gcm-internals` and `brave://gcm-internals` expose provider state without deleting Converge's local identity data.
@@ -351,7 +387,8 @@ vapid.party sends only the event type and opaque local inbox handle:
 
 ### Follow-Up Checklist
 
-- Deploy an always-on XMTP listener with durable state and connect it to vapid.party's authenticated ciphertext-envelope ingest.
+- Continuously validate the Cloudflare Container XMTP listener and D1-backed registration bridge; keep `deliveryReady` false whenever either side is stale, disconnected, pending, or failed.
+- Evaluate a replay-capable XMTP ingestion path or explicitly retain best-effort push semantics around listener restart/disconnect windows.
 - Add production expiry, retry, dead-letter, and observability policy for physical endpoints, logical registrations, and delivery attempts.
 - Verify the same delivery matrix on supported mobile platforms and installed PWAs; the 2026-07-12 automated test used headless Google Chrome on Linux.
-- Keep notification copy experimental until the persistent listener is deployed and platform reliability is characterized.
+- Keep notification copy experimental until installed-PWA and mobile platform reliability is characterized.

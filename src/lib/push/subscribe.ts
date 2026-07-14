@@ -17,7 +17,9 @@ import {
   type PushStateStore,
 } from './state';
 import {
+  XMTP_PUSH_APP_ID,
   VAPID_PARTY_API_BASE,
+  VAPID_PARTY_HEALTH_PATH,
   VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
   VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH,
   VAPID_PUBLIC_KEY,
@@ -55,10 +57,15 @@ export type InboxPushRegistrationInput = {
   inboxHandle?: string;
 };
 
-export type VapidPartyXmtpRegistrationPayload = {
+/**
+ * App-scoped XMTP alert registration using standard Web Push as the current
+ * delivery adapter. The version-1 wire shape stays compatible with vapid.party
+ * while its logical XMTP topic metadata remains delivery-adapter independent.
+ */
+export type XmtpAlertRegistrationPayload = {
   version: 1;
   app: {
-    id: 'converge.cv';
+    id: typeof XMTP_PUSH_APP_ID;
     origin?: string;
   };
   identity: XmtpPushIdentity;
@@ -77,6 +84,42 @@ export type VapidPartyXmtpRegistrationPayload = {
   };
   userAgent?: string;
   registeredAt: string;
+};
+
+/** @deprecated Use XmtpAlertRegistrationPayload. */
+export type VapidPartyXmtpRegistrationPayload = XmtpAlertRegistrationPayload;
+
+export type XmtpAlertUnregistrationPayload = {
+  version: 1;
+  app: {
+    id: typeof XMTP_PUSH_APP_ID;
+    origin?: string;
+  };
+  endpoint: string;
+  identity: XmtpPushIdentity;
+  deletedAt: string;
+};
+
+export type XmtpPushDeliveryReadiness =
+  | 'ready'
+  | 'degraded'
+  | 'not-configured'
+  | 'unavailable'
+  | 'unknown';
+
+/** Public, coarse delivery-pipeline status. It never includes listener secrets. */
+export type XmtpPushServiceStatus = {
+  relayReachable: boolean;
+  relayStatus?: string;
+  deliveryReadiness: XmtpPushDeliveryReadiness;
+  listenerStatus?: string;
+  listenerLastCheckedAt?: string;
+  bridgeStatus?: string;
+  bridgeLastSuccessfulSyncAt?: string;
+  pendingRegistrationCount?: number;
+  failedRegistrationCount?: number;
+  checkedAt: string;
+  detail: string;
 };
 
 export type PushSubscriptionResult = {
@@ -119,8 +162,8 @@ export type PushRegistrationSyncState = {
 type FetchLike = typeof fetch;
 const PUSH_ACTIVITY_CLEARED_EVENT = 'converge.push.activity-cleared';
 const PUSH_REGISTRATION_CHANGED_EVENT = 'converge.push.registration-changed';
-const XMTP_GROUP_ID_PATTERN = /^[0-9a-f]{64}$/i;
-const XMTP_GROUP_TOPIC_PATTERN = /^\/xmtp\/mls\/1\/g-([0-9a-f]{64})\/proto$/i;
+const XMTP_GROUP_ID_PATTERN = /^[0-9a-f]{32}$/i;
+const XMTP_GROUP_TOPIC_PATTERN = /^\/xmtp\/mls\/1\/g-([0-9a-f]{32})\/proto$/i;
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 5_000;
 const BROWSER_PUSH_PROVIDER_RETRY_DELAYS_MS = [250, 750] as const;
 const PUSH_SERVICE_WORKER_SCRIPT = '/sw.js';
@@ -430,22 +473,24 @@ export function listenForPushRegistrationChanged(callback: () => void): () => vo
   return () => window.removeEventListener(PUSH_REGISTRATION_CHANGED_EVENT, callback);
 }
 
-export function buildVapidPartyXmtpRegistrationPayload({
+export function buildXmtpAlertRegistrationPayload({
   identity,
   subscription,
   topics,
   inboxHandle,
+  appOrigin = getOrigin(),
   registeredAt = new Date().toISOString(),
 }: {
   identity: XmtpPushIdentity;
   subscription: SerializedPushSubscription;
   topics: XmtpPushTopic[];
   inboxHandle?: string;
+  appOrigin?: string;
   registeredAt?: string;
-}): VapidPartyXmtpRegistrationPayload {
+}): XmtpAlertRegistrationPayload {
   return {
     version: 1,
-    app: { id: 'converge.cv', origin: getOrigin() },
+    app: { id: XMTP_PUSH_APP_ID, origin: appOrigin?.trim() || undefined },
     identity,
     subscription,
     xmtp: { env: 'production', topics, topicSource: 'conversations.hmacKeys' },
@@ -453,6 +498,29 @@ export function buildVapidPartyXmtpRegistrationPayload({
     preferences: { minimalPayloadOnly: true, plaintextPreview: false },
     userAgent: getUserAgent(),
     registeredAt,
+  };
+}
+
+/** Backward-compatible name for the public vapid.party version-1 wire format. */
+export const buildVapidPartyXmtpRegistrationPayload = buildXmtpAlertRegistrationPayload;
+
+export function buildXmtpAlertUnregistrationPayload({
+  endpoint,
+  identity,
+  appOrigin = getOrigin(),
+  deletedAt = new Date().toISOString(),
+}: {
+  endpoint: string;
+  identity: XmtpPushIdentity;
+  appOrigin?: string;
+  deletedAt?: string;
+}): XmtpAlertUnregistrationPayload {
+  return {
+    version: 1,
+    app: { id: XMTP_PUSH_APP_ID, origin: appOrigin?.trim() || undefined },
+    endpoint,
+    identity,
+    deletedAt,
   };
 }
 
@@ -1089,7 +1157,7 @@ function selectOneRegistrationPerInbox(
 }
 
 async function registerWithVapidParty(
-  payload: VapidPartyXmtpRegistrationPayload,
+  payload: XmtpAlertRegistrationPayload,
   {
     apiBase = VAPID_PARTY_API_BASE,
     fetchFn = fetch,
@@ -1135,13 +1203,7 @@ async function unregisterWithVapidParty(
     {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        version: 1,
-        app: { id: 'converge.cv', origin: getOrigin() },
-        endpoint,
-        identity,
-        deletedAt: new Date().toISOString(),
-      }),
+      body: JSON.stringify(buildXmtpAlertUnregistrationPayload({ endpoint, identity })),
     },
     async (response) => {
       if (!response.ok) throw new Error(`vapid.party XMTP unsubscribe failed: ${response.status}`);
@@ -1304,7 +1366,7 @@ async function performEnablePushForLoadedInboxes(
           throw new Error('Notification setup was superseded by a later disable or inbox removal');
         }
         const registeredAt = new Date().toISOString();
-        const payload = buildVapidPartyXmtpRegistrationPayload({
+        const payload = buildXmtpAlertRegistrationPayload({
           identity: cached.identity,
           subscription: serialized,
           topics: cached.topics,
@@ -1578,6 +1640,152 @@ export async function refreshPushRegistrationForCurrentInbox(
     );
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function readinessFromPublicHealth(data: Record<string, unknown>): XmtpPushServiceStatus {
+  const checkedAt = new Date().toISOString();
+  const xmtp = recordValue(data.xmtp) ?? {};
+  const listener = recordValue(xmtp.listener) ?? {};
+  const bridge = recordValue(xmtp.bridge) ?? {};
+  const explicitDeliveryReady = typeof xmtp.deliveryReady === 'boolean'
+    ? xmtp.deliveryReady
+    : undefined;
+  const configured = typeof listener.configured === 'boolean'
+    ? listener.configured
+    : undefined;
+  const listenerStatus = optionalString(listener.status);
+  const listenerLastCheckedAt = optionalString(listener.lastCheckedAt);
+  const bridgeStatus = optionalString(bridge.status);
+  const bridgeLastSuccessfulSyncAt = optionalString(bridge.lastSuccessfulSyncAt);
+  const pendingRegistrationCount = optionalCount(bridge.pendingRegistrationCount);
+  const failedRegistrationCount = optionalCount(bridge.failedRegistrationCount);
+  const relayStatus = optionalString(data.status);
+
+  const corroboratedDeliveryReady =
+    explicitDeliveryReady === true &&
+    configured === true &&
+    listenerStatus === 'ready' &&
+    bridgeStatus === 'synced' &&
+    pendingRegistrationCount === 0 &&
+    failedRegistrationCount === 0;
+
+  if (corroboratedDeliveryReady) {
+    return {
+      relayReachable: true,
+      relayStatus,
+      deliveryReadiness: 'ready',
+      listenerStatus,
+      listenerLastCheckedAt,
+      bridgeStatus,
+      bridgeLastSuccessfulSyncAt,
+      pendingRegistrationCount,
+      failedRegistrationCount,
+      checkedAt,
+      detail: 'XMTP listener, registration bridge, and delivery relay report ready.',
+    };
+  }
+
+  let deliveryReadiness: XmtpPushDeliveryReadiness = 'unknown';
+  let detail = 'Relay API is reachable, but end-to-end XMTP delivery readiness is not reported.';
+  if (configured === false) {
+    deliveryReadiness = 'not-configured';
+    detail = 'Relay API is reachable, but the XMTP listener pipeline is not configured.';
+  } else if (explicitDeliveryReady !== undefined) {
+    if (explicitDeliveryReady === true) {
+      deliveryReadiness = 'degraded';
+      detail = 'Relay health is inconsistent: deliveryReady was true without a ready listener and fully synced bridge.';
+    } else if ((pendingRegistrationCount ?? 0) > 0 || (failedRegistrationCount ?? 0) > 0) {
+      deliveryReadiness = 'degraded';
+      detail = 'XMTP delivery is not ready because registration sync is pending or failing.';
+    } else {
+      deliveryReadiness = 'unavailable';
+      detail = 'Relay API is reachable, but the XMTP delivery pipeline is not ready.';
+    }
+  }
+
+  return {
+    relayReachable: true,
+    relayStatus,
+    deliveryReadiness,
+    listenerStatus,
+    listenerLastCheckedAt,
+    bridgeStatus,
+    bridgeLastSuccessfulSyncAt,
+    pendingRegistrationCount,
+    failedRegistrationCount,
+    checkedAt,
+    detail,
+  };
+}
+
+/**
+ * Check the relay's coarse public delivery readiness. Local browser and relay
+ * registration state is deliberately not treated as proof that XMTP is being
+ * monitored continuously.
+ */
+export async function getXmtpPushServiceStatus(
+  {
+    apiBase = VAPID_PARTY_API_BASE,
+    fetchFn = fetch,
+    requestTimeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
+  }: PushRuntimeOptions = {},
+): Promise<XmtpPushServiceStatus> {
+  const checkedAt = new Date().toISOString();
+  try {
+    return await fetchRelayWithTimeout(
+      fetchFn,
+      joinApiPath(apiBase, VAPID_PARTY_HEALTH_PATH),
+      { method: 'GET' },
+      async (response) => {
+        if (!response.ok) {
+          return {
+            relayReachable: true,
+            relayStatus: `HTTP ${response.status}`,
+            deliveryReadiness: 'unavailable',
+            checkedAt,
+            detail: `Relay health check returned HTTP ${response.status}; XMTP delivery is not confirmed.`,
+          };
+        }
+        const contentType = response.headers.get('Content-Type') ?? '';
+        if (!contentType.includes('application/json')) {
+          return {
+            relayReachable: true,
+            relayStatus: `HTTP ${response.status}`,
+            deliveryReadiness: 'unknown',
+            checkedAt,
+            detail: 'Relay API is reachable, but its health response does not report XMTP delivery readiness.',
+          };
+        }
+        const payload = recordValue(await response.json()) ?? {};
+        const data = recordValue(payload.data) ?? payload;
+        return readinessFromPublicHealth(data);
+      },
+      requestTimeoutMs,
+    );
+  } catch {
+    return {
+      relayReachable: false,
+      deliveryReadiness: 'unavailable',
+      checkedAt,
+      detail: 'Relay health check is unreachable; XMTP delivery is not confirmed.',
+    };
   }
 }
 

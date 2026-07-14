@@ -12,7 +12,8 @@ export default defineConfig({
   },
   plugins: [
     react(),
-    // Service worker disabled - not needed for XMTP protocol v3 (cthulhu.bot works without it)
+    // Push and isolation use the hand-authored public/sw.js. App-shell
+    // precaching through a Vite PWA plugin remains intentionally disabled.
   ],
   resolve: {
     alias: {

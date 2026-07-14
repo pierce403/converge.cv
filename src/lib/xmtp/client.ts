@@ -6524,9 +6524,10 @@ export class XmtpClient {
   /**
    * Get a fresh, consent-filtered XMTP conversation HMAC-key snapshot.
    *
-   * Browser SDK 6.1.2 returns bare MLS group IDs from `hmacKeys()`. Calling the
-   * method on each consented conversation preserves every backing MLS group for
-   * stitched DMs while excluding denied conversations.
+   * Browser SDK 6.1.2 returns bare 16-byte MLS group IDs (32 hex characters)
+   * from `hmacKeys()`. Calling the method on each consented conversation
+   * preserves every backing MLS group for stitched DMs while excluding denied
+   * conversations.
    */
   async getPushHmacKeys(): Promise<Map<string, HmacKey[]>> {
     const activeClient = this.client;

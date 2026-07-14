@@ -5,13 +5,17 @@
 import { ensurePushServiceWorkerRegistration } from './subscribe';
 
 export {
+  XMTP_PUSH_APP_ID,
   VAPID_PARTY_API_BASE,
+  VAPID_PARTY_HEALTH_PATH,
   VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
   VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH,
   VAPID_PUBLIC_KEY,
 } from './config';
 
 export {
+  buildXmtpAlertRegistrationPayload,
+  buildXmtpAlertUnregistrationPayload,
   buildVapidPartyXmtpRegistrationPayload,
   cacheInboxPushRegistration,
   clearPushActivityForInbox,
@@ -23,6 +27,7 @@ export {
   isPushEnabled,
   disablePush,
   getPushPermissionStatus,
+  getXmtpPushServiceStatus,
   isPushRegistrationRefreshReady,
   listPendingPushActivity,
   listenForPushActivity,
@@ -48,6 +53,10 @@ export {
   type PushRegistrationSyncState,
   type PushSubscriptionResult,
   type SerializedPushSubscription,
+  type XmtpAlertRegistrationPayload,
+  type XmtpAlertUnregistrationPayload,
+  type XmtpPushDeliveryReadiness,
+  type XmtpPushServiceStatus,
   type VapidPartyXmtpRegistrationPayload,
   type XmtpPushIdentity,
   type XmtpPushTopic,

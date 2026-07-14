@@ -28,9 +28,9 @@ const internals = (client: XmtpClient) => client as unknown as PushClientInterna
 describe('XMTP push topic snapshots', () => {
   it('syncs consent first and retains HMAC keys only for allowed and unknown conversations', async () => {
     const client = new XmtpClient();
-    const allowedGroupId = 'a'.repeat(64);
-    const unknownDmGroupId = 'b'.repeat(64);
-    const duplicateDmGroupId = 'c'.repeat(64);
+    const allowedGroupId = 'a'.repeat(32);
+    const unknownDmGroupId = 'b'.repeat(32);
+    const duplicateDmGroupId = 'c'.repeat(32);
     const order: string[] = [];
     const sync = vi.fn(async () => {
       order.push('sync');

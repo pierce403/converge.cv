@@ -67,9 +67,10 @@ Update `src/lib/sw-bridge/index.ts` with your public key:
 const vapidPublicKey = 'YOUR_PUBLIC_KEY_HERE';
 ```
 
-Store the private key securely on your push notification server. The checked-in
-static app does not ship a private VAPID key, and live XMTP push delivery remains
-experimental until the configured relay is verified end to end.
+Store the private key securely in the Cloudflare Worker secret store. The
+checked-in static app does not ship a private VAPID key. A production end-to-end
+XMTP delivery canary passed on 2026-07-14; push remains experimental while
+restart gaps and installed-PWA/mobile reliability are characterized.
 
 ### XMTP Configuration
 
@@ -90,7 +91,7 @@ caching remains disabled while XMTP stability work continues.
 
 For the app to be installable:
 1. Served over HTTPS (GitHub Pages handles this)
-2. Has a valid manifest.webmanifest
+2. Has a valid `manifest.json`
 3. Has a registered service worker
 4. Meets PWA criteria (Lighthouse audit)
 
@@ -114,9 +115,9 @@ convert source-icon.png -resize 512x512 public/icons/icon-512.png
 - [ ] Run Lighthouse audit for PWA compliance
 - [ ] Confirm the app does not claim offline messaging while app-shell caching is disabled
 - [ ] Verify service worker registration
-- [ ] Run a real end-to-end push delivery test (experimental; not yet verified)
+- [x] Run a real end-to-end push delivery test (passed 2026-07-14; still experimental)
 - [ ] Check responsive design on various screen sizes
-- [ ] Validate manifest.webmanifest
+- [ ] Validate `manifest.json`
 - [ ] Test on iOS Safari and Android Chrome
 - [ ] Verify all routes work correctly
 - [ ] Test authentication flow
@@ -155,7 +156,7 @@ navigator.serviceWorker.getRegistrations().then(registrations => {
 ### PWA Not Installing
 
 - Check browser console for errors
-- Verify manifest.webmanifest is accessible
+- Verify `manifest.json` is accessible
 - Ensure HTTPS is working
 - Check Lighthouse PWA audit
 

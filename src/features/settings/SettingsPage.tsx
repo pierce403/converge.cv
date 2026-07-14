@@ -18,8 +18,10 @@ import {
   enablePushForCurrentUser,
   getAppPushStatus,
   getPushPermissionStatus,
+  getXmtpPushServiceStatus,
   preparePushBrowserResources,
   type AppPushStatus,
+  type XmtpPushServiceStatus,
 } from '@/lib/push';
 import { exportIdentityToKeyfile, serializeKeyfile } from '@/lib/keyfile';
 import { FarcasterSettings } from './FarcasterSettings';
@@ -114,6 +116,7 @@ export function SettingsPage() {
   // Track push status
   const [pushStatus, setPushStatus] = useState<'unknown' | AppPushStatus['state']>('unknown');
   const [pushDetails, setPushDetails] = useState<AppPushStatus | null>(null);
+  const [pushServiceStatus, setPushServiceStatus] = useState<XmtpPushServiceStatus | null>(null);
   const [isPushLoading, setIsPushLoading] = useState(false);
   const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
   const [pushFeedback, setPushFeedback] = useState<{
@@ -218,6 +221,8 @@ export function SettingsPage() {
       const status = await getAppPushStatus();
       setPushDetails(status);
       setPushStatus(status.state);
+      const serviceStatus = await getXmtpPushServiceStatus();
+      setPushServiceStatus(serviceStatus);
     };
     checkPushStatus();
     if (getPushPermissionStatus() !== 'unsupported') {
@@ -253,12 +258,18 @@ export function SettingsPage() {
       const result = await enablePushForCurrentUser();
 
       if (result.success) {
-        const status = await getAppPushStatus();
+        const [status, serviceStatus] = await Promise.all([
+          getAppPushStatus(),
+          getXmtpPushServiceStatus(),
+        ]);
         setPushDetails(status);
         setPushStatus(status.state);
+        setPushServiceStatus(serviceStatus);
         setPushFeedback({
-          tone: 'success',
-          message: `Experimental notifications registered for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. Continuous automatic delivery still needs the always-on XMTP listener.`,
+          tone: serviceStatus.deliveryReadiness === 'ready' ? 'success' : 'info',
+          message: serviceStatus.deliveryReadiness === 'ready'
+            ? `Notifications registered for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. The XMTP delivery pipeline reports ready.`
+            : `Browser notifications registered for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. ${serviceStatus.detail}`,
         });
       } else {
         const status = await getAppPushStatus();
@@ -954,10 +965,22 @@ export function SettingsPage() {
       if (pushDetails?.pendingDeletionCount) {
         return `Notifications are off; ${pushDetails.pendingDeletionCount} relay cleanup ${pushDetails.pendingDeletionCount === 1 ? 'request is' : 'requests are'} pending`;
       }
-      return `Experimental notifications active for ${pushDetails?.registeredInboxCount ?? 0} of ${pushDetails?.expectedInboxCount ?? 0} loaded inboxes`;
+      return `Browser registered for ${pushDetails?.registeredInboxCount ?? 0} of ${pushDetails?.expectedInboxCount ?? 0} loaded inboxes`;
     }
     if (pushStatus === 'enabled') {
-      return `Experimental notifications active for ${pushDetails?.registeredInboxCount ?? 0} loaded inbox${pushDetails?.registeredInboxCount === 1 ? '' : 'es'}`;
+      const registered = `Browser registered for ${pushDetails?.registeredInboxCount ?? 0} loaded inbox${pushDetails?.registeredInboxCount === 1 ? '' : 'es'}`;
+      switch (pushServiceStatus?.deliveryReadiness) {
+        case 'ready':
+          return `${registered}; XMTP delivery ready`;
+        case 'degraded':
+          return `${registered}; XMTP delivery degraded`;
+        case 'not-configured':
+          return `${registered}; XMTP listener not configured`;
+        case 'unavailable':
+          return `${registered}; XMTP delivery unavailable`;
+        default:
+          return `${registered}; XMTP delivery not confirmed`;
+      }
     }
     return 'Notify this browser about activity in loaded inboxes';
   })();

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
+  buildXmtpAlertRegistrationPayload,
+  buildXmtpAlertUnregistrationPayload,
   buildVapidPartyXmtpRegistrationPayload,
   cacheInboxPushRegistration,
   clearPushActivityForInbox,
@@ -9,6 +11,7 @@ import {
   getAppPushStatus,
   getBrowserPushSubscriptionState,
   getPushPermissionStatus,
+  getXmtpPushServiceStatus,
   isPushEnabled,
   isPushRegistrationRefreshReady,
   listPendingPushActivity,
@@ -26,8 +29,8 @@ import { MemoryPushStateStore, pushRegistrationKey } from './state';
 import { registerServiceWorkerForPush } from './index';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const GROUP_ID_A = 'a'.repeat(64);
-const GROUP_ID_B = 'b'.repeat(64);
+const GROUP_ID_A = 'a'.repeat(32);
+const GROUP_ID_B = 'b'.repeat(32);
 const GROUP_TOPIC_A = `/xmtp/mls/1/g-${GROUP_ID_A}/proto`;
 const GROUP_TOPIC_B = `/xmtp/mls/1/g-${GROUP_ID_B}/proto`;
 const INSTALLATION_ID_A = '1'.repeat(64);
@@ -199,6 +202,9 @@ describe('push helpers', () => {
     expect(normalizeXmtpGroupTopic(GROUP_ID_A.toUpperCase())).toBe(GROUP_TOPIC_A);
     expect(normalizeXmtpGroupTopic(GROUP_TOPIC_A.toUpperCase())).toBe(GROUP_TOPIC_A);
     expect(normalizeXmtpGroupTopic('/xmtp/mls/1/g-short/proto')).toBeNull();
+    expect(normalizeXmtpGroupTopic('a'.repeat(64))).toBeNull();
+    expect(normalizeXmtpGroupTopic(`/xmtp/mls/1/g-${'a'.repeat(64)}/proto`)).toBeNull();
+    expect(normalizeXmtpGroupTopic(`/xmtp/mls/1/w-${INSTALLATION_ID_A}/proto`)).toBeNull();
 
     expect(normalizeXmtpPushTopics(topics, INSTALLATION_ID_A)).toEqual([
       ...topics,
@@ -250,6 +256,7 @@ describe('push helpers', () => {
     });
 
     expect(payload.identity).toEqual(identity);
+    expect(payload.app.id).toBe('converge.cv');
     expect(payload.preferences).toEqual({
       minimalPayloadOnly: true,
       plaintextPreview: false,
@@ -257,6 +264,172 @@ describe('push helpers', () => {
     expect(payload.xmtp.topics).toEqual(topics);
     expect(payload.notification.inboxHandle).toBe('legacy-current-inbox');
     expect(JSON.stringify(payload)).not.toMatch(/messageBody|previewText|body/);
+    expect(JSON.stringify(payload)).not.toMatch(/fcm|apns|pushProvider/i);
+  });
+
+  it('keeps XMTP alert registration app-scoped while Web Push remains the delivery adapter', () => {
+    const registration = buildXmtpAlertRegistrationPayload({
+      appOrigin: 'https://converge.cv',
+      identity,
+      subscription: {
+        endpoint: 'https://push.example/subscription',
+        expirationTime: null,
+        keys: { p256dh: 'p256dh', auth: 'auth' },
+      },
+      topics,
+      inboxHandle: 'opaque-app-handle',
+      registeredAt: '2026-07-14T00:00:00.000Z',
+    });
+    const unregistration = buildXmtpAlertUnregistrationPayload({
+      appOrigin: 'https://converge.cv',
+      endpoint: registration.subscription.endpoint,
+      identity,
+      deletedAt: '2026-07-14T01:00:00.000Z',
+    });
+
+    expect(registration.app).toEqual({ id: 'converge.cv', origin: 'https://converge.cv' });
+    expect(unregistration.app).toEqual(registration.app);
+    expect(unregistration.identity).toEqual(identity);
+  });
+
+  it('reports end-to-end XMTP delivery ready only from explicit public health', async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        status: 'healthy',
+        xmtp: {
+          deliveryReady: true,
+          listener: {
+            configured: true,
+            status: 'ready',
+            lastCheckedAt: '2026-07-14T00:00:00.000Z',
+          },
+          bridge: {
+            status: 'synced',
+            pendingRegistrationCount: 0,
+            failedRegistrationCount: 0,
+            lastSuccessfulSyncAt: '2026-07-14T00:00:01.000Z',
+          },
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as Mock;
+
+    await expect(getXmtpPushServiceStatus({
+      apiBase: 'https://relay.example/api',
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      relayReachable: true,
+      relayStatus: 'healthy',
+      deliveryReadiness: 'ready',
+      listenerStatus: 'ready',
+      listenerLastCheckedAt: '2026-07-14T00:00:00.000Z',
+      bridgeStatus: 'synced',
+      bridgeLastSuccessfulSyncAt: '2026-07-14T00:00:01.000Z',
+      pendingRegistrationCount: 0,
+      failedRegistrationCount: 0,
+    });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://relay.example/api/health',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('does not infer XMTP delivery readiness from a healthy relay alone', async () => {
+    const genericHealth = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { status: 'healthy', runtime: 'cloudflare-worker' },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as Mock;
+    const degradedHealth = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        status: 'healthy',
+        xmtp: {
+          deliveryReady: false,
+          bridge: { pendingRegistrationCount: 2, failedRegistrationCount: 1 },
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as Mock;
+    const inconsistentHealth = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { status: 'healthy', xmtp: { deliveryReady: true } },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as Mock;
+
+    await expect(getXmtpPushServiceStatus({
+      fetchFn: genericHealth as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      relayReachable: true,
+      deliveryReadiness: 'unknown',
+    });
+    await expect(getXmtpPushServiceStatus({
+      fetchFn: degradedHealth as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      relayReachable: true,
+      deliveryReadiness: 'degraded',
+      pendingRegistrationCount: 2,
+      failedRegistrationCount: 1,
+    });
+    await expect(getXmtpPushServiceStatus({
+      fetchFn: inconsistentHealth as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      relayReachable: true,
+      deliveryReadiness: 'degraded',
+    });
+  });
+
+  it('reports an explicitly unconfigured listener without treating the relay as down', async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        status: 'healthy',
+        xmtp: {
+          deliveryReady: false,
+          listener: { configured: false, status: 'not_configured' },
+          bridge: {
+            status: 'not_configured',
+            pendingRegistrationCount: 0,
+            failedRegistrationCount: 0,
+          },
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as Mock;
+
+    await expect(getXmtpPushServiceStatus({
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      relayReachable: true,
+      deliveryReadiness: 'not-configured',
+      listenerStatus: 'not_configured',
+      bridgeStatus: 'not_configured',
+    });
+  });
+
+  it('fails closed when the public relay health check is unreachable', async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new TypeError('network unavailable');
+    }) as unknown as Mock;
+
+    await expect(getXmtpPushServiceStatus({
+      fetchFn: fetchFn as unknown as typeof fetch,
+      requestTimeoutMs: 10,
+    })).resolves.toMatchObject({
+      relayReachable: false,
+      deliveryReadiness: 'unavailable',
+    });
   });
 
   it('uses one browser subscription and upserts active plus cached inactive inboxes', async () => {

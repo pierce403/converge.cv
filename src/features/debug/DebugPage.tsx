@@ -18,6 +18,7 @@ import {
   enablePushForCurrentUser,
   disablePush,
   getBrowserPushSubscriptionState,
+  getXmtpPushServiceStatus,
   preparePushBrowserResources,
   VAPID_PARTY_API_BASE,
   VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
@@ -70,6 +71,7 @@ export function DebugPage() {
   const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
   const [pushProvider, setPushProvider] = useState<string>('browser default');
   const [backendReachable, setBackendReachable] = useState<string>('unknown');
+  const [deliveryPipeline, setDeliveryPipeline] = useState<string>('unknown');
   const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
   const [isPushEnabling, setIsPushEnabling] = useState(false);
   const [pushAttempt, setPushAttempt] = useState('not run');
@@ -121,24 +123,43 @@ export function DebugPage() {
       setPushProvider(isBrave
         ? "Brave detected; its browser-wide provider setting is not exposed to websites. Verify 'Use Google services for push messaging', then fully quit/reopen Brave"
         : 'Browser default; provider availability is not exposed to websites');
-      // Check both the generic Worker health and the public XMTP push surface.
+      // Relay reachability and end-to-end XMTP delivery readiness are separate.
       try {
-        const healthUrl = `${VAPID_PARTY_API_BASE}/health`;
         const keyUrl = `${VAPID_PARTY_API_BASE}${VAPID_PARTY_XMTP_PUBLIC_KEY_PATH}`;
-        const [health, key] = await Promise.all([
-          fetch(healthUrl, { method: 'GET' }),
-          fetch(keyUrl, { method: 'GET' }),
+        const [service, key] = await Promise.all([
+          getXmtpPushServiceStatus(),
+          fetch(keyUrl, { method: 'GET' }).catch(() => null),
         ]);
         setBackendReachable(
-          `health ${health.status}; XMTP VAPID ${key.status} ${health.ok && key.ok ? 'OK' : 'ERR'}`,
+          `${service.relayReachable ? service.relayStatus || 'reachable' : 'unreachable'}; XMTP VAPID ${key ? `${key.status} ${key.ok ? 'OK' : 'ERR'}` : 'unreachable'}`,
+        );
+        const counts = [
+          service.pendingRegistrationCount !== undefined
+            ? `${service.pendingRegistrationCount} pending`
+            : undefined,
+          service.failedRegistrationCount !== undefined
+            ? `${service.failedRegistrationCount} failed`
+            : undefined,
+        ].filter(Boolean).join(', ');
+        const freshness = [
+          service.listenerLastCheckedAt
+            ? `listener checked ${service.listenerLastCheckedAt}`
+            : undefined,
+          service.bridgeLastSuccessfulSyncAt
+            ? `bridge synced ${service.bridgeLastSuccessfulSyncAt}`
+            : undefined,
+        ].filter(Boolean).join('; ');
+        setDeliveryPipeline(
+          `${service.deliveryReadiness}${service.listenerStatus ? `; listener ${service.listenerStatus}` : ''}${service.bridgeStatus ? `; bridge ${service.bridgeStatus}` : ''}${counts ? `; ${counts}` : ''}${freshness ? `; ${freshness}` : ''}. ${service.detail}`,
         );
         logNetworkEvent({
           direction: 'status',
           event: 'push:health',
-          details: `GET health -> ${health.status}; GET XMTP VAPID key -> ${key.status}`,
+          details: `relay=${service.relayReachable ? service.relayStatus || 'reachable' : 'unreachable'}; delivery=${service.deliveryReadiness}; XMTP VAPID key=${key?.status ?? 'unreachable'}`,
         });
       } catch (e) {
         setBackendReachable('unreachable');
+        setDeliveryPipeline('unavailable; XMTP delivery is not confirmed');
         logNetworkEvent({ direction: 'status', event: 'push:health', details: 'vapid.party health unreachable' });
       }
     } catch (e) {
@@ -452,8 +473,12 @@ export function DebugPage() {
               <div className="mt-1 text-primary-100 break-words text-xs">{pushProvider}</div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">vapid.party Status</div>
+              <div className="text-primary-300">Relay API</div>
               <div className="mt-1 text-primary-100">{backendReachable}</div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">XMTP Delivery Pipeline</div>
+              <div className="mt-1 text-primary-100 break-words text-xs">{deliveryPipeline}</div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
               <div className="text-primary-300">Last Enable Attempt</div>
