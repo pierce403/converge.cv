@@ -598,8 +598,8 @@ let browserSubscriptionCreationPromise: Promise<PushBrowserSubscription> | null 
 class BrowserPushProviderError extends Error {
   constructor(brave: boolean, cause?: unknown) {
     super(brave
-      ? "Brave could not create a Web Push subscription. No subscription or inbox data was sent to vapid.party. Turn on Use Google services for push messaging in Brave's Privacy settings, then fully quit every Brave window and reopen Brave before retrying. Other app or extension notifications do not prove that Brave can create a new Web Push subscription."
-      : "The browser's push provider could not create a subscription. No subscription or inbox data was sent to vapid.party. Check that notifications are allowed for converge.cv and that your browser's push service is available, then retry.");
+      ? "Brave could not create a Web Push subscription. The permission prompt only allowed converge.cv to display notifications; it did not enable Brave's separate browser-wide Web Push provider. No subscription or inbox data was sent to vapid.party. Paste brave://settings/privacy into the address bar, verify Use Google services for push messaging is on, then fully quit every Brave and installed Converge window before reopening Brave and retrying. Other app or extension notifications do not prove that Brave can create a new Web Push subscription."
+      : "The browser's Web Push provider could not create a subscription even though converge.cv has display permission. No subscription or inbox data was sent to vapid.party. Check that your browser's push service is available, then retry.");
     this.name = 'BrowserPushProviderError';
     (this as Error & { cause?: unknown }).cause = cause;
   }

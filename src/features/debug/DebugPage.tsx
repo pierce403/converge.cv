@@ -119,8 +119,8 @@ export function DebugPage() {
       }).brave;
       const isBrave = braveApi?.isBrave ? await braveApi.isBrave().catch(() => false) : false;
       setPushProvider(isBrave
-        ? 'Brave; new Web Push requires Use Google services for push messaging and a full quit/reopen'
-        : 'browser default');
+        ? "Brave detected; its browser-wide provider setting is not exposed to websites. Verify 'Use Google services for push messaging', then fully quit/reopen Brave"
+        : 'Browser default; provider availability is not exposed to websites');
       // Check both the generic Worker health and the public XMTP push surface.
       try {
         const healthUrl = `${VAPID_PARTY_API_BASE}/health`;
@@ -432,8 +432,10 @@ export function DebugPage() {
               <div className="mt-1 text-primary-100 break-all text-xs">{VAPID_PARTY_API_BASE}</div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Notification Permission</div>
-              <div className="mt-1 text-primary-100">{pushPermission}</div>
+              <div className="text-primary-300">Site Display Permission</div>
+              <div className="mt-1 text-primary-100">
+                {pushPermission === 'granted' ? 'granted (converge.cv allowed)' : pushPermission}
+              </div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
               <div className="text-primary-300">Service Worker</div>
@@ -446,7 +448,7 @@ export function DebugPage() {
               </div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Push Provider</div>
+              <div className="text-primary-300">Web Push Provider</div>
               <div className="mt-1 text-primary-100 break-words text-xs">{pushProvider}</div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">

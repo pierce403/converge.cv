@@ -277,6 +277,7 @@ pnpm typecheck        # TypeScript type checking
   - disable deletes every cached logical relay record before unsubscribing, retaining failed deletion tombstones for retry;
   - the service worker stores opaque per-inbox activity hints, resolves the profile name only from local state, and always focuses/opens the Converge root without accepting relay navigation; plaintext XMTP message content is not sent through push.
 - vapid.party's contract separates one physical endpoint from logical inbox/installation registrations and accepts minimal opaque delivery events. A 2026-07-12 live test passed with real production XMTP clients, the official v3 listener, production D1/Queue, FCM, and Converge's live service worker. No always-on XMTP listener is deployed yet, so the feature remains experimental and is not continuously delivering.
+- Push diagnostics distinguish origin-level display permission from the browser-wide Web Push provider. In Brave, accepting the site permission prompt does not prove the Google push transport is available; websites cannot read that browser setting, and a provider `AbortError` occurs before any subscription or inbox data reaches vapid.party.
 - XMTP protocol runtime:
   - **XMTP SDK v6.1.2 on protocol v3**: ✅ Fully working!
   - **Upgraded from v5.0.1 → v6.1.2** (January 25, 2026)

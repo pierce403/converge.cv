@@ -25,19 +25,23 @@ inbox registration to vapid.party. Cloudflare logs for the reported failure
 showed healthy vapid.party health/public-key responses and no subscription
 POST.
 
-`Notification.permission === 'granted'` does not rule this out. Already visible
-app, native, or extension notifications do not prove that the browser will
-accept a new Web Push registration for `converge.cv`.
+`Notification.permission === 'granted'` means only that `converge.cv` may
+display notifications. Choosing **Allow forever** in that site prompt does not
+enable Brave's separate browser-wide Web Push provider. Websites cannot read
+that provider setting. Already visible app, native, or extension notifications
+do not prove that the browser will accept a new Web Push registration for
+`converge.cv`.
 
 1. Retry once from Settings. Converge coalesces repeated setup requests and
    backs off when Chromium is still deleting an older VAPID subscription. If
    the exact root registration remains stuck after a VAPID rotation, Converge
    automatically retries with a key-versioned service-worker recovery scope;
    this does not clear IndexedDB, OPFS, inbox keys, or messages.
-2. In Brave, enable **Use Google Services for Push Messaging** at
-   `brave://settings/privacy`, fully quit every Brave window/process, relaunch,
-   and retry. Converge detects Brave through `navigator.brave.isBrave()` rather
-   than guessing from the user agent.
+2. In Brave, paste `brave://settings/privacy` into the address bar and verify
+   **Use Google Services for Push Messaging** is enabled. Fully quit every Brave
+   window/process and installed Converge window, relaunch, and retry. Converge
+   detects Brave through `navigator.brave.isBrave()` rather than guessing from
+   the user agent.
 3. In Chromium-based browsers, `chrome://gcm-internals` or
    `brave://gcm-internals` can expose provider events, but Brave may still show
    GCM as initialized while its Google push-services preference blocks new Web

@@ -1306,7 +1306,7 @@ describe('push helpers', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('No subscription or inbox data was sent to vapid.party');
-    expect(result.error).toMatch(/browser's push service.*retry/i);
+    expect(result.error).toMatch(/Web Push provider.*display permission.*push service.*retry/i);
     expect(pushManager.subscribe).toHaveBeenCalledTimes(6);
     expect(navigatorMock.serviceWorker.register).toHaveBeenCalledWith(
       '/sw.js',
@@ -1336,7 +1336,9 @@ describe('push helpers', () => {
     const result = await enable;
 
     expect(result).toMatchObject({ success: false });
-    expect(result.error).toMatch(/Brave.*Google services.*fully quit.*reopen Brave/i);
+    expect(result.error).toMatch(/permission prompt only allowed converge\.cv to display notifications/i);
+    expect(result.error).toContain('brave://settings/privacy');
+    expect(result.error).toMatch(/verify Use Google services.*fully quit.*reopening Brave/i);
     expect(result.error).toMatch(/Other app or extension notifications do not prove/i);
     expect(fetchFn).not.toHaveBeenCalled();
   });
