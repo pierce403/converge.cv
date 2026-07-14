@@ -179,6 +179,8 @@ model.
 
 ## Experimental Web Push Implementation
 - Push enablement checks browser capabilities, requests Notification permission, registers the service worker, and creates or reuses one app/browser `PushSubscription` using the vapid.party VAPID public key.
+- Browser subscription setup waits for the active root service worker, validates the VAPID key before handing it to `PushManager`, and shares one in-flight provider request across repeated clicks. Replacing an older VAPID subscription uses bounded retry/backoff for Chromium's asynchronous provider cleanup race.
+- A browser push-provider failure is reported separately from a vapid.party relay failure. Until `PushManager.subscribe()` returns an endpoint, Converge sends no inbox, installation, topic, or subscription data to vapid.party.
 - Converge caches one logical relay registration per loaded inbox/installation on the shared physical endpoint. Only the active inbox is connected; inactive inboxes reuse their last cached registration material.
 - Before collecting active-inbox topics, Converge syncs XMTP preferences and includes Allowed and Unknown conversations, including every backing group of stitched/duplicate DMs. Denied conversations are excluded.
 - Browser SDK 6.1.2 exposes bare MLS group IDs. Converge canonicalizes them as `/xmtp/mls/1/g-<group-id>/proto`, merges every distinct HMAC epoch returned per conversation, and adds `/xmtp/mls/1/w-<installation-id>/proto` as the deterministic no-HMAC welcome topic.
@@ -189,6 +191,7 @@ model.
 - The vapid.party contract supports public VAPID lookup, logical per-inbox registration on a shared endpoint, logical deletion, and authenticated ciphertext-envelope delivery. An always-on XMTP listener is still required to feed that delivery endpoint and is not deployed yet.
 - Live verification covers two logical inboxes sharing one browser endpoint, deterministic welcome and canonical group topics, multiple HMAC epochs, duplicate and `shouldPush:false` suppression, independent logical deletion, a genuine XMTP production welcome, a genuine inbound group message, recipient-own-message suppression, opaque activity, and local-only notification copy.
 - Enabling push no longer forces a page reload (service worker takeover should not disconnect wallet-backed identities).
+- Notification setup results remain visible inline in Settings and Debug instead of relying on transient browser alerts; Debug also prevents overlapping enable attempts.
 - Disabling notifications attempts to delete every cached inbox/installation relay record before unsubscribing the shared endpoint. Failed relay deletions remain as local tombstones for later cleanup; the app-level status reports expected versus registered inboxes.
 - Relay requests, including response parsing, are bounded to five seconds. If a relay POST succeeds but local persistence fails, Converge attempts an immediate DELETE and retains a cleanup tombstone when that rollback cannot be confirmed.
 

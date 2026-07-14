@@ -69,6 +69,8 @@ export function DebugPage() {
   const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
   const [backendReachable, setBackendReachable] = useState<string>('unknown');
   const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
+  const [isPushEnabling, setIsPushEnabling] = useState(false);
+  const [pushAttempt, setPushAttempt] = useState('not run');
   const [isKeyExplorerOpen, setIsKeyExplorerOpen] = useState(false);
   const [isIgnoredModalOpen, setIsIgnoredModalOpen] = useState(false);
   const [inviteInput, setInviteInput] = useState('');
@@ -439,6 +441,10 @@ export function DebugPage() {
               <div className="text-primary-300">vapid.party Status</div>
               <div className="mt-1 text-primary-100">{backendReachable}</div>
             </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Last Enable Attempt</div>
+              <div className="mt-1 text-primary-100 break-words text-xs">{pushAttempt}</div>
+            </div>
           </div>
           <div className="px-4 pb-4">
             <div className="flex flex-wrap gap-2">
@@ -456,36 +462,52 @@ export function DebugPage() {
               <button
                 type="button"
                 onClick={async () => {
-                  if (pushPreparation !== 'ready') {
-                    setPushPreparation('preparing');
-                    try {
+                  if (isPushEnabling) return;
+                  setIsPushEnabling(true);
+                  setPushAttempt('running');
+                  try {
+                    if (pushPreparation !== 'ready') {
+                      setPushPreparation('preparing');
                       await preparePushBrowserResources();
                       setPushPreparation('ready');
-                    } catch (error) {
-                      setPushPreparation('retry');
-                      logNetworkEvent({
-                        direction: 'status',
-                        event: 'push:prepare',
-                        details: error instanceof Error ? error.message : 'preparation failed',
-                      });
+                      setPushAttempt('browser resources ready; click Enable Push again');
+                      return;
                     }
-                    return;
+                    const result = await enablePushForCurrentUser();
+                    const details = result.success
+                      ? `registered ${result.topicCount ?? 0} topic(s)`
+                      : result.error || 'failed';
+                    setPushAttempt(details);
+                    logNetworkEvent({
+                      direction: 'outbound',
+                      event: 'push:enable',
+                      details,
+                      payload: result.endpoint
+                        ? JSON.stringify({ endpointHost: new URL(result.endpoint).host })
+                        : undefined,
+                    });
+                    await refreshPushStatus();
+                  } catch (error) {
+                    const details = error instanceof Error ? error.message : 'preparation failed';
+                    setPushPreparation('retry');
+                    setPushAttempt(details);
+                    logNetworkEvent({
+                      direction: 'status',
+                      event: 'push:prepare',
+                      details,
+                    });
+                  } finally {
+                    setIsPushEnabling(false);
                   }
-                  const result = await enablePushForCurrentUser();
-                  logNetworkEvent({
-                    direction: 'outbound',
-                    event: 'push:enable',
-                    details: result.success ? `registered ${result.topicCount ?? 0} topic(s)` : result.error || 'failed',
-                    payload: result.endpoint
-                      ? JSON.stringify({ endpointHost: new URL(result.endpoint).host })
-                      : undefined,
-                  });
-                  await refreshPushStatus();
                 }}
                 className="btn-primary"
-                disabled={!identity || pushPreparation === 'preparing'}
+                disabled={!identity || pushPreparation === 'preparing' || isPushEnabling}
               >
-                {pushPreparation === 'retry' ? 'Retry Push Setup' : 'Enable Push'}
+                {isPushEnabling
+                  ? 'Enabling...'
+                  : pushPreparation === 'retry'
+                    ? 'Retry Push Setup'
+                    : 'Enable Push'}
               </button>
               <button
                 type="button"

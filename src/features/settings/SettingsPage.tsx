@@ -116,6 +116,10 @@ export function SettingsPage() {
   const [pushDetails, setPushDetails] = useState<AppPushStatus | null>(null);
   const [isPushLoading, setIsPushLoading] = useState(false);
   const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
+  const [pushFeedback, setPushFeedback] = useState<{
+    tone: 'info' | 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [showConnectorList, setShowConnectorList] = useState(false);
@@ -226,16 +230,23 @@ export function SettingsPage() {
   const handleEnablePush = async () => {
     if (isPushLoading) return;
     setIsPushLoading(true);
+    setPushFeedback(null);
     try {
       if (pushPreparation !== 'ready') {
         setPushPreparation('preparing');
         try {
           await preparePushBrowserResources();
           setPushPreparation('ready');
-          alert('Notification support is ready. Turn the switch on again to approve notifications.');
+          setPushFeedback({
+            tone: 'info',
+            message: 'Notification support is ready. Turn the switch on again to approve notifications.',
+          });
         } catch (error) {
           setPushPreparation('retry');
-          alert(`Unable to prepare notifications: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          setPushFeedback({
+            tone: 'error',
+            message: `Unable to prepare notifications: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          });
         }
         return;
       }
@@ -245,18 +256,25 @@ export function SettingsPage() {
         const status = await getAppPushStatus();
         setPushDetails(status);
         setPushStatus(status.state);
-        alert(
-          `Experimental notifications registered for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. End-to-end delivery is verified, but continuous automatic delivery still needs the always-on XMTP listener.`
-        );
+        setPushFeedback({
+          tone: 'success',
+          message: `Experimental notifications registered for ${status.registeredInboxCount} of ${status.expectedInboxCount} loaded inboxes. Continuous automatic delivery still needs the always-on XMTP listener.`,
+        });
       } else {
         const status = await getAppPushStatus();
         setPushDetails(status);
         setPushStatus(status.state);
-        alert(`Failed to enable notifications: ${result.error || 'Unknown error'}`);
+        setPushFeedback({
+          tone: 'error',
+          message: result.error || 'Failed to enable notifications.',
+        });
       }
     } catch (e) {
       console.warn('[Settings] Enable push failed', e);
-      alert('Failed to enable notifications');
+      setPushFeedback({
+        tone: 'error',
+        message: e instanceof Error ? e.message : 'Failed to enable notifications.',
+      });
     } finally {
       setIsPushLoading(false);
     }
@@ -265,23 +283,28 @@ export function SettingsPage() {
   const handleDisablePush = async () => {
     if (isPushLoading) return;
     setIsPushLoading(true);
+    setPushFeedback(null);
     try {
       const success = await disablePush();
       const status = await getAppPushStatus();
       setPushDetails(status);
       setPushStatus(status.state);
       if (success && status.pendingDeletionCount === 0) {
-        alert('Notifications disabled');
+        setPushFeedback({ tone: 'success', message: 'Notifications disabled.' });
       } else if (status.pendingDeletionCount > 0) {
-        alert(
-          `Browser notifications are off, but ${status.pendingDeletionCount} relay registration${status.pendingDeletionCount === 1 ? '' : 's'} could not be deleted. Retry this toggle when online.`
-        );
+        setPushFeedback({
+          tone: 'error',
+          message: `Browser notifications are off, but ${status.pendingDeletionCount} relay registration${status.pendingDeletionCount === 1 ? '' : 's'} could not be deleted. Retry this toggle when online.`,
+        });
       } else {
-        alert('Failed to disable notifications');
+        setPushFeedback({ tone: 'error', message: 'Failed to disable notifications.' });
       }
     } catch (e) {
       console.warn('[Settings] Disable push failed', e);
-      alert('Failed to disable notifications');
+      setPushFeedback({
+        tone: 'error',
+        message: e instanceof Error ? e.message : 'Failed to disable notifications.',
+      });
     } finally {
       setIsPushLoading(false);
     }
@@ -1389,6 +1412,20 @@ export function SettingsPage() {
                     </button>
                   )}
                 </div>
+                {pushFeedback && (
+                  <div
+                    role={pushFeedback.tone === 'error' ? 'alert' : 'status'}
+                    className={`mt-3 text-sm ${
+                      pushFeedback.tone === 'error'
+                        ? 'text-red-300'
+                        : pushFeedback.tone === 'success'
+                          ? 'text-green-300'
+                          : 'text-primary-200'
+                    }`}
+                  >
+                    {pushFeedback.message}
+                  </div>
+                )}
               </div>
               <div className="p-4">
                 <div className="flex items-center justify-between">

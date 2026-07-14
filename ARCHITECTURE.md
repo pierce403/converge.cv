@@ -197,9 +197,12 @@ Converge's client-side integration treats vapid.party as an XMTP-aware Web Push 
   - `VITE_VAPID_PARTY_API_BASE`, defaulting to `https://vapid.party/api`.
   - `VITE_VAPID_PUBLIC_KEY` as an optional cached/fallback VAPID public key.
 - `src/lib/push/subscribe.ts`:
-  - registers/reuses `/sw.js`;
+  - registers/reuses `/sw.js` and waits for the active root registration through `navigator.serviceWorker.ready`;
   - requests `Notification` permission from the Settings/Debug user action;
-  - creates/reuses a `PushSubscription` with the vapid.party public VAPID key;
+  - validates the vapid.party public VAPID key's 65-byte uncompressed-point encoding before passing it to the browser for curve validation;
+  - creates/reuses a `PushSubscription` through one shared in-flight provider request;
+  - rechecks for an asynchronously completed subscription after provider rejection and uses bounded retry/backoff when replacing a stale-key subscription, because Chromium can resolve `unsubscribe()` before its push-provider deletion finishes;
+  - classifies browser provider rejection separately from relay registration failure and makes clear that vapid.party was not contacted when no endpoint exists;
   - gathers the active `inboxId`, `installationId`, address, local profile name, and consent-filtered conversation HMAC keys;
   - caches one registration per loaded inbox/installation in `ConvergePushState` and upserts every loaded inbox with available material;
   - tracks app-level enabled/partial/disabled status instead of treating endpoint existence as sufficient;
@@ -339,6 +342,7 @@ vapid.party sends only the event type and opaque local inbox handle:
 - The complete path was exercised on 2026-07-12 using real production XMTP sender/recipient inboxes, the official v3 notification server with temporary PostgreSQL, vapid.party's production D1/Queue worker, a real Chrome FCM subscription, and the live Converge service worker. A genuine installation welcome and inbound group message produced opaque activity and locally named notifications; three HMAC epochs were accepted, and the recipient's own message produced no delivery.
 - A separate production relay probe verified two logical inboxes sharing one physical endpoint, duplicate and `shouldPush:false` suppression, deletion of one logical registration without affecting the other, and complete registration cleanup. These tests prove the contract and delivery path, but do not make delivery continuous after the disposable listener exits.
 - Browser Web Push reliability depends on platform policy. iOS/iPadOS Home Screen web apps support Web Push on 16.4+, but delivery remains subject to OS/browser limits.
+- Chromium's generic `AbortError: Registration failed - push service error` is emitted by the browser provider before relay registration. It can mean a pending provider operation, a disabled push provider, or a provider-side failure. Brave users must enable its Google push-services setting; `chrome://gcm-internals` and `brave://gcm-internals` expose provider state without deleting Converge's local identity data.
 
 ### Follow-Up Checklist
 

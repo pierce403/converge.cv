@@ -245,6 +245,7 @@ pnpm typecheck        # TypeScript type checking
 - The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; patched direct/transitive releases produce a zero-finding `pnpm audit --audit-level low` without changing the XMTP or Wagmi major versions
 - GitHub Pages, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
 - Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
+- Browser push setup waits for the active root service worker, validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. Provider failures explicitly say that vapid.party was not contacted; Settings and Debug retain inline results instead of push setup alerts.
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
 - Local identities remain available by default; no lock/vault UI is exposed
@@ -310,7 +311,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-07-14): `pnpm test --run` passes (81 files, 512 tests).
+- Current Vitest status (2026-07-14): `pnpm test --run` passes (81 files, 519 tests).
 
 ---
 
@@ -540,8 +541,18 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-12 (app version 0.5.5 + XMTP push registration hardening)
+**Last Updated**: 2026-07-14 (app version 0.5.6 + browser push-provider recovery)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-07-14)
+
+### Browser Push Provider Recovery
+- Cloudflare Workers Logs showed zero vapid.party error-level events over the inspected 48-hour window, while its XMTP public-key route returned 200 and its stored VAPID key remained structurally valid. A clean Chrome profile created and removed a real FCM subscription against the live Converge service worker and production key.
+- `AbortError: Registration failed - push service error` occurs inside Chromium before Converge has a browser endpoint and therefore before any vapid.party registration POST. Chromium can produce it when a stale subscription is removed and its asynchronous provider deletion is still pending, as well as when browser push services are disabled or unhealthy.
+- Push setup now waits for the active root service worker, validates the VAPID key's 65-byte uncompressed-point encoding, shares concurrent provider work, rechecks asynchronous completion, and uses bounded retry/backoff for stale-key replacement. A final provider failure explains that vapid.party was not contacted and points users toward browser push settings.
+- Settings shows persistent inline push results instead of browser alerts. Debug prevents overlapping enable attempts and retains the last setup result.
+- CI-equivalent verification passes: typecheck, zero-warning lint, 81 Vitest files (519 tests), and the production build.
 
 
 ## Latest Changes (2026-07-12)

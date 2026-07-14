@@ -122,6 +122,7 @@ const PUSH_REGISTRATION_CHANGED_EVENT = 'converge.push.registration-changed';
 const XMTP_GROUP_ID_PATTERN = /^[0-9a-f]{64}$/i;
 const XMTP_GROUP_TOPIC_PATTERN = /^\/xmtp\/mls\/1\/g-([0-9a-f]{64})\/proto$/i;
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 5_000;
+const BROWSER_PUSH_PROVIDER_RETRY_DELAYS_MS = [250, 750] as const;
 const invalidatedPushRegistrationKeys = new Set<string>();
 const activeRelayRequestControllers = new Set<AbortController>();
 let pushMutationTail: Promise<void> = Promise.resolve();
@@ -462,9 +463,8 @@ function hasPushSupport(): boolean {
 }
 
 async function ensureServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
-  const existing = await navigator.serviceWorker.getRegistration();
-  if (existing) return existing;
-  await navigator.serviceWorker.register('/sw.js');
+  const existing = await navigator.serviceWorker.getRegistration('/');
+  if (!existing) await navigator.serviceWorker.register('/sw.js');
   return navigator.serviceWorker.ready;
 }
 
@@ -516,6 +516,16 @@ type PushBrowserSubscription = {
 };
 
 let defaultBrowserResourcesPromise: Promise<PushBrowserResources> | null = null;
+let browserSubscriptionCreationPromise: Promise<PushBrowserSubscription> | null = null;
+
+class BrowserPushProviderError extends Error {
+  constructor() {
+    super(
+      "The browser's push provider could not create a subscription. vapid.party was not contacted. Check that notifications are allowed for converge.cv and that your browser's push service is available, then retry. In Brave, enable Use Google Services for Push Messaging under Privacy.",
+    );
+    this.name = 'BrowserPushProviderError';
+  }
+}
 
 function usesDefaultPushResources(options: EnablePushOptions): boolean {
   return !options.apiBase && !options.fetchFn && !options.vapidPublicKey && !options.requestTimeoutMs;
@@ -540,10 +550,20 @@ export function preparePushBrowserResources(
       fetchFn: options.fetchFn,
       requestTimeoutMs: options.requestTimeoutMs,
     }),
-  ]).then(([serviceWorker, publicKey]) => ({
-    serviceWorker,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
-  }));
+  ]).then(([serviceWorker, publicKey]) => {
+    let applicationServerKey: Uint8Array;
+    try {
+      applicationServerKey = urlBase64ToUint8Array(publicKey);
+    } catch {
+      throw new Error('vapid.party returned an invalid VAPID public key');
+    }
+    if (applicationServerKey.byteLength !== 65 || applicationServerKey[0] !== 0x04) {
+      throw new Error(
+        'vapid.party returned an invalid VAPID public key: expected a 65-byte uncompressed P-256 key',
+      );
+    }
+    return { serviceWorker, applicationServerKey };
+  });
 
   if (usesDefaultPushResources(options)) {
     defaultBrowserResourcesPromise = promise;
@@ -552,6 +572,25 @@ export function preparePushBrowserResources(
     });
   }
   return promise;
+}
+
+function isBrowserPushProviderFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const name = 'name' in error ? String(error.name) : '';
+  const message = 'message' in error ? String(error.message).toLowerCase() : '';
+  return name === 'AbortError' || message.includes('push service error');
+}
+
+function invalidateCachedBrowserResources(resourcesPromise: Promise<PushBrowserResources>): void {
+  if (defaultBrowserResourcesPromise === resourcesPromise) {
+    defaultBrowserResourcesPromise = null;
+  }
+}
+
+function waitForBrowserPushProvider(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 function applicationServerKeyMatches(
@@ -563,7 +602,7 @@ function applicationServerKeyMatches(
   return current.every((value, index) => value === expected[index]);
 }
 
-async function createBrowserPushSubscription(
+async function performCreateBrowserPushSubscription(
   options: EnablePushOptions,
 ): Promise<PushBrowserSubscription> {
   const permissionPromise = options.permissionPromise ?? Notification.requestPermission();
@@ -574,7 +613,8 @@ async function createBrowserPushSubscription(
     throw new Error(`Notification permission ${permission}`);
   }
 
-  let subscription = await resources.serviceWorker.pushManager.getSubscription();
+  const pushManager = resources.serviceWorker.pushManager;
+  let subscription = await pushManager.getSubscription();
   if (subscription && !applicationServerKeyMatches(subscription, resources.applicationServerKey)) {
     const removed = await subscription.unsubscribe();
     if (!removed) throw new Error('The browser could not replace its outdated push subscription');
@@ -582,13 +622,56 @@ async function createBrowserPushSubscription(
   }
   if (subscription) return { subscription, created: false };
 
-  return {
-    subscription: await resources.serviceWorker.pushManager.subscribe({
+  const subscribe = () =>
+    pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: resources.applicationServerKey as BufferSource,
-    }),
-    created: true,
-  };
+    });
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return { subscription: await subscribe(), created: true };
+    } catch (error) {
+      const recovered = await pushManager.getSubscription().catch(() => null);
+      if (recovered && applicationServerKeyMatches(recovered, resources.applicationServerKey)) {
+        return { subscription: recovered, created: true };
+      }
+      if (!isBrowserPushProviderFailure(error)) {
+        invalidateCachedBrowserResources(resourcesPromise);
+        throw error;
+      }
+
+      const retryDelay = BROWSER_PUSH_PROVIDER_RETRY_DELAYS_MS[attempt];
+      if (retryDelay === undefined) {
+        invalidateCachedBrowserResources(resourcesPromise);
+        throw new BrowserPushProviderError();
+      }
+
+      // Chromium can resolve unsubscribe() before its underlying push-provider
+      // operation has finished. Give that race a short, bounded backoff.
+      await waitForBrowserPushProvider(retryDelay);
+      const delayed = await pushManager.getSubscription().catch(() => null);
+      if (delayed && applicationServerKeyMatches(delayed, resources.applicationServerKey)) {
+        return { subscription: delayed, created: true };
+      }
+    }
+  }
+}
+
+function createBrowserPushSubscription(options: EnablePushOptions): Promise<PushBrowserSubscription> {
+  if (browserSubscriptionCreationPromise) return browserSubscriptionCreationPromise;
+
+  const promise = performCreateBrowserPushSubscription(options);
+  browserSubscriptionCreationPromise = promise;
+  void promise.then(
+    () => {
+      if (browserSubscriptionCreationPromise === promise) browserSubscriptionCreationPromise = null;
+    },
+    () => {
+      if (browserSubscriptionCreationPromise === promise) browserSubscriptionCreationPromise = null;
+    },
+  );
+  return promise;
 }
 
 async function collectCurrentIdentity(override?: Partial<XmtpPushIdentity>): Promise<XmtpPushIdentity> {
@@ -881,7 +964,12 @@ export function enablePushForLoadedInboxes(
         })
       )
     )
-    .catch((error) => {
+    .catch(async (error) => {
+      if (error instanceof BrowserPushProviderError) {
+        const store = opts.stateStore ?? getPushStateStore();
+        await store.setPreferences({ enabled: false, endpoint: undefined, updatedAt: Date.now() });
+        emitPushRegistrationChanged();
+      }
       console.error('[Push] Failed to enable push notifications:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     });

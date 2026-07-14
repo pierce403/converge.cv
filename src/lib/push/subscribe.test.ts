@@ -117,6 +117,7 @@ function installPushBrowserMocks({
 
 describe('push helpers', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     delete (window as any).PushManager;
   });
@@ -993,6 +994,191 @@ describe('push helpers', () => {
     expect(result).toMatchObject({ success: true, endpoint: current.endpoint });
     expect(stale.unsubscribe).toHaveBeenCalledTimes(1);
     expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for the root service worker registration to be ready before subscribing', async () => {
+    const subscription = createSubscription('https://push.example/ready');
+    const { navigatorMock, registration, pushManager } = installPushBrowserMocks({ subscription });
+    let resolveReady: ((value: ServiceWorkerRegistration) => void) | undefined;
+    const ready = new Promise<ServiceWorkerRegistration>((resolve) => {
+      resolveReady = resolve;
+    });
+    (navigatorMock.serviceWorker.getRegistration as Mock)
+      .mockReset()
+      .mockResolvedValue(registration as unknown as ServiceWorkerRegistration);
+    Object.defineProperty(navigatorMock.serviceWorker, 'ready', { configurable: true, value: ready });
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const enable = enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      { vapidPublicKey: TEST_VAPID_PUBLIC_KEY, fetchFn: fetchFn as unknown as typeof fetch },
+    );
+    await vi.waitFor(() => expect(navigatorMock.serviceWorker.getRegistration).toHaveBeenCalledWith('/'));
+    expect(navigatorMock.serviceWorker.register).not.toHaveBeenCalled();
+    expect(pushManager.subscribe).not.toHaveBeenCalled();
+
+    resolveReady?.(registration as unknown as ServiceWorkerRegistration);
+    expect((await enable).success).toBe(true);
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a decoded VAPID key that is not an uncompressed P-256 public key', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription();
+    const { pushManager } = installPushBrowserMocks({ subscription });
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const result = await enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      {
+        stateStore,
+        vapidPublicKey: `A${TEST_VAPID_PUBLIC_KEY.slice(1)}`,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      },
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.error).toMatch(/65-byte uncompressed P-256 key/i);
+    expect(pushManager.subscribe).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect((await stateStore.getPreferences()).enabled).toBe(false);
+  });
+
+  it('recovers when the browser finishes creating a subscription after subscribe rejects', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription('https://push.example/late-success');
+    const { pushManager } = installPushBrowserMocks({ subscription });
+    (pushManager.getSubscription as Mock)
+      .mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(subscription);
+    pushManager.subscribe.mockRejectedValueOnce(
+      new DOMException('Registration failed - push service error', 'AbortError'),
+    );
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const result = await enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      {
+        stateStore,
+        vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      },
+    );
+
+    expect(result).toMatchObject({ success: true, endpoint: subscription.endpoint });
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an actionable provider error without contacting vapid.party', async () => {
+    vi.useFakeTimers();
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription();
+    const { pushManager } = installPushBrowserMocks({ subscription });
+    (pushManager.getSubscription as Mock).mockReset().mockResolvedValue(null);
+    pushManager.subscribe.mockRejectedValue(
+      new DOMException('Registration failed - push service error', 'AbortError'),
+    );
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const enable = enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      {
+        stateStore,
+        vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      },
+    );
+    await vi.runAllTimersAsync();
+    const result = await enable;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('vapid.party was not contacted');
+    expect(result.error).toMatch(/browser's push service.*retry/i);
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(3);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect((await stateStore.getPreferences()).enabled).toBe(false);
+  });
+
+  it('clears a failed browser subscription attempt so a later retry can succeed', async () => {
+    vi.useFakeTimers();
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription('https://push.example/retry-success');
+    const { pushManager } = installPushBrowserMocks({ subscription });
+    (pushManager.getSubscription as Mock).mockReset().mockResolvedValue(null);
+    const providerError = new DOMException('Registration failed - push service error', 'AbortError');
+    pushManager.subscribe
+      .mockRejectedValueOnce(providerError)
+      .mockRejectedValueOnce(providerError)
+      .mockRejectedValueOnce(providerError)
+      .mockResolvedValue(subscription);
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const options = {
+      stateStore,
+      vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    };
+
+    const firstEnable = enablePushForLoadedInboxes([{ identity, topics }], options);
+    await vi.runAllTimersAsync();
+    expect((await firstEnable).success).toBe(false);
+
+    const retry = await enablePushForLoadedInboxes([{ identity, topics }], options);
+    expect(retry).toMatchObject({ success: true, endpoint: subscription.endpoint });
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(4);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect((await stateStore.getPreferences()).enabled).toBe(true);
+  });
+
+  it('shares one PushManager.subscribe call across concurrent enable attempts', async () => {
+    const subscription = createSubscription('https://push.example/single-flight');
+    const { pushManager } = installPushBrowserMocks({ subscription });
+    let resolveSubscription: ((value: ReturnType<typeof createSubscription>) => void) | undefined;
+    pushManager.subscribe.mockImplementation(
+      () => new Promise((resolve) => { resolveSubscription = resolve; }),
+    );
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const options = {
+      stateStore: new MemoryPushStateStore(),
+      vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    };
+
+    const first = enablePushForLoadedInboxes([{ identity, topics }], options);
+    const second = enablePushForLoadedInboxes([{ identity, topics }], options);
+    await vi.waitFor(() => expect(pushManager.subscribe).toHaveBeenCalledTimes(1));
+    resolveSubscription?.(subscription);
+
+    expect((await first).success).toBe(true);
+    expect((await second).success).toBe(true);
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once after replacing a stale key while Chromium finishes provider cleanup', async () => {
+    vi.useFakeTimers();
+    const current = createSubscription('https://push.example/replaced-after-provider-cleanup');
+    const stale = createSubscription('https://push.example/stale-provider-key', new Uint8Array(65).fill(9));
+    const { pushManager } = installPushBrowserMocks({ subscription: current, existingSubscription: stale });
+    (pushManager.getSubscription as Mock)
+      .mockReset()
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue(null);
+    pushManager.subscribe
+      .mockRejectedValueOnce(new DOMException('Registration failed - push service error', 'AbortError'))
+      .mockResolvedValueOnce(current);
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const enable = enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      { vapidPublicKey: TEST_VAPID_PUBLIC_KEY, fetchFn: fetchFn as unknown as typeof fetch },
+    );
+    await vi.runAllTimersAsync();
+    const result = await enable;
+
+    expect(result).toMatchObject({ success: true, endpoint: current.endpoint });
+    expect(stale.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(2);
   });
 
   it('unsubscribes a newly created endpoint when local preparation fails', async () => {
