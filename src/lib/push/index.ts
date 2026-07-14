@@ -2,6 +2,8 @@
  * Push notification module using vapid.party
  */
 
+import { ensurePushServiceWorkerRegistration } from './subscribe';
+
 export {
   VAPID_PARTY_API_BASE,
   VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
@@ -15,6 +17,8 @@ export {
   clearPushActivityForInbox,
   enablePushForLoadedInboxes,
   enablePushForCurrentUser,
+  ensurePushServiceWorkerRegistration,
+  getBrowserPushSubscriptionState,
   getAppPushStatus,
   isPushEnabled,
   disablePush,
@@ -35,6 +39,7 @@ export {
   serializePushSubscription,
   updatePushInboxProfile,
   type AppPushStatus,
+  type BrowserPushSubscriptionState,
   type DisablePushOptions,
   type EnablePushOptions,
   type InboxPushRegistrationInput,
@@ -70,8 +75,7 @@ export async function registerServiceWorkerForPush(): Promise<ServiceWorkerRegis
     return null;
   }
   try {
-    const reg = await navigator.serviceWorker.register('/sw.js');
-    await navigator.serviceWorker.ready;
+    const reg = await ensurePushServiceWorkerRegistration();
     console.log('[Push] Service worker registered for push');
     return reg;
   } catch (e) {

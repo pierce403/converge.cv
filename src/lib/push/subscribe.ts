@@ -123,6 +123,10 @@ const XMTP_GROUP_ID_PATTERN = /^[0-9a-f]{64}$/i;
 const XMTP_GROUP_TOPIC_PATTERN = /^\/xmtp\/mls\/1\/g-([0-9a-f]{64})\/proto$/i;
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 5_000;
 const BROWSER_PUSH_PROVIDER_RETRY_DELAYS_MS = [250, 750] as const;
+const PUSH_SERVICE_WORKER_SCRIPT = '/sw.js';
+const ROOT_SERVICE_WORKER_SCOPE = '/';
+const PUSH_RECOVERY_SCOPE_PREFIX = '/__converge-push/';
+const SERVICE_WORKER_ACTIVATION_TIMEOUT_MS = 10_000;
 const invalidatedPushRegistrationKeys = new Set<string>();
 const activeRelayRequestControllers = new Set<AbortController>();
 let pushMutationTail: Promise<void> = Promise.resolve();
@@ -462,10 +466,77 @@ function hasPushSupport(): boolean {
   );
 }
 
-async function ensureServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
-  const existing = await navigator.serviceWorker.getRegistration('/');
-  if (!existing) await navigator.serviceWorker.register('/sw.js');
-  return navigator.serviceWorker.ready;
+function serviceWorkerScopePath(scope: string): string {
+  try {
+    return new URL(scope, window.location.href).pathname;
+  } catch {
+    return scope;
+  }
+}
+
+function isExactServiceWorkerScope(
+  registration: ServiceWorkerRegistration,
+  scopePath: string,
+): boolean {
+  return serviceWorkerScopePath(registration.scope) === serviceWorkerScopePath(scopePath);
+}
+
+function isPushRecoveryScope(registration: ServiceWorkerRegistration): boolean {
+  return serviceWorkerScopePath(registration.scope).startsWith(PUSH_RECOVERY_SCOPE_PREFIX);
+}
+
+async function waitForServiceWorkerActivation(
+  registration: ServiceWorkerRegistration,
+): Promise<ServiceWorkerRegistration> {
+  if (registration.active?.state === 'activated') return registration;
+  const worker = registration.installing ?? registration.waiting ?? registration.active;
+  // Test doubles and already-stable registrations may not expose worker state.
+  if (!worker || worker.state === 'activated') return registration;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Service worker did not activate for scope ${registration.scope}`));
+    }, SERVICE_WORKER_ACTIVATION_TIMEOUT_MS);
+    const onStateChange = () => {
+      if (worker.state === 'activated') {
+        cleanup();
+        resolve();
+      } else if (worker.state === 'redundant') {
+        cleanup();
+        reject(new Error(`Service worker became redundant for scope ${registration.scope}`));
+      }
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      worker.removeEventListener('statechange', onStateChange);
+    };
+    worker.addEventListener('statechange', onStateChange);
+    onStateChange();
+  });
+  return registration;
+}
+
+async function ensureExactServiceWorkerRegistration(
+  scopePath: string,
+): Promise<ServiceWorkerRegistration> {
+  const candidate = await navigator.serviceWorker.getRegistration(scopePath);
+  const registration = candidate && isExactServiceWorkerScope(candidate, scopePath)
+    ? candidate
+    : await navigator.serviceWorker.register(PUSH_SERVICE_WORKER_SCRIPT, {
+      scope: scopePath,
+      updateViaCache: 'none',
+    });
+  return waitForServiceWorkerActivation(registration);
+}
+
+export async function ensurePushServiceWorkerRegistration(): Promise<ServiceWorkerRegistration> {
+  return ensureExactServiceWorkerRegistration(ROOT_SERVICE_WORKER_SCOPE);
+}
+
+function recoveryScopeForApplicationServerKey(applicationServerKey: Uint8Array): string {
+  const keyVersion = bytesToBase64Url(applicationServerKey).slice(0, 16);
+  return `${PUSH_RECOVERY_SCOPE_PREFIX}${keyVersion}/`;
 }
 
 async function getVapidPublicKey({
@@ -511,19 +582,38 @@ type PushBrowserResources = {
 };
 
 type PushBrowserSubscription = {
+  registration: ServiceWorkerRegistration;
   subscription: PushSubscription;
   created: boolean;
+};
+
+export type BrowserPushSubscriptionState = {
+  registration?: ServiceWorkerRegistration;
+  subscription: PushSubscription | null;
 };
 
 let defaultBrowserResourcesPromise: Promise<PushBrowserResources> | null = null;
 let browserSubscriptionCreationPromise: Promise<PushBrowserSubscription> | null = null;
 
 class BrowserPushProviderError extends Error {
-  constructor() {
-    super(
-      "The browser's push provider could not create a subscription. vapid.party was not contacted. Check that notifications are allowed for converge.cv and that your browser's push service is available, then retry. In Brave, enable Use Google Services for Push Messaging under Privacy.",
-    );
+  constructor(brave: boolean, cause?: unknown) {
+    super(brave
+      ? "Brave could not create a Web Push subscription. No subscription or inbox data was sent to vapid.party. Turn on Use Google services for push messaging in Brave's Privacy settings, then fully quit every Brave window and reopen Brave before retrying. Other app or extension notifications do not prove that Brave can create a new Web Push subscription."
+      : "The browser's push provider could not create a subscription. No subscription or inbox data was sent to vapid.party. Check that notifications are allowed for converge.cv and that your browser's push service is available, then retry.");
     this.name = 'BrowserPushProviderError';
+    (this as Error & { cause?: unknown }).cause = cause;
+  }
+}
+
+async function isBraveBrowser(): Promise<boolean> {
+  const brave = (navigator as Navigator & {
+    brave?: { isBrave?: () => Promise<boolean> };
+  }).brave;
+  if (!brave?.isBrave) return false;
+  try {
+    return await brave.isBrave();
+  } catch {
+    return false;
   }
 }
 
@@ -543,7 +633,7 @@ export function preparePushBrowserResources(
   }
 
   const promise = Promise.all([
-    ensureServiceWorkerRegistration(),
+    ensurePushServiceWorkerRegistration(),
     getVapidPublicKey({
       apiBase: options.apiBase,
       vapidPublicKey: options.vapidPublicKey,
@@ -602,59 +692,232 @@ function applicationServerKeyMatches(
   return current.every((value, index) => value === expected[index]);
 }
 
+async function listServiceWorkerRegistrations(): Promise<ServiceWorkerRegistration[]> {
+  if (typeof navigator.serviceWorker.getRegistrations === 'function') {
+    return Array.from(await navigator.serviceWorker.getRegistrations());
+  }
+  const registration = await navigator.serviceWorker.getRegistration();
+  return registration ? [registration] : [];
+}
+
+/** Locate the Converge subscription regardless of whether it uses the legacy root scope or recovery scope. */
+export async function getBrowserPushSubscriptionState(
+  preferredEndpoint?: string,
+): Promise<BrowserPushSubscriptionState> {
+  if (!hasPushSupport()) return { subscription: null };
+  const registrations = (await listServiceWorkerRegistrations()).filter(
+    (registration) =>
+      isExactServiceWorkerScope(registration, ROOT_SERVICE_WORKER_SCOPE) ||
+      isPushRecoveryScope(registration),
+  );
+  const states = await Promise.all(
+    registrations.map(async (registration) => ({
+      registration,
+      subscription: await registration.pushManager.getSubscription().catch(() => null),
+    })),
+  );
+  const subscribed = states.filter(
+    (state): state is { registration: ServiceWorkerRegistration; subscription: PushSubscription } =>
+      Boolean(state.subscription),
+  );
+  const preferred = preferredEndpoint
+    ? subscribed.find((state) => state.subscription.endpoint === preferredEndpoint)
+    : undefined;
+  if (preferred) return preferred;
+  const recovery = subscribed.find((state) => isPushRecoveryScope(state.registration));
+  if (recovery) return recovery;
+  const root = subscribed.find((state) =>
+    isExactServiceWorkerScope(state.registration, ROOT_SERVICE_WORKER_SCOPE));
+  if (root) return root;
+
+  const emptyRecovery = states.find((state) => isPushRecoveryScope(state.registration));
+  const emptyRoot = states.find((state) =>
+    isExactServiceWorkerScope(state.registration, ROOT_SERVICE_WORKER_SCOPE));
+  const registration = emptyRecovery?.registration ?? emptyRoot?.registration;
+  return { registration, subscription: null };
+}
+
+async function subscribeWithProviderRetry(
+  registration: ServiceWorkerRegistration,
+  applicationServerKey: Uint8Array,
+): Promise<PushSubscription> {
+  const subscribe = () => registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: applicationServerKey as BufferSource,
+  });
+  let lastError: unknown;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await subscribe();
+    } catch (error) {
+      lastError = error;
+      const recovered = await registration.pushManager.getSubscription().catch(() => null);
+      if (recovered && applicationServerKeyMatches(recovered, applicationServerKey)) {
+        return recovered;
+      }
+      if (!isBrowserPushProviderFailure(error)) throw error;
+
+      const retryDelay = BROWSER_PUSH_PROVIDER_RETRY_DELAYS_MS[attempt];
+      if (retryDelay === undefined) throw lastError;
+      await waitForBrowserPushProvider(retryDelay);
+      const delayed = await registration.pushManager.getSubscription().catch(() => null);
+      if (delayed && applicationServerKeyMatches(delayed, applicationServerKey)) {
+        return delayed;
+      }
+    }
+  }
+}
+
+async function cleanupLegacyBrowserPushSubscriptions(
+  currentEndpoint: string,
+  currentRegistration: ServiceWorkerRegistration,
+): Promise<void> {
+  const registrations = await listServiceWorkerRegistrations();
+  for (const registration of registrations) {
+    if (
+      !isExactServiceWorkerScope(registration, ROOT_SERVICE_WORKER_SCOPE) &&
+      !isPushRecoveryScope(registration)
+    ) {
+      continue;
+    }
+    const subscription = await registration.pushManager.getSubscription().catch(() => null);
+    if (!subscription) {
+      if (
+        isPushRecoveryScope(registration) &&
+        serviceWorkerScopePath(registration.scope) !== serviceWorkerScopePath(currentRegistration.scope)
+      ) {
+        const removed = await registration.unregister().catch(() => false);
+        if (!removed) {
+          console.warn('[Push] Browser did not remove an empty recovery worker', registration.scope);
+        }
+      }
+      continue;
+    }
+    if (subscription.endpoint === currentEndpoint) continue;
+    const removed = await subscription.unsubscribe().catch(() => false);
+    if (!removed) {
+      console.warn('[Push] Browser did not remove a superseded subscription', registration.scope);
+      continue;
+    }
+    if (isPushRecoveryScope(registration)) {
+      await registration.unregister().catch(() => false);
+    }
+  }
+}
+
+async function cleanupLegacyBrowserPushSubscriptionsIfReady(
+  currentEndpoint: string,
+  currentRegistration: ServiceWorkerRegistration,
+  store: PushStateStore,
+): Promise<void> {
+  const registrations = await store.listRegistrations();
+  const hasActiveLegacyEndpoint = registrations.some(
+    (registration) =>
+      !registration.pendingDeletion &&
+      Boolean(registration.endpoint) &&
+      registration.endpoint !== currentEndpoint,
+  );
+  if (hasActiveLegacyEndpoint) return;
+  await cleanupLegacyBrowserPushSubscriptions(currentEndpoint, currentRegistration);
+}
+
+async function unsubscribeAllConvergeBrowserPushSubscriptions(): Promise<boolean> {
+  if (
+    typeof navigator === 'undefined' ||
+    !('serviceWorker' in navigator)
+  ) {
+    return true;
+  }
+  let succeeded = true;
+  for (const registration of await listServiceWorkerRegistrations()) {
+    if (
+      !isExactServiceWorkerScope(registration, ROOT_SERVICE_WORKER_SCOPE) &&
+      !isPushRecoveryScope(registration)
+    ) {
+      continue;
+    }
+    const subscription = await registration.pushManager.getSubscription().catch(() => null);
+    if (subscription && !(await subscription.unsubscribe().catch(() => false))) succeeded = false;
+    if (isPushRecoveryScope(registration) && !(await registration.unregister().catch(() => false))) {
+      succeeded = false;
+    }
+  }
+  return succeeded;
+}
+
 async function performCreateBrowserPushSubscription(
   options: EnablePushOptions,
 ): Promise<PushBrowserSubscription> {
   const permissionPromise = options.permissionPromise ?? Notification.requestPermission();
   const resourcesPromise =
     options.browserResourcesPromise ?? preparePushBrowserResources(options);
-  const [permission, resources] = await Promise.all([permissionPromise, resourcesPromise]);
+  const [permission, preparedResources] = await Promise.all([permissionPromise, resourcesPromise]);
   if (permission !== 'granted') {
     throw new Error(`Notification permission ${permission}`);
   }
+  const resources = usesDefaultPushResources(options)
+    ? {
+      ...preparedResources,
+      serviceWorker: await ensurePushServiceWorkerRegistration(),
+    }
+    : preparedResources;
 
-  const pushManager = resources.serviceWorker.pushManager;
-  let subscription = await pushManager.getSubscription();
-  if (subscription && !applicationServerKeyMatches(subscription, resources.applicationServerKey)) {
-    const removed = await subscription.unsubscribe();
-    if (!removed) throw new Error('The browser could not replace its outdated push subscription');
-    subscription = null;
+  const rootSubscription = await resources.serviceWorker.pushManager.getSubscription();
+  if (rootSubscription && applicationServerKeyMatches(rootSubscription, resources.applicationServerKey)) {
+    return { registration: resources.serviceWorker, subscription: rootSubscription, created: false };
   }
-  if (subscription) return { subscription, created: false };
 
-  const subscribe = () =>
-    pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: resources.applicationServerKey as BufferSource,
-    });
-
-  for (let attempt = 0; ; attempt += 1) {
+  let rootProviderError: unknown;
+  if (!rootSubscription) {
     try {
-      return { subscription: await subscribe(), created: true };
+      return {
+        registration: resources.serviceWorker,
+        subscription: await subscribeWithProviderRetry(
+          resources.serviceWorker,
+          resources.applicationServerKey,
+        ),
+        created: true,
+      };
     } catch (error) {
-      const recovered = await pushManager.getSubscription().catch(() => null);
-      if (recovered && applicationServerKeyMatches(recovered, resources.applicationServerKey)) {
-        return { subscription: recovered, created: true };
-      }
       if (!isBrowserPushProviderFailure(error)) {
         invalidateCachedBrowserResources(resourcesPromise);
         throw error;
       }
-
-      const retryDelay = BROWSER_PUSH_PROVIDER_RETRY_DELAYS_MS[attempt];
-      if (retryDelay === undefined) {
-        invalidateCachedBrowserResources(resourcesPromise);
-        throw new BrowserPushProviderError();
-      }
-
-      // Chromium can resolve unsubscribe() before its underlying push-provider
-      // operation has finished. Give that race a short, bounded backoff.
-      await waitForBrowserPushProvider(retryDelay);
-      const delayed = await pushManager.getSubscription().catch(() => null);
-      if (delayed && applicationServerKeyMatches(delayed, resources.applicationServerKey)) {
-        return { subscription: delayed, created: true };
-      }
+      rootProviderError = error;
     }
+  }
+
+  // A VAPID-key rotation or corrupt root registration can leave Chromium's
+  // origin-specific InstanceID state unusable even when getSubscription() is
+  // null. A distinct SW registration ID avoids deleting the root worker or any
+  // Converge application data. The legacy subscription remains intact until
+  // the new endpoint has been persisted remotely and locally.
+  const recoveryRegistration = await ensureExactServiceWorkerRegistration(
+    recoveryScopeForApplicationServerKey(resources.applicationServerKey),
+  );
+  const recoverySubscription = await recoveryRegistration.pushManager.getSubscription();
+  if (recoverySubscription) {
+    if (!applicationServerKeyMatches(recoverySubscription, resources.applicationServerKey)) {
+      invalidateCachedBrowserResources(resourcesPromise);
+      throw new Error('The browser recovery subscription is bound to an unexpected VAPID key');
+    }
+    return { registration: recoveryRegistration, subscription: recoverySubscription, created: false };
+  }
+
+  try {
+    return {
+      registration: recoveryRegistration,
+      subscription: await subscribeWithProviderRetry(
+        recoveryRegistration,
+        resources.applicationServerKey,
+      ),
+      created: true,
+    };
+  } catch (error) {
+    invalidateCachedBrowserResources(resourcesPromise);
+    if (!isBrowserPushProviderFailure(error)) throw error;
+    throw new BrowserPushProviderError(await isBraveBrowser(), error ?? rootProviderError);
   }
 }
 
@@ -1018,7 +1281,7 @@ async function performEnablePushForLoadedInboxes(
       }
       return selected;
     })();
-    const [{ subscription: browserSubscription, created }, selected] = await Promise.all([
+    const [{ registration: browserRegistration, subscription: browserSubscription, created }, selected] = await Promise.all([
       browserSubscriptionPromise,
       preparationPromise,
     ]);
@@ -1098,6 +1361,15 @@ async function performEnablePushForLoadedInboxes(
     });
     emitPushRegistrationChanged();
     if (!enabled && createdSubscription) await subscription.unsubscribe().catch(() => undefined);
+    if (enabled && failedInboxIds.length === 0) {
+      await cleanupLegacyBrowserPushSubscriptionsIfReady(
+        subscription.endpoint,
+        browserRegistration,
+        store,
+      ).catch((error) => {
+        console.warn('[Push] Could not finish superseded browser subscription cleanup', error);
+      });
+    }
 
     return {
       success: enabled && failedInboxIds.length === 0,
@@ -1244,8 +1516,8 @@ async function performPushRegistrationRefresh(
     }
     const cached = await cacheInboxPushRegistration(input, { stateStore: store });
     if (!hasPushSupport()) return { success: false, error: 'Notifications not supported in this browser' };
-    const registration = await navigator.serviceWorker.getRegistration();
-    const subscription = await registration?.pushManager.getSubscription();
+    const { registration: browserRegistration, subscription } =
+      await getBrowserPushSubscriptionState(preferences.endpoint);
     if (!subscription) return { success: false, error: 'Browser push subscription is missing; enable notifications again' };
     const registeredAt = new Date().toISOString();
     const registered = await registerWithVapidParty(
@@ -1270,6 +1542,15 @@ async function performPushRegistrationRefresh(
     await store.putRegistration(persistedRegistration);
     await removeSupersededInboxRegistrations(persistedRegistration, store, opts);
     await store.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: Date.now() });
+    if (browserRegistration) {
+      await cleanupLegacyBrowserPushSubscriptionsIfReady(
+        subscription.endpoint,
+        browserRegistration,
+        store,
+      ).catch((error) => {
+        console.warn('[Push] Could not finish superseded browser subscription cleanup', error);
+      });
+    }
     return {
       success: true,
       endpoint: subscription.endpoint,
@@ -1316,12 +1597,11 @@ export async function getAppPushStatus(
   }
   const store = options.stateStore ?? getPushStateStore();
   try {
-    const [preferences, cached, serviceWorker] = await Promise.all([
+    const [preferences, cached] = await Promise.all([
       store.getPreferences(),
       store.listRegistrations(),
-      navigator.serviceWorker.getRegistration(),
     ]);
-    const subscription = await serviceWorker?.pushManager.getSubscription() ?? null;
+    const { subscription } = await getBrowserPushSubscriptionState(preferences.endpoint);
     const expected = Array.from(
       new Set((options.loadedInboxIds ?? defaultLoadedInboxIds()).map(normalizeInboxId).filter((value): value is string => Boolean(value))),
     );
@@ -1381,14 +1661,13 @@ export function disablePush(opts: DisablePushOptions = {}): Promise<boolean> {
 async function performDisablePush(opts: DisablePushOptions): Promise<boolean> {
   const store = opts.stateStore ?? getPushStateStore();
   try {
-    const [preferences, serviceWorker, cached] = await Promise.all([
+    const [preferences, cached] = await Promise.all([
       store.getPreferences(),
-      typeof navigator !== 'undefined' && 'serviceWorker' in navigator
-        ? navigator.serviceWorker.getRegistration()
-        : Promise.resolve(undefined),
       store.listRegistrations(),
     ]);
-    const subscription = await serviceWorker?.pushManager.getSubscription() ?? null;
+    const { subscription } = typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+      ? await getBrowserPushSubscriptionState(preferences.endpoint)
+      : { subscription: null };
     const fallbackIdentity = await collectCurrentIdentity(opts.identity).catch(() => undefined);
     const records = [...cached];
     if (fallbackIdentity && !records.some((entry) => entry.key === pushRegistrationKey(fallbackIdentity))) {
@@ -1419,7 +1698,7 @@ async function performDisablePush(opts: DisablePushOptions): Promise<boolean> {
       }
     }
 
-    const unsubscribed = subscription ? await subscription.unsubscribe() : true;
+    const unsubscribed = await unsubscribeAllConvergeBrowserPushSubscriptions();
     await store.setPreferences({ enabled: false, updatedAt: Date.now() });
     emitPushRegistrationChanged();
     try {
@@ -1478,19 +1757,15 @@ async function performRemovePushRegistrationForInbox(
   const store = opts.stateStore ?? getPushStateStore();
   let relayCleanupSucceeded = true;
   try {
-    const [recordsResult, profileResult, preferencesResult, serviceWorkerResult] = await Promise.allSettled([
+    const [recordsResult, profileResult, preferencesResult] = await Promise.allSettled([
       store.listRegistrations(),
       store.getProfileByInboxId(normalized),
       store.getPreferences(),
-      typeof navigator !== 'undefined' && 'serviceWorker' in navigator
-        ? navigator.serviceWorker.getRegistration()
-        : Promise.resolve(undefined),
     ]);
     if (
       recordsResult.status === 'rejected' ||
       profileResult.status === 'rejected' ||
-      preferencesResult.status === 'rejected' ||
-      serviceWorkerResult.status === 'rejected'
+      preferencesResult.status === 'rejected'
     ) {
       relayCleanupSucceeded = false;
     }
@@ -1505,11 +1780,11 @@ async function performRemovePushRegistrationForInbox(
       preferencesResult.status === 'fulfilled'
         ? preferencesResult.value
         : { enabled: false, updatedAt: 0 };
-    const serviceWorker =
-      serviceWorkerResult.status === 'fulfilled' ? serviceWorkerResult.value : undefined;
     let subscription: PushSubscription | null = null;
     try {
-      subscription = await serviceWorker?.pushManager.getSubscription() ?? null;
+      subscription = typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+        ? (await getBrowserPushSubscriptionState(preferences.endpoint)).subscription
+        : null;
     } catch (error) {
       relayCleanupSucceeded = false;
       console.warn('[Push] Could not inspect the shared subscription during inbox cleanup', error);

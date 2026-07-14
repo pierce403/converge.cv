@@ -245,7 +245,7 @@ pnpm typecheck        # TypeScript type checking
 - The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; patched direct/transitive releases produce a zero-finding `pnpm audit --audit-level low` without changing the XMTP or Wagmi major versions
 - GitHub Pages, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
 - Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
-- Browser push setup waits for the active root service worker, validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. Provider failures explicitly say that vapid.party was not contacted; Settings and Debug retain inline results instead of push setup alerts.
+- Browser push setup resolves the exact root service-worker registration and waits for that registration to activate instead of trusting the one-shot `navigator.serviceWorker.ready` result. It validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. If origin-specific root registration state remains unusable after a VAPID rotation, Converge retries on a key-versioned `/__converge-push/<key-version>/` recovery scope without clearing IndexedDB, OPFS, keys, or messages. Provider failures explicitly say that no subscription or inbox data was sent to vapid.party; the public-key GET may already have succeeded. Settings and Debug retain inline results instead of push setup alerts.
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
 - Local identities remain available by default; no lock/vault UI is exposed
@@ -271,7 +271,7 @@ pnpm typecheck        # TypeScript type checking
 - Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
 - Static PWA push registration is wired to the intended app-level vapid.party XMTP relay contract without shipping any vapid.party API key:
   - public config only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`;
-  - `Enable notifications` registers `/sw.js`, requests browser permission, creates/reuses one physical `PushSubscription`, and upserts logical registrations for every loaded inbox with available material;
+  - `Enable notifications` registers `/sw.js` at the exact root scope, requests browser permission, creates/reuses one physical `PushSubscription`, and upserts logical registrations for every loaded inbox with available material. A root provider failure may use a key-versioned recovery scope for the same worker and current VAPID key;
   - the active inbox synchronizes preferences, includes Allowed/Unknown conversations and stitched-DM backing groups, preserves every distinct HMAC epoch, canonicalizes group topics, and adds `/xmtp/mls/1/w-<installation-id>/proto`;
   - sync/conversation changes plus XMTP HMAC-key and consent updates trigger debounced, serialized refreshes that preserve a trailing newest snapshot;
   - disable deletes every cached logical relay record before unsubscribing, retaining failed deletion tombstones for retry;
@@ -311,7 +311,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-07-14): `pnpm test --run` passes (81 files, 519 tests).
+- Current Vitest status (2026-07-14): `pnpm test --run` passes (81 files, 526 tests).
 
 ---
 
@@ -548,11 +548,13 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ## Latest Changes (2026-07-14)
 
 ### Browser Push Provider Recovery
-- Cloudflare Workers Logs showed zero vapid.party error-level events over the inspected 48-hour window, while its XMTP public-key route returned 200 and its stored VAPID key remained structurally valid. A clean Chrome profile created and removed a real FCM subscription against the live Converge service worker and production key.
-- `AbortError: Registration failed - push service error` occurs inside Chromium before Converge has a browser endpoint and therefore before any vapid.party registration POST. Chromium can produce it when a stale subscription is removed and its asynchronous provider deletion is still pending, as well as when browser push services are disabled or unhealthy.
-- Push setup now waits for the active root service worker, validates the VAPID key's 65-byte uncompressed-point encoding, shares concurrent provider work, rechecks asynchronous completion, and uses bounded retry/backoff for stale-key replacement. A final provider failure explains that vapid.party was not contacted and points users toward browser push settings.
+- Cloudflare Workers Logs showed zero vapid.party error-level events over the inspected 24-hour window, while its health and XMTP public-key routes returned 200 and its stored VAPID key remained structurally valid. During the reported failure, the relay received public-key health traffic but no subscription POST, confirming that the error remained inside the browser provider. A clean Chrome profile created and removed a real FCM subscription against the live Converge service worker and production key.
+- `AbortError: Registration failed - push service error` occurs inside Chromium before Converge has a browser endpoint and therefore before any vapid.party registration POST. Chromium can produce it when a stale subscription is removed and its asynchronous provider deletion is still pending, when origin-specific registration state survives a VAPID rotation, or when browser push services are disabled or unhealthy. Notification permission can remain `granted`, and notifications from already-registered apps or extensions can still arrive, while a new registration for `converge.cv` fails.
+- Push setup now resolves the exact root registration and waits for its own activation rather than accepting an unrelated registration through `navigator.serviceWorker.ready`. It validates the VAPID key's 65-byte uncompressed-point encoding, shares concurrent provider work, rechecks asynchronous completion, and uses bounded retry/backoff for stale-key replacement. If the exact root registration still fails, a key-versioned `/__converge-push/<key-version>/` registration gives Chromium a fresh registration identity without deleting Converge's IndexedDB/OPFS state. The old subscription is removed only after the replacement endpoint has been registered remotely and persisted locally.
+- Brave is detected through `navigator.brave.isBrave()` rather than user-agent matching. Its exact provider failure tells users to enable **Use Google services for push messaging** in Privacy settings and fully quit/relaunch Brave; permission alone does not prove the provider will accept new registrations.
+- Cache-only refresh actions must preserve service-worker registrations and the browser push subscription. Only explicit notification disable may unsubscribe the browser endpoint; Burn Inbox removes only the affected logical relay registration, while the separately confirmed destructive Clear All Data flow may remove all local push state.
 - Settings shows persistent inline push results instead of browser alerts. Debug prevents overlapping enable attempts and retains the last setup result.
-- CI-equivalent verification passes: typecheck, zero-warning lint, 81 Vitest files (519 tests), and the production build.
+- CI-equivalent verification passes: typecheck, zero-warning lint, 81 Vitest files (526 tests), and the production build.
 
 
 ## Latest Changes (2026-07-12)

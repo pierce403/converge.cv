@@ -7,6 +7,7 @@ import {
   enablePushForLoadedInboxes,
   enablePushForCurrentUser,
   getAppPushStatus,
+  getBrowserPushSubscriptionState,
   getPushPermissionStatus,
   isPushEnabled,
   isPushRegistrationRefreshReady,
@@ -89,16 +90,46 @@ function installPushBrowserMocks({
     subscribe: vi.fn(async () => subscription),
     getSubscription,
   };
-  const registration = { scope: 'https://converge.cv/', pushManager };
+  const registration = { scope: 'https://converge.cv/', pushManager, unregister: vi.fn(async () => true) };
+  let recoverySubscription: unknown = null;
+  const recoveryPushManager = {
+    subscribe: vi.fn(async (...args: Parameters<typeof pushManager.subscribe>) => {
+      const created = await pushManager.subscribe(...args);
+      recoverySubscription = created;
+      return created;
+    }),
+    getSubscription: vi.fn(async () => recoverySubscription),
+  };
+  const recoveryRegistration = {
+    scope: 'https://converge.cv/__converge-push/test-key/',
+    pushManager: recoveryPushManager,
+    unregister: vi.fn(async () => true),
+  };
+  let recoveryRegistered = false;
+  let rootLookupCount = 0;
   const navigatorMock = {
     userAgent: 'vitest',
     serviceWorker: {
       ready: Promise.resolve(registration as unknown as ServiceWorkerRegistration),
-      register: vi.fn(async () => registration),
-      getRegistration: vi
-        .fn<() => Promise<ServiceWorkerRegistration | null>>()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValue(registration as unknown as ServiceWorkerRegistration),
+      register: vi.fn(async (_script: string, options?: RegistrationOptions) => {
+        if (options?.scope?.startsWith('/__converge-push/')) {
+          recoveryRegistered = true;
+          recoveryRegistration.scope = `https://converge.cv${options.scope}`;
+          return recoveryRegistration;
+        }
+        return registration;
+      }),
+      getRegistration: vi.fn(async (scope?: string) => {
+        if (scope?.startsWith('/__converge-push/')) {
+          return recoveryRegistered ? recoveryRegistration : registration;
+        }
+        if ((scope === '/' || scope === undefined) && rootLookupCount++ === 0) return null;
+        return registration;
+      }),
+      getRegistrations: vi.fn(async () => [
+        registration,
+        ...(recoveryRegistered ? [recoveryRegistration] : []),
+      ]),
     },
   } as unknown as Navigator;
 
@@ -112,7 +143,13 @@ function installPushBrowserMocks({
   vi.stubGlobal('navigator', navigatorMock);
   vi.stubGlobal('Notification', notificationMock);
 
-  return { navigatorMock, pushManager, registration };
+  return {
+    navigatorMock,
+    pushManager,
+    registration,
+    recoveryPushManager,
+    recoveryRegistration,
+  };
 }
 
 describe('push helpers', () => {
@@ -355,6 +392,65 @@ describe('push helpers', () => {
     expect((await stateStore.getPreferences()).enabled).toBe(false);
   });
 
+  it('disables every Converge subscription without touching unrelated worker state', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const rootSubscription = createSubscription('https://push.example/root');
+    const recoverySubscription = createSubscription('https://push.example/recovery');
+    const {
+      navigatorMock,
+      registration,
+      recoveryPushManager,
+      recoveryRegistration,
+    } = installPushBrowserMocks({
+      subscription: recoverySubscription,
+      existingSubscription: rootSubscription,
+    });
+    await navigatorMock.serviceWorker.register('/sw.js', {
+      scope: '/__converge-push/current-key/',
+      updateViaCache: 'none',
+    });
+    await recoveryPushManager.subscribe();
+
+    const unrelatedSubscription = createSubscription('https://push.example/unrelated');
+    const unrelatedRegistration = {
+      scope: 'https://converge.cv/unrelated-app/',
+      pushManager: { getSubscription: vi.fn(async () => unrelatedSubscription) },
+      unregister: vi.fn(async () => true),
+    };
+    (navigatorMock.serviceWorker.getRegistrations as Mock).mockResolvedValue([
+      registration,
+      recoveryRegistration,
+      unrelatedRegistration,
+    ]);
+
+    const cached = await cacheInboxPushRegistration(
+      { identity, topics, inboxHandle: 'opaque-disable-all' },
+      { stateStore },
+    );
+    await stateStore.putRegistration({ ...cached, endpoint: recoverySubscription.endpoint });
+    await stateStore.setPreferences({
+      enabled: true,
+      endpoint: recoverySubscription.endpoint,
+      updatedAt: 1,
+    });
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    expect(
+      await disablePush({
+        identity,
+        stateStore,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).toBe(true);
+
+    expect(rootSubscription.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(recoverySubscription.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(recoveryRegistration.unregister).toHaveBeenCalledTimes(1);
+    expect(registration.unregister).not.toHaveBeenCalled();
+    expect(unrelatedSubscription.unsubscribe).not.toHaveBeenCalled();
+    expect(unrelatedRegistration.unregister).not.toHaveBeenCalled();
+  });
+
   it('surfaces failed relay deletion and retries the retained tombstone', async () => {
     const stateStore = new MemoryPushStateStore();
     const subscription = createSubscription('https://push.example/shared');
@@ -535,6 +631,64 @@ describe('push helpers', () => {
     expect(await stateStore.listRegistrations()).toEqual([
       expect.objectContaining({ endpoint: subscription.endpoint, pendingDeletion: false }),
     ]);
+  });
+
+  it('removes the legacy browser endpoint after the last inbox refresh completes migration', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const rootSubscription = createSubscription('https://push.example/legacy-root');
+    const recoverySubscription = createSubscription('https://push.example/current-recovery');
+    const {
+      navigatorMock,
+      registration,
+      recoveryPushManager,
+      recoveryRegistration,
+    } = installPushBrowserMocks({
+      subscription: recoverySubscription,
+      existingSubscription: rootSubscription,
+    });
+    await navigatorMock.serviceWorker.register('/sw.js', {
+      scope: '/__converge-push/current-key/',
+      updateViaCache: 'none',
+    });
+    await recoveryPushManager.subscribe();
+    (navigatorMock.serviceWorker.getRegistrations as Mock).mockResolvedValue([
+      registration,
+      recoveryRegistration,
+    ]);
+
+    const migrating = await cacheInboxPushRegistration(
+      { identity, topics, inboxHandle: 'opaque-migrating-inbox' },
+      { stateStore, now: 1 },
+    );
+    await stateStore.putRegistration({ ...migrating, endpoint: rootSubscription.endpoint });
+    const migratedIdentity = { inboxId: 'inbox-2', installationId: INSTALLATION_ID_B };
+    const migrated = await cacheInboxPushRegistration(
+      { identity: migratedIdentity, topics, inboxHandle: 'opaque-migrated-inbox' },
+      { stateStore, now: 1 },
+    );
+    await stateStore.putRegistration({ ...migrated, endpoint: recoverySubscription.endpoint });
+    await stateStore.setPreferences({
+      enabled: true,
+      endpoint: recoverySubscription.endpoint,
+      updatedAt: 1,
+    });
+    const methods: string[] = [];
+    const fetchFn = vi.fn(async (_url, init) => {
+      methods.push(String(init?.method));
+      return new Response('{}', { status: 200 });
+    }) as unknown as Mock;
+
+    const result = await refreshPushRegistrationForInbox(
+      { identity, topics },
+      { stateStore, fetchFn: fetchFn as unknown as typeof fetch },
+    );
+
+    expect(result).toMatchObject({ success: true, endpoint: recoverySubscription.endpoint });
+    expect(methods).toEqual(['POST', 'DELETE']);
+    expect(rootSubscription.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(recoverySubscription.unsubscribe).not.toHaveBeenCalled();
+    expect(registration.unregister).not.toHaveBeenCalled();
+    expect(recoveryRegistration.unregister).not.toHaveBeenCalled();
   });
 
   it('coalesces concurrent refreshes for the same inbox installation', async () => {
@@ -931,7 +1085,10 @@ describe('push helpers', () => {
       registrationId: 'registration-1',
       topicCount: 2,
     });
-    expect(navigatorMock.serviceWorker.register).toHaveBeenCalledWith('/sw.js');
+    expect(navigatorMock.serviceWorker.register).toHaveBeenCalledWith('/sw.js', {
+      scope: '/',
+      updateViaCache: 'none',
+    });
     expect(pushManager.subscribe).toHaveBeenCalled();
 
     const lastCall = fetchFn.mock.calls[fetchFn.mock.calls.length - 1];
@@ -970,6 +1127,53 @@ describe('push helpers', () => {
     expect(pushManager.getSubscription).toHaveBeenCalled();
   });
 
+  it('removes an empty superseded recovery scope after root enable succeeds', async () => {
+    const subscription = createSubscription('https://push.example/root-current');
+    const {
+      navigatorMock,
+      registration,
+      recoveryRegistration,
+    } = installPushBrowserMocks({
+      subscription,
+      existingSubscription: subscription,
+    });
+    (navigatorMock.serviceWorker.getRegistrations as Mock).mockResolvedValue([
+      registration,
+      recoveryRegistration,
+    ]);
+    (recoveryRegistration.pushManager.getSubscription as Mock).mockResolvedValue(null);
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const result = await enablePushForCurrentUser({
+      identity,
+      topics,
+      vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ success: true, endpoint: subscription.endpoint });
+    expect(recoveryRegistration.unregister).toHaveBeenCalledTimes(1);
+    expect(registration.unregister).not.toHaveBeenCalled();
+    expect(subscription.unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it('ignores a preferred endpoint owned by an unrelated service worker scope', async () => {
+    const subscription = createSubscription('https://push.example/unrelated');
+    const { navigatorMock, registration, pushManager } = installPushBrowserMocks({ subscription });
+    (pushManager.getSubscription as Mock).mockReset().mockResolvedValue(null);
+    const unrelated = {
+      scope: 'https://converge.cv/unrelated-app/',
+      pushManager: { getSubscription: vi.fn(async () => subscription) },
+    };
+    (navigatorMock.serviceWorker.getRegistrations as Mock)
+      .mockResolvedValue([unrelated, registration]);
+
+    const state = await getBrowserPushSubscriptionState(subscription.endpoint);
+
+    expect(state.subscription).toBeNull();
+    expect(state.registration).toBe(registration);
+  });
+
   it('replaces an existing subscription bound to a stale VAPID key', async () => {
     const current = createSubscription('https://push.example/current');
     const stale = createSubscription(
@@ -996,17 +1200,23 @@ describe('push helpers', () => {
     expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('waits for the root service worker registration to be ready before subscribing', async () => {
+  it('waits for the exact root service worker registration to activate before subscribing', async () => {
     const subscription = createSubscription('https://push.example/ready');
     const { navigatorMock, registration, pushManager } = installPushBrowserMocks({ subscription });
-    let resolveReady: ((value: ServiceWorkerRegistration) => void) | undefined;
-    const ready = new Promise<ServiceWorkerRegistration>((resolve) => {
-      resolveReady = resolve;
-    });
+    const listeners = new Set<() => void>();
+    const worker = {
+      state: 'installing' as ServiceWorkerState,
+      addEventListener: (_event: string, listener: EventListenerOrEventListenerObject) => {
+        listeners.add(listener as () => void);
+      },
+      removeEventListener: (_event: string, listener: EventListenerOrEventListenerObject) => {
+        listeners.delete(listener as () => void);
+      },
+    };
+    Object.assign(registration, { installing: worker, waiting: null, active: null });
     (navigatorMock.serviceWorker.getRegistration as Mock)
       .mockReset()
       .mockResolvedValue(registration as unknown as ServiceWorkerRegistration);
-    Object.defineProperty(navigatorMock.serviceWorker, 'ready', { configurable: true, value: ready });
     const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
 
     const enable = enablePushForLoadedInboxes(
@@ -1017,7 +1227,8 @@ describe('push helpers', () => {
     expect(navigatorMock.serviceWorker.register).not.toHaveBeenCalled();
     expect(pushManager.subscribe).not.toHaveBeenCalled();
 
-    resolveReady?.(registration as unknown as ServiceWorkerRegistration);
+    worker.state = 'activated';
+    listeners.forEach((listener) => listener());
     expect((await enable).success).toBe(true);
     expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
   });
@@ -1071,11 +1282,11 @@ describe('push helpers', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it('returns an actionable provider error without contacting vapid.party', async () => {
+  it('returns an actionable provider error without posting registration data to vapid.party', async () => {
     vi.useFakeTimers();
     const stateStore = new MemoryPushStateStore();
     const subscription = createSubscription();
-    const { pushManager } = installPushBrowserMocks({ subscription });
+    const { navigatorMock, pushManager } = installPushBrowserMocks({ subscription });
     (pushManager.getSubscription as Mock).mockReset().mockResolvedValue(null);
     pushManager.subscribe.mockRejectedValue(
       new DOMException('Registration failed - push service error', 'AbortError'),
@@ -1094,14 +1305,43 @@ describe('push helpers', () => {
     const result = await enable;
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('vapid.party was not contacted');
+    expect(result.error).toContain('No subscription or inbox data was sent to vapid.party');
     expect(result.error).toMatch(/browser's push service.*retry/i);
-    expect(pushManager.subscribe).toHaveBeenCalledTimes(3);
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(6);
+    expect(navigatorMock.serviceWorker.register).toHaveBeenCalledWith(
+      '/sw.js',
+      expect.objectContaining({ scope: expect.stringMatching(/^\/__converge-push\//) }),
+    );
     expect(fetchFn).not.toHaveBeenCalled();
     expect((await stateStore.getPreferences()).enabled).toBe(false);
   });
 
-  it('clears a failed browser subscription attempt so a later retry can succeed', async () => {
+  it('explains the Brave provider setting when new Web Push registrations are disabled', async () => {
+    vi.useFakeTimers();
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription();
+    const { navigatorMock, pushManager } = installPushBrowserMocks({ subscription });
+    Object.assign(navigatorMock, { brave: { isBrave: vi.fn(async () => true) } });
+    (pushManager.getSubscription as Mock).mockReset().mockResolvedValue(null);
+    pushManager.subscribe.mockRejectedValue(
+      new DOMException('Registration failed - push service error', 'AbortError'),
+    );
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const enable = enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      { stateStore, vapidPublicKey: TEST_VAPID_PUBLIC_KEY, fetchFn: fetchFn as unknown as typeof fetch },
+    );
+    await vi.runAllTimersAsync();
+    const result = await enable;
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.error).toMatch(/Brave.*Google services.*fully quit.*reopen Brave/i);
+    expect(result.error).toMatch(/Other app or extension notifications do not prove/i);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('recovers a stuck root provider registration with a dedicated scope in the same enable attempt', async () => {
     vi.useFakeTimers();
     const stateStore = new MemoryPushStateStore();
     const subscription = createSubscription('https://push.example/retry-success');
@@ -1120,15 +1360,36 @@ describe('push helpers', () => {
       fetchFn: fetchFn as unknown as typeof fetch,
     };
 
-    const firstEnable = enablePushForLoadedInboxes([{ identity, topics }], options);
+    const enable = enablePushForLoadedInboxes([{ identity, topics }], options);
     await vi.runAllTimersAsync();
-    expect((await firstEnable).success).toBe(false);
-
-    const retry = await enablePushForLoadedInboxes([{ identity, topics }], options);
-    expect(retry).toMatchObject({ success: true, endpoint: subscription.endpoint });
+    expect(await enable).toMatchObject({ success: true, endpoint: subscription.endpoint });
     expect(pushManager.subscribe).toHaveBeenCalledTimes(4);
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect((await stateStore.getPreferences()).enabled).toBe(true);
+  });
+
+  it('removes an empty recovery worker after the root scope succeeds', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription('https://push.example/root-success');
+    const { navigatorMock, registration, recoveryRegistration } = installPushBrowserMocks({ subscription });
+    await navigatorMock.serviceWorker.register('/sw.js', {
+      scope: '/__converge-push/abandoned-key/',
+      updateViaCache: 'none',
+    });
+    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+
+    const result = await enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      {
+        stateStore,
+        vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      },
+    );
+
+    expect(result).toMatchObject({ success: true, endpoint: subscription.endpoint });
+    expect(recoveryRegistration.unregister).toHaveBeenCalledTimes(1);
+    expect(registration.unregister).not.toHaveBeenCalled();
   });
 
   it('shares one PushManager.subscribe call across concurrent enable attempts', async () => {
@@ -1155,15 +1416,14 @@ describe('push helpers', () => {
     expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('retries once after replacing a stale key while Chromium finishes provider cleanup', async () => {
+  it('keeps a stale-key subscription until its recovery-scope replacement is registered', async () => {
     vi.useFakeTimers();
     const current = createSubscription('https://push.example/replaced-after-provider-cleanup');
     const stale = createSubscription('https://push.example/stale-provider-key', new Uint8Array(65).fill(9));
     const { pushManager } = installPushBrowserMocks({ subscription: current, existingSubscription: stale });
     (pushManager.getSubscription as Mock)
       .mockReset()
-      .mockResolvedValueOnce(stale)
-      .mockResolvedValue(null);
+      .mockResolvedValue(stale);
     pushManager.subscribe
       .mockRejectedValueOnce(new DOMException('Registration failed - push service error', 'AbortError'))
       .mockResolvedValueOnce(current);
@@ -1179,6 +1439,9 @@ describe('push helpers', () => {
     expect(result).toMatchObject({ success: true, endpoint: current.endpoint });
     expect(stale.unsubscribe).toHaveBeenCalledTimes(1);
     expect(pushManager.subscribe).toHaveBeenCalledTimes(2);
+    expect(stale.unsubscribe.mock.invocationCallOrder[0]).toBeGreaterThan(
+      fetchFn.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it('unsubscribes a newly created endpoint when local preparation fails', async () => {
@@ -1312,6 +1575,17 @@ describe('push helpers', () => {
 
     const enabled = await isPushEnabled();
     expect(enabled).toBe(false);
+  });
+
+  it('disables cached push state when the service worker API is unavailable', async () => {
+    const stateStore = new MemoryPushStateStore();
+    await stateStore.setPreferences({ enabled: true, updatedAt: 1 });
+    vi.stubGlobal('navigator', {} as Navigator);
+
+    const disabled = await disablePush({ identity, stateStore });
+
+    expect(disabled).toBe(true);
+    expect((await stateStore.getPreferences()).enabled).toBe(false);
   });
 
   it('skips service worker registration when unsupported', async () => {

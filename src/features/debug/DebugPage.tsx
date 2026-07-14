@@ -17,6 +17,7 @@ import {
   registerServiceWorkerForPush,
   enablePushForCurrentUser,
   disablePush,
+  getBrowserPushSubscriptionState,
   preparePushBrowserResources,
   VAPID_PARTY_API_BASE,
   VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
@@ -67,6 +68,7 @@ export function DebugPage() {
   const [swRegistered, setSwRegistered] = useState<boolean>(false);
   const [swScope, setSwScope] = useState<string>('');
   const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
+  const [pushProvider, setPushProvider] = useState<string>('browser default');
   const [backendReachable, setBackendReachable] = useState<string>('unknown');
   const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
   const [isPushEnabling, setIsPushEnabling] = useState(false);
@@ -102,17 +104,23 @@ export function DebugPage() {
     try {
       const perm = typeof Notification !== 'undefined' ? Notification.permission : 'default';
       setPushPermission(perm);
-      const reg = await navigator.serviceWorker.getRegistration();
+      const { registration: reg, subscription: sub } = await getBrowserPushSubscriptionState();
       if (reg) {
         setSwRegistered(true);
         setSwScope(reg.scope || '');
-        const sub = await reg.pushManager.getSubscription();
         setSubscriptionEndpoint(sub?.endpoint ? new URL(sub.endpoint).host : '');
       } else {
         setSwRegistered(false);
         setSwScope('');
         setSubscriptionEndpoint('');
       }
+      const braveApi = (navigator as Navigator & {
+        brave?: { isBrave?: () => Promise<boolean> };
+      }).brave;
+      const isBrave = braveApi?.isBrave ? await braveApi.isBrave().catch(() => false) : false;
+      setPushProvider(isBrave
+        ? 'Brave; new Web Push requires Use Google services for push messaging and a full quit/reopen'
+        : 'browser default');
       // Check both the generic Worker health and the public XMTP push surface.
       try {
         const healthUrl = `${VAPID_PARTY_API_BASE}/health`;
@@ -246,10 +254,10 @@ export function DebugPage() {
                   const cacheNames = await caches.keys();
                   await Promise.all(cacheNames.map(name => caches.delete(name)));
                 }
-                // Clear service worker and reload
+                // Refresh workers without destroying their push subscriptions.
                 if ('serviceWorker' in navigator) {
                   const registrations = await navigator.serviceWorker.getRegistrations();
-                  await Promise.all(registrations.map(reg => reg.unregister()));
+                  await Promise.allSettled(registrations.map((reg) => reg.update()));
                 }
                 // Hard reload
                 window.location.reload();
@@ -436,6 +444,10 @@ export function DebugPage() {
               <div className="mt-1 text-primary-100 break-all text-xs">
                 {subscriptionEndpoint ? subscriptionEndpoint : 'none'}
               </div>
+            </div>
+            <div className="rounded-lg bg-primary-900/40 p-3">
+              <div className="text-primary-300">Push Provider</div>
+              <div className="mt-1 text-primary-100 break-words text-xs">{pushProvider}</div>
             </div>
             <div className="rounded-lg bg-primary-900/40 p-3">
               <div className="text-primary-300">vapid.party Status</div>

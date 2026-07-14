@@ -21,22 +21,40 @@ removed with the rest of the site data.
 `AbortError: Registration failed - push service error` comes from the browser's
 push provider while Converge is calling `PushManager.subscribe()`. At that
 point no subscription endpoint exists, so Converge has not yet sent a logical
-inbox registration to vapid.party.
+inbox registration to vapid.party. Cloudflare logs for the reported failure
+showed healthy vapid.party health/public-key responses and no subscription
+POST.
+
+`Notification.permission === 'granted'` does not rule this out. Already visible
+app, native, or extension notifications do not prove that the browser will
+accept a new Web Push registration for `converge.cv`.
 
 1. Retry once from Settings. Converge coalesces repeated setup requests and
-   backs off when Chromium is still deleting an older VAPID subscription.
+   backs off when Chromium is still deleting an older VAPID subscription. If
+   the exact root registration remains stuck after a VAPID rotation, Converge
+   automatically retries with a key-versioned service-worker recovery scope;
+   this does not clear IndexedDB, OPFS, inbox keys, or messages.
 2. In Brave, enable **Use Google Services for Push Messaging** at
-   `brave://settings/privacy`, relaunch Brave, and retry.
-3. In Chromium-based browsers, inspect `chrome://gcm-internals` or
-   `brave://gcm-internals`. Check whether GCM is enabled and whether the
-   registration log records a provider failure.
+   `brave://settings/privacy`, fully quit every Brave window/process, relaunch,
+   and retry. Converge detects Brave through `navigator.brave.isBrave()` rather
+   than guessing from the user agent.
+3. In Chromium-based browsers, `chrome://gcm-internals` or
+   `brave://gcm-internals` can expose provider events, but Brave may still show
+   GCM as initialized while its Google push-services preference blocks new Web
+   Push registrations. Treat the Brave privacy setting and full relaunch as the
+   authoritative recovery steps.
 4. Try another standard browser profile. If push registration also fails in a
    generic Web Push demo, the problem is the browser/provider rather than
    Converge or vapid.party.
 
 The Debug page reports the last enable attempt and separately checks the
 vapid.party health and public-key routes. A browser-provider failure should say
-that the relay was not contacted.
+that no subscription or inbox data was sent; the public-key GET is expected.
+
+Do not clear site data to repair push. It would delete Converge's local account
+keys and messages. A cache-only refresh must preserve service-worker
+registrations and the browser subscription; use **Disable notifications** when
+you intentionally want Converge to delete relay registrations and unsubscribe.
 
 ## XMTP SQLite worker missing / build errors
 

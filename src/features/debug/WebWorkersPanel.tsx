@@ -94,11 +94,16 @@ export function WebWorkersPanel() {
   };
 
   const unregisterSw = async (reg: ServiceWorkerRegistration) => {
+    const subscription = await reg.pushManager.getSubscription().catch(() => null);
+    const warning = subscription
+      ? 'This service worker owns a browser push subscription. Unregistering it can leave a stale relay record. Disable notifications first unless you are deliberately testing recovery. Continue?'
+      : 'Unregister this service worker and reload Converge?';
+    if (!window.confirm(warning)) return;
     setBusy(true);
     setSwError(null);
     try {
       await reg.unregister();
-      await refreshServiceWorkers();
+      window.location.reload();
     } catch (e) {
       setSwError(e instanceof Error ? e.message : String(e));
     } finally {

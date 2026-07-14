@@ -2,7 +2,11 @@
  * Service Worker bridge for app ↔ SW communication
  */
 
-import { disablePush, enablePushForCurrentUser } from '@/lib/push';
+import {
+  disablePush,
+  enablePushForCurrentUser,
+  getBrowserPushSubscriptionState,
+} from '@/lib/push';
 
 export interface SWMessage {
   type: string;
@@ -90,8 +94,7 @@ export async function subscribeToPush(): Promise<PushSubscription | null> {
       return null;
     }
 
-    const registration = await navigator.serviceWorker.getRegistration();
-    return (await registration?.pushManager.getSubscription()) ?? null;
+    return (await getBrowserPushSubscriptionState(result.endpoint)).subscription;
   } catch (error) {
     console.error('Failed to subscribe to push:', error);
     return null;
@@ -127,4 +130,3 @@ export function getNotificationPermission(): NotificationPermission {
   }
   return 'denied';
 }
-

@@ -718,13 +718,12 @@ export function SettingsPage() {
         await Promise.all(cacheNames.map(name => caches.delete(name)));
       }
 
-      // Unregister service worker
+      // Refresh service-worker scripts without unregistering their push state.
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(registrations.map(reg => reg.unregister()));
+        await Promise.allSettled(registrations.map((reg) => reg.update()));
       }
-
-      alert('Cache cleared! Refresh the page to see the latest version.');
+      window.location.reload();
     } catch (error) {
       console.error('Failed to clear cache:', error);
       alert('Failed to clear cache');

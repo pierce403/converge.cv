@@ -13,18 +13,18 @@ describe('push index helpers', () => {
   });
 
   it('registers service worker when available', async () => {
-    const readyPromise = Promise.resolve({} as ServiceWorkerRegistration);
-    const register = vi.fn(async () => ({} as ServiceWorkerRegistration));
+    const registration = { scope: 'https://converge.cv/' } as ServiceWorkerRegistration;
+    const register = vi.fn(async () => registration);
     const navigatorMock = {
       serviceWorker: {
         register,
-        ready: readyPromise,
+        getRegistration: vi.fn(async () => null),
       },
     } as unknown as Navigator;
     vi.stubGlobal('navigator', navigatorMock);
 
     const reg = await registerServiceWorkerForPush();
-    expect(register).toHaveBeenCalledWith('/sw.js');
-    expect(reg).toBeTruthy();
+    expect(register).toHaveBeenCalledWith('/sw.js', { scope: '/', updateViaCache: 'none' });
+    expect(reg).toBe(registration);
   });
 });
