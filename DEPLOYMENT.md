@@ -24,6 +24,19 @@ and XMTP installation namespace.
 - `CNAME`, `.nojekyll`, and the GitHub Pages `404.html` redirect shim are not part
   of the Cloudflare build.
 
+## Live State (2026-07-15)
+
+- `converge-cv` serves `https://converge.cv` as a Worker Custom Domain.
+- `converge-miniapp` independently serves `https://miniapp.converge.cv`.
+- The five Namecheap forwarding MX records and the SPF TXT record are present in
+  the Cloudflare zone and remain DNS-only.
+- Each repository has a main-only Cloudflare Workers Builds trigger. Cloudflare
+  pulls source through its GitHub App, runs the repository gate, and deploys with
+  a Cloudflare-owned scoped build token.
+- GitHub Actions is read-only CI. Do not add Cloudflare API tokens, account
+  credentials, or deployment secrets to GitHub Actions or GitHub repository
+  secrets.
+
 ## Local Verification
 
 Requirements: Node.js 22 and the pnpm version pinned by `packageManager`.
@@ -65,7 +78,7 @@ manifest, the XMTP WASM asset, and at least one hashed JavaScript asset.
 4. Deploy the isolated preview Worker:
 
    ```bash
-   pnpm deploy:preview
+   pnpm run deploy:preview
    ```
 
 5. Smoke-test the returned `workers.dev` URL. Preview responses carry
@@ -73,7 +86,7 @@ manifest, the XMTP WASM asset, and at least one hashed JavaScript asset.
 6. Deploy production only after preview verification and zone activation:
 
    ```bash
-   pnpm deploy
+   pnpm run deploy
    ```
 
 The production configuration uses a Worker Custom Domain. Do not create a
@@ -94,7 +107,9 @@ build credential and GitHub retains CI only:
    `packageManager` pins pnpm.
 
 Workers Builds creates and retains its own scoped API token. Do not add a fake
-token, account ID, private VAPID key, or other credential to this repository.
+token, account ID, private VAPID key, or other credential to this repository or
+to GitHub Actions. GitHub grants the Cloudflare GitHub App repository access;
+Cloudflare performs the checkout, build, and deployment inside Cloudflare.
 
 ## Environment Variables
 

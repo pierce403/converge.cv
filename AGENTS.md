@@ -15,6 +15,7 @@ read the same source of truth.
 - Use repo-local indexes before important work: `AGENTS.md`, `MEMORY.md`, and `SKILLS.md`.
 - Record durable project learnings where future agents will look: `AGENTS.md` for canonical rules, `MEMORY.md`/`memory/` for searchable context, and `SKILLS.md`/`skills/` for reusable procedures.
 - Work in focused steps, verify real behavior when practical, then commit and push completed changes.
+- Keep GitHub deployment-blind: GitHub Actions is read-only CI, while Cloudflare Workers Builds pulls `main` through Cloudflare's GitHub App and deploys with a Cloudflare-owned build token. Never add a Cloudflare API token, account credential, or deploy secret to GitHub Actions or repository secrets.
 
 ## Project Overview
 
@@ -26,7 +27,7 @@ read the same source of truth.
 - **Storage**: Dexie (IndexedDB wrapper)
 - **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v6.1.2
 - **PWA**: hand-maintained service worker and web app manifest
-- **Deployment**: Cloudflare Workers Static Assets at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds owns deployment after the project connection is enabled
+- **Deployment**: Cloudflare Workers Static Assets at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds pulls and deploys `main`
 
 ---
 
@@ -202,6 +203,8 @@ pnpm check            # Full deterministic CI and Cloudflare bundle gate
 pnpm test --run       # Run Vitest suite once (avoids hanging watch mode)
 pnpm lint             # Run ESLint
 pnpm typecheck        # TypeScript type checking
+pnpm run deploy:preview # Verify and deploy the isolated workers.dev preview
+pnpm run deploy       # Verify and deploy production as an authenticated operator
 ```
 
 ---
@@ -209,9 +212,10 @@ pnpm typecheck        # TypeScript type checking
 ## Deployment
 
 - **CI**: Every push to `main` and every pull request triggers GitHub Actions
-- **Deploy**: Cloudflare Workers Builds deploys `main` after its repository connection is enabled; authenticated operators can use `pnpm deploy:preview` and `pnpm deploy`
+- **Deploy**: Cloudflare Workers Builds pulls and deploys `main`; authenticated operators can use `pnpm run deploy:preview` and `pnpm run deploy`
 - **Process**: Type check → Lint → Test → Build → Wrangler dry run → Cloudflare Workers Static Assets deploy
 - **Domains**: `converge.cv` is the apex Worker Custom Domain; `miniapp.converge.cv` belongs to the separate `converge-miniapp` Worker
+- **Credential boundary**: The Cloudflare GitHub App grants repository read access to Cloudflare; its scoped build token stays inside Cloudflare. GitHub Actions has no Cloudflare credential and must remain CI-only.
 - See `DEPLOYMENT.md` for details
 
 ---
@@ -230,7 +234,7 @@ pnpm typecheck        # TypeScript type checking
 ## Current State (as of this session)
 
 ### ✅ Completed
-- Cloudflare Workers Static Assets is the checked-in hosting contract: production and route-free preview environments, native React SPA fallback, immutable hashed-asset caching, root no-cache service-worker headers, Node 22/pinned Wrangler tooling, provider-neutral GitHub CI with a production-manifest dry run, and a cutover/rollback runbook. The exact `https://converge.cv` origin is preserved so the host migration does not intentionally change IndexedDB, OPFS, service-worker, Push API, or XMTP installation namespaces. Keep the sibling Mini App on its separate `miniapp.converge.cv` Worker.
+- Cloudflare Workers Static Assets is live at `https://converge.cv` with native React SPA fallback, immutable hashed-asset caching, root no-cache service-worker headers, Node 22/pinned Wrangler tooling, and a cutover/rollback runbook. Cloudflare Workers Builds pulls `main` through its GitHub App and owns deployment; GitHub Actions remains provider-neutral, read-only CI. The exact app origin was preserved, so the host migration does not intentionally change IndexedDB, OPFS, service-worker, Push API, or XMTP installation namespaces. The sibling Mini App is live on its separate `miniapp.converge.cv` Worker.
 - Choice-first onboarding shows Create, Restore, and Add this device before any identity or wallet action; successful creation registers the inbox before showing the dismissible Color Animal name/avatar editor
 - The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Add this device actions; duplicate imports stop with "This inbox is already loaded"
 - Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
@@ -299,7 +303,6 @@ pnpm typecheck        # TypeScript type checking
   - **Key difference from v3**: `getIdentifier()` is synchronous in v5+ (was async in v3)
 
 ### 🚧 TODO
-- Complete the hosting cutover after recursive DNS catches up with the `.cv` parent's Cloudflare delegation: restore the five missing Namecheap email-forwarding MX records listed in `DEPLOYMENT.md`, restore Wrangler authentication or connect Workers Builds, smoke-test both Workers on `workers.dev`, attach `miniapp.converge.cv`, then attach the `converge.cv` Custom Domain and run the live origin/SW/push checks. The old GitHub Pages artifact remains the rollback origin until those checks pass.
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
 - Video + multi-file attachments (image attachments are now supported)
 - Re-enable non-push PWA features (install prompt, update notifications/full app-shell service worker) when ready.
@@ -308,7 +311,7 @@ pnpm typecheck        # TypeScript type checking
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
   - XMTP community Discord/forums for verified bot addresses
-- **Cloudflare hosting migration**: `wrangler.jsonc` deploys the static bundle with native SPA fallback; `public/_headers` keeps hashed assets immutable and `/sw.js` uncached at root scope. Do not reintroduce the removed COOP/COEP service-worker shim: it previously caused XMTP/wallet regressions. Keep QR camera permission available to the same origin, and stage any future CSP separately against XMTP workers/WASM, WalletConnect, attachment hosts, RPCs, and wallet popups.
+- **Cloudflare hosting operations**: continue live post-cutover checks for inbox reopen, Push API continuity, and recursive DNS convergence. `wrangler.jsonc` deploys the static bundle with native SPA fallback; `public/_headers` keeps hashed assets immutable and `/sw.js` uncached at root scope. Do not reintroduce the removed COOP/COEP service-worker shim: it previously caused XMTP/wallet regressions. Keep QR camera permission available to the same origin, and stage any future CSP separately against XMTP workers/WASM, WalletConnect, attachment hosts, RPCs, and wallet popups.
 
 ---
 
@@ -319,7 +322,7 @@ pnpm typecheck        # TypeScript type checking
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-07-14): `pnpm test --run` passes (83 files, 542 tests).
+- Current Vitest status (2026-07-15): `pnpm test --run` passes (83 files, 542 tests).
 
 ---
 
