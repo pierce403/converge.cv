@@ -28,6 +28,11 @@ and XMTP installation namespace.
 
 - `converge-cv` serves `https://converge.cv` as a Worker Custom Domain.
 - `converge-miniapp` independently serves `https://miniapp.converge.cv`.
+- The zone has **Always Use HTTPS** enabled. Both application hosts redirect
+  HTTP to the same HTTPS path and query before the Worker handles the request.
+- The zone-level `http_config_settings` ruleset disables automatic Cloudflare
+  Web Analytics injection for `converge.cv` and `miniapp.converge.cv`. Keep
+  Workers observability and server-side analytics separate from browser RUM.
 - The five Namecheap forwarding MX records and the SPF TXT record are present in
   the Cloudflare zone and remain DNS-only.
 - Each repository has a main-only Cloudflare Workers Builds trigger. Cloudflare
@@ -141,6 +146,8 @@ curl -fsSI https://converge.cv/manifest.json
 - `/` and `/debug` return `200` from Cloudflare, not `server: GitHub.com`.
 - HTML includes the checked-in security headers without Cloudflare HTML
   transformations, Rocket Loader, Zaraz, or challenge injection.
+- A clean browser records no `static.cloudflareinsights.com` request, no
+  `/cdn-cgi/rum` request, and no injected `data-cf-beacon` markup.
 - `/sw.js` includes `Cache-Control: no-cache, no-store, must-revalidate` and
   `Service-Worker-Allowed: /`.
 - Hashed `/assets/*` responses are immutable.
