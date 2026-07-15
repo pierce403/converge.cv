@@ -10,6 +10,14 @@ const packageJsonPath = join(__dirname, '..', 'package.json');
 const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
 const appVersion = typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
 
+const readEnvironmentValue = (...names) => {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+};
+
 const readGitValue = (args) => {
   try {
     return execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -25,8 +33,12 @@ const readGitValue = (args) => {
 };
 
 try {
-  const gitHash = readGitValue(['rev-parse', '--short', 'HEAD']);
-  const gitBranch = readGitValue(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const environmentHash = readEnvironmentValue('WORKERS_CI_COMMIT_SHA', 'GITHUB_SHA');
+  const gitHash = /^[0-9a-f]{7,40}$/i.test(environmentHash ?? '')
+    ? environmentHash.slice(0, 7)
+    : readGitValue(['rev-parse', '--short', 'HEAD']);
+  const gitBranch = readEnvironmentValue('WORKERS_CI_BRANCH', 'GITHUB_REF_NAME')
+    ?? readGitValue(['rev-parse', '--abbrev-ref', 'HEAD']);
   const buildTime = new Date().toISOString();
 
   const buildInfo = {

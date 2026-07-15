@@ -26,7 +26,7 @@ read the same source of truth.
 - **Storage**: Dexie (IndexedDB wrapper)
 - **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v6.1.2
 - **PWA**: hand-maintained service worker and web app manifest
-- **Deployment**: GitHub Pages (auto-deploy on push to main)
+- **Deployment**: Cloudflare Workers Static Assets at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds owns deployment after the project connection is enabled
 
 ---
 
@@ -197,6 +197,8 @@ src/
 pnpm dev              # Start dev server (port 3000)
 pnpm build            # Build for production
 pnpm preview          # Preview production build
+pnpm preview:cloudflare # Preview with Workers Static Assets routing and headers
+pnpm check            # Full deterministic CI and Cloudflare bundle gate
 pnpm test --run       # Run Vitest suite once (avoids hanging watch mode)
 pnpm lint             # Run ESLint
 pnpm typecheck        # TypeScript type checking
@@ -206,9 +208,10 @@ pnpm typecheck        # TypeScript type checking
 
 ## Deployment
 
-- **Auto-deploy**: Every push to `main` triggers GitHub Actions
-- **Process**: Type check → Build → Deploy to GitHub Pages
-- **Domain**: converge.cv (CNAME configured)
+- **CI**: Every push to `main` and every pull request triggers GitHub Actions
+- **Deploy**: Cloudflare Workers Builds deploys `main` after its repository connection is enabled; authenticated operators can use `pnpm deploy:preview` and `pnpm deploy`
+- **Process**: Type check → Lint → Test → Build → Wrangler dry run → Cloudflare Workers Static Assets deploy
+- **Domains**: `converge.cv` is the apex Worker Custom Domain; `miniapp.converge.cv` belongs to the separate `converge-miniapp` Worker
 - See `DEPLOYMENT.md` for details
 
 ---
@@ -227,6 +230,7 @@ pnpm typecheck        # TypeScript type checking
 ## Current State (as of this session)
 
 ### ✅ Completed
+- Cloudflare Workers Static Assets is the checked-in hosting contract: production and route-free preview environments, native React SPA fallback, immutable hashed-asset caching, root no-cache service-worker headers, Node 22/pinned Wrangler tooling, provider-neutral GitHub CI with a production-manifest dry run, and a cutover/rollback runbook. The exact `https://converge.cv` origin is preserved so the host migration does not intentionally change IndexedDB, OPFS, service-worker, Push API, or XMTP installation namespaces. Keep the sibling Mini App on its separate `miniapp.converge.cv` Worker.
 - Choice-first onboarding shows Create, Restore, and Add this device before any identity or wallet action; successful creation registers the inbox before showing the dismissible Color Animal name/avatar editor
 - The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Add this device actions; duplicate imports stop with "This inbox is already loaded"
 - Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
@@ -243,8 +247,8 @@ pnpm typecheck        # TypeScript type checking
 - New installations request XMTP device history and explain that an older installation may need to be online
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
-- The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; patched direct/transitive releases produce a zero-finding `pnpm audit --audit-level low` without changing the XMTP or Wagmi major versions
-- GitHub Pages, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
+- The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; the resolved lockfile returns zero findings through pnpm 11's current bulk advisory API without changing the XMTP or Wagmi major versions. The pinned pnpm 10 audit command now receives HTTP 410 because npm retired its legacy endpoint; do not report that transport failure as an advisory result.
+- GitHub CI, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
 - Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
 - Browser push setup resolves the exact root service-worker registration and waits for that registration to activate instead of trusting the one-shot `navigator.serviceWorker.ready` result. It validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. If origin-specific root registration state remains unusable after a VAPID rotation, Converge retries on a key-versioned `/__converge-push/<key-version>/` recovery scope without clearing IndexedDB, OPFS, keys, or messages. Provider failures explicitly say that no subscription or inbox data was sent to vapid.party; the public-key GET may already have succeeded. Settings and Debug retain inline results instead of push setup alerts.
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
@@ -295,6 +299,7 @@ pnpm typecheck        # TypeScript type checking
   - **Key difference from v3**: `getIdentifier()` is synchronous in v5+ (was async in v3)
 
 ### 🚧 TODO
+- Complete the hosting cutover after recursive DNS catches up with the `.cv` parent's Cloudflare delegation: restore the five missing Namecheap email-forwarding MX records listed in `DEPLOYMENT.md`, restore Wrangler authentication or connect Workers Builds, smoke-test both Workers on `workers.dev`, attach `miniapp.converge.cv`, then attach the `converge.cv` Custom Domain and run the live origin/SW/push checks. The old GitHub Pages artifact remains the rollback origin until those checks pass.
 - Device-based encryption for private keys (currently stored in plain text in IndexedDB)
 - Video + multi-file attachments (image attachments are now supported)
 - Re-enable non-push PWA features (install prompt, update notifications/full app-shell service worker) when ready.
@@ -303,10 +308,7 @@ pnpm typecheck        # TypeScript type checking
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
   - XMTP community Discord/forums for verified bot addresses
-- **Hosting Limitation (Resolved)**: GitHub Pages itself cannot set COOP/COEP headers, so the PWA service worker now injects
-  `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` on navigations. The app shows a
-  one-time "Enabling advanced mode…" banner while waiting for isolation, reloads after the SW takes control, and then proceeds
-  with XMTP initialization.
+- **Cloudflare hosting migration**: `wrangler.jsonc` deploys the static bundle with native SPA fallback; `public/_headers` keeps hashed assets immutable and `/sw.js` uncached at root scope. Do not reintroduce the removed COOP/COEP service-worker shim: it previously caused XMTP/wallet regressions. Keep QR camera permission available to the same origin, and stage any future CSP separately against XMTP workers/WASM, WalletConnect, attachment hosts, RPCs, and wallet popups.
 
 ---
 
@@ -492,7 +494,7 @@ if (!isRegistered) {
 5. Note any new dependencies or tools added
 6. Update `MEMORY.md`/`memory/` when durable context is useful but too detailed for this file.
 7. Update `SKILLS.md`/`skills/` when a reusable procedure changes.
-8. Always run the full CI-equivalent checks before handing work back: `pnpm typecheck && pnpm lint && pnpm test --run && pnpm build` (matches the GitHub Pages workflow order: typecheck → lint → test → build/deploy).
+8. Always run the full CI-equivalent checks before handing work back: `pnpm check` (typecheck → lint → test → build → Wrangler production dry run). Cloudflare deployment is a separate verified release step.
 9. **ALWAYS COMMIT AND PUSH ALL CHANGES** - This is mandatory after completing any work:
    ```bash
    git add -A

@@ -35,6 +35,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // Production source maps previously shipped the full application source.
+    // Keep them local to development unless a private upload path is added.
+    sourcemap: false,
   },
 });

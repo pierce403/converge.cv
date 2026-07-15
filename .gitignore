@@ -43,4 +43,5 @@ build
 .cache
 
 .vercel
+.wrangler
 code/

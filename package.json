@@ -9,6 +9,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "preview:cloudflare": "pnpm build && wrangler dev --env preview",
+    "check": "pnpm typecheck && pnpm lint && pnpm test --run && pnpm build && pnpm check:cloudflare",
+    "check:cloudflare": "wrangler deploy --dry-run --env=\"\"",
+    "deploy": "pnpm check && wrangler deploy --env=\"\"",
+    "deploy:preview": "pnpm check && wrangler deploy --env preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest",
@@ -58,7 +63,8 @@
     "tailwindcss": "^3.4.11",
     "typescript": "^5.5.3",
     "vite": "^6.4.3",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "wrangler": "4.110.0"
   },
   "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b",
   "pnpm": {
@@ -72,7 +78,6 @@
       "@walletconnect/logger": "3.0.0",
       "@wagmi/connectors": "5.11.2",
       "@wagmi/core": "2.22.1",
-      "esbuild": "0.25.0",
       "glob@10.4.5": "10.5.0",
       "rollup": "4.62.2",
       "preact": "10.27.3",

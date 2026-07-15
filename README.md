@@ -73,7 +73,7 @@ Debug's **Push Trace** isolates local display, browser-provider subscription, pr
 
 ### Prerequisites
 
-- Node.js 20 or newer
+- Node.js 22
 - pnpm 10
 
 ### Setup
@@ -96,6 +96,8 @@ pnpm lint
 pnpm test --run
 pnpm build
 pnpm preview
+pnpm preview:cloudflare
+pnpm check
 pnpm test:e2e
 ```
 
@@ -103,7 +105,7 @@ Use `pnpm test --run` for a one-shot Vitest run. Plain `pnpm test` starts watch 
 
 ## Deployment
 
-Pushes to `main` use the pnpm version pinned by `packageManager` with the frozen lockfile, then run typecheck, lint, Vitest, build, and deploy through GitHub Pages. The static app is served at [https://converge.cv](https://converge.cv). See [DEPLOYMENT.md](./DEPLOYMENT.md) for details.
+GitHub Actions runs typecheck, lint, Vitest, and the production build on pushes and pull requests. Cloudflare Workers Builds deploys the verified `dist/` bundle as Workers Static Assets at [https://converge.cv](https://converge.cv); the checked-in Wrangler configuration also provides an isolated `workers.dev` preview environment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the cutover and rollback runbook.
 
 Push-contract releases are ordered across repositories: apply vapid.party D1 migration `0005_xmtp_diagnostics.sql`, deploy and verify the vapid.party Worker/listener status and diagnostic endpoints, and only then deploy the matching Converge client. The diagnostics-enabled client requires the relay's management-capability response and CORS headers.
 

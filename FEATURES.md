@@ -144,8 +144,8 @@ model.
 
 - Converge's installed graph excludes unused `@xmtp/proto`, Dexie React hooks, PWA/Workbox packages, test helpers, patch tooling, and the full Thirdweb SDK. The hand-maintained service worker and Browser SDK integration remain unchanged.
 - Vite 6.4.3, Vitest 3.2.7, PostCSS 8.5.19, React Router 6.30.4, and scoped patched transitive releases replace the vulnerable versions reported on 2026-07-14. Wallet/XMTP major versions remain pinned to avoid turning an advisory cleanup into an untested protocol migration.
-- GitHub Pages, CodeQL, and dormant Socket workflows use current Node 24-based action majors; application build steps run on Node.js 22 instead of the retired Node.js 20 release.
-- `pnpm audit --audit-level low` must return zero findings alongside the normal typecheck, lint, test, and production-build gates.
+- GitHub CI, CodeQL, and dormant Socket workflows use current Node 24-based action majors; application build steps run on Node.js 22 instead of the retired Node.js 20 release.
+- The resolved lockfile must return zero findings from npm's current bulk advisory API alongside the normal typecheck, lint, test, and production-build gates. The pinned pnpm 10 client now receives HTTP 410 from npm's retired legacy audit endpoint; use a current pnpm 11 audit client until the repository performs a deliberate package-manager migration.
 
 ## Conversation Controls
 - Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp.
@@ -209,7 +209,7 @@ model.
 - Recent history backfill deduplicates stored messages, preserves read state for existing threads, and narrows sync windows using per-conversation timestamps to avoid replaying old messages as unread.
 
 ## Static Hosting and PWA Polish
-- The app is delivered as static HTML/CSS/JS through GitHub Pages. The current minimal service worker handles push/isolation behavior; offline app-shell precaching and install/update prompts remain disabled while XMTP stability work continues.
+- The app is delivered as static HTML/CSS/JS through Cloudflare Workers Static Assets. Cloudflare provides native SPA fallback, immutable hashed-asset caching, and a no-cache root service worker; offline app-shell precaching and install/update prompts remain disabled while XMTP stability work continues.
 - Mobile-friendly styles and responsive layout primitives keep the experience app-like on phones, with viewport-safe spacing and touch-target sizing.
 - Keyboard-open behavior in mobile PWA mode now uses VisualViewport-driven app height and fully removes the bottom nav from layout while typing, with a focused-input viewport-baseline fallback so iOS/PWA keyboard states still hide nav even when `innerHeight` tracks `visualViewport.height`.
 

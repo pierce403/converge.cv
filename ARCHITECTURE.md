@@ -4,7 +4,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 ## Current Stack
 
-- Static React 18 + TypeScript + Vite PWA hosted on GitHub Pages.
+- Static React 18 + TypeScript + Vite PWA hosted as Cloudflare Workers Static Assets.
 - Local-first state and data storage with Zustand plus Dexie/IndexedDB.
 - XMTP protocol v3 through `@xmtp/browser-sdk` 6.1.2 on the production network.
 - No Converge backend. Client code may only use public `VITE_*` configuration.
@@ -13,7 +13,7 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 - Choice-first onboarding: always show the inbox actions before creating an identity or opening a wallet; no passphrase or manual wallet entry by default.
 - Local-first app state with XMTP end-to-end transport encryption; browser data is not encrypted at rest today.
-- Static deployability: GitHub Pages remains sufficient for the Converge app shell.
+- Static deployability: an assets-only Cloudflare Worker serves the Converge app shell with native SPA fallback and repo-controlled response headers.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
 
 ## Implemented Multi-Inbox Product Contract
