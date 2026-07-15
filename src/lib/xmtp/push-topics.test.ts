@@ -16,6 +16,7 @@ type PushClientInternals = {
       }>;
     };
     conversations: {
+      sync: () => Promise<void>;
       list: (options: { consentStates: ConsentState[]; includeDuplicateDms: boolean }) => Promise<Array<{
         hmacKeys: () => Promise<Map<string, HmacKey[]>>;
       }>>;
@@ -32,8 +33,11 @@ describe('XMTP push topic snapshots', () => {
     const unknownDmGroupId = 'b'.repeat(32);
     const duplicateDmGroupId = 'c'.repeat(32);
     const order: string[] = [];
-    const sync = vi.fn(async () => {
-      order.push('sync');
+    const conversationSync = vi.fn(async () => {
+      order.push('conversationSync');
+    });
+    const preferenceSync = vi.fn(async () => {
+      order.push('preferenceSync');
     });
     const list = vi.fn(async () => {
       order.push('list');
@@ -58,13 +62,13 @@ describe('XMTP push topic snapshots', () => {
       ];
     });
     internals(client).client = {
-      preferences: { sync },
-      conversations: { list },
+      preferences: { sync: preferenceSync },
+      conversations: { sync: conversationSync, list },
     };
 
     const snapshot = await client.getPushHmacKeys();
 
-    expect(order).toEqual(['sync', 'list', 'groupKeys', 'dmKeys']);
+    expect(order).toEqual(['conversationSync', 'preferenceSync', 'list', 'groupKeys', 'dmKeys']);
     expect(list).toHaveBeenCalledWith({
       consentStates: [ConsentState.Allowed, ConsentState.Unknown],
       includeDuplicateDms: true,
@@ -96,6 +100,7 @@ describe('XMTP push topic snapshots', () => {
     internals(client).client = {
       preferences: { sync: vi.fn(async () => undefined), streamPreferences },
       conversations: {
+        sync: vi.fn(async () => undefined),
         list: vi.fn(async () => []),
       },
     };

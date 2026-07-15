@@ -69,10 +69,31 @@ export {
   pushRegistrationKey,
   type CachedInboxPushRegistration,
   type PushActivityHint,
+  type PushDiagnosticReceipt,
   type PushInboxProfile,
   type PushPreferenceState,
+  type PushRelayDiagnosticsCapability,
   type PushStateStore,
 } from './state';
+
+export {
+  currentRelayDiagnosticRegistration,
+  getPushDiagnosticSnapshot,
+  getRelayPushRegistrationStatus,
+  listenForPushDiagnosticReceipt,
+  sendRelayPushDiagnosticTest,
+  testLocalPushNotificationDisplay,
+  waitForRelayPushDiagnosticReceipt,
+  type InboxPushDiagnostic,
+  type PushDiagnosticSnapshot,
+  type PushDiagnosticTestResult,
+  type RelayRegistrationDiagnostic,
+} from './diagnostics';
+
+export {
+  pushRegistrationRefreshCooldownKey,
+  type PushBuildIdentity,
+} from './bootstrap';
 
 /**
  * Register the service worker for push notifications.

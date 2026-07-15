@@ -14,6 +14,7 @@ import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation
 import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
+import buildInfo from '@/build-info.json';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
@@ -36,6 +37,7 @@ import {
   getAppPushStatus,
   isPushRegistrationRefreshReady,
   listenForPushRegistrationChanged,
+  pushRegistrationRefreshCooldownKey,
   refreshPushRegistrationForCurrentInbox,
   updatePushInboxProfile,
 } from '@/lib/push';
@@ -608,7 +610,7 @@ export function Layout() {
       return;
     }
 
-    const cooldownKey = `converge.push.refresh.${identity.installationId}`;
+    const cooldownKey = pushRegistrationRefreshCooldownKey(identity.installationId, buildInfo);
     let lastRefresh = 0;
     try {
       lastRefresh = Number(window.sessionStorage.getItem(cooldownKey) ?? 0);

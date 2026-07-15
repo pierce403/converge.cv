@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useAuthStore,
@@ -12,18 +12,8 @@ import { WebWorkersPanel } from './WebWorkersPanel';
 import { KeyExplorerModal } from './KeyExplorerModal';
 import { IgnoredConversationsModal } from './IgnoredConversationsModal';
 import { DatabaseExplorerPanel } from './DatabaseExplorerPanel';
+import { PushDiagnosticsPanel } from './PushDiagnosticsPanel';
 import buildInfo from '../../build-info.json'; // Import build info
-import {
-  registerServiceWorkerForPush,
-  enablePushForCurrentUser,
-  disablePush,
-  getBrowserPushSubscriptionState,
-  getXmtpPushServiceStatus,
-  preparePushBrowserResources,
-  VAPID_PARTY_API_BASE,
-  VAPID_PARTY_XMTP_PUBLIC_KEY_PATH,
-  VAPID_PUBLIC_KEY,
-} from '@/lib/push';
 import { logNetworkEvent } from '@/lib/stores/debug-store';
 import {
   extractConvosInviteCode,
@@ -62,19 +52,6 @@ export function DebugPage() {
   const reversedNetwork = useMemo(() => networkEntries.slice().reverse(), [networkEntries]);
   const reversedErrors = useMemo(() => errorEntries.slice().reverse(), [errorEntries]);
 
-  // Push Debug local state
-  const [pushPermission, setPushPermission] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'default',
-  );
-  const [swRegistered, setSwRegistered] = useState<boolean>(false);
-  const [swScope, setSwScope] = useState<string>('');
-  const [subscriptionEndpoint, setSubscriptionEndpoint] = useState<string>('');
-  const [pushProvider, setPushProvider] = useState<string>('browser default');
-  const [backendReachable, setBackendReachable] = useState<string>('unknown');
-  const [deliveryPipeline, setDeliveryPipeline] = useState<string>('unknown');
-  const [pushPreparation, setPushPreparation] = useState<'preparing' | 'ready' | 'retry'>('preparing');
-  const [isPushEnabling, setIsPushEnabling] = useState(false);
-  const [pushAttempt, setPushAttempt] = useState('not run');
   const [isKeyExplorerOpen, setIsKeyExplorerOpen] = useState(false);
   const [isIgnoredModalOpen, setIsIgnoredModalOpen] = useState(false);
   const [inviteInput, setInviteInput] = useState('');
@@ -83,89 +60,6 @@ export function DebugPage() {
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
   const [inviteSending, setInviteSending] = useState(false);
   const [deepSyncRunning, setDeepSyncRunning] = useState(false);
-
-  useEffect(() => {
-    if (typeof Notification === 'undefined') {
-      setPushPreparation('retry');
-      return;
-    }
-    let cancelled = false;
-    void preparePushBrowserResources()
-      .then(() => {
-        if (!cancelled) setPushPreparation('ready');
-      })
-      .catch(() => {
-        if (!cancelled) setPushPreparation('retry');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function refreshPushStatus() {
-    try {
-      const perm = typeof Notification !== 'undefined' ? Notification.permission : 'default';
-      setPushPermission(perm);
-      const { registration: reg, subscription: sub } = await getBrowserPushSubscriptionState();
-      if (reg) {
-        setSwRegistered(true);
-        setSwScope(reg.scope || '');
-        setSubscriptionEndpoint(sub?.endpoint ? new URL(sub.endpoint).host : '');
-      } else {
-        setSwRegistered(false);
-        setSwScope('');
-        setSubscriptionEndpoint('');
-      }
-      const braveApi = (navigator as Navigator & {
-        brave?: { isBrave?: () => Promise<boolean> };
-      }).brave;
-      const isBrave = braveApi?.isBrave ? await braveApi.isBrave().catch(() => false) : false;
-      setPushProvider(isBrave
-        ? "Brave detected; its browser-wide provider setting is not exposed to websites. Verify 'Use Google services for push messaging', then fully quit/reopen Brave"
-        : 'Browser default; provider availability is not exposed to websites');
-      // Relay reachability and end-to-end XMTP delivery readiness are separate.
-      try {
-        const keyUrl = `${VAPID_PARTY_API_BASE}${VAPID_PARTY_XMTP_PUBLIC_KEY_PATH}`;
-        const [service, key] = await Promise.all([
-          getXmtpPushServiceStatus(),
-          fetch(keyUrl, { method: 'GET' }).catch(() => null),
-        ]);
-        setBackendReachable(
-          `${service.relayReachable ? service.relayStatus || 'reachable' : 'unreachable'}; XMTP VAPID ${key ? `${key.status} ${key.ok ? 'OK' : 'ERR'}` : 'unreachable'}`,
-        );
-        const counts = [
-          service.pendingRegistrationCount !== undefined
-            ? `${service.pendingRegistrationCount} pending`
-            : undefined,
-          service.failedRegistrationCount !== undefined
-            ? `${service.failedRegistrationCount} failed`
-            : undefined,
-        ].filter(Boolean).join(', ');
-        const freshness = [
-          service.listenerLastCheckedAt
-            ? `listener checked ${service.listenerLastCheckedAt}`
-            : undefined,
-          service.bridgeLastSuccessfulSyncAt
-            ? `bridge synced ${service.bridgeLastSuccessfulSyncAt}`
-            : undefined,
-        ].filter(Boolean).join('; ');
-        setDeliveryPipeline(
-          `${service.deliveryReadiness}${service.listenerStatus ? `; listener ${service.listenerStatus}` : ''}${service.bridgeStatus ? `; bridge ${service.bridgeStatus}` : ''}${counts ? `; ${counts}` : ''}${freshness ? `; ${freshness}` : ''}. ${service.detail}`,
-        );
-        logNetworkEvent({
-          direction: 'status',
-          event: 'push:health',
-          details: `relay=${service.relayReachable ? service.relayStatus || 'reachable' : 'unreachable'}; delivery=${service.deliveryReadiness}; XMTP VAPID key=${key?.status ?? 'unreachable'}`,
-        });
-      } catch (e) {
-        setBackendReachable('unreachable');
-        setDeliveryPipeline('unavailable; XMTP delivery is not confirmed');
-        logNetworkEvent({ direction: 'status', event: 'push:health', details: 'vapid.party health unreachable' });
-      }
-    } catch (e) {
-      // swallow – this is debug UI
-    }
-  }
 
   async function handleClaimInvite() {
     setInviteError(null);
@@ -427,155 +321,7 @@ export function DebugPage() {
           </div>
         </section>
 
-        {/* Push Debug */}
-        <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
-          <header className="flex items-center justify-between border-b border-primary-800/60 px-4 py-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-primary-100">Push Debug</h2>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={refreshPushStatus}
-                className="rounded-lg border border-primary-800/60 px-3 py-1 text-xs text-primary-100 hover:border-primary-700"
-              >
-                Refresh
-              </button>
-            </div>
-          </header>
-          <div className="px-4 py-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 text-sm">
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">VAPID Public Key</div>
-              <div className="mt-1 text-primary-100 break-all text-xs">
-                {VAPID_PUBLIC_KEY ? `${VAPID_PUBLIC_KEY.slice(0, 20)}...` : `fetch ${VAPID_PARTY_XMTP_PUBLIC_KEY_PATH}`}
-              </div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">vapid.party API Base</div>
-              <div className="mt-1 text-primary-100 break-all text-xs">{VAPID_PARTY_API_BASE}</div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Site Display Permission</div>
-              <div className="mt-1 text-primary-100">
-                {pushPermission === 'granted' ? 'granted (converge.cv allowed)' : pushPermission}
-              </div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Service Worker</div>
-              <div className="mt-1 text-primary-100">{swRegistered ? `registered (${swScope})` : 'not registered'}</div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Subscription</div>
-              <div className="mt-1 text-primary-100 break-all text-xs">
-                {subscriptionEndpoint ? subscriptionEndpoint : 'none'}
-              </div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Web Push Provider</div>
-              <div className="mt-1 text-primary-100 break-words text-xs">{pushProvider}</div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Relay API</div>
-              <div className="mt-1 text-primary-100">{backendReachable}</div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">XMTP Delivery Pipeline</div>
-              <div className="mt-1 text-primary-100 break-words text-xs">{deliveryPipeline}</div>
-            </div>
-            <div className="rounded-lg bg-primary-900/40 p-3">
-              <div className="text-primary-300">Last Enable Attempt</div>
-              <div className="mt-1 text-primary-100 break-words text-xs">{pushAttempt}</div>
-            </div>
-          </div>
-          <div className="px-4 pb-4">
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  const reg = await registerServiceWorkerForPush();
-                  logNetworkEvent({ direction: 'status', event: 'push:sw_register', details: reg ? `scope=${reg.scope}` : 'failed' });
-                  await refreshPushStatus();
-                }}
-                className="btn-secondary"
-              >
-                Register SW
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (isPushEnabling) return;
-                  setIsPushEnabling(true);
-                  setPushAttempt('running');
-                  try {
-                    if (pushPreparation !== 'ready') {
-                      setPushPreparation('preparing');
-                      await preparePushBrowserResources();
-                      setPushPreparation('ready');
-                      setPushAttempt('browser resources ready; click Enable Push again');
-                      return;
-                    }
-                    const result = await enablePushForCurrentUser();
-                    const details = result.success
-                      ? `registered ${result.topicCount ?? 0} topic(s)`
-                      : result.error || 'failed';
-                    setPushAttempt(details);
-                    logNetworkEvent({
-                      direction: 'outbound',
-                      event: 'push:enable',
-                      details,
-                      payload: result.endpoint
-                        ? JSON.stringify({ endpointHost: new URL(result.endpoint).host })
-                        : undefined,
-                    });
-                    await refreshPushStatus();
-                  } catch (error) {
-                    const details = error instanceof Error ? error.message : 'preparation failed';
-                    setPushPreparation('retry');
-                    setPushAttempt(details);
-                    logNetworkEvent({
-                      direction: 'status',
-                      event: 'push:prepare',
-                      details,
-                    });
-                  } finally {
-                    setIsPushEnabling(false);
-                  }
-                }}
-                className="btn-primary"
-                disabled={!identity || pushPreparation === 'preparing' || isPushEnabling}
-              >
-                {isPushEnabling
-                  ? 'Enabling...'
-                  : pushPreparation === 'retry'
-                    ? 'Retry Push Setup'
-                    : 'Enable Push'}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const disabled = await disablePush();
-                  logNetworkEvent({
-                    direction: 'outbound',
-                    event: 'push:disable',
-                    details: disabled ? 'relay records deleted and browser unsubscribed' : 'cleanup incomplete',
-                  });
-                  await refreshPushStatus();
-                }}
-                className="btn-secondary"
-                disabled={!identity}
-              >
-                Disable Push
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await refreshPushStatus();
-                }}
-                className="btn-secondary"
-              >
-                Check Subscription
-              </button>
-            </div>
-          </div>
-        </section>
+        <PushDiagnosticsPanel />
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article className="rounded-xl border border-primary-800/60 bg-primary-950/30 p-4">

@@ -59,13 +59,15 @@ A keyfile or browser profile containing this data must be protected as sensitive
 
 ## Push Status
 
-Web Push support is experimental. One app/browser toggle manages one physical `PushSubscription` plus an app-scoped logical XMTP alert registration for each loaded inbox/installation. Standard Web Push is the current provider-neutral delivery adapter. Only the selected inbox connects to XMTP. Inactive-inbox pushes record an approximate activity dot without connecting, syncing, or claiming an exact unread count.
+Web Push support is experimental. One app/browser toggle manages one physical `PushSubscription` plus an app-scoped logical XMTP alert registration for each loaded inbox/installation. Converge uses the standard Web Push API without browser-specific request branches; vapid.party accepts only known FCM, Mozilla, Apple, and WNS provider endpoints. Only the selected inbox connects to XMTP. Inactive-inbox pushes record an approximate activity dot without connecting, syncing, or claiming an exact unread count.
 
 For the active inbox, Converge registers canonical MLS group topics with every HMAC-key epoch exposed by XMTP and adds the installation's deterministic welcome topic for new conversations. The relay receives an opaque inbox handle, not the profile name or message plaintext. The service worker resolves notification copy from the locally cached profile, and every notification click opens or focuses Converge's root page; relay data cannot select an inbox, conversation, or external URL.
 
 On July 14, 2026, vapid.party's Cloudflare-only Worker, D1, Queue, and singleton Container listener reported `deliveryReady: true`, listener `ready`, and bridge `synced`. A post-deployment real-Chrome canary then verified genuine XMTP installation-welcome and 16-byte group-topic delivery, three HMAC epochs, recipient-own-message and `shouldPush: false` suppression, and cleanup. Browser and relay registration alone still do not prove current automatic delivery; the app relies on the public readiness signal.
 
 Push remains experimental. XMTP `SubscribeAll` has no replay cursor, so a listener restart or disconnect can miss an approximate push hint; XMTP inbox sync remains authoritative after Converge opens. Installed-PWA and mobile delivery reliability has not yet been characterized. Settings and Debug report ready only while vapid.party's current coarse public health explicitly confirms the listener and bridge.
+
+Debug's **Push Trace** isolates local display, browser-provider subscription, private per-inbox relay registration, live XMTP matching, Queue/provider acceptance, and service-worker receipt. It can re-register a stale current-inbox topic snapshot and send a bounded relay test without exposing the registration capability. See [Push troubleshooting](docs/troubleshooting.md#trace-a-missing-xmtp-notification).
 
 ## Development
 
@@ -102,6 +104,8 @@ Use `pnpm test --run` for a one-shot Vitest run. Plain `pnpm test` starts watch 
 ## Deployment
 
 Pushes to `main` use the pnpm version pinned by `packageManager` with the frozen lockfile, then run typecheck, lint, Vitest, build, and deploy through GitHub Pages. The static app is served at [https://converge.cv](https://converge.cv). See [DEPLOYMENT.md](./DEPLOYMENT.md) for details.
+
+Push-contract releases are ordered across repositories: apply vapid.party D1 migration `0005_xmtp_diagnostics.sql`, deploy and verify the vapid.party Worker/listener status and diagnostic endpoints, and only then deploy the matching Converge client. The diagnostics-enabled client requires the relay's management-capability response and CORS headers.
 
 ## Project Layout
 

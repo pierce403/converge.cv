@@ -19,7 +19,7 @@ Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP prot
 - **Wallets as optional authority** (wallet approval joins/recover/administers an existing inbox; normal messaging uses the local Converge key)
 - **Local-first** (data persists on-device via IndexedDB)
 - **Honest local security** (browser data is unencrypted at rest; incomplete lock/passphrase/passkey controls stay hidden)
-- **Experimental app-level push** (one browser toggle and per-inbox routing/activity state; live relay delivery remains unverified)
+- **Experimental app-level push** (one browser toggle and per-inbox routing/activity state; the Cloudflare relay is deployed and tested, while live-stream gaps and mobile reliability remain explicit limitations)
 
 Burn Inbox is a selected-inbox Settings action. It closes the client, attempts
 static installation revocation, and wipes the complete local inbox namespace

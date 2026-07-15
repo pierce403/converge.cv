@@ -14,6 +14,7 @@ import {
   getPushStateStore,
   pushRegistrationKey,
   type CachedInboxPushRegistration,
+  type PushRelayDiagnosticsCapability,
   type PushStateStore,
 } from './state';
 import {
@@ -68,7 +69,7 @@ export type XmtpAlertRegistrationPayload = {
     id: typeof XMTP_PUSH_APP_ID;
     origin?: string;
   };
-  identity: XmtpPushIdentity;
+  identity: Pick<XmtpPushIdentity, 'inboxId' | 'installationId'>;
   subscription: SerializedPushSubscription;
   xmtp: {
     env: 'production';
@@ -82,7 +83,6 @@ export type XmtpAlertRegistrationPayload = {
     minimalPayloadOnly: true;
     plaintextPreview: false;
   };
-  userAgent?: string;
   registeredAt: string;
 };
 
@@ -96,7 +96,7 @@ export type XmtpAlertUnregistrationPayload = {
     origin?: string;
   };
   endpoint: string;
-  identity: XmtpPushIdentity;
+  identity: Pick<XmtpPushIdentity, 'inboxId' | 'installationId'>;
   deletedAt: string;
 };
 
@@ -141,6 +141,7 @@ export type AppPushStatus = {
   registeredInboxCount: number;
   expectedInboxCount: number;
   missingInboxIds: string[];
+  pendingRegistrationCount: number;
   pendingDeletionCount: number;
 };
 
@@ -445,14 +446,6 @@ function getOrigin(): string | undefined {
   }
 }
 
-function getUserAgent(): string | undefined {
-  try {
-    return typeof navigator !== 'undefined' ? navigator.userAgent : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function emitPushActivityCleared(inboxId?: string): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(
@@ -491,12 +484,14 @@ export function buildXmtpAlertRegistrationPayload({
   return {
     version: 1,
     app: { id: XMTP_PUSH_APP_ID, origin: appOrigin?.trim() || undefined },
-    identity,
+    identity: {
+      inboxId: identity.inboxId,
+      installationId: identity.installationId,
+    },
     subscription,
     xmtp: { env: 'production', topics, topicSource: 'conversations.hmacKeys' },
     notification: { inboxHandle: inboxHandle ?? 'legacy-current-inbox' },
     preferences: { minimalPayloadOnly: true, plaintextPreview: false },
-    userAgent: getUserAgent(),
     registeredAt,
   };
 }
@@ -519,7 +514,10 @@ export function buildXmtpAlertUnregistrationPayload({
     version: 1,
     app: { id: XMTP_PUSH_APP_ID, origin: appOrigin?.trim() || undefined },
     endpoint,
-    identity,
+    identity: {
+      inboxId: identity.inboxId,
+      installationId: identity.installationId,
+    },
     deletedAt,
   };
 }
@@ -1036,8 +1034,8 @@ function currentDisplayName(override?: string): string | undefined {
   const identityName = identity?.displayName?.trim();
   if (identityName) return identityName;
   if (!identity?.inboxId) return undefined;
+  useInboxRegistryStore.getState().hydrate();
   const registry = useInboxRegistryStore.getState();
-  registry.hydrate();
   const entry = registry.entries.find(
     (candidate) => normalizeInboxId(candidate.inboxId) === normalizeInboxId(identity.inboxId),
   );
@@ -1125,8 +1123,8 @@ export async function updatePushInboxProfile(
 }
 
 function defaultLoadedInboxIds(): string[] {
+  useInboxRegistryStore.getState().hydrate();
   const registry = useInboxRegistryStore.getState();
-  registry.hydrate();
   return registry.entries.flatMap((entry) => {
     const normalized = normalizeInboxId(entry.inboxId);
     return normalized ? [normalized] : [];
@@ -1163,13 +1161,26 @@ async function registerWithVapidParty(
     fetchFn = fetch,
     requestTimeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
   }: PushRuntimeOptions = {},
-): Promise<{ registrationId?: string }> {
+  cachedDiagnosticsReceipt?: string,
+): Promise<{
+  registrationId?: string;
+  diagnostics?: PushRelayDiagnosticsCapability;
+}> {
+  const hasCachedDiagnosticsReceipt = /^[A-Za-z0-9_-]{43}$/.test(
+    cachedDiagnosticsReceipt ?? '',
+  );
   return fetchRelayWithTimeout(
     fetchFn,
     joinApiPath(apiBase, VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Vapid-Party-Diagnostics': '1',
+        ...(hasCachedDiagnosticsReceipt
+          ? { Authorization: `Bearer ${cachedDiagnosticsReceipt}` }
+          : {}),
+      },
       body: JSON.stringify(payload),
     },
     async (response) => {
@@ -1178,11 +1189,36 @@ async function registerWithVapidParty(
         throw new Error(`vapid.party XMTP registration failed: ${response.status}${errorText ? `: ${errorText}` : ''}`);
       }
       const contentType = response.headers.get('Content-Type') ?? '';
-      if (!contentType.includes('application/json')) return {};
+      if (!contentType.includes('application/json')) {
+        throw new Error('vapid.party XMTP registration returned an unrecognized response');
+      }
       const json = await response.json();
       const registrationId =
         json?.data?.subscriptionId ?? json?.data?.id ?? json?.subscriptionId ?? json?.id;
-      return typeof registrationId === 'string' ? { registrationId } : {};
+      const rawDiagnostics = json?.data?.diagnostics ?? json?.diagnostics;
+      const receipt = typeof rawDiagnostics?.receipt === 'string'
+        ? rawDiagnostics.receipt.trim()
+        : '';
+      const statusPath = typeof rawDiagnostics?.statusPath === 'string'
+        ? rawDiagnostics.statusPath.trim()
+        : '';
+      const testPath = typeof rawDiagnostics?.testPath === 'string'
+        ? rawDiagnostics.testPath.trim()
+        : undefined;
+      const expectedStatusPath = '/api/xmtp/status';
+      const diagnostics =
+        /^[A-Za-z0-9_-]{43}$/.test(receipt) &&
+        statusPath === expectedStatusPath &&
+        (!testPath || testPath === `${expectedStatusPath}/test`)
+          ? { receipt, statusPath, testPath }
+          : undefined;
+      if (!diagnostics) {
+        throw new Error('vapid.party XMTP registration did not return a management capability');
+      }
+      return {
+        registrationId: typeof registrationId === 'string' ? registrationId : undefined,
+        diagnostics,
+      };
     },
     requestTimeoutMs,
   );
@@ -1196,13 +1232,19 @@ async function unregisterWithVapidParty(
     fetchFn = fetch,
     requestTimeoutMs = DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
   }: PushRuntimeOptions = {},
+  diagnosticsReceipt?: string,
 ): Promise<void> {
   return fetchRelayWithTimeout(
     fetchFn,
     joinApiPath(apiBase, VAPID_PARTY_XMTP_SUBSCRIPTIONS_PATH),
     {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(/^[A-Za-z0-9_-]{43}$/.test(diagnosticsReceipt ?? '')
+          ? { Authorization: `Bearer ${diagnosticsReceipt}` }
+          : {}),
+      },
       body: JSON.stringify(buildXmtpAlertUnregistrationPayload({ endpoint, identity })),
     },
     async (response) => {
@@ -1210,33 +1252,6 @@ async function unregisterWithVapidParty(
     },
     requestTimeoutMs,
   );
-}
-
-function staleEndpointRegistrationKey(registration: CachedInboxPushRegistration): string {
-  const suffix = typeof globalThis.crypto.randomUUID === 'function'
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now()}`;
-  return `${registration.key}:stale-endpoint:${suffix}`;
-}
-
-async function removeReplacedEndpointRegistration(
-  cached: CachedInboxPushRegistration,
-  currentEndpoint: string,
-  store: PushStateStore,
-  opts: PushRuntimeOptions,
-): Promise<void> {
-  if (!cached.endpoint || cached.endpoint === currentEndpoint) return;
-  try {
-    await unregisterWithVapidParty(cached.endpoint, cached.identity, opts);
-  } catch (error) {
-    console.warn('[Push] Could not delete a replaced browser endpoint relay record', error);
-    await store.putRegistration({
-      ...cached,
-      key: staleEndpointRegistrationKey(cached),
-      pendingDeletion: true,
-      updatedAt: Date.now(),
-    });
-  }
 }
 
 async function removeSupersededInboxRegistrations(
@@ -1258,7 +1273,12 @@ async function removeSupersededInboxRegistrations(
       continue;
     }
     try {
-      await unregisterWithVapidParty(registration.endpoint, registration.identity, opts);
+      await unregisterWithVapidParty(
+        registration.endpoint,
+        registration.identity,
+        opts,
+        registration.relayDiagnostics?.receipt,
+      );
       await store.deleteRegistration(registration.key);
     } catch (error) {
       console.warn('[Push] Could not delete a superseded inbox/installation relay record', error);
@@ -1309,6 +1329,7 @@ async function performEnablePushForLoadedInboxes(
   let createdSubscription = false;
   let subscription: PushSubscription | null = null;
   let registeredInboxCount = 0;
+  let retainedRemoteInboxCount = 0;
   let browserSubscriptionPromise: Promise<PushBrowserSubscription> | undefined;
 
   try {
@@ -1361,6 +1382,8 @@ async function performEnablePushForLoadedInboxes(
 
     for (const cached of selected) {
       let remoteRegistered = false;
+      let remoteDiagnostics = cached.relayDiagnostics;
+      let pendingRegistration: CachedInboxPushRegistration | undefined;
       try {
         if (opts.mutationGeneration !== pushMutationGeneration) {
           throw new Error('Notification setup was superseded by a later disable or inbox removal');
@@ -1373,49 +1396,81 @@ async function performEnablePushForLoadedInboxes(
           inboxHandle: cached.inboxHandle,
           registeredAt,
         });
-        const registered = await registerWithVapidParty(payload, opts);
+        const registered = await registerWithVapidParty(
+          payload,
+          opts,
+          cached.relayDiagnostics?.receipt,
+        );
         remoteRegistered = true;
+        remoteDiagnostics = registered.diagnostics;
         if (opts.mutationGeneration !== pushMutationGeneration) {
           throw new Error('Notification setup was superseded by a later disable or inbox removal');
         }
-        const persistedRegistration = {
+        const persistedRegistration: CachedInboxPushRegistration = {
           ...cached,
           endpoint: subscription.endpoint,
           relayRegistrationId: registered.registrationId,
+          relayDiagnostics: remoteDiagnostics,
           registeredAt,
           updatedAt: Date.now(),
+          pendingRegistration: false,
           pendingDeletion: false,
         };
-        await removeReplacedEndpointRegistration(cached, subscription.endpoint, store, opts);
+        pendingRegistration = persistedRegistration;
         await store.putRegistration(persistedRegistration);
         await removeSupersededInboxRegistrations(persistedRegistration, store, opts);
         if (registered.registrationId) registrationIds.push(registered.registrationId);
         topicCount += cached.topics.length;
         registeredInboxCount += 1;
       } catch (error) {
-        console.warn('[Push] Failed to register loaded inbox', cached.identity.inboxId, error);
-        if (remoteRegistered) {
+        console.warn('[Push] Failed to register a loaded inbox', error);
+        const intentionallySuperseded =
+          opts.mutationGeneration !== pushMutationGeneration ||
+          invalidatedPushRegistrationKeys.has(cached.key);
+        if (remoteRegistered && intentionallySuperseded) {
           try {
-            await unregisterWithVapidParty(subscription.endpoint, cached.identity, opts);
+            await unregisterWithVapidParty(
+              subscription.endpoint,
+              cached.identity,
+              opts,
+              remoteDiagnostics?.receipt,
+            );
+            await store.deleteRegistration(cached.key);
           } catch (rollbackError) {
-            console.warn('[Push] Failed to roll back a partially persisted relay registration', rollbackError);
+            console.warn('[Push] Failed to remove a superseded relay registration', rollbackError);
             try {
               await store.putRegistration({
-                ...cached,
+                ...(pendingRegistration ?? cached),
                 endpoint: subscription.endpoint,
+                relayDiagnostics: remoteDiagnostics,
+                pendingRegistration: false,
                 pendingDeletion: true,
                 updatedAt: Date.now(),
               });
             } catch (tombstoneError) {
-              console.warn('[Push] Failed to retain relay rollback tombstone', tombstoneError);
+              console.warn('[Push] Failed to retain relay deletion tombstone', tombstoneError);
             }
+          }
+        } else if (remoteRegistered) {
+          retainedRemoteInboxCount += 1;
+          try {
+            await store.putRegistration({
+              ...(pendingRegistration ?? cached),
+              endpoint: subscription.endpoint,
+              relayDiagnostics: remoteDiagnostics,
+              pendingRegistration: true,
+              pendingDeletion: false,
+              updatedAt: Date.now(),
+            });
+          } catch (recoveryStateError) {
+            console.warn('[Push] Failed to retain relay registration recovery state', recoveryStateError);
           }
         }
         failedInboxIds.push(cached.identity.inboxId);
       }
     }
 
-    const enabled = registeredInboxCount > 0;
+    const enabled = registeredInboxCount + retainedRemoteInboxCount > 0;
     await store.setPreferences({
       enabled,
       endpoint: enabled ? subscription.endpoint : undefined,
@@ -1448,7 +1503,7 @@ async function performEnablePushForLoadedInboxes(
       subscription && createdSubscription
         ? { subscription, created: true }
         : await browserSubscriptionPromise?.catch(() => undefined);
-    if (browserSubscription?.created && registeredInboxCount === 0) {
+    if (browserSubscription?.created && registeredInboxCount + retainedRemoteInboxCount === 0) {
       await browserSubscription.subscription.unsubscribe().catch(() => undefined);
     }
     console.error('[Push] Failed to enable push notifications:', error);
@@ -1591,16 +1646,18 @@ async function performPushRegistrationRefresh(
         registeredAt,
       }),
       opts,
+      cached.relayDiagnostics?.receipt,
     );
     const persistedRegistration = {
       ...cached,
       endpoint: subscription.endpoint,
       relayRegistrationId: registered.registrationId,
+      relayDiagnostics: registered.diagnostics,
       registeredAt,
       updatedAt: Date.now(),
+      pendingRegistration: false,
       pendingDeletion: false,
     };
-    await removeReplacedEndpointRegistration(cached, subscription.endpoint, store, opts);
     await store.putRegistration(persistedRegistration);
     await removeSupersededInboxRegistrations(persistedRegistration, store, opts);
     await store.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: Date.now() });
@@ -1801,6 +1858,7 @@ export async function getAppPushStatus(
       expectedInboxCount: 0,
       missingInboxIds: [],
       pendingDeletionCount: 0,
+      pendingRegistrationCount: 0,
     };
   }
   const store = options.stateStore ?? getPushStateStore();
@@ -1823,11 +1881,16 @@ export async function getAppPushStatus(
     const registeredInboxIds = new Set(matching.map((entry) => normalizeInboxId(entry.identity.inboxId)));
     const missingInboxIds = expected.filter((inboxId) => !registeredInboxIds.has(inboxId));
     const pendingDeletionCount = cached.filter((entry) => entry.pendingDeletion).length;
+    const pendingRegistrationCount = matching.filter((entry) => entry.pendingRegistration).length;
     const fullyEnabled =
-      preferences.enabled && Boolean(subscription) && matching.length > 0 && missingInboxIds.length === 0;
+      preferences.enabled &&
+      Boolean(subscription) &&
+      matching.length > 0 &&
+      missingInboxIds.length === 0 &&
+      pendingRegistrationCount === 0;
     return {
       state:
-        pendingDeletionCount > 0
+        pendingDeletionCount > 0 || pendingRegistrationCount > 0
           ? 'partial'
           : !preferences.enabled
             ? 'disabled'
@@ -1840,6 +1903,7 @@ export async function getAppPushStatus(
       registeredInboxCount: matching.length,
       expectedInboxCount: expected.length,
       missingInboxIds,
+      pendingRegistrationCount,
       pendingDeletionCount,
     };
   } catch (error) {
@@ -1852,6 +1916,7 @@ export async function getAppPushStatus(
       expectedInboxCount: 0,
       missingInboxIds: [],
       pendingDeletionCount: 0,
+      pendingRegistrationCount: 0,
     };
   }
 }
@@ -1897,7 +1962,12 @@ async function performDisablePush(opts: DisablePushOptions): Promise<boolean> {
         continue;
       }
       try {
-        await unregisterWithVapidParty(endpoint, record.identity, opts);
+        await unregisterWithVapidParty(
+          endpoint,
+          record.identity,
+          opts,
+          record.relayDiagnostics?.receipt,
+        );
         await store.deleteRegistration(record.key);
       } catch (error) {
         relayCleanupSucceeded = false;
@@ -2001,7 +2071,12 @@ async function performRemovePushRegistrationForInbox(
       const endpoint = record.endpoint ?? subscription?.endpoint ?? preferences.endpoint;
       if (endpoint) {
         try {
-          await unregisterWithVapidParty(endpoint, record.identity, opts);
+          await unregisterWithVapidParty(
+            endpoint,
+            record.identity,
+            opts,
+            record.relayDiagnostics?.receipt,
+          );
         } catch (error) {
           relayCleanupSucceeded = false;
           console.warn('[Push] Failed to remove burned inbox from push relay', error);

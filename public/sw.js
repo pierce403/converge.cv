@@ -5,6 +5,7 @@ const PUSH_META_STORE = 'meta';
 const PUSH_REGISTRATIONS_STORE = 'registrations';
 const PUSH_PROFILES_STORE = 'profiles';
 const PUSH_ACTIVITY_STORE = 'activity';
+const LAST_DIAGNOSTIC_KEY = 'lastDiagnosticReceipt';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -39,6 +40,12 @@ function validInboxHandle(value) {
 function payloadInboxHandle(payload) {
   const nestedData = payload.data && typeof payload.data === 'object' ? payload.data : {};
   return validInboxHandle(payload.inboxHandle) || validInboxHandle(nestedData.inboxHandle);
+}
+
+function validDiagnosticTestId(value) {
+  if (typeof value !== 'string') return null;
+  const testId = value.trim();
+  return /^[A-Za-z0-9_-]{8,128}$/.test(testId) ? testId : null;
 }
 
 function openPushStateDatabase() {
@@ -105,6 +112,24 @@ async function recordInboxActivity(inboxHandle, receivedAt) {
   }
 }
 
+async function recordDiagnosticReceipt(testId, receivedAt, source) {
+  const database = await openPushStateDatabase();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(PUSH_META_STORE, 'readwrite');
+      transaction.objectStore(PUSH_META_STORE).put({
+        key: LAST_DIAGNOSTIC_KEY,
+        value: { testId, receivedAt, source },
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error('Unable to store push diagnostic receipt'));
+      transaction.onabort = () => reject(transaction.error || new Error('Push diagnostic transaction aborted'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
 async function postActivityToClients(inboxHandle, receivedAt, count) {
   if (!inboxHandle) return;
   const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
@@ -118,6 +143,40 @@ async function postActivityToClients(inboxHandle, receivedAt, count) {
   }
 }
 
+async function postDiagnosticToClients(testId, receivedAt, source) {
+  const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  for (const client of allClients) {
+    client.postMessage({
+      type: 'converge.push.diagnostic',
+      testId,
+      receivedAt,
+      source,
+    });
+  }
+}
+
+async function showDiagnosticNotification(testId, source) {
+  const receivedAt = Date.now();
+  await self.registration.showNotification('Converge push test', {
+    body: source === 'relay'
+      ? 'The relay, push provider, and service worker path reached this browser.'
+      : 'This browser can display notifications from the Converge service worker.',
+    tag: `converge-push-diagnostic-${source}`,
+    data: {
+      url: self.location.origin + '/',
+      type: 'vapid.diagnostic',
+      testId,
+    },
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+  });
+  await Promise.all([
+    recordDiagnosticReceipt(testId, receivedAt, source).catch(() => undefined),
+    postDiagnosticToClients(testId, receivedAt, source).catch(() => undefined),
+  ]);
+  return receivedAt;
+}
+
 function localProfileName(profile) {
   if (!profile || typeof profile.displayName !== 'string') return null;
   const displayName = profile.displayName.trim().replace(/[\u0000-\u001f\u007f]/g, ' ');
@@ -128,6 +187,11 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
       const payload = unwrapPayload(readPushData(event));
+      if (payload.type === 'vapid.diagnostic') {
+        const diagnosticTestId = validDiagnosticTestId(payload.testId);
+        if (diagnosticTestId) await showDiagnosticNotification(diagnosticTestId, 'relay');
+        return;
+      }
       const inboxHandle = payloadInboxHandle(payload);
       const receivedAt = Date.now();
       const [profile, count] = await Promise.all([
@@ -157,6 +221,30 @@ self.addEventListener('push', (event) => {
         badge: '/icons/icon-192.png',
       });
     })(),
+  );
+});
+
+self.addEventListener('message', (event) => {
+  const payload = event.data && typeof event.data === 'object' ? event.data : {};
+  if (payload.type !== 'converge.push.test-display') return;
+  const testId = validDiagnosticTestId(payload.testId);
+  if (!testId) return;
+  event.waitUntil(
+    showDiagnosticNotification(testId, 'local')
+      .then((receivedAt) => {
+        event.ports?.[0]?.postMessage({
+          type: 'converge.push.diagnostic',
+          testId,
+          receivedAt,
+          source: 'local',
+        });
+      })
+      .catch((error) => {
+        event.ports?.[0]?.postMessage({
+          type: 'converge.push.diagnostic-error',
+          message: error instanceof Error ? error.message : 'Notification display failed',
+        });
+      }),
   );
 });
 

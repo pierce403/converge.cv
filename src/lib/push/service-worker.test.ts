@@ -21,6 +21,25 @@ describe('push service worker privacy contract', () => {
     expect(source).toContain('`converge-xmtp-${inboxHandle}`');
   });
 
+  it('handles relay diagnostics separately without recording inbox activity', () => {
+    expect(source).toContain("payload.type === 'vapid.diagnostic'");
+    expect(source).toContain("showDiagnosticNotification(diagnosticTestId, 'relay')");
+    expect(source).toContain("type: 'converge.push.diagnostic'");
+    expect(source).toContain("source: 'local'");
+    const pushHandler = source.slice(
+      source.indexOf("self.addEventListener('push'"),
+      source.indexOf("self.addEventListener('message'"),
+    );
+    expect(pushHandler.indexOf("payload.type === 'vapid.diagnostic'"))
+      .toBeLessThan(pushHandler.indexOf('recordInboxActivity(inboxHandle, receivedAt)'));
+    const diagnosticFunction = source.slice(
+      source.indexOf('async function showDiagnosticNotification'),
+      source.indexOf('function localProfileName'),
+    );
+    expect(diagnosticFunction.indexOf("await self.registration.showNotification('Converge push test'"))
+      .toBeLessThan(diagnosticFunction.indexOf('recordDiagnosticReceipt(testId, receivedAt, source)'));
+  });
+
   it('focuses the app without encoding an inbox switch decision in the click URL', () => {
     expect(source).toContain("self.addEventListener('notificationclick'");
     expect(source).toContain("const url = self.location.origin + '/'");

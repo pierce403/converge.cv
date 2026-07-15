@@ -965,6 +965,9 @@ export function SettingsPage() {
       if (pushDetails?.pendingDeletionCount) {
         return `Notifications are off; ${pushDetails.pendingDeletionCount} relay cleanup ${pushDetails.pendingDeletionCount === 1 ? 'request is' : 'requests are'} pending`;
       }
+      if (pushDetails?.pendingRegistrationCount) {
+        return `${pushDetails.pendingRegistrationCount} active relay registration ${pushDetails.pendingRegistrationCount === 1 ? 'needs' : 'registrations need'} a local retry`;
+      }
       return `Browser registered for ${pushDetails?.registeredInboxCount ?? 0} of ${pushDetails?.expectedInboxCount ?? 0} loaded inboxes`;
     }
     if (pushStatus === 'enabled') {

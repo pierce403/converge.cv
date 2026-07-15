@@ -16,6 +16,44 @@ Do not use DevTools **Clear site data** as a routine troubleshooting step.
 Converge's local account keys and messages live in browser storage and will be
 removed with the rest of the site data.
 
+## Trace a missing XMTP notification
+
+Open **Debug -> Push Trace**. It checks the delivery path in order instead of
+treating a test notification as proof that XMTP matching works:
+
+1. **Site and service worker**: notification permission must be granted and the
+   Converge service worker must be active.
+2. **Browser provider**: a physical Web Push subscription must exist. **Test
+   local display** checks only this browser and service worker; it does not
+   contact vapid.party or XMTP.
+3. **Logical relay registration**: the current inbox should have exactly one
+   welcome topic plus conversation group topics and HMAC epochs when it has
+   conversations. The private relay counts must match the local counts and the
+   listener route must be synced.
+4. **Relay delivery**: **Send relay test** checks D1 -> Queue -> Web Push
+   provider -> service worker for exactly the current logical registration. A
+   provider-accepted result still does not prove that an XMTP message matched.
+5. **XMTP match**: send a new message from a different XMTP inbox, then refresh
+   Push Trace. Messages authored by another installation of the recipient's
+   same inbox are intentionally suppressed and are not a valid test.
+
+If an inbox with conversations is `welcome_only`, or shows zero group topics or
+zero HMAC epochs, select **Re-register current inbox**. This synchronizes the
+active conversation list and preferences, publishes the current topic snapshot,
+and verifies the private relay copy. Reloading a newly deployed Converge build
+also performs one build-aware repair refresh, but the explicit Debug action does
+not wait for that cooldown.
+
+vapid.party's public landing-page status is intentionally coarse. It can prove
+that the global listener and registration bridge are ready, but it cannot expose
+or verify a particular inbox registration. Push Trace uses a private capability
+stored in `ConvergePushState` for that check. Never paste that capability, a Web
+Push endpoint, HMAC key, or copied IndexedDB registration into an issue or chat.
+
+XMTP listener subscriptions are live-only. Repairing a registration affects new
+traffic; notifications missed before the repair are not replayed. Opening
+Converge still performs authoritative XMTP sync and can recover the messages.
+
 ## Push service registration error
 
 `AbortError: Registration failed - push service error` comes from the browser's
@@ -51,9 +89,10 @@ do not prove that the browser will accept a new Web Push registration for
    generic Web Push demo, the problem is the browser/provider rather than
    Converge or vapid.party.
 
-The Debug page reports the last enable attempt and separately checks the
-vapid.party health and public-key routes. A browser-provider failure should say
-that no subscription or inbox data was sent; the public-key GET is expected.
+Push Trace reports the last enable attempt and separately checks vapid.party's
+health, public key, and the private logical registration when a management
+capability exists. A browser-provider failure should say that no subscription
+or inbox data was sent; the public-key GET is expected.
 
 Do not clear site data to repair push. It would delete Converge's local account
 keys and messages. A cache-only refresh must preserve service-worker

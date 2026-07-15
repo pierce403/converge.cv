@@ -6535,6 +6535,14 @@ export class XmtpClient {
       return new Map<string, HmacKey[]>();
     }
 
+    // Pull newly joined/created MLS groups before enumerating push topics. A
+    // preference sync alone can leave a relay registration welcome-only even
+    // though the inbox already has active conversations.
+    await activeClient.conversations.sync();
+    if (this.client !== activeClient) {
+      return new Map<string, HmacKey[]>();
+    }
+
     await activeClient.preferences.sync();
     if (this.client !== activeClient) {
       return new Map<string, HmacKey[]>();

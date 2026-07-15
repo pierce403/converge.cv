@@ -174,7 +174,7 @@ Converge's client-side integration treats XMTP alert registration as an app-scop
 
 1. Converge registers a browser `PushSubscription`.
 2. Converge maintains one `converge.cv`-scoped logical XMTP alert registration per loaded inbox and installation on that shared subscription endpoint.
-3. A singleton Cloudflare Container XMTP listener watches message and welcome traffic and forwards matching encrypted envelopes to vapid.party's authenticated delivery ingest.
+3. A singleton Cloudflare Container XMTP listener watches message and welcome traffic and forwards only minimal opaque match metadata to vapid.party's authenticated delivery ingest; encrypted envelopes are not queued or forwarded by the production contract.
 4. vapid.party sends a minimal Web Push payload that identifies the inbox through an opaque local handle.
 5. `public/sw.js` records an approximate per-inbox activity hint and shows a visible notification using the local inbox profile name when available.
 6. Clicking the notification focuses or opens Converge without automatically switching inboxes.
@@ -183,8 +183,8 @@ Converge's client-side integration treats XMTP alert registration as an app-scop
 ### App-Level Subscription Model
 
 - Notification permission and the browser `PushSubscription` are app/browser-wide. There is no per-inbox or per-conversation user toggle.
-- The app scope is part of every registration and deletion. Standard Web Push endpoint/key data is provider-neutral: Converge does not branch on FCM, APNs, or another browser push vendor.
-- The relay stores the physical Web Push endpoint separately from logical registrations keyed by `subscription.endpoint + inboxId + installationId`. One physical endpoint can therefore serve many loaded inboxes, and deleting one logical registration leaves the others intact.
+- The app scope is part of every registration and deletion. Converge uses standard Web Push endpoint/key data without browser-vendor request branches. The public relay separately validates endpoints against its supported FCM, Mozilla, Apple, and WNS provider allowlist.
+- The relay keeps one active route per `app + inboxId + installationId`; its physical Web Push endpoint and subscription keys are replaceable attributes of that route. One physical endpoint can serve many loaded inboxes, and deleting one logical registration leaves the others intact.
 - Enabling notifications upserts every loaded inbox for which Converge has cached valid relay material. A newly created, imported, or joined inbox is upserted when it is active and its topics are available.
 - Inactive inboxes remain registered at the relay but do not open an XMTP client or sync. Last-known topic material is stored in that inbox's local namespace and refreshed only while the inbox is active.
 - Disabling notifications deletes every locally known inbox/installation relay record before unsubscribing the shared browser endpoint. Browser notification permission itself remains controlled by browser settings.
@@ -207,26 +207,30 @@ Converge's client-side integration treats XMTP alert registration as an app-scop
   - after a provider-level root failure, registers the same worker under the VAPID-key-versioned `/__converge-push/<key-version>/` scope and retries there. A subscription belongs to a service-worker registration, so this gives origin-specific Chromium/FCM state a new registration identity without clearing Converge IndexedDB, OPFS, local keys, or messages;
   - prefers a matching recovery subscription during status, refresh, and disable operations; removes superseded root/recovery subscriptions only after the replacement endpoint is registered remotely and persisted locally; and never unregisters the root app worker as part of push recovery;
   - classifies browser provider rejection separately from relay registration failure and makes clear that no subscription or inbox data was sent to vapid.party when no endpoint exists, even though the public-key GET may have succeeded;
-  - gathers the active `inboxId`, `installationId`, address, local profile name, and consent-filtered conversation HMAC keys;
+  - synchronizes the active conversation list and preferences before gathering the active `inboxId`, `installationId`, address, local profile name, and consent-filtered conversation HMAC keys;
   - caches one registration per loaded inbox/installation in `ConvergePushState` and upserts every loaded inbox with available material;
   - tracks app-level enabled/partial/disabled status instead of treating endpoint existence as sufficient;
   - checks coarse public relay health separately and marks end-to-end delivery ready only when the response explicitly confirms the listener and registration bridge are ready. A healthy Worker with no XMTP readiness field remains `unknown`;
   - deletes every cached relay record before unsubscribing globally and retains failed deletions as retryable tombstones;
   - POSTs/DELETEs versioned XMTP registration payloads without `X-API-Key`.
-- `src/lib/xmtp/client.ts` synchronizes preferences, lists Allowed and Unknown conversations with `includeDuplicateDms: true`, calls each conversation's `hmacKeys()`, and merges all backing MLS groups and every distinct HMAC epoch. Denied conversations are excluded.
+- `src/lib/xmtp/client.ts` synchronizes conversations and preferences, lists Allowed and Unknown conversations with `includeDuplicateDms: true`, calls each conversation's `hmacKeys()`, and merges all backing MLS groups and every distinct HMAC epoch. Denied conversations are excluded.
 - Browser SDK 6.1.2 returns raw 16-byte group IDs (32 lowercase hex characters) as map keys. `src/lib/push/subscribe.ts` accepts only that raw shape or the full `/xmtp/mls/1/g-<32-hex-group-id>/proto` shape, canonicalizes the result to lowercase, and deterministically appends `/xmtp/mls/1/w-<64-hex-installation-id>/proto` with no HMAC key for installation welcomes.
 - The active client watches XMTP `HmacKeyUpdate` and `ConsentUpdate` preference events. Conversation/sync changes and those preference changes trigger a debounced relay refresh. Relay mutations are serialized; concurrent refresh calls coalesce but retain one trailing newest snapshot. Disable/Burn synchronously advance a mutation generation and abort active relay requests, while permission/VAPID preparation stays outside the mutation lock, so stale Enable/refresh work cannot restore deleted state or block local cleanup.
-- Relay fetch and body parsing are bounded to five seconds. A successful registration POST is counted only after local persistence completes; a later local failure triggers DELETE rollback, with a pending-deletion tombstone retained when rollback cannot be confirmed.
+- Relay fetch and body parsing are bounded to five seconds. If the relay accepts an upsert but final local persistence fails, Converge keeps the active route and browser subscription and stores the returned capability in a `pendingRegistration` recovery record. A retry sends that capability and finalizes the same route idempotently. Only explicit supersession, Disable, or Burn invokes DELETE; failed intentional cleanup remains a `pendingDeletion` tombstone.
 - `public/sw.js` stores opaque-handle activity in `ConvergePushState`, resolves a locally cached inbox profile name, uses a per-inbox notification tag, and posts activity hints to open clients. It never decrypts XMTP or expects plaintext message content.
 - `InboxSwitcher` loads and listens for those approximate activity hints, shows a dot for inactive inboxes, and clears the hint when that inbox is selected.
 - Notification clicks ignore all relay-supplied navigation and focus/open `self.location.origin + '/'`. They cannot select an inbox, conversation, same-origin subroute, or external URL; the user chooses the dotted inbox before XMTP sync/decryption.
-- Debug no longer attempts client-side `POST /send`; real test pushes must come from the relay side.
+- Startup topic repair uses a session cooldown key containing the installation plus build version/hash. A new deployment therefore publishes one fresh snapshot even when an older build refreshed recently. The Debug action calls the refresh directly and bypasses this startup cooldown.
+- Registration upserts may return a 256-bit diagnostic and management capability. Converge stores it only inside `ConvergePushState`; subsequent registration refreshes and deletes send it only as `Authorization: Bearer`, and the Debug Push Trace uses the same header on fixed `POST /api/xmtp/status` and `POST /api/xmtp/status/test` paths with no body, no referrer, and no cache. Exact-endpoint refreshes and authorized endpoint replacement preserve a valid capability. Exact-endpoint bootstrap or recovery without a valid stored capability may mint a replacement; a `409` capability conflict stops without an unauthenticated retry. The receipt, endpoint, inbox ID, installation ID, topics, and HMAC keys are never rendered or logged by diagnostics.
+- The Push Trace compares local and relay group/welcome/HMAC counts and reports the last XMTP match independently from Queue/provider acceptance and service-worker receipt. Its local display test bypasses the relay; its relay test targets only the logical registration represented by the bearer capability. A successful diagnostic receipt is persisted only after `showNotification()` resolves and is tagged as `local` or `relay`, so it never becomes an inbox activity hint.
 
 ### vapid.party Relay Contract
 
 Converge uses public XMTP-aware registration routes without shipping a vapid.party secret. The version-1 compatibility route is app-scoped to `converge.cv` and carries standard Web Push as its delivery adapter. The companion relay contract has an authenticated internal delivery ingest for the singleton XMTP listener. The Cloudflare-only production stack is a Worker API, D1 registration/bridge state, a delivery Queue, and a singleton Cloudflare Container running the listener. The public routes register routing metadata; by themselves they do not watch the XMTP network or produce automatic pushes.
 
 The generic service boundary is the app-scoped XMTP alert registration: app, inbox, installation, topics, HMAC epochs, and opaque delivery metadata. A Farcaster Mini App or another delivery provider can use the same listener-side XMTP matching model later, but it needs its own app-scoped authenticated registration and delivery adapter. Converge's public compatibility route must not be reused to enroll another app silently.
+
+Push-contract rollout order is mandatory: apply vapid.party D1 migration `0005_xmtp_diagnostics.sql`, deploy the vapid.party Worker/listener, verify CORS plus `/api/xmtp/status`, `/api/xmtp/status/test`, and public delivery health, then deploy Converge. The Worker requires the new D1 columns/tables, while the diagnostics-enabled Converge client requires the Worker's management-capability response and headers.
 
 #### Public VAPID Key
 
@@ -277,8 +281,8 @@ The relay's ordinary Worker health and XMTP delivery readiness are independent. 
 `POST {VITE_VAPID_PARTY_API_BASE}/xmtp/subscriptions`
 
 - Authentication: no client-side secret. Backend should validate origin/CORS, rate limit, and may add a future public challenge/proof if needed.
-- Idempotency: upsert by `subscription.endpoint` plus `identity.inboxId` plus `identity.installationId`.
-- Update behavior: a later POST for the same key replaces subscription keys, topic HMAC keys, user agent, and timestamps.
+- Idempotency: upsert the one active route for `app.id` plus `identity.inboxId` plus `identity.installationId`; `subscription.endpoint` is replaceable.
+- Update behavior: an authorized later POST for the same route replaces endpoint/subscription keys, topic HMAC keys, and timestamps while preserving its valid management capability.
 - Request body:
 
 ```json

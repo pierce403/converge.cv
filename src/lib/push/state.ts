@@ -26,6 +26,18 @@ export type PushStateTopic = {
   hmacKeys: Array<{ epoch: string; key: string }>;
 };
 
+/**
+ * Bearer capability returned by vapid.party for one logical registration.
+ * Never render or log these values; possession authorizes refresh, endpoint
+ * replacement, deletion, status checks, and a bounded diagnostic push for only
+ * this logical registration.
+ */
+export type PushRelayDiagnosticsCapability = {
+  receipt: string;
+  statusPath: string;
+  testPath?: string;
+};
+
 export type CachedInboxPushRegistration = {
   key: string;
   identity: PushStateIdentity;
@@ -34,8 +46,11 @@ export type CachedInboxPushRegistration = {
   topics: PushStateTopic[];
   endpoint?: string;
   relayRegistrationId?: string;
+  relayDiagnostics?: PushRelayDiagnosticsCapability;
   registeredAt?: string;
   updatedAt: number;
+  /** The relay route is active, but the local finalization step needs an idempotent retry. */
+  pendingRegistration?: boolean;
   pendingDeletion?: boolean;
 };
 
@@ -52,6 +67,12 @@ export type PushActivityHint = {
   count: number;
 };
 
+export type PushDiagnosticReceipt = {
+  testId: string;
+  receivedAt: number;
+  source: 'local' | 'relay';
+};
+
 export interface PushStateStore {
   getPreferences(): Promise<PushPreferenceState>;
   setPreferences(preferences: PushPreferenceState): Promise<void>;
@@ -66,6 +87,8 @@ export interface PushStateStore {
   putActivity(activity: PushActivityHint): Promise<void>;
   deleteActivity(inboxHandle: string): Promise<void>;
   clearActivity(): Promise<void>;
+  getLastDiagnosticReceipt(): Promise<PushDiagnosticReceipt | undefined>;
+  putLastDiagnosticReceipt(receipt: PushDiagnosticReceipt): Promise<void>;
 }
 
 type StoredMetaRecord = {
@@ -77,6 +100,7 @@ const DEFAULT_PREFERENCES: PushPreferenceState = {
   enabled: false,
   updatedAt: 0,
 };
+const LAST_DIAGNOSTIC_KEY = 'lastDiagnosticReceipt';
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -230,6 +254,27 @@ export class BrowserPushStateStore implements PushStateStore {
     transaction.objectStore(PUSH_ACTIVITY_STORE).clear();
     await transactionComplete(transaction);
   }
+
+  async getLastDiagnosticReceipt(): Promise<PushDiagnosticReceipt | undefined> {
+    const record = await this.read<{ key: string; value: PushDiagnosticReceipt }>(
+      PUSH_META_STORE,
+      LAST_DIAGNOSTIC_KEY,
+    );
+    const value = record?.value;
+    if (
+      !value ||
+      typeof value.testId !== 'string' ||
+      !Number.isFinite(value.receivedAt) ||
+      (value.source !== 'local' && value.source !== 'relay')
+    ) {
+      return undefined;
+    }
+    return { testId: value.testId, receivedAt: value.receivedAt, source: value.source };
+  }
+
+  async putLastDiagnosticReceipt(receipt: PushDiagnosticReceipt): Promise<void> {
+    await this.write(PUSH_META_STORE, { key: LAST_DIAGNOSTIC_KEY, value: receipt });
+  }
 }
 
 export class MemoryPushStateStore implements PushStateStore {
@@ -237,6 +282,7 @@ export class MemoryPushStateStore implements PushStateStore {
   private registrations = new Map<string, CachedInboxPushRegistration>();
   private profiles = new Map<string, PushInboxProfile>();
   private activity = new Map<string, PushActivityHint>();
+  private lastDiagnosticReceipt: PushDiagnosticReceipt | undefined;
 
   async getPreferences(): Promise<PushPreferenceState> {
     return { ...this.preferences };
@@ -293,6 +339,14 @@ export class MemoryPushStateStore implements PushStateStore {
 
   async clearActivity(): Promise<void> {
     this.activity.clear();
+  }
+
+  async getLastDiagnosticReceipt(): Promise<PushDiagnosticReceipt | undefined> {
+    return this.lastDiagnosticReceipt ? { ...this.lastDiagnosticReceipt } : undefined;
+  }
+
+  async putLastDiagnosticReceipt(receipt: PushDiagnosticReceipt): Promise<void> {
+    this.lastDiagnosticReceipt = { ...receipt };
   }
 }
 

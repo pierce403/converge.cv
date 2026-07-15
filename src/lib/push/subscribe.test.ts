@@ -60,6 +60,22 @@ const topics: XmtpPushTopic[] = [
   },
 ];
 
+function registrationResponse(status = 200, receipt = 'r'.repeat(43)): Response {
+  return new Response(JSON.stringify({
+    success: true,
+    data: {
+      diagnostics: {
+        receipt,
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
+    },
+  }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 function createSubscription(
   endpoint = 'https://push.example/subscription',
   applicationServerKey = decodeBase64Url(TEST_VAPID_PUBLIC_KEY),
@@ -255,7 +271,10 @@ describe('push helpers', () => {
       registeredAt: '2026-07-09T00:00:00.000Z',
     });
 
-    expect(payload.identity).toEqual(identity);
+    expect(payload.identity).toEqual({
+      inboxId: identity.inboxId,
+      installationId: identity.installationId,
+    });
     expect(payload.app.id).toBe('converge.cv');
     expect(payload.preferences).toEqual({
       minimalPayloadOnly: true,
@@ -264,6 +283,7 @@ describe('push helpers', () => {
     expect(payload.xmtp.topics).toEqual(topics);
     expect(payload.notification.inboxHandle).toBe('legacy-current-inbox');
     expect(JSON.stringify(payload)).not.toMatch(/messageBody|previewText|body/);
+    expect(payload.identity).not.toHaveProperty('address');
     expect(JSON.stringify(payload)).not.toMatch(/fcm|apns|pushProvider/i);
   });
 
@@ -289,7 +309,10 @@ describe('push helpers', () => {
 
     expect(registration.app).toEqual({ id: 'converge.cv', origin: 'https://converge.cv' });
     expect(unregistration.app).toEqual(registration.app);
-    expect(unregistration.identity).toEqual(identity);
+    expect(unregistration.identity).toEqual({
+      inboxId: identity.inboxId,
+      installationId: identity.installationId,
+    });
   });
 
   it('reports end-to-end XMTP delivery ready only from explicit public health', async () => {
@@ -450,12 +473,7 @@ describe('push helpers', () => {
 
     const subscription = createSubscription();
     const { pushManager } = installPushBrowserMocks({ subscription });
-    const fetchFn = vi.fn(async () =>
-      new Response(JSON.stringify({ success: true }), {
-        status: 201,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    ) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse(201)) as unknown as Mock;
 
     const result = await enablePushForLoadedInboxes(
       [
@@ -549,7 +567,7 @@ describe('push helpers', () => {
     const fetchFn = vi.fn(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       events.push(`delete:${body.identity.inboxId}`);
-      return new Response('{}', { status: 200 });
+      return registrationResponse();
     }) as unknown as Mock;
 
     const disabled = await disablePush({
@@ -606,7 +624,7 @@ describe('push helpers', () => {
       endpoint: recoverySubscription.endpoint,
       updatedAt: 1,
     });
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     expect(
       await disablePush({
@@ -655,7 +673,7 @@ describe('push helpers', () => {
       pendingDeletionCount: 1,
     });
 
-    const retryFetch = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const retryFetch = vi.fn(async () => registrationResponse()) as unknown as Mock;
     expect(
       await disablePush({ stateStore, fetchFn: retryFetch as unknown as typeof fetch })
     ).toBe(true);
@@ -743,10 +761,7 @@ describe('push helpers', () => {
     const methods: string[] = [];
     const fetchFn = vi.fn(async (_url, init) => {
       methods.push(String(init?.method));
-      return new Response('{}', {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return registrationResponse();
     }) as unknown as Mock;
 
     const result = await refreshPushRegistrationForInbox(
@@ -762,7 +777,7 @@ describe('push helpers', () => {
     expect(registrations[0]?.inboxHandle).toBe('opaque-replaced-handle');
   });
 
-  it('deletes a replaced browser endpoint before caching the current endpoint', async () => {
+  it('authorizes an atomic browser endpoint replacement without deleting the rotated route', async () => {
     const stateStore = new MemoryPushStateStore();
     const subscription = createSubscription('https://push.example/current');
     const { navigatorMock, registration } = installPushBrowserMocks({
@@ -779,15 +794,35 @@ describe('push helpers', () => {
     await stateStore.putRegistration({
       ...cached,
       endpoint: 'https://push.example/replaced',
+      relayDiagnostics: {
+        receipt: 'r'.repeat(43),
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
     });
     await stateStore.setPreferences({ enabled: true, endpoint: cached.endpoint, updatedAt: 1 });
-    const requests: Array<{ method: string; body: Record<string, unknown> }> = [];
+    const requests: Array<{
+      method: string;
+      headers: Headers;
+      body: Record<string, unknown>;
+    }> = [];
+    const nextReceipt = 'n'.repeat(43);
     const fetchFn = vi.fn(async (_url, init) => {
       requests.push({
         method: String(init?.method),
+        headers: new Headers(init?.headers),
         body: JSON.parse(String(init?.body)),
       });
-      return new Response(JSON.stringify({ success: true }), {
+      return new Response(JSON.stringify({
+        success: true,
+        data: {
+          diagnostics: {
+            receipt: nextReceipt,
+            statusPath: '/api/xmtp/status',
+            testPath: '/api/xmtp/status/test',
+          },
+        },
+      }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -799,11 +834,101 @@ describe('push helpers', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(requests.map((request) => request.method)).toEqual(['POST', 'DELETE']);
-    expect(requests[1]?.body.endpoint).toBe('https://push.example/replaced');
+    expect(requests.map((request) => request.method)).toEqual(['POST']);
+    expect(requests[0]?.headers.get('Authorization')).toBe(`Bearer ${'r'.repeat(43)}`);
+    expect(requests[0]?.headers.get('X-Vapid-Party-Diagnostics')).toBe('1');
+    expect(JSON.stringify(requests[0]?.body)).not.toContain('r'.repeat(43));
     expect(await stateStore.listRegistrations()).toEqual([
-      expect.objectContaining({ endpoint: subscription.endpoint, pendingDeletion: false }),
+      expect.objectContaining({
+        endpoint: subscription.endpoint,
+        pendingDeletion: false,
+        relayDiagnostics: expect.objectContaining({ receipt: nextReceipt }),
+      }),
     ]);
+  });
+
+  it('rejects a successful refresh response without a management capability', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription('https://push.example/exact-refresh');
+    const { navigatorMock, registration } = installPushBrowserMocks({
+      subscription,
+      existingSubscription: subscription,
+    });
+    (navigatorMock.serviceWorker.getRegistration as Mock)
+      .mockReset()
+      .mockResolvedValue(registration as unknown as ServiceWorkerRegistration);
+    const receipt = 'p'.repeat(43);
+    const cached = await cacheInboxPushRegistration(
+      { identity, topics, inboxHandle: 'opaque-exact-refresh' },
+      { stateStore, now: 1 },
+    );
+    await stateStore.putRegistration({
+      ...cached,
+      endpoint: subscription.endpoint,
+      relayDiagnostics: {
+        receipt,
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
+    });
+    await stateStore.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: 1 });
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { subscriptionId: 'existing-registration' },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as unknown as Mock;
+
+    const result = await refreshPushRegistrationForInbox(
+      { identity, topics },
+      { stateStore, fetchFn: fetchFn as unknown as typeof fetch },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('did not return a management capability');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect((await stateStore.listRegistrations())[0]?.relayDiagnostics?.receipt).toBe(receipt);
+  });
+
+  it('does not retry a relay capability conflict without authorization', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription('https://push.example/conflict');
+    const { navigatorMock, registration } = installPushBrowserMocks({
+      subscription,
+      existingSubscription: subscription,
+    });
+    (navigatorMock.serviceWorker.getRegistration as Mock)
+      .mockReset()
+      .mockResolvedValue(registration as unknown as ServiceWorkerRegistration);
+    const receipt = 'c'.repeat(43);
+    const cached = await cacheInboxPushRegistration(
+      { identity, topics, inboxHandle: 'opaque-capability-conflict' },
+      { stateStore, now: 1 },
+    );
+    await stateStore.putRegistration({
+      ...cached,
+      endpoint: subscription.endpoint,
+      relayDiagnostics: {
+        receipt,
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
+    });
+    await stateStore.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: 1 });
+    const fetchFn = vi.fn(async () => new Response('management capability conflict', { status: 409 })) as unknown as Mock;
+
+    const result = await refreshPushRegistrationForInbox(
+      { identity, topics, displayName: 'Orange Orca' },
+      { stateStore, fetchFn: fetchFn as unknown as typeof fetch },
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.error).toContain('409');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetchFn.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe(
+      `Bearer ${receipt}`,
+    );
   });
 
   it('removes the legacy browser endpoint after the last inbox refresh completes migration', async () => {
@@ -848,7 +973,7 @@ describe('push helpers', () => {
     const methods: string[] = [];
     const fetchFn = vi.fn(async (_url, init) => {
       methods.push(String(init?.method));
-      return new Response('{}', { status: 200 });
+      return registrationResponse();
     }) as unknown as Mock;
 
     const result = await refreshPushRegistrationForInbox(
@@ -857,7 +982,7 @@ describe('push helpers', () => {
     );
 
     expect(result).toMatchObject({ success: true, endpoint: recoverySubscription.endpoint });
-    expect(methods).toEqual(['POST', 'DELETE']);
+    expect(methods).toEqual(['POST']);
     expect(rootSubscription.unsubscribe).toHaveBeenCalledTimes(1);
     expect(recoverySubscription.unsubscribe).not.toHaveBeenCalled();
     expect(registration.unregister).not.toHaveBeenCalled();
@@ -982,7 +1107,7 @@ describe('push helpers', () => {
         startPost?.();
         await postGate;
       }
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return registrationResponse();
     }) as unknown as Mock;
     const options = { stateStore, fetchFn: fetchFn as unknown as typeof fetch };
 
@@ -1025,7 +1150,7 @@ describe('push helpers', () => {
         startPost?.();
         await postGate;
       }
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return registrationResponse();
     }) as unknown as Mock;
     const options = { stateStore, fetchFn: fetchFn as unknown as typeof fetch };
 
@@ -1074,7 +1199,7 @@ describe('push helpers', () => {
         startPost?.();
         return new Promise<Response>(() => undefined);
       }
-      return new Response('{}', { status: 200 });
+      return registrationResponse();
     }) as unknown as Mock;
     const options = {
       stateStore,
@@ -1123,7 +1248,7 @@ describe('push helpers', () => {
         startRefresh?.();
         await refreshGate;
       }
-      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return registrationResponse();
     }) as unknown as Mock;
     const options = { stateStore, fetchFn: fetchFn as unknown as typeof fetch };
 
@@ -1172,7 +1297,7 @@ describe('push helpers', () => {
     }>((resolve) => {
       resolveBrowserSubscription = resolve;
     });
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
     const options = { stateStore, fetchFn: fetchFn as unknown as typeof fetch };
 
     const enable = enablePushForLoadedInboxes(
@@ -1215,7 +1340,7 @@ describe('push helpers', () => {
     }
     await stateStore.putActivity({ inboxHandle: 'opaque-burn-one', receivedAt: 10, count: 1 });
     await stateStore.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: 1 });
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const removed = await removePushRegistrationForInbox('INBOX-1', {
       stateStore,
@@ -1234,9 +1359,20 @@ describe('push helpers', () => {
 
   it('enables push by subscribing and posting the XMTP registration to vapid.party without an API key', async () => {
     const subscription = createSubscription();
+    const stateStore = new MemoryPushStateStore();
     const { navigatorMock, pushManager } = installPushBrowserMocks({ subscription });
     const fetchFn = vi.fn(async (_url, _init) =>
-      new Response(JSON.stringify({ success: true, data: { subscriptionId: 'registration-1' } }), {
+      new Response(JSON.stringify({
+        success: true,
+        data: {
+          subscriptionId: 'registration-1',
+          diagnostics: {
+            receipt: 'r'.repeat(43),
+            statusPath: '/api/xmtp/status',
+            testPath: '/api/xmtp/status/test',
+          },
+        },
+      }), {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -1248,6 +1384,7 @@ describe('push helpers', () => {
       vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
       apiBase: 'https://vapid.party/api',
       fetchFn: fetchFn as unknown as typeof fetch,
+      stateStore,
     });
     expect(Notification.requestPermission).toHaveBeenCalledTimes(1);
     const result = await enablePromise;
@@ -1266,17 +1403,34 @@ describe('push helpers', () => {
 
     const lastCall = fetchFn.mock.calls[fetchFn.mock.calls.length - 1];
     expect(lastCall?.[0]).toBe('https://vapid.party/api/xmtp/subscriptions');
-    expect(lastCall?.[1]?.headers).toEqual({ 'Content-Type': 'application/json' });
+    const registrationHeaders = new Headers(lastCall?.[1]?.headers);
+    expect(registrationHeaders.get('Content-Type')).toBe('application/json');
+    expect(registrationHeaders.get('X-Vapid-Party-Diagnostics')).toBe('1');
     expect(JSON.stringify(lastCall?.[1]?.headers)).not.toMatch(/X-API-Key/i);
     const body = JSON.parse(String(lastCall?.[1]?.body));
-    expect(body.identity).toEqual(identity);
+    expect(body.identity).toEqual({
+      inboxId: identity.inboxId,
+      installationId: identity.installationId,
+    });
     expect(body.xmtp.topics).toEqual(normalizeXmtpPushTopics(topics, identity.installationId));
+    expect((await stateStore.listRegistrations())[0]?.relayDiagnostics).toEqual({
+      receipt: 'r'.repeat(43),
+      statusPath: '/api/xmtp/status',
+      testPath: '/api/xmtp/status/test',
+    });
 
     await disablePush({
       identity,
       apiBase: 'https://vapid.party/api',
       fetchFn: fetchFn as unknown as typeof fetch,
+      stateStore,
     });
+    const disableCall = fetchFn.mock.calls[fetchFn.mock.calls.length - 1];
+    expect(disableCall?.[1]?.method).toBe('DELETE');
+    expect(new Headers(disableCall?.[1]?.headers).get('Authorization')).toBe(
+      `Bearer ${'r'.repeat(43)}`,
+    );
+    expect(String(disableCall?.[1]?.body)).not.toContain('r'.repeat(43));
     expect(subscription.unsubscribe).toHaveBeenCalled();
   });
 
@@ -1286,7 +1440,7 @@ describe('push helpers', () => {
       subscription,
       existingSubscription: subscription,
     });
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const result = await enablePushForCurrentUser({
       identity,
@@ -1315,7 +1469,7 @@ describe('push helpers', () => {
       recoveryRegistration,
     ]);
     (recoveryRegistration.pushManager.getSubscription as Mock).mockResolvedValue(null);
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const result = await enablePushForCurrentUser({
       identity,
@@ -1358,7 +1512,7 @@ describe('push helpers', () => {
       existingSubscription: stale,
     });
     const stateStore = new MemoryPushStateStore();
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const result = await enablePushForCurrentUser({
       identity,
@@ -1390,7 +1544,7 @@ describe('push helpers', () => {
     (navigatorMock.serviceWorker.getRegistration as Mock)
       .mockReset()
       .mockResolvedValue(registration as unknown as ServiceWorkerRegistration);
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const enable = enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1410,7 +1564,7 @@ describe('push helpers', () => {
     const stateStore = new MemoryPushStateStore();
     const subscription = createSubscription();
     const { pushManager } = installPushBrowserMocks({ subscription });
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const result = await enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1439,7 +1593,7 @@ describe('push helpers', () => {
     pushManager.subscribe.mockRejectedValueOnce(
       new DOMException('Registration failed - push service error', 'AbortError'),
     );
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const result = await enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1464,7 +1618,7 @@ describe('push helpers', () => {
     pushManager.subscribe.mockRejectedValue(
       new DOMException('Registration failed - push service error', 'AbortError'),
     );
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const enable = enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1499,7 +1653,7 @@ describe('push helpers', () => {
     pushManager.subscribe.mockRejectedValue(
       new DOMException('Registration failed - push service error', 'AbortError'),
     );
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const enable = enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1528,7 +1682,7 @@ describe('push helpers', () => {
       .mockRejectedValueOnce(providerError)
       .mockRejectedValueOnce(providerError)
       .mockResolvedValue(subscription);
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
     const options = {
       stateStore,
       vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
@@ -1551,7 +1705,7 @@ describe('push helpers', () => {
       scope: '/__converge-push/abandoned-key/',
       updateViaCache: 'none',
     });
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const result = await enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1574,7 +1728,7 @@ describe('push helpers', () => {
     pushManager.subscribe.mockImplementation(
       () => new Promise((resolve) => { resolveSubscription = resolve; }),
     );
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
     const options = {
       stateStore: new MemoryPushStateStore(),
       vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
@@ -1602,7 +1756,7 @@ describe('push helpers', () => {
     pushManager.subscribe
       .mockRejectedValueOnce(new DOMException('Registration failed - push service error', 'AbortError'))
       .mockResolvedValueOnce(current);
-    const fetchFn = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as Mock;
+    const fetchFn = vi.fn(async () => registrationResponse()) as unknown as Mock;
 
     const enable = enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1639,7 +1793,8 @@ describe('push helpers', () => {
     expect(subscription.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('rolls back the relay and browser endpoint when persistence fails after POST', async () => {
+  it('retains an active relay route and capability for retry when final persistence fails after POST', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     class RejectingPersistedPushStateStore extends MemoryPushStateStore {
       private writes = 0;
 
@@ -1651,12 +1806,24 @@ describe('push helpers', () => {
     }
 
     const stateStore = new RejectingPersistedPushStateStore();
-    const subscription = createSubscription('https://push.example/rolled-back');
+    const subscription = createSubscription('https://push.example/recovery-pending');
     installPushBrowserMocks({ subscription });
     const methods: string[] = [];
+    const requestHeaders: Headers[] = [];
+    const receipt = 'b'.repeat(43);
     const fetchFn = vi.fn(async (_url, init) => {
       methods.push(String(init?.method));
-      return new Response(JSON.stringify({ success: true }), {
+      requestHeaders.push(new Headers(init?.headers));
+      return new Response(JSON.stringify({
+        success: true,
+        data: init?.method === 'POST' ? {
+          diagnostics: {
+            receipt,
+            statusPath: '/api/xmtp/status',
+            testPath: '/api/xmtp/status/test',
+          },
+        } : {},
+      }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1672,13 +1839,53 @@ describe('push helpers', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(methods).toEqual(['POST', 'DELETE']);
-    expect(subscription.unsubscribe).toHaveBeenCalledTimes(1);
-    expect((await stateStore.getPreferences()).enabled).toBe(false);
+    expect(methods).toEqual(['POST']);
+    expect(subscription.unsubscribe).not.toHaveBeenCalled();
+    expect(await stateStore.listRegistrations()).toEqual([
+      expect.objectContaining({
+        endpoint: subscription.endpoint,
+        pendingRegistration: true,
+        pendingDeletion: false,
+        relayDiagnostics: expect.objectContaining({ receipt }),
+      }),
+    ]);
+    expect((await stateStore.getPreferences()).enabled).toBe(true);
+    expect(await getAppPushStatus({ loadedInboxIds: ['inbox-1'], stateStore })).toMatchObject({
+      state: 'partial',
+      enabledPreference: true,
+      pendingRegistrationCount: 1,
+      pendingDeletionCount: 0,
+    });
+    expect(warn.mock.calls.flat().map(String).join(' ')).not.toContain(identity.inboxId);
+
+    const retry = await enablePushForLoadedInboxes(
+      [{ identity, topics }],
+      {
+        stateStore,
+        vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      },
+    );
+
+    expect(retry.success).toBe(true);
+    expect(methods).toEqual(['POST', 'POST']);
+    expect(requestHeaders[1]?.get('Authorization')).toBe(`Bearer ${receipt}`);
+    expect(await stateStore.listRegistrations()).toEqual([
+      expect.objectContaining({
+        endpoint: subscription.endpoint,
+        pendingRegistration: false,
+        pendingDeletion: false,
+        relayDiagnostics: expect.objectContaining({ receipt }),
+      }),
+    ]);
+    expect(await getAppPushStatus({ loadedInboxIds: ['inbox-1'], stateStore })).toMatchObject({
+      state: 'enabled',
+      pendingRegistrationCount: 0,
+    });
   });
 
-  it('retains a deletion tombstone when post-POST rollback also fails', async () => {
-    class RollbackTombstonePushStateStore extends MemoryPushStateStore {
+  it('still deletes a recovery-pending route during explicit Disable', async () => {
+    class RecoveryPendingPushStateStore extends MemoryPushStateStore {
       private writes = 0;
 
       override async putRegistration(registration: Parameters<MemoryPushStateStore['putRegistration']>[0]): Promise<void> {
@@ -1688,12 +1895,29 @@ describe('push helpers', () => {
       }
     }
 
-    const stateStore = new RollbackTombstonePushStateStore();
-    const subscription = createSubscription('https://push.example/rollback-tombstone');
+    const stateStore = new RecoveryPendingPushStateStore();
+    const subscription = createSubscription('https://push.example/recovery-disable');
     installPushBrowserMocks({ subscription });
-    const fetchFn = vi.fn(async (_url, init) =>
-      new Response('{}', { status: init?.method === 'DELETE' ? 503 : 200 })
-    ) as unknown as Mock;
+    const receipt = 't'.repeat(43);
+    const methods: string[] = [];
+    const requestHeaders: Headers[] = [];
+    const fetchFn = vi.fn(async (_url, init) => {
+      methods.push(String(init?.method));
+      requestHeaders.push(new Headers(init?.headers));
+      return new Response(JSON.stringify({
+        success: true,
+        data: init?.method === 'POST' ? {
+          diagnostics: {
+            receipt,
+            statusPath: '/api/xmtp/status',
+            testPath: '/api/xmtp/status/test',
+          },
+        } : {},
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as Mock;
 
     const result = await enablePushForLoadedInboxes(
       [{ identity, topics }],
@@ -1705,12 +1929,11 @@ describe('push helpers', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(await stateStore.listRegistrations()).toEqual([
-      expect.objectContaining({
-        endpoint: subscription.endpoint,
-        pendingDeletion: true,
-      }),
-    ]);
+    expect(methods).toEqual(['POST']);
+    expect(await disablePush({ stateStore, fetchFn: fetchFn as unknown as typeof fetch })).toBe(true);
+    expect(methods).toEqual(['POST', 'DELETE']);
+    expect(requestHeaders[1]?.get('Authorization')).toBe(`Bearer ${receipt}`);
+    expect(await stateStore.listRegistrations()).toEqual([]);
     expect(subscription.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
