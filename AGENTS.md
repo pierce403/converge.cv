@@ -265,6 +265,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
 - External wallet signing now shows a global blocking modal so users clearly see when Converge is waiting on signature approval/rejection
 - Contact Details refresh treats the peer-published XMTP/Convos profile as canonical; Farcaster/ENS are optional secondary identity and reputation metadata
+- Settings profile actions can explicitly replace the selected inbox name/avatar from ENS or Farcaster using the inbox's associated wallet (`linkedWalletAddress`, falling back to the local account address). A successful refresh updates the identity record, Inbox Switcher registry, local push label, and published XMTP profile together.
 - Address→inbox identity lookup uses a shared cached resolver (`resolveInboxIdForAddress`) and `canMessageWithInbox`, reducing repeated `IdentityApi/GetInboxIds` calls across conversation, send, and contact refresh paths
 - Debug log control in bottom navigation captures console output and surfaces state snapshots
 - Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs

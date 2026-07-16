@@ -6,7 +6,8 @@ import { normalize } from 'viem/ens';
 import { createPublicClient, fallback, http } from 'viem';
 import { mainnet } from 'viem/chains';
 
-type EnsPublicClient = Pick<ReturnType<typeof createPublicClient>, 'getEnsAddress' | 'getEnsName'>;
+type EnsPublicClient = Pick<ReturnType<typeof createPublicClient>, 'getEnsAddress' | 'getEnsName'> &
+  Partial<Pick<ReturnType<typeof createPublicClient>, 'getEnsAvatar'>>;
 
 let ensClient: EnsPublicClient | null = null;
 
@@ -157,6 +158,19 @@ export async function resolveENSFromAddress(address: string): Promise<string | n
     }
   } catch (error) {
     console.error('[ENS] Failed to reverse resolve ENS name:', error);
+    return null;
+  }
+}
+
+/** Resolve the avatar record for an ENS name. */
+export async function resolveENSAvatar(ensName: string): Promise<string | null> {
+  try {
+    const normalized = normalize(ensName.trim());
+    const client = getEnsClient();
+    if (!client.getEnsAvatar) return null;
+    return await withRetry(() => client.getEnsAvatar!({ name: normalized }));
+  } catch (error) {
+    console.error('[ENS] Failed to resolve avatar:', error);
     return null;
   }
 }
