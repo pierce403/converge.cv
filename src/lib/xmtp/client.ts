@@ -2790,6 +2790,13 @@ export class XmtpClient {
   }
 
   async fetchGroupDetails(conversationId: string): Promise<GroupDetails | null> {
+    // Group hydration is best-effort and is called from render/event lifecycles
+    // that can overlap inbox switches and disconnects. A missing client is an
+    // expected lifecycle state, not a failed network request.
+    if (!this.client) {
+      return null;
+    }
+
     try {
       const group = await this.getGroupConversation(conversationId);
       if (!group) {
@@ -2803,6 +2810,12 @@ export class XmtpClient {
       });
       return details;
     } catch (error) {
+      // The client can disappear after the preflight while an inbox switch is
+      // closing the old worker. Keep this read-only refresh quiet; callers
+      // already treat null as "use the locally persisted group details".
+      if (!this.client || (error instanceof Error && /Client not connected/i.test(error.message))) {
+        return null;
+      }
       console.error('[XMTP] Failed to fetch group details:', error);
       return null;
     }
