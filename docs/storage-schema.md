@@ -179,10 +179,13 @@ XMTP inbox/installation identifiers). The XMTP installation key itself remains
 inside the Browser SDK OPFS database. During an explicitly confirmed settled
 browser repair, `installationId`, `staleInstallationId`,
 `installationRepairPending`, and `xmtpDbPathMode` form a small crash-resume
-journal: the exact candidate is persisted before revoke/register, while the
-superseded ID is retained only for exact cleanup. These are ordinary object
-fields in the existing identity row and require no new Dexie index or schema
-version.
+journal: the live attempt's candidate is persisted before revoke/register,
+while the superseded ID is retained only for exact cleanup. If an unregistered
+XMTP worker closes, the SDK may generate a different prospective installation
+ID when the database opens again; after a crash or reload the journal therefore
+settles fresh local and ledger state rather than promising that candidate ID is
+stable. These are ordinary object fields in the existing identity row and
+require no new Dexie index or schema version.
 
 Index notes:
 

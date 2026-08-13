@@ -16,25 +16,39 @@ const base: InstallationRecoveryDetails = {
 };
 
 describe('installation recovery Settings view', () => {
-  it('describes the exact one-for-one 8/10 recovery', () => {
+  it('describes replacement-first recovery and retained cleanup fallback at 8/10', () => {
     expect(getInstallationRecoveryView(base)).toEqual({
       canRepair: true,
       reason: 'opened a different installation',
       outcome:
-        'Repair will replace only the saved unavailable installation. The inbox should remain at about 8/10.',
+        'Repair will save and verify the installation from this live database attempt before trying to remove only the exact saved unavailable installation. The inbox should return to about 8/10; if cleanup does not settle, the verified replacement remains connected and the prior ID can be revoked later.',
+    });
+  });
+
+  it('describes exact predecessor cleanup before registration at 10/10', () => {
+    expect(
+      getInstallationRecoveryView({
+        ...base,
+        existingInstallationCount: 10,
+      })
+    ).toMatchObject({
+      canRepair: true,
+      outcome: expect.stringContaining('first remove only the exact saved unavailable'),
     });
   });
 
   it('describes use of one available slot for a non-recovery account key', () => {
-    expect(
-      getInstallationRecoveryView({
-        ...base,
-        signerIsRecoveryIdentifier: false,
-      })
-    ).toMatchObject({
+    const view = getInstallationRecoveryView({
+      ...base,
+      signerIsRecoveryIdentifier: false,
+    });
+
+    expect(view).toMatchObject({
       canRepair: true,
       outcome: expect.stringContaining('8/10 → 9/10'),
     });
+    expect(view.outcome).toContain('without reopening it');
+    expect(view.outcome).not.toContain('same staged candidate');
   });
 
   it('does not offer repair for ambiguous local-ready network-absent state', () => {
@@ -46,6 +60,52 @@ describe('installation recovery Settings view', () => {
     ).toMatchObject({
       canRepair: false,
       outcome: expect.stringContaining('will not replace or delete'),
+    });
+  });
+
+  it('retries a local-ready network-absent candidate while its live key is retained', () => {
+    expect(
+      getInstallationRecoveryView(
+        {
+          ...base,
+          localInstallationRegistered: true,
+        },
+        {
+          installationRepairPending: true,
+          stagedInstallationId: 'candidate',
+          staleInstallationId: 'saved',
+          hasLiveRepairCandidate: true,
+        }
+      )
+    ).toEqual({
+      canRepair: true,
+      reason:
+        'is registered in this live browser session but has not appeared on the inbox ledger yet',
+      outcome:
+        'Retry Repair This Browser to recheck and finish the same live installation. Converge will keep its key in memory and will not register, replace, or delete another installation while the ledger is still settling.',
+    });
+  });
+
+  it('does not replace a ledger-visible interrupted candidate whose local key was lost', () => {
+    expect(
+      getInstallationRecoveryView(
+        {
+          ...base,
+          expectedInstallationId: 'staged-candidate',
+          localInstallationId: 'new-ephemeral-candidate',
+          expectedInstallationVisible: true,
+          localInstallationVisible: false,
+          localInstallationRegistered: false,
+        },
+        {
+          installationRepairPending: true,
+          stagedInstallationId: 'staged-candidate',
+          staleInstallationId: 'saved-old',
+        }
+      )
+    ).toMatchObject({
+      canRepair: false,
+      outcome: expect.stringContaining('will not register another installation'),
     });
   });
 
@@ -75,11 +135,11 @@ describe('installation recovery Settings view', () => {
       canRepair: true,
       reason: 'opened a different installation',
       outcome:
-        'Repair will resume this exact installation, which is already present on the inbox ledger. It will not use another installation slot.',
+        'The inspected installation is already present on the inbox ledger. Repair will verify it without using another installation slot.',
     });
   });
 
-  it('offers the same candidate after an interrupted repair at 10/10', () => {
+  it('explains that an interrupted unregistered candidate may change at 10/10', () => {
     expect(
       getInstallationRecoveryView(
         {
@@ -97,7 +157,7 @@ describe('installation recovery Settings view', () => {
       canRepair: true,
       reason: 'opened a different installation',
       outcome:
-        'Resume will reuse the same staged candidate and recheck the exact prior installation before any mutation. If that prior ID cannot be removed, repair stops without creating another candidate.',
+        'Converge will recheck the ledger and the exact prior installation, then open the local database once for this repair attempt. An unregistered installation ID may change after its worker closes, so the attempt saves and registers the ID it opens without reopening it.',
     });
   });
 });

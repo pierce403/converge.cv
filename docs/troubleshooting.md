@@ -26,19 +26,32 @@ local path/installation metadata only when both local and network state verify
 the exact installation.
 
 When the warning remains, choose **Repair This Browser** and review the
-confirmation. Converge persists the already-inspected candidate before any
-network mutation. A recovery-authority signer may remove only the exact saved
-unavailable installation; another authorized account key uses one free slot.
-At 10/10 the operation stops before registering unless that exact removal is
-available. A successful replacement requests encrypted device history, so an
-older installation may need to be online for old messages to arrive.
+confirmation. Converge opens the local XMTP database once for that live repair
+attempt, saves the installation it opens before any network mutation, and
+registers it without reopening the database. A recovery-authority signer may
+remove only the exact saved unavailable installation; another authorized
+account key uses one free slot. When room remains, Converge verifies the new
+installation before attempting exact cleanup of the old one. At 10/10 the
+operation stops before registering unless that exact removal is available. A
+successful replacement requests encrypted device history, so an older
+installation may need to be online for old messages to arrive.
+
+An unregistered installation ID is prospective: Browser SDK 6.1.2 may generate
+a different ID after its worker closes and the database opens again. If repair
+is interrupted by a crash or reload, Converge rechecks the saved journal against
+fresh local and inbox-ledger state. It preserves the exact prior installation as
+the only cleanup target, but does not promise to recover the same unregistered
+ID; the next live attempt saves and registers the ID it opens without reopening.
 
 The installations panel remains readable while disconnected and labels the
 saved unavailable ID. Revocation buttons stay disabled until the repaired live
 installation is verified. Lock, quota, or ambiguous local-registration errors
 leave the database untouched instead of guessing that it is corrupt.
+The same applies when an interrupted installation appears on the ledger but its
+local key was not stored before the worker closed: Converge does not register
+another replacement over that partial state.
 An 8/10 count is only capacity information; it is not the cause of the saved-ID
-mismatch and still leaves room for an authorized exact-candidate repair.
+mismatch and still leaves room for an authorized browser repair.
 
 ## Trace a missing XMTP notification
 

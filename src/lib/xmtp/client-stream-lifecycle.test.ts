@@ -14,6 +14,7 @@ vi.mock('@/lib/message-retention', () => ({
 
 import { XmtpClient } from './client';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
+import { signerIdentityKey } from './device-provisioning';
 
 type StreamHarness = {
   isDone: boolean;
@@ -231,6 +232,172 @@ describe('XmtpClient message stream cleanup', () => {
     ).rejects.toThrow(/different browser installation than the exact repair candidate/i);
 
     expect(onInstallationReady).not.toHaveBeenCalled();
+  });
+
+  it('keeps an already-staged retained repair candidate open after an early retry failure', async () => {
+    const xmtp = new XmtpClient();
+    const inboxId = 'a'.repeat(64);
+    const installationId = 'candidate-p';
+    const repairIdentity = {
+      address: `0x${'11'.repeat(20)}`,
+      privateKey: `0x${'22'.repeat(32)}`,
+      inboxId,
+      installationId,
+      xmtpDbPathMode: 'inbox-default' as const,
+    };
+    const earlyFailure = new Error('local registration state unavailable');
+    const close = vi.fn(async () => undefined);
+    const candidate = {
+      inboxId,
+      installationId,
+      isRegistered: vi.fn(async () => {
+        throw earlyFailure;
+      }),
+      close,
+    };
+    const internal = xmtp as unknown as {
+      retainedInstallationRepairClient: unknown;
+      createSigner: () => Promise<{ getIdentifier: () => Promise<unknown> }>;
+      repairInstallationInternal: (
+        identity: typeof repairIdentity,
+        options: {
+          recovery: {
+            reason: 'installation-unregistered';
+            inboxId: string;
+            expectedInstallationId: string;
+            localInstallationId: string;
+            expectedInstallationVisible: boolean;
+            localInstallationVisible: boolean;
+            localInstallationRegistered: boolean;
+            signerIsRecoveryIdentifier: boolean;
+            existingInstallationCount: number;
+            databasePathMode: 'inbox-default';
+          };
+          interruptedRepairCandidateId: string;
+          expectedInboxId: string;
+          onCandidateReady: () => Promise<void>;
+        }
+      ) => Promise<unknown>;
+    };
+    internal.retainedInstallationRepairClient = {
+      client: candidate,
+      databasePathMode: 'inbox-default',
+      inboxId,
+      installationId,
+      signerIdentity: signerIdentityKey(repairIdentity),
+    };
+    internal.createSigner = vi.fn(async () => ({
+      getIdentifier: vi.fn(async () => ({
+        identifier: repairIdentity.address,
+        identifierKind: 0,
+      })),
+    }));
+
+    await expect(
+      internal.repairInstallationInternal(repairIdentity, {
+        recovery: {
+          reason: 'installation-unregistered',
+          inboxId,
+          expectedInstallationId: installationId,
+          localInstallationId: installationId,
+          expectedInstallationVisible: false,
+          localInstallationVisible: false,
+          localInstallationRegistered: false,
+          signerIsRecoveryIdentifier: true,
+          existingInstallationCount: 8,
+          databasePathMode: 'inbox-default',
+        },
+        interruptedRepairCandidateId: installationId,
+        expectedInboxId: inboxId,
+        onCandidateReady: vi.fn(async () => undefined),
+      })
+    ).rejects.toBe(earlyFailure);
+
+    expect(close).not.toHaveBeenCalled();
+    expect(internal.retainedInstallationRepairClient).toMatchObject({
+      client: candidate,
+      inboxId,
+      installationId,
+    });
+  });
+
+  it('closes a retained repair client exactly once when it no longer matches the journal', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    const inboxId = 'a'.repeat(64);
+    const repairIdentity = {
+      address: `0x${'11'.repeat(20)}`,
+      privateKey: `0x${'22'.repeat(32)}`,
+    };
+    const close = vi.fn(async () => undefined);
+    const internal = xmtp as unknown as {
+      retainedInstallationRepairClient: unknown;
+      takeRetainedInstallationRepairClient: (
+        identity: typeof repairIdentity,
+        recovery: {
+          inboxId: string;
+          localInstallationId: string;
+        },
+        interruptedRepairCandidateId: string,
+        expectedInboxId: string,
+        databasePathMode: 'inbox-default'
+      ) => Promise<unknown>;
+    };
+    internal.retainedInstallationRepairClient = {
+      client: {
+        inboxId,
+        installationId: 'candidate-old',
+        close,
+      },
+      databasePathMode: 'inbox-default',
+      inboxId,
+      installationId: 'candidate-old',
+      signerIdentity: signerIdentityKey(repairIdentity),
+    };
+
+    const pending = internal.takeRetainedInstallationRepairClient(
+      repairIdentity,
+      {
+        inboxId,
+        localInstallationId: 'candidate-current',
+      },
+      'candidate-current',
+      inboxId,
+      'inbox-default'
+    );
+    await vi.runAllTimersAsync();
+
+    await expect(pending).resolves.toBeNull();
+    expect(close).toHaveBeenCalledOnce();
+    expect(internal.retainedInstallationRepairClient).toBeNull();
+  });
+
+  it('refuses an ordinary reconnect without closing a retained live repair candidate', async () => {
+    const xmtp = new XmtpClient();
+    const close = vi.fn(async () => undefined);
+    const internal = xmtp as unknown as {
+      retainedInstallationRepairClient: unknown;
+    };
+    internal.retainedInstallationRepairClient = {
+      client: { close },
+      databasePathMode: 'inbox-default',
+      inboxId: 'a'.repeat(64),
+      installationId: 'candidate-p',
+      signerIdentity: signerIdentityKey({
+        address: `0x${'11'.repeat(20)}`,
+        privateKey: `0x${'22'.repeat(32)}`,
+      }),
+    };
+
+    await expect(
+      xmtp.connect({
+        address: `0x${'11'.repeat(20)}`,
+        privateKey: `0x${'22'.repeat(32)}`,
+      })
+    ).rejects.toThrow(/in-progress XMTP repair candidate/i);
+
+    expect(close).not.toHaveBeenCalled();
+    expect(internal.retainedInstallationRepairClient).not.toBeNull();
   });
 
   it('does not close the client underneath an in-flight manual sync', async () => {

@@ -214,7 +214,7 @@ export interface Identity {
   inboxId?: string; // XMTP inbox ID
   installationId?: string; // XMTP installation ID for this device
   staleInstallationId?: string; // Superseded/unavailable installation retained for exact cleanup
-  installationRepairPending?: boolean; // The exact local repair candidate was persisted before registration
+  installationRepairPending?: boolean; // Latest live repair candidate was journaled before registration
   needsHistorySync?: boolean;
   historySyncRequestedAt?: number;
   expectedInboxId?: string;

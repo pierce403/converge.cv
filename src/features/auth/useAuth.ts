@@ -13,7 +13,7 @@ import { ensureInboxStorageNamespace } from '@/lib/storage/namespacing';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { lockVault } from '@/lib/crypto';
 import { getXmtpClient } from '@/lib/xmtp';
-import type { ConnectResult } from '@/lib/xmtp/client';
+import type { ConnectResult, RepairInstallationResult } from '@/lib/xmtp/client';
 import {
   expectedInstallationForStoredIdentity,
   registrationPolicyForStoredIdentity,
@@ -44,6 +44,7 @@ import {
   isUsableNetworkDisplayName,
 } from '@/lib/identity/profile-suggestions';
 import { installationIdsMatch } from '@/lib/xmtp/client-registration';
+import { selectPreviousInstallationForRepair } from '@/lib/xmtp/installation-repair';
 import {
   clearIntentionalEmptyInboxState,
 } from './onboarding-state';
@@ -824,7 +825,7 @@ export function useAuth() {
       chainId?: number;
       signMessage?: (message: string) => Promise<string>;
       walletType?: 'EOA' | 'SCW';
-    }): Promise<ConnectResult> => {
+    }): Promise<RepairInstallationResult> => {
       const identity = useAuthStore.getState().identity;
       const recovery = useXmtpStore.getState().installationRecovery;
       if (!identity) {
@@ -852,13 +853,10 @@ export function useAuth() {
         },
         {
           recovery,
-          previousInstallationId:
-            !installationIdsMatch(
-              identity.installationId,
-              recovery.localInstallationId
-            )
-              ? identity.installationId
-              : identity.staleInstallationId,
+          interruptedRepairCandidateId: identity.installationRepairPending
+            ? identity.installationId
+            : undefined,
+          previousInstallationId: selectPreviousInstallationForRepair(identity, recovery),
           expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
           enableHistorySync: false,
           requestHistorySync: true,
@@ -868,13 +866,31 @@ export function useAuth() {
             if (!current) {
               throw new Error('The selected identity changed while browser repair was preparing.');
             }
+            const currentInboxId = current.expectedInboxId ?? current.inboxId;
+            if (!currentInboxId || !inboxIdsMatch(currentInboxId, candidate.inboxId)) {
+              throw new Error(
+                'The selected inbox changed while browser repair was preparing. No registration was attempted.'
+              );
+            }
+            if (
+              (current.installationId || identity.installationId) &&
+              !installationIdsMatch(current.installationId, identity.installationId)
+            ) {
+              throw new Error(
+                'Another Converge tab updated this browser installation or repair journal. No registration was attempted; reload before retrying.'
+              );
+            }
+            const previousInstallationId = selectPreviousInstallationForRepair(
+              current,
+              recovery
+            );
             const staged: Identity = {
               ...current,
               inboxId: candidate.inboxId,
               expectedInboxId: current.expectedInboxId ?? candidate.inboxId,
               installationId: candidate.candidateInstallationId,
               staleInstallationId:
-                candidate.previousInstallationId,
+                candidate.previousInstallationId ?? previousInstallationId,
               xmtpDbPathMode: candidate.databasePathMode,
               installationRepairPending: true,
               needsHistorySync: true,

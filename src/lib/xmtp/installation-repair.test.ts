@@ -1,6 +1,15 @@
 import { IdentifierKind, type InboxState, type Identifier } from '@xmtp/browser-sdk';
 import { describe, expect, it, vi } from 'vitest';
-import { prepareInstallationRepair } from './installation-repair';
+import {
+  InstallationRecoveryRequiredError,
+  type InstallationRecoveryDetails,
+  type RegistrationClient,
+} from './client-registration';
+import {
+  prepareInstallationRepair,
+  runInstallationRepairSession,
+  selectPreviousInstallationForRepair,
+} from './installation-repair';
 
 const inboxId = 'a'.repeat(64);
 const signerIdentifier: Identifier = {
@@ -30,7 +39,35 @@ function state(
 }
 
 describe('explicit browser installation repair', () => {
-  it('persists one candidate before revoking only the exact superseded installation', async () => {
+  it('keeps the exact stale predecessor across prospective candidate rotations', () => {
+    expect(
+      selectPreviousInstallationForRepair(
+        {
+          installationId: 'staged-candidate',
+          staleInstallationId: 'saved-old',
+          installationRepairPending: true,
+        },
+        {
+          expectedInstallationId: 'staged-candidate',
+          localInstallationId: 'new-ephemeral-candidate',
+        }
+      )
+    ).toBe('saved-old');
+    expect(
+      selectPreviousInstallationForRepair(
+        {
+          installationId: 'saved-old',
+          installationRepairPending: false,
+        },
+        {
+          expectedInstallationId: 'saved-old',
+          localInstallationId: 'new-ephemeral-candidate',
+        }
+      )
+    ).toBe('saved-old');
+  });
+
+  it('persists one candidate but keeps the exact superseded installation until registration when capacity is available', async () => {
     let current = state(['saved-old', ...Array.from({ length: 7 }, (_, index) => `other-${index}`)]);
     const events: string[] = [];
     const revokeInstallation = vi.fn(async (_inboxId: string, bytes: Uint8Array[]) => {
@@ -57,15 +94,15 @@ describe('explicit browser installation repair', () => {
       }
     );
 
-    expect(events).toEqual(['persist:candidate-new', 'revoke:saved-old']);
-    expect(revokeInstallation).toHaveBeenCalledWith(inboxId, [installation('saved-old').bytes]);
+    expect(events).toEqual(['persist:candidate-new']);
+    expect(revokeInstallation).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       candidateInstallationId: 'candidate-new',
       previousInstallationId: 'saved-old',
-      previousInstallationRevoked: true,
+      previousInstallationRevoked: false,
       previousInstallationAbsent: false,
       registrationRequired: true,
-      existingInstallationCount: 7,
+      existingInstallationCount: 8,
     });
   });
 
@@ -130,9 +167,12 @@ describe('explicit browser installation repair', () => {
   });
 
   it('settles a revoke that committed even when its request threw', async () => {
-    let current = state(['saved-old']);
+    let current = state([
+      'saved-old',
+      ...Array.from({ length: 9 }, (_, index) => `other-${index}`),
+    ]);
     const revokeInstallation = vi.fn(async () => {
-      current = state([]);
+      current = state(current.installations.filter((item) => item.id !== 'saved-old').map((item) => item.id));
       throw new Error('response interrupted');
     });
 
@@ -158,7 +198,7 @@ describe('explicit browser installation repair', () => {
   });
 
   it('stops when exact revocation is rejected instead of silently consuming a slot', async () => {
-    const current = state(['saved-old', ...Array.from({ length: 7 }, (_, index) => `other-${index}`)]);
+    const current = state(['saved-old', ...Array.from({ length: 9 }, (_, index) => `other-${index}`)]);
     const revokeInstallation = vi.fn(async () => {
       throw new Error('signature chain rejected');
     });
@@ -209,7 +249,7 @@ describe('explicit browser installation repair', () => {
     expect(revokeInstallation).not.toHaveBeenCalled();
   });
 
-  it('preserves the same staged candidate if capacity reaches 10 before registration', async () => {
+  it('preserves the repair journal if capacity reaches 10 before registration', async () => {
     let current = state(Array.from({ length: 8 }, (_, index) => `other-${index}`), otherRecoveryIdentifier);
     const onCandidateReady = vi.fn(async () => {
       current = state(Array.from({ length: 10 }, (_, index) => `other-${index}`), otherRecoveryIdentifier);
@@ -258,4 +298,444 @@ describe('explicit browser installation repair', () => {
       registrationRequired: true,
     });
   });
+});
+
+describe('browser installation repair session', () => {
+  const recovery = (
+    overrides: Partial<InstallationRecoveryDetails> = {}
+  ): InstallationRecoveryDetails => ({
+    reason: 'installation-unregistered',
+    inboxId,
+    localInstallationId: 'candidate-a',
+    expectedInstallationVisible: false,
+    localInstallationVisible: false,
+    localInstallationRegistered: false,
+    signerIsRecoveryIdentifier: true,
+    existingInstallationCount: 0,
+    databasePathMode: 'inbox-default',
+    ...overrides,
+  });
+
+  it('rebases an ephemeral candidate and stages then registers the opened client itself', async () => {
+    const events: string[] = [];
+    let registered = false;
+    let current = state([]);
+    const register = vi.fn(async function (this: RegistrationClient) {
+      expect(this).toBe(client);
+      events.push(`register:${this.installationId}`);
+      registered = true;
+      current = state(['candidate-b']);
+    });
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-b',
+      isRegistered: vi.fn(async () => registered),
+      register,
+    };
+
+    const result = await runInstallationRepairSession(
+      {
+        client,
+        recovery: recovery(),
+        signerIdentifier,
+        expectedInboxId: inboxId,
+        previousInstallationId: 'candidate-a',
+        databasePathMode: 'inbox-default',
+      },
+      {
+        resolveInboxId: vi.fn(async () => inboxId),
+        fetchInboxState: vi.fn(async () => current),
+        revokeInstallation: vi.fn(async () => undefined),
+        onCandidateReady: vi.fn(async ({ candidateInstallationId }) => {
+          events.push(`stage:${candidateInstallationId}`);
+        }),
+        onInstallationReady: vi.fn(async ({ installationId, installationRegistered }) => {
+          events.push(`ready:${installationId}:${installationRegistered}`);
+        }),
+        sleep: vi.fn(async () => undefined),
+      }
+    );
+
+    expect(events).toEqual([
+      'stage:candidate-b',
+      'ready:candidate-b:false',
+      'register:candidate-b',
+      'ready:candidate-b:true',
+    ]);
+    expect(register).toHaveBeenCalledOnce();
+    expect(result.candidateInstallationId).toBe('candidate-b');
+    expect(result.preparation).toMatchObject({
+      candidateInstallationId: 'candidate-b',
+      previousInstallationAbsent: true,
+      registrationRequired: true,
+    });
+    expect(result.registration).toMatchObject({
+      inboxId,
+      installationId: 'candidate-b',
+      installationRegistered: true,
+    });
+  });
+
+  it('registers before optional exact cleanup at 8/10 and succeeds when cleanup is rejected', async () => {
+    const events: string[] = [];
+    let registered = false;
+    let current = state([
+      'saved-old',
+      ...Array.from({ length: 7 }, (_, index) => `other-${index}`),
+    ]);
+    const register = vi.fn(async () => {
+      events.push('register:candidate-b');
+      registered = true;
+      current = state([
+        'saved-old',
+        ...Array.from({ length: 7 }, (_, index) => `other-${index}`),
+        'candidate-b',
+      ]);
+    });
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-b',
+      isRegistered: vi.fn(async () => registered),
+      register,
+    };
+    const revokeInstallation = vi.fn(async () => {
+      events.push('revoke:saved-old');
+      throw new Error('cleanup signature rejected');
+    });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await (async () => {
+      try {
+        return await runInstallationRepairSession(
+          {
+            client,
+            recovery: recovery({ existingInstallationCount: 8 }),
+            signerIdentifier,
+            expectedInboxId: inboxId,
+            previousInstallationId: 'saved-old',
+            databasePathMode: 'inbox-default',
+          },
+          {
+            resolveInboxId: vi.fn(async () => inboxId),
+            fetchInboxState: vi.fn(async () => current),
+            revokeInstallation,
+            onCandidateReady: vi.fn(async () => {
+              events.push('stage:candidate-b');
+            }),
+            onInstallationReady: vi.fn(async ({ installationRegistered }) => {
+              if (installationRegistered) events.push('verified:candidate-b');
+            }),
+            sleep: vi.fn(async () => undefined),
+          }
+        );
+      } finally {
+        warning.mockRestore();
+      }
+    })();
+
+    expect(events).toEqual([
+      'stage:candidate-b',
+      'register:candidate-b',
+      'verified:candidate-b',
+      'revoke:saved-old',
+    ]);
+    expect(register).toHaveBeenCalledOnce();
+    expect(revokeInstallation).toHaveBeenCalledOnce();
+    expect(revokeInstallation).toHaveBeenCalledWith(inboxId, [installation('saved-old').bytes]);
+    expect(current.installations.map((item) => item.id)).toContain('saved-old');
+    expect(result.registration).toMatchObject({
+      installationId: 'candidate-b',
+      installationRegistered: true,
+    });
+    expect(result.preparation).toMatchObject({
+      previousInstallationId: 'saved-old',
+      previousInstallationRevoked: false,
+      previousInstallationAbsent: false,
+    });
+  });
+
+  it('stages and revokes the exact predecessor before registering at 10/10', async () => {
+    const events: string[] = [];
+    let registered = false;
+    let current = state([
+      'saved-old',
+      ...Array.from({ length: 9 }, (_, index) => `other-${index}`),
+    ]);
+    const register = vi.fn(async () => {
+      events.push('register:candidate-b');
+      registered = true;
+      current = state([
+        ...Array.from({ length: 9 }, (_, index) => `other-${index}`),
+        'candidate-b',
+      ]);
+    });
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-b',
+      isRegistered: vi.fn(async () => registered),
+      register,
+    };
+    const revokeInstallation = vi.fn(async () => {
+      events.push('revoke:saved-old');
+      current = state(
+        current.installations
+          .filter((item) => item.id !== 'saved-old')
+          .map((item) => item.id)
+      );
+    });
+
+    const result = await runInstallationRepairSession(
+      {
+        client,
+        recovery: recovery({ existingInstallationCount: 10 }),
+        signerIdentifier,
+        expectedInboxId: inboxId,
+        previousInstallationId: 'saved-old',
+        databasePathMode: 'inbox-default',
+      },
+      {
+        resolveInboxId: vi.fn(async () => inboxId),
+        fetchInboxState: vi.fn(async () => current),
+        revokeInstallation,
+        onCandidateReady: vi.fn(async () => {
+          events.push('stage:candidate-b');
+        }),
+        onInstallationReady: vi.fn(async () => undefined),
+        sleep: vi.fn(async () => undefined),
+      }
+    );
+
+    expect(events).toEqual([
+      'stage:candidate-b',
+      'revoke:saved-old',
+      'register:candidate-b',
+    ]);
+    expect(revokeInstallation).toHaveBeenCalledWith(inboxId, [installation('saved-old').bytes]);
+    expect(register).toHaveBeenCalledOnce();
+    expect(result.registration.installationId).toBe('candidate-b');
+    expect(result.preparation).toMatchObject({
+      previousInstallationRevoked: true,
+      previousInstallationAbsent: false,
+    });
+  });
+
+  it('refreshes a partial registration failure for the same candidate without registering twice', async () => {
+    let current = state([]);
+    const register = vi.fn(async () => {
+      current = state(['candidate-b']);
+      throw new Error('registration response interrupted');
+    });
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-b',
+      isRegistered: vi.fn(async () => false),
+      register,
+    };
+
+    const failure = runInstallationRepairSession(
+      {
+        client,
+        recovery: recovery(),
+        signerIdentifier,
+        expectedInboxId: inboxId,
+        previousInstallationId: 'candidate-a',
+        databasePathMode: 'inbox-default',
+      },
+      {
+        resolveInboxId: vi.fn(async () => inboxId),
+        fetchInboxState: vi.fn(async () => current),
+        revokeInstallation: vi.fn(async () => undefined),
+        onCandidateReady: vi.fn(async () => undefined),
+        onInstallationReady: vi.fn(async () => undefined),
+        sleep: vi.fn(async () => undefined),
+      }
+    );
+
+    await expect(failure).rejects.toBeInstanceOf(InstallationRecoveryRequiredError);
+    await expect(failure).rejects.toMatchObject({
+      details: {
+        reason: 'installation-unregistered',
+        inboxId,
+        expectedInstallationId: 'candidate-b',
+        localInstallationId: 'candidate-b',
+        expectedInstallationVisible: true,
+        localInstallationVisible: true,
+        localInstallationRegistered: false,
+      },
+    });
+    expect(register).toHaveBeenCalledOnce();
+  });
+
+  it('does not replace a ledger-visible interrupted candidate after its local key was lost', async () => {
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-after-reload',
+      isRegistered: vi.fn(async () => false),
+      register: vi.fn(async () => undefined),
+    };
+    const onCandidateReady = vi.fn(async () => undefined);
+
+    await expect(
+      runInstallationRepairSession(
+        {
+          client,
+          recovery: recovery({
+            expectedInstallationId: 'staged-before-reload',
+            expectedInstallationVisible: true,
+            localInstallationId: 'candidate-from-inspection',
+          }),
+          signerIdentifier,
+          expectedInboxId: inboxId,
+          interruptedRepairCandidateId: 'staged-before-reload',
+          previousInstallationId: 'saved-old',
+          databasePathMode: 'inbox-default',
+        },
+        {
+          resolveInboxId: vi.fn(async () => inboxId),
+          fetchInboxState: vi.fn(async () => state(['staged-before-reload', 'saved-old'])),
+          revokeInstallation: vi.fn(async () => undefined),
+          onCandidateReady,
+          onInstallationReady: vi.fn(async () => undefined),
+        }
+      )
+    ).rejects.toThrow(/previously staged.*visible/i);
+
+    expect(client.isRegistered).not.toHaveBeenCalled();
+    expect(client.register).not.toHaveBeenCalled();
+    expect(onCandidateReady).not.toHaveBeenCalled();
+  });
+
+  it('catches a staged candidate that becomes visible after the recovery snapshot', async () => {
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-after-reload',
+      isRegistered: vi.fn(async () => false),
+      register: vi.fn(async () => undefined),
+    };
+    const onCandidateReady = vi.fn(async () => undefined);
+
+    await expect(
+      runInstallationRepairSession(
+        {
+          client,
+          recovery: recovery({
+            expectedInstallationId: 'staged-before-reload',
+            expectedInstallationVisible: false,
+            localInstallationId: 'candidate-from-stale-inspection',
+          }),
+          signerIdentifier,
+          expectedInboxId: inboxId,
+          interruptedRepairCandidateId: 'staged-before-reload',
+          previousInstallationId: 'saved-old',
+          databasePathMode: 'inbox-default',
+        },
+        {
+          resolveInboxId: vi.fn(async () => inboxId),
+          fetchInboxState: vi.fn(async () => state(['staged-before-reload', 'saved-old'])),
+          revokeInstallation: vi.fn(async () => undefined),
+          onCandidateReady,
+          onInstallationReady: vi.fn(async () => undefined),
+        }
+      )
+    ).rejects.toThrow(/previously staged.*visible/i);
+
+    expect(client.register).not.toHaveBeenCalled();
+    expect(onCandidateReady).not.toHaveBeenCalled();
+  });
+
+  it('settles repeated absence before rebasing an interrupted ephemeral candidate', async () => {
+    let registered = false;
+    let current = state([]);
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-after-reload',
+      isRegistered: vi.fn(async () => registered),
+      register: vi.fn(async () => {
+        registered = true;
+        current = state(['candidate-after-reload']);
+      }),
+    };
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(
+      runInstallationRepairSession(
+        {
+          client,
+          recovery: recovery({
+            expectedInstallationId: 'staged-before-reload',
+            expectedInstallationVisible: false,
+            localInstallationId: 'candidate-from-stale-inspection',
+          }),
+          signerIdentifier,
+          expectedInboxId: inboxId,
+          interruptedRepairCandidateId: 'staged-before-reload',
+          previousInstallationId: 'saved-old',
+          databasePathMode: 'inbox-default',
+        },
+        {
+          resolveInboxId: vi.fn(async () => inboxId),
+          fetchInboxState: vi.fn(async () => current),
+          revokeInstallation: vi.fn(async () => undefined),
+          onCandidateReady: vi.fn(async () => undefined),
+          onInstallationReady: vi.fn(async () => undefined),
+          sleep,
+        }
+      )
+    ).resolves.toMatchObject({ candidateInstallationId: 'candidate-after-reload' });
+
+    expect(sleep).toHaveBeenCalledTimes(9);
+    expect(client.register).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: 'registered',
+      recoveryOverrides: {
+        localInstallationRegistered: true,
+      },
+    },
+    {
+      label: 'ledger-visible',
+      recoveryOverrides: {
+        localInstallationVisible: true,
+      },
+    },
+  ])(
+    'rejects a $label candidate mismatch before staging or registration',
+    async ({ recoveryOverrides }) => {
+      const client: RegistrationClient = {
+        inboxId,
+        installationId: 'candidate-b',
+        isRegistered: vi.fn(async () => false),
+        register: vi.fn(async () => undefined),
+      };
+      const onCandidateReady = vi.fn(async () => undefined);
+      const onInstallationReady = vi.fn(async () => undefined);
+
+      await expect(
+        runInstallationRepairSession(
+          {
+            client,
+            recovery: recovery(recoveryOverrides),
+            signerIdentifier,
+            expectedInboxId: inboxId,
+            previousInstallationId: 'candidate-a',
+            databasePathMode: 'inbox-default',
+          },
+          {
+            resolveInboxId: vi.fn(async () => inboxId),
+            fetchInboxState: vi.fn(async () => state(['candidate-a'])),
+            revokeInstallation: vi.fn(async () => undefined),
+            onCandidateReady,
+            onInstallationReady,
+          }
+        )
+      ).rejects.toThrow(/changed after it had registered or appeared/i);
+
+      expect(client.isRegistered).not.toHaveBeenCalled();
+      expect(client.register).not.toHaveBeenCalled();
+      expect(onCandidateReady).not.toHaveBeenCalled();
+      expect(onInstallationReady).not.toHaveBeenCalled();
+    }
+  );
 });

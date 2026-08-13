@@ -88,6 +88,21 @@ function isLegacyScwChainZeroRecoveryError(message: string | null | undefined): 
   return Boolean(message && /SCW chain ID 0|WalletConnect alone/i.test(message));
 }
 
+function installationRepairSuccessNotice(result: {
+  previousInstallationId?: string;
+  previousInstallationAbsent: boolean;
+  previousInstallationRevoked: boolean;
+}): string {
+  if (
+    result.previousInstallationId &&
+    !result.previousInstallationAbsent &&
+    !result.previousInstallationRevoked
+  ) {
+    return 'This browser installation was repaired and verified. The prior installation remains on the inbox ledger and can be revoked later.';
+  }
+  return 'This browser installation was repaired and verified.';
+}
+
 export function SettingsPage() {
   const navigate = useNavigate();
   const {
@@ -184,7 +199,7 @@ export function SettingsPage() {
       action === 'repair' &&
       !repairConfirmed &&
       !window.confirm(
-        `Repair this browser's XMTP installation?\n\n${installationRepairOutcome ?? 'Converge will preserve local messages and reuse this exact local database candidate.'}\n\nNo arbitrary device will be revoked. An older installation may need to be online to restore encrypted history.`
+        `Repair this browser's XMTP installation?\n\n${installationRepairOutcome ?? 'Converge will preserve local messages and open the local XMTP database once for this live repair attempt.'}\n\nThe attempt saves and registers the installation it opens without reopening the database. If an unregistered attempt was interrupted, its installation ID may change after the worker closed, so Converge first rechecks the inbox ledger. No arbitrary device will be revoked. An older installation may need to be online to restore encrypted history.`
       )
     ) {
       return;
@@ -198,8 +213,8 @@ export function SettingsPage() {
       // If identity has a private key (Converge-generated), use it directly
       if (identity.privateKey) {
         if (action === 'repair') {
-          await repairCurrentInstallation();
-          setConnectNotice('This browser installation was repaired and verified.');
+          const result = await repairCurrentInstallation();
+          setConnectNotice(installationRepairSuccessNotice(result));
         } else {
           await reconnectCurrentIdentity();
         }
@@ -248,8 +263,8 @@ export function SettingsPage() {
             : await effectiveSignMessage(message, identity.address),
       };
       if (action === 'repair') {
-        await repairCurrentInstallation(reconnectOptions);
-        setConnectNotice('This browser installation was repaired and verified.');
+        const result = await repairCurrentInstallation(reconnectOptions);
+        setConnectNotice(installationRepairSuccessNotice(result));
       } else {
         await reconnectCurrentIdentity(reconnectOptions);
       }
@@ -1090,10 +1105,16 @@ export function SettingsPage() {
 
   const shouldShowReconnect = connectionStatus === 'error' || connectionStatus === 'disconnected';
   const walletNeedsReconnect = Boolean(identity && !identity.privateKey && !isWalletConnected);
+  const hasLiveRepairCandidate = Boolean(
+    identity?.installationRepairPending &&
+      getXmtpClient().hasRetainedInstallationRepairClient()
+  );
   const installationRecoveryView = installationRecovery
     ? getInstallationRecoveryView(installationRecovery, {
         installationRepairPending: identity?.installationRepairPending,
+        stagedInstallationId: identity?.installationId,
         staleInstallationId: identity?.staleInstallationId,
+        hasLiveRepairCandidate,
       })
     : null;
   const canRepairInstallation = installationRecoveryView?.canRepair === true;
@@ -1340,7 +1361,8 @@ export function SettingsPage() {
                         <p>
                           Converge found the correct inbox, but this browser's local XMTP
                           database {installationRecoveryView?.reason}.
-                          {' '}No new installation was registered.
+                          {' '}Ledger changes happen only inside the confirmed Repair action;
+                          Converge will not delete messages or reset this database.
                         </p>
                         <p className="text-yellow-200/80">
                           Inbox usage: {installationRecovery.existingInstallationCount}/10.
@@ -1365,7 +1387,7 @@ export function SettingsPage() {
                       onClick={() => {
                         void handleConnectionAction('reconnect');
                       }}
-                      disabled={isReconnecting || !identity}
+                      disabled={isReconnecting || !identity || hasLiveRepairCandidate}
                       className="btn-primary text-xs disabled:opacity-50"
                     >
                       {activeConnectionAction === 'reconnect'
@@ -1376,6 +1398,11 @@ export function SettingsPage() {
                             ? 'Retry Connection'
                             : 'Connect'}
                     </button>
+                    {hasLiveRepairCandidate && (
+                      <div className="text-xs text-primary-300">
+                        Finish or retry Repair This Browser before checking the saved installation again; this keeps the current repair key alive.
+                      </div>
+                    )}
                     {showConnectorList && (
                       <div className="space-y-2">
                         <div className="text-xs text-primary-300">Choose a wallet to reconnect:</div>
