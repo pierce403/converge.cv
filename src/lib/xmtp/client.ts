@@ -29,6 +29,7 @@ import {
   SortDirection,
   encodeText,
   encryptAttachment,
+  generateInboxId,
   getInboxIdForIdentifier,
   PermissionPolicy,
   PermissionUpdateType,
@@ -96,6 +97,7 @@ import {
 import {
   getExactClientDbPath,
   getClientDbPath,
+  getPersistentClientDbPath,
   provisionFreshDeviceKey,
   provisionWithStaleInstallationRecovery,
   shouldRequestHistorySync,
@@ -800,7 +802,7 @@ export class XmtpClient {
   private isDatabaseLockError(err: unknown): boolean {
     try {
       const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err ?? '');
-      return /database is locked|opfs.*lock|lock.*opfs|NoModificationAllowedError|InvalidStateError/i.test(
+      return /database is locked|opfs.*lock|lock.*opfs|NoModificationAllowedError|InvalidStateError|no such vfs:\s*opfs-libxmtp|failed to initialize opfs/i.test(
         message
       );
     } catch {
@@ -4002,7 +4004,12 @@ export class XmtpClient {
 
     const signer = await this.createSigner(identity);
     const signerIdentifier = await signer.getIdentifier();
-    const dbPath = getClientDbPath(identity.address, databasePathMode);
+    const dbPath = getPersistentClientDbPath(
+      identity.address,
+      databasePathMode,
+      expectedInboxId,
+      'rwc'
+    );
     const sdkLoggingLevel = getXmtpSdkLogLevel();
     let candidate = await this.takeRetainedInstallationRepairClient(
       identity,
@@ -4014,6 +4021,7 @@ export class XmtpClient {
     // A retained client was already journaled by the previous live attempt.
     // Keep ownership across another early failure even before restaging runs.
     let candidateStaged = candidate !== null;
+    let stagedCandidateInstallationId = candidate?.installationId ?? null;
     let repairSession: Awaited<ReturnType<typeof runInstallationRepairSession>>;
 
     try {
@@ -4046,9 +4054,10 @@ export class XmtpClient {
         throw new Error('The repair database opened a different XMTP inbox.');
       }
 
+      const repairCandidate = candidate;
       repairSession = await runInstallationRepairSession(
         {
-          client: candidate,
+          client: repairCandidate,
           recovery,
           signerIdentifier,
           expectedInboxId,
@@ -4080,10 +4089,73 @@ export class XmtpClient {
           onCandidateReady: async (ready) => {
             await options.onCandidateReady(ready);
             candidateStaged = true;
+            stagedCandidateInstallationId = ready.candidateInstallationId;
           },
           onInstallationReady: options.onInstallationReady,
+          verifyCandidateDurability: async (candidateInstallationId) => {
+            // A successful register() is not enough: wasm-bindings 1.8.1 can
+            // silently use SQLite's in-memory VFS when OPFS initialization
+            // fails. Terminate the registered worker, then require a fresh
+            // worker to recover the exact same installation from the named
+            // OPFS VFS before cleanup or a success notice.
+            await repairCandidate.close();
+            if (candidate === repairCandidate) {
+              candidate = null;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 350));
+
+            const reopened = await this.retryWithDelay(
+              'client.create:installation-repair-durability',
+              async () =>
+                await Client.create(signer, {
+                  env: 'production',
+                  dbPath,
+                  appVersion: XMTP_APP_VERSION,
+                  codecs: XMTP_CONTENT_CODECS,
+                  loggingLevel: sdkLoggingLevel,
+                  structuredLogging: false,
+                  performanceLogging: false,
+                  disableAutoRegister: true,
+                }),
+              {
+                attempts: 5,
+                initialDelayMs: 500,
+                shouldRetry: (error) => this.isDatabaseLockError(error),
+              }
+            );
+            candidate = reopened;
+            await ensureClientRegistration(
+              {
+                client: reopened,
+                identifier: signerIdentifier,
+                policy: 'resume-only',
+                expectedInboxId,
+                expectedInstallationId: candidateInstallationId,
+                databasePathMode,
+                requireExpectedInstallation: true,
+              },
+              {
+                resolveInboxId: async (identifier) =>
+                  await this.retryWithBackoff(
+                    'installation-repair-durability:getInboxIdForIdentifier',
+                    () => getInboxIdForIdentifier(identifier, 'production')
+                  ),
+                fetchInboxState: async (inboxId) => {
+                  const states = await this.retryWithBackoff(
+                    'installation-repair-durability:fetchInboxStates',
+                    () => Client.fetchInboxStates([inboxId], 'production')
+                  );
+                  return states[0];
+                },
+                onInstallationReady: options.onInstallationReady,
+              }
+            );
+          },
         }
       );
+      if (!candidate) {
+        throw new Error('XMTP closed the repaired database before durability verification.');
+      }
       const connection = await this.activateVerifiedClient(
         candidate,
         {
@@ -4111,8 +4183,10 @@ export class XmtpClient {
     } catch (error) {
       if (
         candidateStaged &&
+        stagedCandidateInstallationId &&
         candidate?.inboxId &&
         candidate.installationId &&
+        installationIdsMatch(candidate.installationId, stagedCandidateInstallationId) &&
         this.client !== candidate
       ) {
         await this.closeRetainedInstallationRepairClient();
@@ -4280,10 +4354,19 @@ export class XmtpClient {
 
       const signer = await this.createSigner(identity);
       const signerIdentifier = await signer.getIdentifier();
+      let databaseInboxId = options?.expectedInboxId;
+      if (!databaseInboxId && (identity.xmtpDbPathMode ?? 'legacy-address') === 'inbox-default') {
+        databaseInboxId =
+          (await this.retryWithBackoff('connect:resolve-database-inbox', () =>
+            getInboxIdForIdentifier(signerIdentifier, 'production')
+          )) ?? (await generateInboxId(signerIdentifier));
+      }
 
       console.log('[XMTP] Calling Client.create() with signer...');
-      // New identities use the SDK's inbox-aware default. Records created before
-      // this migration retain their address path so a reload does not churn an installation.
+      // New identities use the deterministic inbox-aware filename. Records
+      // created before that migration retain their address filename. Both are
+      // opened through the named OPFS VFS so storage failure cannot silently
+      // become an in-memory installation.
       const sdkLoggingLevel = getXmtpSdkLogLevel();
       const preferredDatabasePathMode = identity.xmtpDbPathMode ?? 'legacy-address';
       let databaseAttempts: ReconnectDatabaseAttempt[] = [
@@ -4302,12 +4385,12 @@ export class XmtpClient {
           const preferredPath = getExactClientDbPath(
             identity.address,
             preferredDatabasePathMode,
-            options.expectedInboxId
+            databaseInboxId
           );
           const alternatePath = getExactClientDbPath(
             identity.address,
             alternateDatabasePathMode,
-            options.expectedInboxId
+            databaseInboxId
           );
           if (preferredPath && alternatePath && preferredPath !== alternatePath) {
             const preferredExists = await xmtpDatabaseFileExists(preferredPath);
@@ -4336,7 +4419,20 @@ export class XmtpClient {
       for (let index = 0; index < databaseAttempts.length; index += 1) {
         const attempt = databaseAttempts[index];
         const databasePathMode = attempt.mode;
-        const dbPath = getClientDbPath(identity.address, databasePathMode);
+        const logicalDbPath = getExactClientDbPath(
+          identity.address,
+          databasePathMode,
+          databaseInboxId
+        );
+        const dbPath =
+          logicalDbPath
+            ? getPersistentClientDbPath(
+                identity.address,
+                databasePathMode,
+                databaseInboxId,
+                'rwc'
+              )
+            : getClientDbPath(identity.address, databasePathMode);
         console.log('[XMTP] Client.create options:', {
           env: 'production',
           dbPath: dbPath ?? '(SDK inbox default)',
@@ -4540,6 +4636,12 @@ export class XmtpClient {
         createManager: async (signer) =>
           await Client.create(signer, {
             env: 'production',
+            dbPath: getPersistentClientDbPath(
+              deviceIdentity.address,
+              'inbox-default',
+              expectedInboxId,
+              'rwc'
+            ),
             appVersion: XMTP_APP_VERSION,
             codecs: XMTP_CONTENT_CODECS,
             loggingLevel: sdkLoggingLevel,

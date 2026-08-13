@@ -321,6 +321,138 @@ describe('XmtpClient message stream cleanup', () => {
     });
   });
 
+  it('closes a different installation produced by durability reopen instead of retaining it', async () => {
+    const xmtp = new XmtpClient();
+    const inboxId = 'a'.repeat(64);
+    const stagedInstallationId = 'candidate-staged';
+    const reopenedInstallationId = 'candidate-after-reopen';
+    const repairIdentity = {
+      address: `0x${'11'.repeat(20)}`,
+      privateKey: `0x${'22'.repeat(32)}`,
+      inboxId,
+      installationId: stagedInstallationId,
+      xmtpDbPathMode: 'inbox-default' as const,
+    };
+    const signerIdentifier = {
+      identifier: repairIdentity.address,
+      identifierKind: 0,
+    };
+    let registered = false;
+    let visibleInstallationIds: string[] = [];
+    const stagedClose = vi.fn(async () => undefined);
+    const stagedClient = {
+      inboxId,
+      installationId: stagedInstallationId,
+      isRegistered: vi.fn(async () => registered),
+      register: vi.fn(async () => {
+        registered = true;
+        visibleInstallationIds = [stagedInstallationId];
+      }),
+      close: stagedClose,
+    };
+    const reopenedClose = vi.fn(async () => undefined);
+    const reopenedClient = {
+      inboxId,
+      installationId: reopenedInstallationId,
+      isRegistered: vi.fn(async () => false),
+      register: vi.fn(async () => undefined),
+      close: reopenedClose,
+    };
+    const currentState = () => ({
+      inboxId,
+      recoveryIdentifier: signerIdentifier,
+      accountIdentifiers: [signerIdentifier],
+      installations: visibleInstallationIds.map((id, index) => ({
+        id,
+        bytes: new Uint8Array([index + 1]),
+        clientTimestampNs: BigInt(index + 1),
+      })),
+    });
+    const internal = xmtp as unknown as {
+      retainedInstallationRepairClient: unknown;
+      createSigner: () => Promise<{ getIdentifier: () => Promise<typeof signerIdentifier> }>;
+      retryWithBackoff: (
+        label: string,
+        operation: () => Promise<unknown>
+      ) => Promise<unknown>;
+      retryWithDelay: (
+        label: string,
+        operation: () => Promise<unknown>
+      ) => Promise<unknown>;
+      repairInstallationInternal: (
+        identity: typeof repairIdentity,
+        options: {
+          recovery: {
+            reason: 'installation-unregistered';
+            inboxId: string;
+            expectedInstallationId: string;
+            localInstallationId: string;
+            expectedInstallationVisible: boolean;
+            localInstallationVisible: boolean;
+            localInstallationRegistered: boolean;
+            signerIsRecoveryIdentifier: boolean;
+            existingInstallationCount: number;
+            databasePathMode: 'inbox-default';
+          };
+          interruptedRepairCandidateId: string;
+          expectedInboxId: string;
+          onCandidateReady: () => Promise<void>;
+          onInstallationReady: () => Promise<void>;
+        }
+      ) => Promise<unknown>;
+    };
+    internal.retainedInstallationRepairClient = {
+      client: stagedClient,
+      databasePathMode: 'inbox-default',
+      inboxId,
+      installationId: stagedInstallationId,
+      signerIdentity: signerIdentityKey(repairIdentity),
+    };
+    internal.createSigner = vi.fn(async () => ({
+      getIdentifier: vi.fn(async () => signerIdentifier),
+    }));
+    internal.retryWithBackoff = vi.fn(
+      async (label: string, operation: () => Promise<unknown>) => {
+        if (label.includes('getInboxIdForIdentifier')) return inboxId;
+        if (label.includes('fetchInboxStates')) return [currentState()];
+        return await operation();
+      }
+    );
+    internal.retryWithDelay = vi.fn(
+      async (_label: string, operation: () => Promise<unknown>) => await operation()
+    );
+    const create = vi
+      .spyOn(Client, 'create')
+      .mockResolvedValue(reopenedClient as unknown as Client);
+
+    await expect(
+      internal.repairInstallationInternal(repairIdentity, {
+        recovery: {
+          reason: 'installation-unregistered',
+          inboxId,
+          expectedInstallationId: stagedInstallationId,
+          localInstallationId: stagedInstallationId,
+          expectedInstallationVisible: false,
+          localInstallationVisible: false,
+          localInstallationRegistered: false,
+          signerIsRecoveryIdentifier: true,
+          existingInstallationCount: 8,
+          databasePathMode: 'inbox-default',
+        },
+        interruptedRepairCandidateId: stagedInstallationId,
+        expectedInboxId: inboxId,
+        onCandidateReady: vi.fn(async () => undefined),
+        onInstallationReady: vi.fn(async () => undefined),
+      })
+    ).rejects.toThrow(/installation/i);
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(stagedClient.register).toHaveBeenCalledOnce();
+    expect(stagedClose).toHaveBeenCalledOnce();
+    expect(reopenedClose).toHaveBeenCalledOnce();
+    expect(internal.retainedInstallationRepairClient).toBeNull();
+  });
+
   it('closes a retained repair client exactly once when it no longer matches the journal', async () => {
     vi.useFakeTimers();
     const xmtp = new XmtpClient();

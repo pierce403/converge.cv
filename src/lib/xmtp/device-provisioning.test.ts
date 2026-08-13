@@ -4,6 +4,7 @@ import {
   completeProvisioning,
   getExactClientDbPath,
   getClientDbPath,
+  getPersistentClientDbPath,
   getScwRetryChainId,
   InstallationMembershipPendingError,
   InstallationLimitError,
@@ -825,6 +826,12 @@ describe('client identity and history policy', () => {
     );
     expect(getExactClientDbPath('0xABCD', 'legacy-address', targetInbox)).toBe(
       'xmtp-production-0xabcd.db3'
+    );
+    expect(getPersistentClientDbPath('0xABCD', 'inbox-default', targetInbox, 'rw')).toBe(
+      `file:xmtp-production-${targetInbox}.db3?mode=rw&vfs=opfs-libxmtp`
+    );
+    expect(getPersistentClientDbPath('0xABCD', 'legacy-address', targetInbox)).toBe(
+      'file:xmtp-production-0xabcd.db3?mode=rwc&vfs=opfs-libxmtp'
     );
   });
 

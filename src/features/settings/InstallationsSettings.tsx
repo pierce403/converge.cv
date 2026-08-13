@@ -2,10 +2,9 @@
  * XMTP Installations Management
  */
 
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useAuthStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
-import { getStorage } from '@/lib/storage';
 import { installationIdsMatch } from '@/lib/xmtp/client-registration';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 
@@ -35,8 +34,11 @@ export function InstallationsSettings() {
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [isFetchingStatuses, setIsFetchingStatuses] = useState(false);
   const [verifiedCurrentInstallationId, setVerifiedCurrentInstallationId] = useState<string | null>(null);
+  const loadGenerationRef = useRef(0);
 
   const loadInstallations = useCallback(async () => {
+    const loadGeneration = ++loadGenerationRef.current;
+    const isCurrentLoad = () => loadGeneration === loadGenerationRef.current;
     setIsLoading(true);
     setError(null);
     setVerifiedCurrentInstallationId(null);
@@ -53,6 +55,7 @@ export function InstallationsSettings() {
             ? await xmtp.getInboxStateById(identity.inboxId)
             : await xmtp.getInboxState()
       ) as unknown as SafeInboxStateLite;
+      if (!isCurrentLoad()) return;
       console.log('[Installations] Inbox state:', inboxState);
       
       // Sort installations by creation date (newest first)
@@ -73,17 +76,6 @@ export function InstallationsSettings() {
         : null;
       setVerifiedCurrentInstallationId(verifiedLiveInstallationId);
 
-      if (
-        verifiedLiveInstallationId &&
-        identity &&
-        !installationIdsMatch(identity.installationId, verifiedLiveInstallationId)
-      ) {
-        const updatedIdentity = { ...identity, installationId: verifiedLiveInstallationId };
-        const storage = await getStorage();
-        await storage.putIdentity(updatedIdentity);
-        useAuthStore.getState().setIdentity(updatedIdentity);
-      }
-
       // Fetch key package statuses for all installations (requires connection)
       if (xmtp.isConnected() && sortedInstallations.length > 0) {
         try {
@@ -94,9 +86,11 @@ export function InstallationsSettings() {
             ...installation,
             keyPackageStatus: statuses.get(installation.id),
           }));
-          
+
+          if (!isCurrentLoad()) return;
           setInstallations(installationsWithStatus as unknown as Installation[]);
         } catch (statusErr) {
+          if (!isCurrentLoad()) return;
           console.warn('[Installations] Failed to fetch key package statuses:', statusErr);
           // Still show installations even if status fetch fails
           setInstallations(sortedInstallations as unknown as Installation[]);
@@ -106,6 +100,7 @@ export function InstallationsSettings() {
         setInstallations(sortedInstallations as unknown as Installation[]);
       }
     } catch (err) {
+      if (!isCurrentLoad()) return;
       setHasLoaded(false);
       console.error('[Installations] Failed to load:', err);
       const errorMsg = err instanceof Error ? err.message : 'Failed to load installations';
@@ -117,9 +112,11 @@ export function InstallationsSettings() {
         setError(errorMsg);
       }
     } finally {
-      setIsLoading(false);
+      if (isCurrentLoad()) {
+        setIsLoading(false);
+      }
     }
-  }, [identity]);
+  }, [identity?.inboxId]);
 
   const refreshStatuses = async () => {
     setIsFetchingStatuses(true);
@@ -157,6 +154,9 @@ export function InstallationsSettings() {
       setHasLoaded(false);
       setVerifiedCurrentInstallationId(null);
     }
+    return () => {
+      loadGenerationRef.current += 1;
+    };
   }, [connectionStatus, identity?.inboxId, loadInstallations]);
 
   const handleRevoke = async (installationBytes: Uint8Array, installationId: string) => {

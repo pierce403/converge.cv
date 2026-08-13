@@ -55,6 +55,7 @@ export interface InstallationRepairSessionDependencies
   extends ClientRegistrationDependencies {
   revokeInstallation(inboxId: string, installationBytes: Uint8Array[]): Promise<void>;
   onCandidateReady: InstallationRepairDependencies['onCandidateReady'];
+  verifyCandidateDurability?(candidateInstallationId: string): Promise<void>;
 }
 
 export interface InstallationRepairSessionResult {
@@ -336,10 +337,10 @@ export async function prepareInstallationRepair(
 }
 
 /**
- * Inspect, stage, register, and verify one repair candidate without closing its
- * Browser SDK client. An unregistered installation key is held only by that
- * live worker until registration stores it, so close/reopen is not a valid
- * exact-candidate boundary.
+ * Inspect, stage, register, and verify one repair candidate without closing it
+ * before registration. An unregistered installation key is held only by that
+ * live worker until registration stores it; after verification, the caller may
+ * close and reopen the registered database to prove durability.
  */
 export async function runInstallationRepairSession(
   input: InstallationRepairSessionInput,
@@ -369,7 +370,6 @@ export async function runInstallationRepairSession(
   }
 
   if (
-    candidateChanged &&
     input.interruptedRepairCandidateId &&
     !installationIdsMatch(candidateInstallationId, input.interruptedRepairCandidateId)
   ) {
@@ -464,6 +464,12 @@ export async function runInstallationRepairSession(
       throw error;
     }
   }
+
+  // Registration is not complete from Converge's perspective until a fresh
+  // Browser SDK worker can reopen the same persistent database and recover the
+  // exact installation. This catches an SDK OPFS-to-memory fallback before the
+  // UI reports success or optional cleanup removes the prior installation.
+  await dependencies.verifyCandidateDurability?.(candidateInstallationId);
 
   if (
     preparation.previousInstallationId &&

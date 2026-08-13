@@ -1,7 +1,10 @@
 import type { InboxState, Identifier, Signer } from '@xmtp/browser-sdk';
 import type { Identity } from '@/types';
 import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
-import { getInboxDefaultDatabasePath } from './opfs-database';
+import {
+  getInboxDefaultDatabasePath,
+  getPersistentXmtpDatabaseUri,
+} from './opfs-database';
 
 export const XMTP_INSTALLATION_LIMIT = 10;
 
@@ -224,6 +227,19 @@ export function getExactClientDbPath(
     return expectedInboxId ? getInboxDefaultDatabasePath(expectedInboxId) : undefined;
   }
   return getClientDbPath(address, mode);
+}
+
+export function getPersistentClientDbPath(
+  address: string,
+  mode: XmtpDbPathMode,
+  expectedInboxId: string | undefined,
+  openMode: 'rw' | 'rwc' = 'rwc'
+): string {
+  const logicalPath = getExactClientDbPath(address, mode, expectedInboxId);
+  if (!logicalPath) {
+    throw new Error('An inbox ID is required to open the persistent XMTP database.');
+  }
+  return getPersistentXmtpDatabaseUri(logicalPath, openMode);
 }
 
 export function shouldRequestHistorySync(input: {

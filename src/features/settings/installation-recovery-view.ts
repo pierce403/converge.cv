@@ -22,7 +22,7 @@ export function getInstallationRecoveryView(
         reason:
           'is registered in this live browser session but has not appeared on the inbox ledger yet',
         outcome:
-          'Retry Repair This Browser to recheck and finish the same live installation. Converge will keep its key in memory and will not register, replace, or delete another installation while the ledger is still settling.',
+          'Retry Repair This Browser to recheck and finish the same live installation. Converge will keep its key in memory and will not register, replace, or delete another installation while the inbox ledger is still settling. Once it appears, Converge will reopen this local database and require the exact same installation before reporting success.',
       };
     }
     return {
@@ -78,15 +78,15 @@ export function getInstallationRecoveryView(
           ? 'opened a different installation'
           : 'has not been registered locally',
       outcome:
-        'The inspected installation is already present on the inbox ledger. Repair will verify it without using another installation slot.',
+        'The inspected installation is already present on the inbox ledger. Repair will confirm it on this live connection, then reopen the saved local database and require that exact installation before reporting success. It will not use another installation slot.',
     };
   }
 
   if (recovery.signerIsRecoveryIdentifier && recovery.expectedInstallationVisible) {
     const outcome =
       recovery.existingInstallationCount >= 10
-        ? 'This inbox is at 10/10. Repair will first remove only the exact saved unavailable installation, then save and register the installation from this live database attempt without reopening it.'
-        : `Repair will save and verify the installation from this live database attempt before trying to remove only the exact saved unavailable installation. The inbox should return to about ${recovery.existingInstallationCount}/10; if cleanup does not settle, the verified replacement remains connected and the prior ID can be revoked later.`;
+        ? 'This inbox is at 10/10. Repair will first remove only the exact saved unavailable installation. It will then save and register the replacement on one live connection, reopen the same local database, and require the exact replacement before reporting success.'
+        : `Repair will save and register the replacement on one live connection, then reopen the same local database and require the exact replacement before reporting success. Only then will it try to remove the exact saved unavailable installation. The inbox should return to about ${recovery.existingInstallationCount}/10; if cleanup does not settle, the verified replacement remains connected and the prior ID can be revoked later.`;
     return {
       canRepair: true,
       reason:
@@ -109,7 +109,7 @@ export function getInstallationRecoveryView(
           ? 'opened a different installation'
           : 'has not been registered',
       outcome:
-        'Converge will recheck the ledger and the exact prior installation, then open the local database once for this repair attempt. An unregistered installation ID may change after its worker closes, so the attempt saves and registers the ID it opens without reopening it.',
+        'Converge will first recheck the inbox ledger and the exact prior installation, removing only that unavailable prior installation if a slot is needed. An unregistered installation ID can change after its connection closes, so this attempt will save and register the installation it opens before closing it. Converge will then reopen the same local database and require that exact installation before reporting success.',
     };
   }
 
@@ -119,6 +119,6 @@ export function getInstallationRecoveryView(
       recovery.reason === 'installation-mismatch'
         ? 'opened a different installation'
         : 'has not been registered',
-    outcome: `Repair will open the local database once, save and register the installation from that live attempt without reopening it, and use one open slot (${recovery.existingInstallationCount}/10 → ${recovery.existingInstallationCount + 1}/10). The old installation remains available for later cleanup.`,
+    outcome: `Repair will use one open slot (${recovery.existingInstallationCount}/10 → ${recovery.existingInstallationCount + 1}/10). It will save and register the installation on one live connection, then reopen the same local database and require that exact installation before reporting success. The old installation remains available for later cleanup.`,
   };
 }

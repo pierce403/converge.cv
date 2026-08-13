@@ -98,9 +98,9 @@ function installationRepairSuccessNotice(result: {
     !result.previousInstallationAbsent &&
     !result.previousInstallationRevoked
   ) {
-    return 'This browser installation was repaired and verified. The prior installation remains on the inbox ledger and can be revoked later.';
+    return 'This browser installation was repaired and recovered from the same local database after reopening. The prior installation remains on the inbox ledger and can be revoked later.';
   }
-  return 'This browser installation was repaired and verified.';
+  return 'This browser installation was repaired and recovered from the same local database after reopening.';
 }
 
 export function SettingsPage() {
@@ -199,7 +199,7 @@ export function SettingsPage() {
       action === 'repair' &&
       !repairConfirmed &&
       !window.confirm(
-        `Repair this browser's XMTP installation?\n\n${installationRepairOutcome ?? 'Converge will preserve local messages and open the local XMTP database once for this live repair attempt.'}\n\nThe attempt saves and registers the installation it opens without reopening the database. If an unregistered attempt was interrupted, its installation ID may change after the worker closed, so Converge first rechecks the inbox ledger. No arbitrary device will be revoked. An older installation may need to be online to restore encrypted history.`
+        `Repair this browser's XMTP installation?\n\n${installationRepairOutcome ?? 'Converge will preserve local messages and repair the saved local XMTP database.'}\n\nConverge keeps one repair connection open through any required registration. Before reporting success, it closes that connection, reopens the same local database, and verifies the exact same installation. An interrupted unregistered attempt may open a different installation ID, so Converge first rechecks the inbox ledger. No arbitrary device will be revoked. An older installation may need to be online to restore encrypted history.`
       )
     ) {
       return;

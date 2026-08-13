@@ -454,6 +454,70 @@ describe('browser installation repair session', () => {
     });
   });
 
+  it('verifies candidate durability after registration and before optional prior cleanup', async () => {
+    const events: string[] = [];
+    const durabilityFailure = new Error('registered candidate did not survive reopen');
+    let registered = false;
+    let current = state([
+      'saved-old',
+      ...Array.from({ length: 7 }, (_, index) => `other-${index}`),
+    ]);
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-b',
+      isRegistered: vi.fn(async () => registered),
+      register: vi.fn(async () => {
+        events.push('register:candidate-b');
+        registered = true;
+        current = state([
+          'saved-old',
+          ...Array.from({ length: 7 }, (_, index) => `other-${index}`),
+          'candidate-b',
+        ]);
+      }),
+    };
+    const revokeInstallation = vi.fn(async () => {
+      events.push('revoke:saved-old');
+    });
+
+    await expect(
+      runInstallationRepairSession(
+        {
+          client,
+          recovery: recovery({ existingInstallationCount: 8 }),
+          signerIdentifier,
+          expectedInboxId: inboxId,
+          previousInstallationId: 'saved-old',
+          databasePathMode: 'inbox-default',
+        },
+        {
+          resolveInboxId: vi.fn(async () => inboxId),
+          fetchInboxState: vi.fn(async () => current),
+          revokeInstallation,
+          onCandidateReady: vi.fn(async () => {
+            events.push('stage:candidate-b');
+          }),
+          onInstallationReady: vi.fn(async ({ installationRegistered }) => {
+            if (installationRegistered) events.push('verified:candidate-b');
+          }),
+          verifyCandidateDurability: vi.fn(async () => {
+            events.push('durable:candidate-b');
+            throw durabilityFailure;
+          }),
+          sleep: vi.fn(async () => undefined),
+        }
+      )
+    ).rejects.toBe(durabilityFailure);
+
+    expect(events).toEqual([
+      'stage:candidate-b',
+      'register:candidate-b',
+      'verified:candidate-b',
+      'durable:candidate-b',
+    ]);
+    expect(revokeInstallation).not.toHaveBeenCalled();
+  });
+
   it('stages and revokes the exact predecessor before registering at 10/10', async () => {
     const events: string[] = [];
     let registered = false;
@@ -603,6 +667,47 @@ describe('browser installation repair session', () => {
     expect(client.isRegistered).not.toHaveBeenCalled();
     expect(client.register).not.toHaveBeenCalled();
     expect(onCandidateReady).not.toHaveBeenCalled();
+  });
+
+  it('does not rebase a refreshed local candidate while the interrupted journal candidate is visible', async () => {
+    const client: RegistrationClient = {
+      inboxId,
+      installationId: 'candidate-after-reload',
+      isRegistered: vi.fn(async () => false),
+      register: vi.fn(async () => undefined),
+    };
+    const onCandidateReady = vi.fn(async () => undefined);
+    const revokeInstallation = vi.fn(async () => undefined);
+
+    await expect(
+      runInstallationRepairSession(
+        {
+          client,
+          recovery: recovery({
+            expectedInstallationId: 'staged-before-reload',
+            expectedInstallationVisible: true,
+            localInstallationId: 'candidate-after-reload',
+          }),
+          signerIdentifier,
+          expectedInboxId: inboxId,
+          interruptedRepairCandidateId: 'staged-before-reload',
+          previousInstallationId: 'saved-old',
+          databasePathMode: 'inbox-default',
+        },
+        {
+          resolveInboxId: vi.fn(async () => inboxId),
+          fetchInboxState: vi.fn(async () => state(['staged-before-reload', 'saved-old'])),
+          revokeInstallation,
+          onCandidateReady,
+          onInstallationReady: vi.fn(async () => undefined),
+        }
+      )
+    ).rejects.toThrow(/previously staged.*visible/i);
+
+    expect(client.isRegistered).not.toHaveBeenCalled();
+    expect(client.register).not.toHaveBeenCalled();
+    expect(onCandidateReady).not.toHaveBeenCalled();
+    expect(revokeInstallation).not.toHaveBeenCalled();
   });
 
   it('catches a staged candidate that becomes visible after the recovery snapshot', async () => {
