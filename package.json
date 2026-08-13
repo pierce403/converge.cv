@@ -20,7 +20,8 @@
     "test:coverage": "rm -rf coverage && vitest run --coverage",
     "test:e2e": "playwright test",
     "test:push:live": "node scripts/probe-live-push-relay.mjs",
-    "typecheck": "tsc --noEmit"
+    "types:worker": "wrangler types",
+    "typecheck": "wrangler types --check && tsc --noEmit && tsc --noEmit -p tsconfig.worker.json"
   },
   "dependencies": {
     "@headlessui/react": "^2.1.8",

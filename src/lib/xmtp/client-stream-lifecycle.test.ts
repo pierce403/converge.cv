@@ -145,6 +145,64 @@ function attachRevocableClient(
   };
 }
 
+const historyIdentity = {
+  address: `0x${'11'.repeat(20)}`,
+  privateKey: `0x${'22'.repeat(32)}`,
+};
+
+function attachReadyHistoryClient(
+  xmtp: XmtpClient,
+  client: {
+    inboxId: string;
+    installationId: string;
+    isReady: boolean;
+    sendSyncRequest: ReturnType<typeof vi.fn>;
+  }
+): {
+  startMessages: ReturnType<typeof vi.fn>;
+  startDeletions: ReturnType<typeof vi.fn>;
+} {
+  const startMessages = vi.fn(async () => undefined);
+  const startDeletions = vi.fn(async () => undefined);
+  const internal = xmtp as unknown as {
+    client: unknown;
+    identity: unknown;
+    startMessageStream: typeof startMessages;
+    startMessageDeletionStream: typeof startDeletions;
+    startBackgroundDiscoveryLoop: () => void;
+  };
+  internal.client = client;
+  internal.identity = historyIdentity;
+  internal.startMessageStream = startMessages;
+  internal.startMessageDeletionStream = startDeletions;
+  internal.startBackgroundDiscoveryLoop = vi.fn();
+  useXmtpStore.setState({ connectionStatus: 'connected' });
+  return { startMessages, startDeletions };
+}
+
+function stubVerifiedClientBootstrap(xmtp: XmtpClient): {
+  startMessages: ReturnType<typeof vi.fn>;
+  startDeletions: ReturnType<typeof vi.fn>;
+} {
+  const startMessages = vi.fn(async () => undefined);
+  const startDeletions = vi.fn(async () => undefined);
+  const internal = xmtp as unknown as {
+    syncConversationsInternal: () => Promise<void>;
+    syncHistory: () => Promise<void>;
+    startMessageStream: typeof startMessages;
+    startMessageDeletionStream: typeof startDeletions;
+    scanInviteJoinRequests: () => Promise<void>;
+    startBackgroundDiscoveryLoop: () => void;
+  };
+  internal.syncConversationsInternal = vi.fn(async () => undefined);
+  internal.syncHistory = vi.fn(async () => undefined);
+  internal.startMessageStream = startMessages;
+  internal.startMessageDeletionStream = startDeletions;
+  internal.scanInviteJoinRequests = vi.fn(async () => undefined);
+  internal.startBackgroundDiscoveryLoop = vi.fn();
+  return { startMessages, startDeletions };
+}
+
 describe('XmtpClient message stream cleanup', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -232,6 +290,354 @@ describe('XmtpClient message stream cleanup', () => {
     ).rejects.toThrow(/different browser installation than the exact repair candidate/i);
 
     expect(onInstallationReady).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat a failed device-history request across immediate reconnects', async () => {
+    const xmtp = new XmtpClient();
+    const historyFailure = new Error('device history request failed');
+    const sendSyncRequest = vi.fn(async () => {
+      throw historyFailure;
+    });
+    attachReadyHistoryClient(xmtp, {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest,
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const first = await xmtp.connect(historyIdentity, { requestHistorySync: true });
+    const second = await xmtp.connect(historyIdentity, { requestHistorySync: true });
+
+    expect(first).toMatchObject({
+      historySyncRequested: false,
+      historySyncRequired: true,
+    });
+    expect(second).toMatchObject({
+      historySyncRequested: false,
+      historySyncRequired: true,
+    });
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+    expect(useXmtpStore.getState().connectionStatus).toBe('connected');
+  });
+
+  it('preserves the history-request cooldown when the same installation reopens', async () => {
+    const xmtp = new XmtpClient();
+    const firstRequest = vi.fn(async () => {
+      throw new Error('device history request failed');
+    });
+    attachReadyHistoryClient(xmtp, {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest: firstRequest,
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+
+    (
+      xmtp as unknown as { invalidateDeviceHistoryRequestFlights: () => void }
+    ).invalidateDeviceHistoryRequestFlights();
+    const reopenedRequest = vi.fn(async () => undefined);
+    attachReadyHistoryClient(xmtp, {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest: reopenedRequest,
+    });
+    const reopened = await xmtp.connect(historyIdentity, { requestHistorySync: true });
+
+    expect(firstRequest).toHaveBeenCalledOnce();
+    expect(reopenedRequest).not.toHaveBeenCalled();
+    expect(reopened).toMatchObject({
+      historySyncRequested: false,
+      historySyncRequired: true,
+    });
+  });
+
+  it('times out a hung device-history request without blocking connection or streams', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    const sendSyncRequest = vi.fn(async () => await new Promise<void>(() => undefined));
+    const client = {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest,
+    };
+    const { startMessages, startDeletions } = stubVerifiedClientBootstrap(xmtp);
+    const internal = xmtp as unknown as {
+      activateVerifiedClient: (
+        activeClient: typeof client,
+        identity: typeof historyIdentity,
+        databasePathMode: 'inbox-default',
+        registration: {
+          inboxId: string;
+          installationId: string;
+          installationRegistered: boolean;
+          existingInstallationCount: number;
+        },
+        options: { requestHistorySync: boolean }
+      ) => Promise<{
+        historySyncRequested: boolean;
+        historySyncRequired: boolean;
+      }>;
+    };
+    let result:
+      | { historySyncRequested: boolean; historySyncRequired: boolean }
+      | undefined;
+    void internal
+      .activateVerifiedClient(
+        client,
+        historyIdentity,
+        'inbox-default',
+        {
+          inboxId: client.inboxId,
+          installationId: client.installationId,
+          installationRegistered: false,
+          existingInstallationCount: 1,
+        },
+        { requestHistorySync: true }
+      )
+      .then((connected) => {
+        result = connected;
+      });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+
+    expect(result).toBeUndefined();
+    expect(startMessages).toHaveBeenCalledOnce();
+    expect(startDeletions).toHaveBeenCalledOnce();
+    expect(useXmtpStore.getState().connectionStatus).toBe('connected');
+
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+
+    expect(result).toMatchObject({
+      historySyncRequested: false,
+      historySyncRequired: true,
+    });
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+  });
+
+  it('retries a failed device-history request after its cooldown expires', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    const sendSyncRequest = vi.fn(async () => {
+      throw new Error('device history request failed');
+    });
+    attachReadyHistoryClient(xmtp, {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest,
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+
+    expect(sendSyncRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('single-flights concurrent device-history requests for one installation', async () => {
+    const xmtp = new XmtpClient();
+    let finishRequest: (() => void) | undefined;
+    const sendSyncRequest = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishRequest = resolve;
+        })
+    );
+    const client = {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest,
+    };
+    attachReadyHistoryClient(xmtp, client);
+    const requestDeviceHistory = (
+      xmtp as unknown as {
+        requestDeviceHistory: (activeClient: typeof client) => Promise<boolean>;
+      }
+    ).requestDeviceHistory.bind(xmtp);
+
+    const first = requestDeviceHistory(client);
+    const second = requestDeviceHistory(client);
+    await Promise.resolve();
+
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+    finishRequest?.();
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(false);
+  });
+
+  it('does not let one installation history failure suppress a new installation', async () => {
+    const xmtp = new XmtpClient();
+    const firstRequest = vi.fn(async () => {
+      throw new Error('first installation history request failed');
+    });
+    attachReadyHistoryClient(xmtp, {
+      inboxId: 'expected-inbox',
+      installationId: 'installation-a',
+      isReady: true,
+      sendSyncRequest: firstRequest,
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+
+    const secondRequest = vi.fn(async () => {
+      throw new Error('second installation history request failed');
+    });
+    attachReadyHistoryClient(xmtp, {
+      inboxId: 'expected-inbox',
+      installationId: 'installation-b',
+      isReady: true,
+      sendSyncRequest: secondRequest,
+    });
+    await xmtp.connect(historyIdentity, { requestHistorySync: true });
+
+    expect(firstRequest).toHaveBeenCalledOnce();
+    expect(secondRequest).toHaveBeenCalledOnce();
+  });
+
+  it('finishes browser repair when its post-reopen device-history request fails', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    const inboxId = 'a'.repeat(64);
+    const installationId = 'candidate-durable';
+    const repairIdentity = {
+      address: `0x${'11'.repeat(20)}`,
+      privateKey: `0x${'22'.repeat(32)}`,
+      inboxId,
+      installationId,
+      xmtpDbPathMode: 'inbox-default' as const,
+    };
+    const signerIdentifier = {
+      identifier: repairIdentity.address,
+      identifierKind: 0,
+    };
+    const inboxState = {
+      inboxId,
+      recoveryIdentifier: signerIdentifier,
+      accountIdentifiers: [signerIdentifier],
+      installations: [
+        {
+          id: installationId,
+          bytes: new Uint8Array([1]),
+          clientTimestampNs: 1n,
+        },
+      ],
+    };
+    const initialClose = vi.fn(async () => undefined);
+    const initialClient = {
+      inboxId,
+      installationId,
+      isRegistered: vi.fn(async () => true),
+      close: initialClose,
+    };
+    const historyFailure = new Error('device history request failed');
+    const sendSyncRequest = vi.fn(async () => {
+      throw historyFailure;
+    });
+    const reopenedClient = {
+      inboxId,
+      installationId,
+      isReady: true,
+      isRegistered: vi.fn(async () => true),
+      sendSyncRequest,
+      close: vi.fn(async () => undefined),
+    };
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const internal = xmtp as unknown as {
+      retainedInstallationRepairClient: unknown;
+      createSigner: () => Promise<{ getIdentifier: () => Promise<typeof signerIdentifier> }>;
+      retryWithBackoff: (
+        label: string,
+        operation: () => Promise<unknown>
+      ) => Promise<unknown>;
+      retryWithDelay: (
+        label: string,
+        operation: () => Promise<unknown>
+      ) => Promise<unknown>;
+      syncConversationsInternal: () => Promise<void>;
+      syncHistory: () => Promise<void>;
+      startMessageStream: () => Promise<void>;
+      startMessageDeletionStream: () => Promise<void>;
+      scanInviteJoinRequests: () => Promise<void>;
+      startBackgroundDiscoveryLoop: () => void;
+    };
+    internal.retainedInstallationRepairClient = {
+      client: initialClient,
+      databasePathMode: 'inbox-default',
+      inboxId,
+      installationId,
+      signerIdentity: signerIdentityKey(repairIdentity),
+    };
+    internal.createSigner = vi.fn(async () => ({
+      getIdentifier: vi.fn(async () => signerIdentifier),
+    }));
+    internal.retryWithBackoff = vi.fn(async (label, operation) => {
+      if (label.includes('getInboxIdForIdentifier')) return inboxId;
+      if (label.includes('fetchInboxStates')) return [inboxState];
+      return await operation();
+    });
+    internal.retryWithDelay = vi.fn(async (_label, operation) => await operation());
+    stubVerifiedClientBootstrap(xmtp);
+    const create = vi
+      .spyOn(Client, 'create')
+      .mockResolvedValue(reopenedClient as unknown as Client);
+
+    const pending = xmtp.repairInstallation(repairIdentity, {
+      recovery: {
+        reason: 'installation-unregistered',
+        inboxId,
+        localInstallationId: installationId,
+        expectedInstallationVisible: false,
+        localInstallationVisible: true,
+        localInstallationRegistered: true,
+        signerIsRecoveryIdentifier: true,
+        existingInstallationCount: 1,
+        databasePathMode: 'inbox-default',
+      },
+      interruptedRepairCandidateId: installationId,
+      expectedInboxId: inboxId,
+      requestHistorySync: true,
+      onCandidateReady: vi.fn(async () => undefined),
+      onInstallationReady: vi.fn(async () => undefined),
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(pending).resolves.toMatchObject({
+      installationId,
+      historySyncRequested: false,
+      historySyncRequired: true,
+    });
+    expect(initialClose).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        historySyncUrl: `${window.location.origin}/api/xmtp-history`,
+      })
+    );
+    expect(sendSyncRequest).toHaveBeenCalledOnce();
+    expect(useXmtpStore.getState().connectionStatus).toBe('connected');
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('Device history request failed'),
+      historyFailure
+    );
   });
 
   it('keeps an already-staged retained repair candidate open after an early retry failure', async () => {

@@ -1,7 +1,9 @@
 # Deployment Guide for Converge.cv
 
-Converge is an assets-only Cloudflare Worker. The production Worker owns the
-`converge.cv` Custom Domain; `converge-miniapp` is a separate Worker at
+Converge is a static-first Cloudflare Worker. Static Assets serves the app, and
+one stateless route streams opaque XMTP device-history archives to and from the
+fixed XMTP history service. The production Worker owns the `converge.cv` Custom
+Domain; `converge-miniapp` is a separate Worker at
 `miniapp.converge.cv`. Do not combine the two apps under one Worker or wildcard
 route because their service workers, IndexedDB, OPFS, and XMTP installations
 must remain origin-isolated.
@@ -14,6 +16,8 @@ and XMTP installation namespace.
 ## Repository Contract
 
 - `wrangler.jsonc` defines the production and preview Workers.
+- `worker/index.ts` handles only `/api/xmtp-history/upload` and
+  `/api/xmtp-history/files/<uuid>` before falling through to Static Assets.
 - `dist/` is the deployed Static Assets directory.
 - `assets.not_found_handling` serves `index.html` with `200` for React routes.
 - `public/_headers` sets security, immutable hashed-asset caching, root QR-camera
@@ -118,7 +122,8 @@ Cloudflare performs the checkout, build, and deployment inside Cloudflare.
 
 ## Environment Variables
 
-Converge is static. Only browser-public `VITE_*` values may enter its build:
+Converge has no secret-backed application service. Only browser-public `VITE_*`
+values may enter its build:
 
 - `VITE_VAPID_PARTY_API_BASE` selects the public vapid.party API origin.
 - `VITE_VAPID_PUBLIC_KEY` is an optional public-key override; normal production
@@ -131,6 +136,12 @@ Converge is static. Only browser-public `VITE_*` values may enter its build:
 Never place server credentials, private VAPID material, or XMTP private keys in
 a `VITE_*` variable.
 
+The encrypted-history relay has no binding or secret. Its upstream is a fixed
+source constant, requests and responses are streamed without buffering, and it
+must not log archive bodies or file identifiers. The upstream archive is
+encrypted before upload; its decryption key travels inside XMTP rather than
+through the Worker.
+
 ## Cutover Verification
 
 After attaching `converge.cv`, verify all of the following before removing the
@@ -141,6 +152,7 @@ curl -fsSI https://converge.cv/
 curl -fsSI https://converge.cv/debug
 curl -fsSI https://converge.cv/sw.js
 curl -fsSI https://converge.cv/manifest.json
+curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp-history/not-allowed
 ```
 
 - `/` and `/debug` return `200` from Cloudflare, not `server: GitHub.com`.
@@ -151,6 +163,9 @@ curl -fsSI https://converge.cv/manifest.json
 - `/sw.js` includes `Cache-Control: no-cache, no-store, must-revalidate` and
   `Service-Worker-Allowed: /`.
 - Hashed `/assets/*` responses are immutable.
+- An unsupported `/api/xmtp-history/*` path fails closed instead of returning
+  the SPA, and a browser history upload/download reaches only the fixed XMTP
+  archive service without a cross-origin browser fetch.
 - The existing inbox reopens without a new XMTP installation. Keeping the exact
   `https://converge.cv` origin preserves browser IndexedDB, OPFS, service-worker,
   and Push API state across the hosting-provider change.
@@ -179,5 +194,8 @@ inbox reopen, and Push Trace.
 XMTP encrypts message transport end to end, but Converge currently stores local
 private keys, mnemonics, decrypted app data, attachment caches, and the Browser
 SDK database without encryption at rest. Keyfile exports contain plaintext
-recovery material. Hosting the static bundle on Cloudflare does not change those
+recovery material. Hosting the app on Cloudflare does not change those
 local-storage properties and does not move decrypted messages to Cloudflare.
+The history relay can observe archive timing and opaque encrypted bytes while a
+transfer is in flight, but it neither receives the XMTP-delivered decryption key
+nor stores the archive in Converge infrastructure.

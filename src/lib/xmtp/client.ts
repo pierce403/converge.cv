@@ -169,6 +169,16 @@ const XMTP_CONTENT_CODECS = [
 ];
 const XMTP_SDK_LOG_LEVEL_STORAGE_KEY = 'converge.xmtpSdkLogLevel.v1';
 const XMTP_APP_VERSION = `converge-app/${buildInfo.version}`;
+const XMTP_HISTORY_SYNC_PATH = '/api/xmtp-history';
+const DEVICE_HISTORY_REQUEST_TIMEOUT_MS = 10 * 1000;
+const DEVICE_HISTORY_REQUEST_COOLDOWN_MS = 60 * 1000;
+
+function getXmtpHistorySyncUrl(): string {
+  if (typeof window === 'undefined' || !window.location.origin) {
+    throw new Error('XMTP browser history sync requires a browser origin.');
+  }
+  return new URL(XMTP_HISTORY_SYNC_PATH, window.location.origin).toString().replace(/\/$/, '');
+}
 
 function decodedMessageExpiryMs(message: unknown): number | undefined {
   const expiresAtNs = (message as { expiresAtNs?: unknown })?.expiresAtNs;
@@ -302,6 +312,11 @@ interface RetainedInstallationRepairClient {
   inboxId: string;
   installationId: string;
   signerIdentity: string;
+}
+
+interface DeviceHistoryRequestEntry {
+  cooldownUntil: number;
+  inFlight: Promise<void> | null;
 }
 
 
@@ -471,6 +486,8 @@ export class XmtpClient {
   private attachmentPreferenceSyncClient: Client<unknown> | null = null;
   private attachmentPreferenceSyncPromise: Promise<void> | null = null;
   private attachmentPreferenceSyncedAt = 0;
+  private deviceHistoryRequestEpoch = 0;
+  private deviceHistoryRequests = new Map<string, DeviceHistoryRequestEntry>();
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
   private static readonly BACKGROUND_DISCOVERY_INTERVAL_MS = 60 * 1000;
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
@@ -566,6 +583,144 @@ export class XmtpClient {
     this.syncCounters.dmSyncCalls = 0;
     this.syncCounters.groupSyncCalls = 0;
     this.syncCounters.backfillMessages = 0;
+  }
+
+  private invalidateDeviceHistoryRequestFlights(): void {
+    this.deviceHistoryRequestEpoch += 1;
+    const now = Date.now();
+    for (const [key, entry] of this.deviceHistoryRequests) {
+      if (entry.cooldownUntil <= now && !entry.inFlight) {
+        this.deviceHistoryRequests.delete(key);
+      } else if (entry.inFlight) {
+        // Do not let a request owned by a closing client get joined by a newly
+        // opened worker, while retaining its cooldown against reconnect loops.
+        this.deviceHistoryRequests.set(key, {
+          cooldownUntil: entry.cooldownUntil,
+          inFlight: null,
+        });
+      }
+    }
+  }
+
+  private getDeviceHistoryRequestKey(client: Client<unknown>): string | null {
+    if (!client.inboxId || !client.installationId) return null;
+    return `${this.normalizeInboxIdKey(client.inboxId)}:${this.normalizeInboxIdKey(client.installationId)}`;
+  }
+
+  private async ensureMessageStreamsBeforeHistoryRequest(
+    client: Client<unknown>
+  ): Promise<boolean> {
+    if (this.client !== client) return false;
+
+    let streamsReady = true;
+    if (!this.messageStream && !this.messageStreamTask) {
+      try {
+        await this.startMessageStream();
+      } catch (error) {
+        streamsReady = false;
+        console.warn(
+          '[XMTP] Message stream did not start before device history request; continuing without blocking connection:',
+          error
+        );
+      }
+    }
+
+    if (this.client !== client) return false;
+    if (!this.messageDeletionStream && !this.messageDeletionStreamTask) {
+      try {
+        await this.startMessageDeletionStream();
+      } catch (error) {
+        streamsReady = false;
+        console.warn(
+          '[XMTP] Message deletion stream did not start before device history request; continuing without blocking connection:',
+          error
+        );
+      }
+    }
+
+    return streamsReady && this.client === client;
+  }
+
+  private async requestDeviceHistory(client: Client<unknown>): Promise<boolean> {
+    const key = this.getDeviceHistoryRequestKey(client);
+    if (!key || this.client !== client) {
+      console.warn('[XMTP] Skipping device history request for a stale or unidentified client.');
+      return false;
+    }
+
+    const now = Date.now();
+    const existing = this.deviceHistoryRequests.get(key);
+    if (existing?.inFlight) {
+      console.info('[XMTP] Device history request already in flight for this installation.');
+      return false;
+    }
+    if (existing && existing.cooldownUntil > now) {
+      console.info(
+        `[XMTP] Device history request is cooling down for ${Math.ceil((existing.cooldownUntil - now) / 1000)}s.`
+      );
+      return false;
+    }
+
+    const requestEpoch = this.deviceHistoryRequestEpoch;
+    const entry: DeviceHistoryRequestEntry = {
+      cooldownUntil: now + DEVICE_HISTORY_REQUEST_COOLDOWN_MS,
+      inFlight: null,
+    };
+    // Install the cooldown before invoking or awaiting the SDK. A rejected or
+    // wedged request must not be hammered by an immediate reconnect.
+    this.deviceHistoryRequests.set(key, entry);
+
+    const publication = Promise.resolve().then(() => client.sendSyncRequest());
+    entry.inFlight = publication;
+    const clearPublication = () => {
+      if (this.deviceHistoryRequests.get(key) === entry) {
+        entry.inFlight = null;
+      }
+    };
+    void publication.then(clearPublication, clearPublication);
+
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const outcome = await Promise.race([
+        publication.then(() => 'published' as const),
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), DEVICE_HISTORY_REQUEST_TIMEOUT_MS);
+        }),
+      ]);
+
+      if (outcome === 'timeout') {
+        console.warn(
+          `[XMTP] Device history request timed out after ${DEVICE_HISTORY_REQUEST_TIMEOUT_MS / 1000}s; normal messaging will continue.`
+        );
+        return false;
+      }
+      if (
+        requestEpoch !== this.deviceHistoryRequestEpoch ||
+        this.client !== client ||
+        this.getDeviceHistoryRequestKey(client) !== key
+      ) {
+        console.info('[XMTP] Ignoring a device history publication from a superseded client.');
+        return false;
+      }
+
+      console.info(
+        '[XMTP] Published encrypted device history request. Another installation must be online to deliver history.'
+      );
+      logNetworkEvent({
+        direction: 'outbound',
+        event: 'history:device_sync_request',
+        details: 'Published history request to other installations; delivery is not yet confirmed',
+      });
+      return true;
+    } catch (error) {
+      console.warn(
+        '[XMTP] Device history request failed; normal network sync will continue:',
+        error
+      );
+      return false;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   private stopBackgroundDiscoveryLoop(): void {
@@ -3799,6 +3954,9 @@ export class XmtpClient {
       installationId: client.installationId,
       isReady: client.isReady,
     });
+    if (this.client !== client) {
+      this.invalidateDeviceHistoryRequestFlights();
+    }
     this.client = client;
     this.identity = {
       ...identity,
@@ -3809,31 +3967,11 @@ export class XmtpClient {
     setInstallationRecovery(null);
     this.clearXmtpCaches();
 
-    let historySyncRequested = false;
     const historySyncRequired = shouldRequestHistorySync({
       installationRegistered,
       existingInstallationCount,
       explicitlyRequested: options?.requestHistorySync,
     });
-    if (historySyncRequired) {
-      try {
-        await client.sendSyncRequest();
-        historySyncRequested = true;
-        console.info(
-          '[XMTP] Requested encrypted device history. An older installation must be online to provide it.'
-        );
-        logNetworkEvent({
-          direction: 'outbound',
-          event: 'history:device_sync_request',
-          details: 'Requested history from another installation',
-        });
-      } catch (historyRequestError) {
-        console.warn(
-          '[XMTP] Device history request failed; normal network sync will continue:',
-          historyRequestError
-        );
-      }
-    }
 
     if (!installationIdsMatch(identity.installationId, client.installationId)) {
       console.log('[XMTP] New installation ID detected, updating identity...');
@@ -3859,6 +3997,7 @@ export class XmtpClient {
     console.log('[XMTP] ✅ XMTP client connected', identity.address, 'inbox:', client.inboxId);
 
     const historySinceMs = this.identity.lastSyncedAt;
+    let streamsReadyForHistory = false;
     console.log('[XMTP] Starting conversation sync and message streaming...');
     try {
       setSyncStatus('syncing-conversations');
@@ -3885,8 +4024,7 @@ export class XmtpClient {
         });
       }
 
-      await this.startMessageStream();
-      await this.startMessageDeletionStream();
+      streamsReadyForHistory = await this.ensureMessageStreamsBeforeHistoryRequest(client);
       await this.scanInviteJoinRequests('connect');
       this.startBackgroundDiscoveryLoop();
 
@@ -3926,7 +4064,20 @@ export class XmtpClient {
       setSyncProgress(0);
     }
 
+    if (!streamsReadyForHistory) {
+      streamsReadyForHistory = await this.ensureMessageStreamsBeforeHistoryRequest(client);
+    }
     this.startBackgroundDiscoveryLoop();
+    let historySyncRequested = false;
+    if (historySyncRequired) {
+      if (streamsReadyForHistory) {
+        historySyncRequested = await this.requestDeviceHistory(client);
+      } else {
+        console.warn(
+          '[XMTP] Skipping optional device history request until live message streams can start.'
+        );
+      }
+    }
     return {
       inboxId: client.inboxId,
       installationId: client.installationId,
@@ -4037,6 +4188,7 @@ export class XmtpClient {
               loggingLevel: sdkLoggingLevel,
               structuredLogging: false,
               performanceLogging: false,
+              historySyncUrl: getXmtpHistorySyncUrl(),
               disableAutoRegister: true,
             }),
           {
@@ -4115,6 +4267,7 @@ export class XmtpClient {
                   loggingLevel: sdkLoggingLevel,
                   structuredLogging: false,
                   performanceLogging: false,
+                  historySyncUrl: getXmtpHistorySyncUrl(),
                   disableAutoRegister: true,
                 }),
               {
@@ -4275,21 +4428,18 @@ export class XmtpClient {
               : undefined,
         });
         setInstallationRecovery(null);
+        const streamsStartedBeforeHistory =
+          await this.ensureMessageStreamsBeforeHistoryRequest(this.client);
         let historySyncRequested = false;
         const historySyncRequired = Boolean(options?.requestHistorySync);
         if (historySyncRequired) {
-          try {
-            await this.client.sendSyncRequest();
-            historySyncRequested = true;
-          } catch (error) {
-            console.warn('[XMTP] Failed to request device history on reused client:', error);
+          if (streamsStartedBeforeHistory) {
+            historySyncRequested = await this.requestDeviceHistory(this.client);
+          } else {
+            console.warn(
+              '[XMTP] Skipping optional device history request until live message streams can start.'
+            );
           }
-        }
-        if (!this.messageStream && !this.messageStreamTask) {
-          await this.startMessageStream();
-        }
-        if (!this.messageDeletionStream && !this.messageDeletionStreamTask) {
-          await this.startMessageDeletionStream();
         }
         this.startBackgroundDiscoveryLoop();
         console.log('[XMTP] Already connected with this signer identity, skipping reconnect');
@@ -4454,6 +4604,7 @@ export class XmtpClient {
                 loggingLevel: sdkLoggingLevel,
                 structuredLogging: false,
                 performanceLogging: false,
+                historySyncUrl: getXmtpHistorySyncUrl(),
                 disableAutoRegister: true,
               }),
             {
@@ -4582,6 +4733,7 @@ export class XmtpClient {
           console.warn('[XMTP] Failed to close client after connect error:', closeError);
         }
       }
+      this.invalidateDeviceHistoryRequestFlights();
       this.client = null;
 
       throw error; // Re-throw the original error
@@ -4647,6 +4799,7 @@ export class XmtpClient {
             loggingLevel: sdkLoggingLevel,
             structuredLogging: false,
             performanceLogging: false,
+            historySyncUrl: getXmtpHistorySyncUrl(),
             disableAutoRegister: true,
           }),
       });
@@ -4840,6 +4993,7 @@ export class XmtpClient {
   private async disconnectInternal(): Promise<void> {
     const { setConnectionStatus, setError, setInstallationRecovery } =
       useXmtpStore.getState();
+    this.invalidateDeviceHistoryRequestFlights();
     this.stopBackgroundDiscoveryLoop();
     this.clearSyncStatusResetTimer();
 

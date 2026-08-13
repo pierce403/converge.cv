@@ -63,6 +63,27 @@ another replacement over that partial state.
 An 8/10 count is only capacity information; it is not the cause of the saved-ID
 mismatch and still leaves room for an authorized browser repair.
 
+## XMTP message-history CORS error
+
+`message-history.production.ephemera.network/upload` is XMTP's optional
+encrypted device-history archive service. It is not the normal XMTP message,
+registration, or live-stream endpoint. A failure there can prevent an older
+installation from supplying history to a newly added browser, but it must not
+disconnect the inbox or stop new messages.
+
+Current Converge builds give the Browser SDK the same-origin
+`/api/xmtp-history` base. The Cloudflare Worker streams only the already
+encrypted upload/download body to XMTP's fixed service and stores nothing. If
+DevTools still shows a direct browser request to the production Ephemera host,
+reload the newest Converge build; the request may also come from another older
+Converge tab that is answering this browser's history request. Keep that older
+installation online after it has updated, then deliberately retry history.
+
+History-request publication is not an import receipt. Converge limits repeated
+requests and keeps connection plus message/deletion streams independent, but
+XMTP Browser SDK 6.1.2 exposes no completion acknowledgment that proves another
+installation successfully uploaded and this browser imported the archive.
+
 ## Trace a missing XMTP notification
 
 Open **Debug -> Push Trace**. It checks the delivery path in order instead of

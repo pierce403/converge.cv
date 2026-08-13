@@ -1,4 +1,5 @@
 dist
+worker-configuration.d.ts
 node_modules
 *.config.js
 *.config.ts

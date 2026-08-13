@@ -10,7 +10,7 @@ read the same source of truth.
 
 ## Agent Responsibilities
 
-- Keep Converge static and local-first unless the user explicitly changes the architecture.
+- Keep Converge static-first and local-first unless the user explicitly changes the architecture. The sole server-side exception is the stateless same-origin stream for opaque XMTP device-history archives; do not turn it into a general proxy, application backend, or storage service.
 - Preserve the low-friction identity flow: no passphrases, no lock screen, no wallet prompts by default.
 - Use repo-local indexes before important work: `AGENTS.md`, `MEMORY.md`, and `SKILLS.md`.
 - Record durable project learnings where future agents will look: `AGENTS.md` for canonical rules, `MEMORY.md`/`memory/` for searchable context, and `SKILLS.md`/`skills/` for reusable procedures.
@@ -27,7 +27,7 @@ read the same source of truth.
 - **Storage**: Dexie (IndexedDB wrapper)
 - **Messaging Protocol**: XMTP protocol v3 (production network) via XMTP SDK v6.1.2
 - **PWA**: hand-maintained service worker and web app manifest
-- **Deployment**: Cloudflare Workers Static Assets at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds pulls and deploys `main`
+- **Deployment**: Cloudflare Workers Static Assets plus one narrow encrypted-history relay at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds pulls and deploys `main`
 
 ---
 
@@ -214,7 +214,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 
 - **CI**: Every push to `main` and every pull request triggers GitHub Actions
 - **Deploy**: Cloudflare Workers Builds pulls and deploys `main`; authenticated operators can use `pnpm run deploy:preview` and `pnpm run deploy`
-- **Process**: Type check → Lint → Test → Build → Wrangler dry run → Cloudflare Workers Static Assets deploy
+- **Process**: Type check → Lint → Test → Build → Wrangler dry run → Cloudflare Worker + Static Assets deploy
 - **Domains**: `converge.cv` is the apex Worker Custom Domain; `miniapp.converge.cv` belongs to the separate `converge-miniapp` Worker
 - **Credential boundary**: The Cloudflare GitHub App grants repository read access to Cloudflare; its scoped build token stays inside Cloudflare. GitHub Actions has no Cloudflare credential and must remain CI-only.
 - See `DEPLOYMENT.md` for details
@@ -251,6 +251,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Existing-inbox and reload connections fail closed under explicit registration policies instead of falling back to standalone inbox creation
 - Fresh inbox registration uses `client.isRegistered()`, persists the installation before mutation, registers at most once, and verifies the signer plus exact installation in network state before onboarding completes
 - New installations request XMTP device history and explain that an older installation may need to be online
+- XMTP device-history requests are optional, single-flight, bounded, and cooldown-limited per installation. They cannot delay message/deletion streams or turn a verified connection/repair into an error. Every browser client uses `/api/xmtp-history`, whose Worker route streams only opaque encrypted archive uploads/downloads to XMTP's fixed history service with no storage, credentials, payload logging, or dynamic upstream.
 - `Client.create` now uses the app version, disables auto-registration, and compares the full signer identity including source, wallet type, and SCW chain ID
 - Incomplete passphrase/passkey/vault-lock UI is hidden; documentation and Settings describe current plaintext local storage accurately
 - The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; the resolved lockfile returns zero findings through pnpm 11's current bulk advisory API without changing the XMTP or Wagmi major versions. The pinned pnpm 10 audit command now receives HTTP 410 because npm retired its legacy endpoint; do not report that transport failure as an advisory result.
@@ -318,7 +319,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
   - https://docs.xmtp.org for official XMTP bots
   - https://base.org for Base ecosystem agents
   - XMTP community Discord/forums for verified bot addresses
-- **Cloudflare hosting operations**: continue live post-cutover checks for inbox reopen, Push API continuity, and recursive DNS convergence. `wrangler.jsonc` deploys the static bundle with native SPA fallback; `public/_headers` keeps hashed assets immutable and `/sw.js` uncached at root scope. Do not reintroduce the removed COOP/COEP service-worker shim: it previously caused XMTP/wallet regressions. Keep QR camera permission available to the same origin, and stage any future CSP separately against XMTP workers/WASM, WalletConnect, attachment hosts, RPCs, and wallet popups.
+- **Cloudflare hosting operations**: continue live post-cutover checks for inbox reopen, Push API continuity, the fail-closed encrypted-history route, and recursive DNS convergence. `wrangler.jsonc` deploys the Worker with native SPA fallback; `public/_headers` keeps hashed assets immutable and `/sw.js` uncached at root scope. Do not reintroduce the removed COOP/COEP service-worker shim: it previously caused XMTP/wallet regressions. Keep QR camera permission available to the same origin, and stage any future CSP separately against XMTP workers/WASM, WalletConnect, attachment hosts, RPCs, wallet popups, and the same-origin history route.
 
 ---
 

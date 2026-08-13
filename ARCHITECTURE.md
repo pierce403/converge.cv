@@ -4,16 +4,16 @@ This root file is the canonical architecture and decision tracker for Converge. 
 
 ## Current Stack
 
-- Static React 18 + TypeScript + Vite PWA hosted as Cloudflare Workers Static Assets.
+- React 18 + TypeScript + Vite PWA hosted primarily as Cloudflare Workers Static Assets.
 - Local-first state and data storage with Zustand plus Dexie/IndexedDB.
 - XMTP protocol v3 through `@xmtp/browser-sdk` 6.1.2 on the production network.
-- No Converge backend. Client code may only use public `VITE_*` configuration.
+- No application database or general Converge backend. One stateless Worker route streams already-encrypted XMTP device-history archives between the browser and XMTP's fixed history service.
 
 ## Product Principles
 
 - Choice-first onboarding: always show the inbox actions before creating an identity or opening a wallet; no passphrase or manual wallet entry by default.
 - Local-first app state with XMTP end-to-end transport encryption; browser data is not encrypted at rest today.
-- Static deployability: an assets-only Cloudflare Worker serves the Converge app shell with native SPA fallback and repo-controlled response headers.
+- Static-first deployability: Cloudflare serves the app shell with native SPA fallback and repo-controlled response headers; only the narrow encrypted-history relay runs Worker code.
 - No placeholder credentials: client code must not ship fake API keys, vapid.party API keys, or private relay credentials.
 
 ## Implemented Multi-Inbox Product Contract
@@ -87,7 +87,7 @@ this contract.
 9. Wait until the fresh identifier resolves to the target inbox and appears in the target inbox identity state.
 10. Close the wallet manager and reopen the same default inbox database with the fresh signer.
 11. Require both the target `inboxId` and the wallet-approved `installationId` to match before marking onboarding complete.
-12. Call `sendSyncRequest()` for the joined device and explain that an older installation must be online to provide decrypted history. Persist failed requests for retry.
+12. Publish a bounded, deduplicated device-history request for the joined device and explain that an older installation must be online to provide decrypted history. Persist requests that could not be published for a deliberate later retry; publishing the request is not proof that an archive arrived.
 
 The manager and final local-key client intentionally share the SDK default path, `xmtp-production-<inbox-id>.db3`. Existing identities without a path-mode marker retain the previous address-based path so upgrading does not create an installation on the next reload.
 
@@ -105,7 +105,7 @@ Normal reconnect remains `resume-only`: it cannot register or revoke anything. B
 
 Otherwise connection raises a structured recovery state containing the saved and local installation IDs, local readiness, fresh ledger membership, recovery-authority match, path mode, and installation count. Settings can inspect the known inbox ledger with static SDK helpers while disconnected, but revocation controls remain disabled until a live current installation is verified. The Installations inventory loader is read-only with respect to stored identity metadata: it never derives or persists an installation ID or path mode from a list response, and a request generation guard prevents an older disconnected response from replacing newer post-repair UI state. Explicit revocation remains a separate confirmed mutation.
 
-**Repair This Browser** is a distinct, confirmed lifecycle operation. It holds an inbox-scoped `navigator.locks` lease when available, opens the selected logical filename through the named persistent OPFS VFS with auto-registration disabled, refetches the expected inbox and signer authority, and persists `{installationId: candidate, staleInstallationId: prior, installationRepairPending: true, xmtpDbPathMode}` before the first ledger mutation. The live client is registered without closing or reopening before registration. After local and ledger verification, Converge terminates that worker, waits for its OPFS handles to release, and creates a fresh worker against the exact same database URI. The repair is durable only if resume-only verification recovers the same inbox, registered installation ID, signer, and ledger membership. With a free slot, that fresh-worker proof runs before recovery-authorized optional cleanup of the prior installation; only at 10/10 may required exact cleanup run first. A non-recovery account key never revokes another installation. Capacity is checked immediately before registration, and a durable replacement requests encrypted device history before the UI reports success.
+**Repair This Browser** is a distinct, confirmed lifecycle operation. It holds an inbox-scoped `navigator.locks` lease when available, opens the selected logical filename through the named persistent OPFS VFS with auto-registration disabled, refetches the expected inbox and signer authority, and persists `{installationId: candidate, staleInstallationId: prior, installationRepairPending: true, xmtpDbPathMode}` before the first ledger mutation. The live client is registered without closing or reopening before registration. After local and ledger verification, Converge terminates that worker, waits for its OPFS handles to release, and creates a fresh worker against the exact same database URI. The repair is durable only if resume-only verification recovers the same inbox, registered installation ID, signer, and ledger membership. With a free slot, that fresh-worker proof runs before recovery-authorized optional cleanup of the prior installation; only at 10/10 may required exact cleanup run first. A non-recovery account key never revokes another installation. Capacity is checked immediately before registration. Optional encrypted-history request failure cannot invalidate a durable repair or delay stream startup; it remains pending for a later deliberate retry.
 
 Browser SDK 6.1.2 can generate a different prospective installation ID when an unregistered client's worker closes and the database is opened again. It can also log an OPFS initialization failure while allowing SQLite to use its default in-memory VFS; such a client may register successfully yet lose its installation key when the worker ends. Converge prevents that fallback by naming `opfs-libxmtp`, and it treats fresh-worker exact-ID reopen as part of registration success rather than as a later health check. A crash or reload before that proof resumes the repair journal and settles fresh local plus ledger state, but cannot promise the same unregistered candidate ID. The exact prior installation remains the only cleanup target; a new live attempt may restage the ID it opens and registers that ID without a pre-registration reopen. The operation never chooses the oldest installation, clears Dexie, or deletes OPFS. A locally registered candidate absent from fresh ledger state, a fresh-worker ID mismatch, or a ledger-visible partial registration whose private installation key was not durable remains fail-closed. A failed live attempt retains its staged client for an explicit same-tab retry only when that live client still matches the journaled candidate.
 
@@ -154,6 +154,13 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - Full Sync is non-destructive: it force-syncs the conversation list, performs a strict retained-history backfill, applies the local retention sweep, and reloads the list. It never disconnects, clears IndexedDB, deletes OPFS, or attempts resume-only registration against a newly created database.
 - Inbox-state management reads fail closed. Timeouts, cooldowns, or empty network responses surface an error instead of presenting a fabricated zero-installation state.
 - There is no durable outbound retry queue. Text/reply/group operations therefore fail visibly when disconnected or rejected instead of returning local-only XMTP-shaped objects that could remain pending forever.
+
+### Encrypted Device-History Transport
+
+- Browser SDK device sync exports an AES-encrypted archive on an older installation and exchanges its download URL and key inside XMTP. The archive service never receives decrypted messages or installation private keys.
+- XMTP's production history edge has returned upload/download responses without browser CORS headers even though the public server implementation enables CORS. Every Converge `Client.create` therefore uses the same-origin base `/api/xmtp-history`; the Cloudflare Worker accepts only `POST /upload` and `GET /files/<uuid>`, streams the opaque body to the fixed XMTP origin, keeps no application state or archive copy, and never logs payloads or file identifiers.
+- History transfer is optional to ordinary XMTP operation. Requests are keyed by installation, single-flight, time-bounded, and cooldown-limited; message and deletion streams start independently. A request-publication result means only that another installation was asked to respond, not that its archive was uploaded or imported.
+- The relay is a compatibility boundary, not a general proxy. It has no credentials, dynamic upstream, plaintext access, user routing, or durable storage. Direct history URLs emitted by other XMTP clients still depend on their configured service and its browser CORS behavior.
 
 ## Convos XMTP Interop
 
