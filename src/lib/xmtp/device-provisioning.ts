@@ -1,6 +1,7 @@
 import type { InboxState, Identifier, Signer } from '@xmtp/browser-sdk';
 import type { Identity } from '@/types';
 import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
+import { getInboxDefaultDatabasePath } from './opfs-database';
 
 export const XMTP_INSTALLATION_LIMIT = 10;
 
@@ -214,6 +215,17 @@ export function getClientDbPath(
   return `xmtp-production-${normalizedAddress}.db3`;
 }
 
+export function getExactClientDbPath(
+  address: string,
+  mode: XmtpDbPathMode,
+  expectedInboxId?: string
+): string | undefined {
+  if (mode === 'inbox-default') {
+    return expectedInboxId ? getInboxDefaultDatabasePath(expectedInboxId) : undefined;
+  }
+  return getClientDbPath(address, mode);
+}
+
 export function shouldRequestHistorySync(input: {
   installationRegistered: boolean;
   existingInstallationCount: number;
@@ -255,13 +267,25 @@ export function getScwRetryChainId(
 
 export function recordInstallationReady(
   identity: Identity,
-  result: { inboxId: string; installationId: string }
+  result: {
+    inboxId: string;
+    installationId: string;
+    databasePathMode?: XmtpDbPathMode;
+    previousInstallationId?: string;
+  }
 ): Identity {
   const inboxId = normalizeId(result.inboxId) ?? result.inboxId;
+  const previousInstallationId =
+    result.previousInstallationId &&
+    !installationIdsMatch(result.previousInstallationId, result.installationId)
+      ? result.previousInstallationId
+      : identity.staleInstallationId;
   return {
     ...identity,
     inboxId,
     installationId: result.installationId,
+    staleInstallationId: previousInstallationId,
+    xmtpDbPathMode: result.databasePathMode ?? identity.xmtpDbPathMode,
     expectedInboxId: identity.expectedInboxId ?? inboxId,
   };
 }

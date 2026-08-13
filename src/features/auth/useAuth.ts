@@ -184,7 +184,7 @@ export function useAuth() {
           const storage = await getStorage();
           const identity = await storage.getIdentityByAddress(canonicalAddress);
           if (identity && ethereumAddressesEqual(identity.address, canonicalAddress)) {
-            const completedIdentity = completeProvisioning(
+            let completedIdentity = completeProvisioning(
               {
                 ...identity,
                 needsHistorySync:
@@ -193,6 +193,15 @@ export function useAuth() {
               },
               result
             );
+            if (
+              completedIdentity.installationRepairPending &&
+              installationIdsMatch(completedIdentity.installationId, result.installationId)
+            ) {
+              completedIdentity = {
+                ...completedIdentity,
+                installationRepairPending: false,
+              };
+            }
             await storage.putIdentity(completedIdentity);
 
             setIdentity(completedIdentity);
@@ -810,6 +819,120 @@ export function useAuth() {
     [connectXmtpSafely]
   );
 
+  const repairCurrentInstallation = useCallback(
+    async (options?: {
+      chainId?: number;
+      signMessage?: (message: string) => Promise<string>;
+      walletType?: 'EOA' | 'SCW';
+    }): Promise<ConnectResult> => {
+      const identity = useAuthStore.getState().identity;
+      const recovery = useXmtpStore.getState().installationRecovery;
+      if (!identity) {
+        throw new Error('No identity is currently loaded.');
+      }
+      if (!recovery) {
+        throw new Error('Retry the saved installation first so Converge can inspect it safely.');
+      }
+      if (!identity.privateKey && !options?.signMessage) {
+        throw new Error('Connect the wallet that controls this identity before repairing it.');
+      }
+
+      const xmtp = getXmtpClient();
+      const result = await xmtp.repairInstallation(
+        {
+          address: identity.address,
+          privateKey: identity.privateKey,
+          chainId: options?.chainId ?? identity.walletChainId,
+          walletType: options?.walletType ?? identity.walletType,
+          signMessage: options?.signMessage,
+          displayName: identity.displayName,
+          inboxId: identity.inboxId,
+          installationId: identity.installationId,
+          xmtpDbPathMode: identity.xmtpDbPathMode,
+        },
+        {
+          recovery,
+          previousInstallationId:
+            !installationIdsMatch(
+              identity.installationId,
+              recovery.localInstallationId
+            )
+              ? identity.installationId
+              : identity.staleInstallationId,
+          expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
+          enableHistorySync: false,
+          requestHistorySync: true,
+          onCandidateReady: async (candidate) => {
+            const storage = await getStorage();
+            const current = await storage.getIdentityByAddress(identity.address);
+            if (!current) {
+              throw new Error('The selected identity changed while browser repair was preparing.');
+            }
+            const staged: Identity = {
+              ...current,
+              inboxId: candidate.inboxId,
+              expectedInboxId: current.expectedInboxId ?? candidate.inboxId,
+              installationId: candidate.candidateInstallationId,
+              staleInstallationId:
+                candidate.previousInstallationId,
+              xmtpDbPathMode: candidate.databasePathMode,
+              installationRepairPending: true,
+              needsHistorySync: true,
+            };
+            await storage.putIdentity(staged);
+            setIdentity(staged);
+          },
+          onInstallationReady: async (ready) => {
+            const storage = await getStorage();
+            const current = await storage.getIdentityByAddress(identity.address);
+            if (!current) {
+              throw new Error(
+                'The selected identity was removed while browser repair was running. Registration was stopped.'
+              );
+            }
+            if (
+              !current.installationRepairPending ||
+              !inboxIdsMatch(current.inboxId, ready.inboxId) ||
+              !installationIdsMatch(current.installationId, ready.installationId)
+            ) {
+              throw new Error(
+                'The saved browser-repair candidate changed before registration. Registration was stopped.'
+              );
+            }
+            const updated = recordInstallationReady(current, ready);
+            await storage.putIdentity(updated);
+            setIdentity(updated);
+            await ensureInboxStorageNamespace(updated.inboxId, updated);
+          },
+        }
+      );
+
+      const storage = await getStorage();
+      const current = await storage.getIdentityByAddress(identity.address);
+      if (!current) {
+        throw new Error('The repaired identity could not be reloaded from local storage.');
+      }
+      let completed = completeProvisioning(
+        {
+          ...current,
+          installationRepairPending: false,
+          needsHistorySync:
+            current.needsHistorySync ||
+            (result.historySyncRequired && !result.historySyncRequested),
+        },
+        result
+      );
+      if (result.previousInstallationRevoked || result.previousInstallationAbsent) {
+        completed = { ...completed, staleInstallationId: undefined };
+      }
+      await storage.putIdentity(completed);
+      setIdentity(completed);
+      await ensureInboxStorageNamespace(completed.inboxId, completed);
+      return result;
+    },
+    [setIdentity]
+  );
+
   const addDeviceToExistingWalletInbox = useCallback(
     async (
       targetWalletAddress: string,
@@ -1115,6 +1238,7 @@ export function useAuth() {
     checkExistingIdentity,
     probeIdentity,
     reconnectCurrentIdentity,
+    repairCurrentInstallation,
     addDeviceToExistingWalletInbox,
   };
 }

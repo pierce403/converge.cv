@@ -27,6 +27,7 @@ interface Installation {
 export function InstallationsSettings() {
   const identity = useAuthStore((state) => state.identity);
   const connectionStatus = useXmtpStore((state) => state.connectionStatus);
+  const installationRecovery = useXmtpStore((state) => state.installationRecovery);
   const [installations, setInstallations] = useState<Installation[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,18 +43,16 @@ export function InstallationsSettings() {
     try {
       const xmtp = getXmtpClient();
       console.log('[Installations] Loading installations, connected:', xmtp.isConnected());
-      if (
-        !xmtp.isConnected() &&
-        (connectionStatus === 'connecting' || connectionStatus === 'disconnected')
-      ) {
-        setHasLoaded(false);
-        return;
-      }
-      
       type SafeInboxStateLite = {
         installations?: Array<{ id: string; clientTimestampNs?: bigint }>;
       };
-      const inboxState = (await xmtp.getInboxState()) as unknown as SafeInboxStateLite;
+      const inboxState = (
+        xmtp.isConnected()
+          ? await xmtp.getInboxState()
+          : identity?.inboxId
+            ? await xmtp.getInboxStateById(identity.inboxId)
+            : await xmtp.getInboxState()
+      ) as unknown as SafeInboxStateLite;
       console.log('[Installations] Inbox state:', inboxState);
       
       // Sort installations by creation date (newest first)
@@ -112,9 +111,7 @@ export function InstallationsSettings() {
       const errorMsg = err instanceof Error ? err.message : 'Failed to load installations';
       
       // Provide helpful error messages
-      if (errorMsg.includes('10/10 installations')) {
-        setError('⚠️ Installation limit reached (10/10). Cannot create management client to view installations. Please use another device or xmtp.chat to revoke old installations.');
-      } else if (errorMsg.includes('Client not connected')) {
+      if (errorMsg.includes('Client not connected')) {
         setError('XMTP not connected. Please connect first to view installations.');
       } else {
         setError(errorMsg);
@@ -122,7 +119,7 @@ export function InstallationsSettings() {
     } finally {
       setIsLoading(false);
     }
-  }, [connectionStatus, identity]);
+  }, [identity]);
 
   const refreshStatuses = async () => {
     setIsFetchingStatuses(true);
@@ -150,29 +147,28 @@ export function InstallationsSettings() {
   };
 
   useEffect(() => {
-    if (connectionStatus === 'connected' || connectionStatus === 'error') {
+    if (
+      connectionStatus === 'connected' ||
+      connectionStatus === 'error' ||
+      (connectionStatus === 'disconnected' && identity?.inboxId)
+    ) {
       void loadInstallations();
     } else {
       setHasLoaded(false);
       setVerifiedCurrentInstallationId(null);
     }
-  }, [connectionStatus, loadInstallations]);
+  }, [connectionStatus, identity?.inboxId, loadInstallations]);
 
   const handleRevoke = async (installationBytes: Uint8Array, installationId: string) => {
     if (!verifiedCurrentInstallationId) {
       setError('Reconnect XMTP and refresh installations before revoking a device.');
       return;
     }
-    const isCurrentDevice = installationIdsMatch(
-      installationId,
-      verifiedCurrentInstallationId
-    );
-    
-    const confirmMessage = isCurrentDevice
-      ? 'Are you sure you want to revoke THIS device? You will be logged out and need to reconnect.'
-      : 'Are you sure you want to revoke this installation? That device will no longer be able to send/receive messages.';
-    
-    if (!confirm(confirmMessage)) {
+    if (
+      !confirm(
+        'Are you sure you want to revoke this installation? That device will no longer be able to send or receive messages.'
+      )
+    ) {
       return;
     }
 
@@ -185,14 +181,7 @@ export function InstallationsSettings() {
       await xmtp.revokeInstallations([installationBytes]);
       console.log('[Installations] ✅ Revocation successful');
       
-      // If we revoked the current device, we need to disconnect and reconnect
-      if (isCurrentDevice) {
-        console.log('[Installations] Revoked current device - disconnecting and will need to reconnect');
-        await xmtp.disconnect();
-        alert('Current installation revoked. You will need to reconnect to create a new installation.');
-      } else {
-        alert('Installation revoked successfully!');
-      }
+      alert('Installation revoked successfully!');
       
       await loadInstallations();
     } catch (err) {
@@ -288,8 +277,7 @@ export function InstallationsSettings() {
               onClick={loadInstallations}
               disabled={
                 isLoading ||
-                connectionStatus === 'connecting' ||
-                connectionStatus === 'disconnected'
+                connectionStatus === 'connecting'
               }
               className="text-sm text-accent-300 hover:text-accent-200 disabled:opacity-50"
               title="Fetch latest inbox state from the network"
@@ -298,7 +286,12 @@ export function InstallationsSettings() {
             </button>
             <button
               onClick={refreshStatuses}
-              disabled={isFetchingStatuses || isLoading || installations.length === 0}
+              disabled={
+                isFetchingStatuses ||
+                isLoading ||
+                installations.length === 0 ||
+                connectionStatus !== 'connected'
+              }
               className="text-sm text-green-400 hover:text-green-300 disabled:opacity-50"
               title="Fetch key package statuses for current installations"
             >
@@ -313,9 +306,7 @@ export function InstallationsSettings() {
           </div>
         )}
 
-        {!hasLoaded &&
-          (connectionStatus === 'connecting' || connectionStatus === 'disconnected') &&
-          !error && (
+        {!hasLoaded && connectionStatus === 'connecting' && !error && (
           <div className="p-3 bg-primary-950/30 border border-primary-800/60 rounded text-sm text-primary-200">
             Waiting for XMTP to reconnect before loading installation state.
           </div>
@@ -323,7 +314,12 @@ export function InstallationsSettings() {
 
         {!isLoading && installations.length > 0 && !verifiedCurrentInstallationId && (
           <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded text-sm text-amber-200">
-            This browser installation could not be verified against the live inbox state. Revocation is disabled until XMTP reconnects and the list is refreshed.
+            <div>This browser installation could not be verified against the live inbox state. Revocation is disabled until XMTP reconnects and the list is refreshed.</div>
+            {installationRecovery && (
+              <div className="mt-2 text-xs">
+                Use <strong>Repair This Browser</strong> in Identity &amp; Connection above when it is offered. Ambiguous or full-inbox states stay read-only.
+              </div>
+            )}
           </div>
         )}
 
@@ -346,6 +342,16 @@ export function InstallationsSettings() {
               const isCurrentDevice = installationIdsMatch(
                 installation.id,
                 currentInstallationId
+              );
+              const isUnavailableSavedInstallation = Boolean(
+                installationIdsMatch(
+                  installation.id,
+                  installationRecovery?.expectedInstallationId
+                ) ||
+                  installationIdsMatch(
+                    installation.id,
+                    identity?.staleInstallationId
+                  )
               );
               const isRevoking = revokingId === installation.id;
               const hasError = !!installation.keyPackageStatus?.validationError;
@@ -372,6 +378,11 @@ export function InstallationsSettings() {
                         {isCurrentDevice && (
                           <span className="text-xs px-2 py-0.5 bg-accent-500/20 text-accent-200 rounded">
                             This Device
+                          </span>
+                        )}
+                        {isUnavailableSavedInstallation && !isCurrentDevice && (
+                          <span className="text-xs px-2 py-0.5 bg-yellow-500/20 text-yellow-300 rounded">
+                            Saved, unavailable here
                           </span>
                         )}
                         {hasError && (

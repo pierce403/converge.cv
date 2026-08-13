@@ -16,6 +16,30 @@ Do not use DevTools **Clear site data** as a routine troubleshooting step.
 Converge's local account keys and messages live in browser storage and will be
 removed with the rest of the site data.
 
+## Saved browser installation unavailable
+
+If Settings says the correct inbox opened a different or unregistered local
+XMTP installation, do not clear site data or delete OPFS manually. Ordinary
+**Check Saved Installation Again** never registers or revokes an XMTP
+installation: it can reopen an existing legacy/default database and repair
+local path/installation metadata only when both local and network state verify
+the exact installation.
+
+When the warning remains, choose **Repair This Browser** and review the
+confirmation. Converge persists the already-inspected candidate before any
+network mutation. A recovery-authority signer may remove only the exact saved
+unavailable installation; another authorized account key uses one free slot.
+At 10/10 the operation stops before registering unless that exact removal is
+available. A successful replacement requests encrypted device history, so an
+older installation may need to be online for old messages to arrive.
+
+The installations panel remains readable while disconnected and labels the
+saved unavailable ID. Revocation buttons stay disabled until the repaired live
+installation is verified. Lock, quota, or ambiguous local-registration errors
+leave the database untouched instead of guessing that it is corrupt.
+An 8/10 count is only capacity information; it is not the cause of the saved-ID
+mismatch and still leaves room for an authorized exact-candidate repair.
+
 ## Trace a missing XMTP notification
 
 Open **Debug -> Push Trace**. It checks the delivery path in order instead of

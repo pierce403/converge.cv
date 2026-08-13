@@ -13,6 +13,7 @@ vi.mock('@/lib/message-retention', () => ({
 }));
 
 import { XmtpClient } from './client';
+import { useXmtpStore } from '@/lib/stores/xmtp-store';
 
 type StreamHarness = {
   isDone: boolean;
@@ -147,6 +148,11 @@ describe('XmtpClient message stream cleanup', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    useXmtpStore.setState({
+      connectionStatus: 'disconnected',
+      installationRecovery: null,
+      error: null,
+    });
   });
 
   it('ends the SDK AsyncStreamProxy when disconnecting', async () => {
@@ -193,6 +199,38 @@ describe('XmtpClient message stream cleanup', () => {
     await Promise.all([first, second]);
 
     expect(events).toEqual(['start:first', 'end:first', 'start:second', 'end:second']);
+  });
+
+  it('does not reuse a different connected installation for an exact repair candidate', async () => {
+    const xmtp = new XmtpClient();
+    const identity = {
+      address: `0x${'11'.repeat(20)}`,
+      privateKey: `0x${'22'.repeat(32)}`,
+    };
+    const onInstallationReady = vi.fn();
+    (
+      xmtp as unknown as {
+        client: unknown;
+        identity: unknown;
+      }
+    ).client = {
+      isReady: true,
+      inboxId: 'expected-inbox',
+      installationId: 'different-installation',
+    };
+    (xmtp as unknown as { identity: unknown }).identity = identity;
+    useXmtpStore.setState({ connectionStatus: 'connected' });
+
+    await expect(
+      xmtp.connect(identity, {
+        expectedInboxId: 'expected-inbox',
+        expectedInstallationId: 'exact-candidate',
+        requireExpectedInstallation: true,
+        onInstallationReady,
+      })
+    ).rejects.toThrow(/different browser installation than the exact repair candidate/i);
+
+    expect(onInstallationReady).not.toHaveBeenCalled();
   });
 
   it('does not close the client underneath an in-flight manual sync', async () => {

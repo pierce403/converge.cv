@@ -8,6 +8,21 @@ interface OpfsDatabaseManager {
 
 type OpfsDatabaseManagerFactory = () => Promise<OpfsDatabaseManager>;
 
+export async function xmtpDatabaseFileExists(
+  path: string,
+  createManager: OpfsDatabaseManagerFactory = async () => await Opfs.create()
+): Promise<boolean> {
+  if (!path.trim() || !path.endsWith('.db3')) {
+    throw new Error('XMTP database recovery requires an exact .db3 path.');
+  }
+  const opfs = await createManager();
+  try {
+    return await opfs.fileExists(path);
+  } finally {
+    opfs.close();
+  }
+}
+
 export function getInboxDefaultDatabasePath(inboxId: string): string {
   const normalized = inboxId.trim().replace(/^(?:0x)+/i, '').toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(normalized)) {

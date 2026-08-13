@@ -55,6 +55,7 @@ import {
   withWalletInspectionTimeout,
   type WalletTypeHint,
 } from '@/lib/wagmi/wallet-inspection';
+import { getInstallationRecoveryView } from './installation-recovery-view';
 
 type WalletSignMessage = (message: string, accountAddress?: string) => Promise<string>;
 interface InstallationRecoveryResult {
@@ -94,9 +95,15 @@ export function SettingsPage() {
     logout,
     burnIdentity,
     reconnectCurrentIdentity,
+    repairCurrentInstallation,
     addDeviceToExistingWalletInbox,
   } = useAuth();
-  const { connectionStatus, lastConnected, error: xmtpError } = useXmtpStore();
+  const {
+    connectionStatus,
+    lastConnected,
+    error: xmtpError,
+    installationRecovery,
+  } = useXmtpStore();
   const [storageSize, setStorageSize] = useState<number | null>(null);
   const [isLoadingSize, setIsLoadingSize] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -133,9 +140,16 @@ export function SettingsPage() {
     tone: 'info' | 'success' | 'error';
     message: string;
   } | null>(null);
-  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [activeConnectionAction, setActiveConnectionAction] = useState<
+    'reconnect' | 'repair' | null
+  >(null);
+  const isReconnecting = activeConnectionAction !== null;
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectNotice, setConnectNotice] = useState<string | null>(null);
   const [showConnectorList, setShowConnectorList] = useState(false);
+  const [pendingWalletAction, setPendingWalletAction] = useState<'reconnect' | 'repair'>(
+    'reconnect'
+  );
   const [showAddIdentityModal, setShowAddIdentityModal] = useState(false);
   const [isAddingIdentity, setIsAddingIdentity] = useState(false);
   const [addIdentityError, setAddIdentityError] = useState<string | null>(null);
@@ -155,17 +169,40 @@ export function SettingsPage() {
     }
   }, [navigate]);
 
-  // Helper to reconnect to XMTP
-  const handleReconnect = async (connectedWallet?: ConnectedWalletSnapshot) => {
+  const handleConnectionAction = async (
+    action: 'reconnect' | 'repair',
+    connectedWallet?: ConnectedWalletSnapshot,
+    repairConfirmed = false
+  ) => {
     if (!identity || isReconnecting) return;
 
-    setIsReconnecting(true);
+    if (action === 'repair' && !installationRecovery) {
+      setConnectError('Retry the saved installation first so Converge can inspect it safely.');
+      return;
+    }
+    if (
+      action === 'repair' &&
+      !repairConfirmed &&
+      !window.confirm(
+        `Repair this browser's XMTP installation?\n\n${installationRepairOutcome ?? 'Converge will preserve local messages and reuse this exact local database candidate.'}\n\nNo arbitrary device will be revoked. An older installation may need to be online to restore encrypted history.`
+      )
+    ) {
+      return;
+    }
+
+    setActiveConnectionAction(action);
     try {
       setConnectError(null);
+      setConnectNotice(null);
       setShowConnectorList(false);
       // If identity has a private key (Converge-generated), use it directly
       if (identity.privateKey) {
-        await reconnectCurrentIdentity();
+        if (action === 'repair') {
+          await repairCurrentInstallation();
+          setConnectNotice('This browser installation was repaired and verified.');
+        } else {
+          await reconnectCurrentIdentity();
+        }
         return;
       }
 
@@ -177,6 +214,7 @@ export function SettingsPage() {
           !walletSnapshot &&
           (!isWalletConnected || !ethereumAddressesEqual(effectiveWallet, identity.address))
         ) {
+          setPendingWalletAction(action);
           setShowConnectorList(true);
           setConnectError(
             effectiveWallet && !ethereumAddressesEqual(effectiveWallet, identity.address)
@@ -201,22 +239,29 @@ export function SettingsPage() {
         throw new Error('Wallet signing is not available. Try reconnecting your wallet.');
       }
 
-      await reconnectCurrentIdentity({
+      const reconnectOptions = {
         chainId: walletSnapshot?.chainId ?? connectedWalletChainId,
         walletType: identity.walletType,
         signMessage: async (message: string) =>
           walletSnapshot
             ? await effectiveSignMessage(message)
             : await effectiveSignMessage(message, identity.address),
-      });
+      };
+      if (action === 'repair') {
+        await repairCurrentInstallation(reconnectOptions);
+        setConnectNotice('This browser installation was repaired and verified.');
+      } else {
+        await reconnectCurrentIdentity(reconnectOptions);
+      }
     } catch (error) {
-      console.error('Reconnect failed:', error);
+      console.error(`${action === 'repair' ? 'Installation repair' : 'Reconnect'} failed:`, error);
       if (!showConnectorList && !isWalletConnected) {
+        setPendingWalletAction(action);
         setShowConnectorList(true);
       }
       setConnectError(error instanceof Error ? error.message : 'Failed to reconnect wallet');
     } finally {
-      setIsReconnecting(false);
+      setActiveConnectionAction(null);
     }
   };
 
@@ -1045,6 +1090,14 @@ export function SettingsPage() {
 
   const shouldShowReconnect = connectionStatus === 'error' || connectionStatus === 'disconnected';
   const walletNeedsReconnect = Boolean(identity && !identity.privateKey && !isWalletConnected);
+  const installationRecoveryView = installationRecovery
+    ? getInstallationRecoveryView(installationRecovery, {
+        installationRepairPending: identity?.installationRepairPending,
+        staleInstallationId: identity?.staleInstallationId,
+      })
+    : null;
+  const canRepairInstallation = installationRecoveryView?.canRepair === true;
+  const installationRepairOutcome = installationRecoveryView?.outcome ?? null;
   const pushIsOn = pushDetails?.enabledPreference ?? pushStatus === 'enabled';
   const pushDescription = (() => {
     if (pushStatus === 'unsupported') return 'Not supported in this browser';
@@ -1254,9 +1307,14 @@ export function SettingsPage() {
                     Connected since {new Date(lastConnected).toLocaleTimeString()}
                   </div>
                 )}
+                {connectNotice && (
+                  <div className="mt-2 text-xs text-green-300 bg-green-500/10 rounded p-2" role="status">
+                    {connectNotice}
+                  </div>
+                )}
                 {shouldShowReconnect && (
                   <div className="mt-2 space-y-2">
-                    {connectionStatus === 'error' && xmtpError && (
+                    {connectionStatus === 'error' && xmtpError && !installationRecovery && (
                       <div className="text-xs text-red-400 bg-red-500/10 rounded p-2">
                         {xmtpError}
                       </div>
@@ -1276,14 +1334,47 @@ export function SettingsPage() {
                         {connectError}
                       </div>
                     )}
+                    {installationRecovery && (
+                      <div className="text-xs text-yellow-100 bg-yellow-500/10 border border-yellow-500/30 rounded p-3 space-y-2" role="alert">
+                        <div className="font-semibold">Saved browser installation unavailable</div>
+                        <p>
+                          Converge found the correct inbox, but this browser's local XMTP
+                          database {installationRecoveryView?.reason}.
+                          {' '}No new installation was registered.
+                        </p>
+                        <p className="text-yellow-200/80">
+                          Inbox usage: {installationRecovery.existingInstallationCount}/10.
+                          {' '}{installationRepairOutcome}
+                        </p>
+                        {canRepairInstallation && (
+                          <button
+                            onClick={() => {
+                              void handleConnectionAction('repair');
+                            }}
+                            disabled={isReconnecting || !identity}
+                            className="btn-primary text-xs disabled:opacity-50"
+                          >
+                            {activeConnectionAction === 'repair'
+                              ? 'Repairing Browser…'
+                              : 'Repair This Browser'}
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <button
                       onClick={() => {
-                        void handleReconnect();
+                        void handleConnectionAction('reconnect');
                       }}
                       disabled={isReconnecting || !identity}
                       className="btn-primary text-xs disabled:opacity-50"
                     >
-                      {isReconnecting ? 'Connecting...' : connectionStatus === 'error' ? 'Retry Connection' : 'Connect'}
+                      {activeConnectionAction === 'reconnect'
+                        ? 'Checking Saved Installation…'
+                        : installationRecovery
+                          ? 'Check Saved Installation Again'
+                          : connectionStatus === 'error'
+                            ? 'Retry Connection'
+                            : 'Connect'}
                     </button>
                     {showConnectorList && (
                       <div className="space-y-2">
@@ -1302,11 +1393,15 @@ export function SettingsPage() {
                                         'The wallet connected without an account-bound signer. Reconnect it and retry.'
                                       );
                                     }
-                                    await handleReconnect({
-                                      address: connectedAddress,
-                                      chainId: connected.chainId,
-                                      signMessage: connected.signMessage,
-                                    });
+                                    await handleConnectionAction(
+                                      pendingWalletAction,
+                                      {
+                                        address: connectedAddress,
+                                        chainId: connected.chainId,
+                                        signMessage: connected.signMessage,
+                                      },
+                                      pendingWalletAction === 'repair'
+                                    );
                                   } catch (err) {
                                     setConnectError(formatWalletConnectionError(err));
                                   }
@@ -1337,10 +1432,13 @@ export function SettingsPage() {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                       </svg>
-                      <span>Registering identity on XMTP network...</span>
+                      <span>
+                        Reopening and verifying this browser's saved installation…
+                      </span>
                     </div>
                     <div className="mt-1 text-primary-300">
-                      Check the <button onClick={() => navigate('/debug')} className="underline hover:text-primary-200">Debug tab</button> for details
+                      No new installation is created during an ordinary reconnect. Check the{' '}
+                      <button onClick={() => navigate('/debug')} className="underline hover:text-primary-200">Debug tab</button> for details.
                     </div>
                   </div>
                 )}

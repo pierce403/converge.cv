@@ -7,6 +7,7 @@ import {
   registrationCapabilities,
   type ClientRegistrationPolicy,
 } from './registration-policy';
+import type { XmtpDbPathMode } from './device-provisioning';
 
 export interface RegistrationClient {
   inboxId?: string;
@@ -18,11 +19,7 @@ export interface RegistrationClient {
 export interface ClientRegistrationDependencies {
   resolveInboxId(identifier: Identifier): Promise<string | undefined>;
   fetchInboxState(inboxId: string): Promise<InboxState | undefined>;
-  onInstallationReady?(result: {
-    inboxId: string;
-    installationId: string;
-    installationRegistered: boolean;
-  }): Promise<void> | void;
+  onInstallationReady?(result: InstallationReadyResult): Promise<void> | void;
   sleep?(milliseconds: number): Promise<void>;
 }
 
@@ -32,6 +29,9 @@ export interface ClientRegistrationInput {
   policy: ClientRegistrationPolicy;
   expectedInboxId?: string;
   expectedInstallationId?: string;
+  databasePathMode?: XmtpDbPathMode;
+  deferMismatchedInstallationAdoption?: boolean;
+  requireExpectedInstallation?: boolean;
 }
 
 export interface ClientRegistrationResult {
@@ -39,6 +39,60 @@ export interface ClientRegistrationResult {
   installationId: string;
   installationRegistered: boolean;
   existingInstallationCount: number;
+}
+
+export interface InstallationReadyResult {
+  inboxId: string;
+  installationId: string;
+  installationRegistered: boolean;
+  databasePathMode?: XmtpDbPathMode;
+  previousInstallationId?: string;
+}
+
+export type InstallationRecoveryReason =
+  | 'installation-mismatch'
+  | 'installation-unregistered'
+  | 'local-registration-not-on-ledger';
+
+export interface InstallationRecoveryDetails {
+  reason: InstallationRecoveryReason;
+  inboxId: string;
+  expectedInstallationId?: string;
+  localInstallationId: string;
+  expectedInstallationVisible: boolean;
+  localInstallationVisible: boolean;
+  localInstallationRegistered: boolean;
+  signerIsRecoveryIdentifier: boolean;
+  existingInstallationCount: number;
+  databasePathMode?: XmtpDbPathMode;
+}
+
+export class InstallationRecoveryRequiredError extends Error {
+  readonly details: InstallationRecoveryDetails;
+
+  constructor(details: InstallationRecoveryDetails) {
+    const message =
+      details.reason === 'installation-mismatch'
+        ? 'Converge found the saved inbox, but this browser opened a different local XMTP installation. No new installation was registered.'
+        : details.reason === 'installation-unregistered'
+          ? 'This browser\'s saved XMTP database is not registered. No new installation was created.'
+          : 'This browser has a locally registered XMTP database that is not present on the inbox ledger. No database was deleted or replaced.';
+    super(message);
+    this.name = 'InstallationRecoveryRequiredError';
+    this.details = details;
+  }
+}
+
+export function isInstallationRecoveryRequiredError(
+  error: unknown
+): error is InstallationRecoveryRequiredError {
+  return (
+    error instanceof InstallationRecoveryRequiredError ||
+    (Boolean(error) &&
+      typeof error === 'object' &&
+      (error as { name?: unknown }).name === 'InstallationRecoveryRequiredError' &&
+      Boolean((error as { details?: unknown }).details))
+  );
 }
 
 const defaultSleep = async (milliseconds: number) =>
@@ -76,8 +130,41 @@ const stateHasInstallation = (
 
 const stateHasIdentifier = (state: InboxState | undefined, identifier: Identifier) =>
   Boolean(
-    state?.accountIdentifiers?.some((candidate) => identifiersMatch(candidate, identifier))
+    state?.accountIdentifiers?.some((candidate) => identifiersMatch(candidate, identifier)) ||
+      (state?.recoveryIdentifier && identifiersMatch(state.recoveryIdentifier, identifier))
   );
+
+const stateRecoveryIdentifierMatches = (
+  state: InboxState | undefined,
+  identifier: Identifier
+) => Boolean(state?.recoveryIdentifier && identifiersMatch(state.recoveryIdentifier, identifier));
+
+function recoveryDetails(input: {
+  reason: InstallationRecoveryReason;
+  inboxId: string;
+  expectedInstallationId?: string;
+  localInstallationId: string;
+  state?: InboxState;
+  localInstallationRegistered: boolean;
+  identifier: Identifier;
+  databasePathMode?: XmtpDbPathMode;
+}): InstallationRecoveryDetails {
+  return {
+    reason: input.reason,
+    inboxId: input.inboxId,
+    expectedInstallationId: input.expectedInstallationId,
+    localInstallationId: input.localInstallationId,
+    expectedInstallationVisible: Boolean(
+      input.expectedInstallationId &&
+        stateHasInstallation(input.state, input.expectedInstallationId)
+    ),
+    localInstallationVisible: stateHasInstallation(input.state, input.localInstallationId),
+    localInstallationRegistered: input.localInstallationRegistered,
+    signerIsRecoveryIdentifier: stateRecoveryIdentifierMatches(input.state, input.identifier),
+    existingInstallationCount: input.state?.installations?.length ?? 0,
+    databasePathMode: input.databasePathMode,
+  };
+}
 
 const isPendingIdentityStateError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error ?? '');
@@ -174,10 +261,65 @@ export async function ensureClientRegistration(
 
   const existingInstallationCount = preState?.installations?.length ?? 0;
   const installationAlreadyVisible = stateHasInstallation(preState, installationId);
+  const alreadyRegistered = await client.isRegistered();
   if (expectedInstallationMismatch) {
+    if (input.requireExpectedInstallation) {
+      throw new InstallationRecoveryRequiredError(
+        recoveryDetails({
+          reason: 'installation-mismatch',
+          inboxId,
+          expectedInstallationId: input.expectedInstallationId,
+          localInstallationId: installationId,
+          state: preState,
+          localInstallationRegistered: alreadyRegistered,
+          identifier,
+          databasePathMode: input.databasePathMode,
+        })
+      );
+    }
     if (policy === 'resume-only') {
-      throw new Error(
-        'XMTP did not reopen the expected browser installation. Registration was stopped to avoid creating another installation.'
+      if (
+        alreadyRegistered &&
+        installationAlreadyVisible &&
+        !input.deferMismatchedInstallationAdoption
+      ) {
+        const verified = await waitForVerifiedRegistration(
+          client,
+          identifier,
+          inboxId,
+          installationId,
+          dependencies
+        );
+        if (verified) {
+          console.info(
+            '[XMTP] Repaired a stale saved installation ID using the already-registered local database.'
+          );
+          await dependencies.onInstallationReady?.({
+            inboxId,
+            installationId,
+            installationRegistered: false,
+            databasePathMode: input.databasePathMode,
+            previousInstallationId: input.expectedInstallationId,
+          });
+          return {
+            inboxId,
+            installationId,
+            installationRegistered: false,
+            existingInstallationCount,
+          };
+        }
+      }
+      throw new InstallationRecoveryRequiredError(
+        recoveryDetails({
+          reason: 'installation-mismatch',
+          inboxId,
+          expectedInstallationId: input.expectedInstallationId,
+          localInstallationId: installationId,
+          state: preState,
+          localInstallationRegistered: alreadyRegistered,
+          identifier,
+          databasePathMode: input.databasePathMode,
+        })
       );
     }
     if (stateHasInstallation(preState, input.expectedInstallationId!)) {
@@ -187,7 +329,6 @@ export async function ensureClientRegistration(
       '[XMTP] The saved pending installation is no longer on the inbox ledger; resuming with this browser database.'
     );
   }
-  const alreadyRegistered = await client.isRegistered();
 
   if (alreadyRegistered) {
     const verified = await waitForVerifiedRegistration(
@@ -198,14 +339,24 @@ export async function ensureClientRegistration(
       dependencies
     );
     if (!verified) {
-      throw new Error(
-        'XMTP opened a registered local installation, but the signer and installation could not be verified in the inbox state.'
+      throw new InstallationRecoveryRequiredError(
+        recoveryDetails({
+          reason: 'local-registration-not-on-ledger',
+          inboxId,
+          expectedInstallationId: input.expectedInstallationId,
+          localInstallationId: installationId,
+          state: preState,
+          localInstallationRegistered: true,
+          identifier,
+          databasePathMode: input.databasePathMode,
+        })
       );
     }
     await dependencies.onInstallationReady?.({
       inboxId,
       installationId,
       installationRegistered: false,
+      databasePathMode: input.databasePathMode,
     });
     return {
       inboxId,
@@ -216,8 +367,17 @@ export async function ensureClientRegistration(
   }
 
   if (!allowInstallationRegistration) {
-    throw new Error(
-      'This browser does not have a registered XMTP installation. Reconnect the controlling wallet or restore the key on this device instead of creating one silently.'
+    throw new InstallationRecoveryRequiredError(
+      recoveryDetails({
+        reason: 'installation-unregistered',
+        inboxId,
+        expectedInstallationId: input.expectedInstallationId,
+        localInstallationId: installationId,
+        state: preState,
+        localInstallationRegistered: false,
+        identifier,
+        databasePathMode: input.databasePathMode,
+      })
     );
   }
   if (resolvedInboxId && existingInstallationCount >= XMTP_INSTALLATION_LIMIT && !installationAlreadyVisible) {
@@ -233,6 +393,7 @@ export async function ensureClientRegistration(
     inboxId,
     installationId,
     installationRegistered: false,
+    databasePathMode: input.databasePathMode,
   });
 
   let registerError: unknown;
@@ -269,6 +430,10 @@ export async function ensureClientRegistration(
     inboxId,
     installationId,
     installationRegistered,
+    databasePathMode: input.databasePathMode,
+    previousInstallationId: expectedInstallationMismatch
+      ? input.expectedInstallationId
+      : undefined,
   });
 
   return {

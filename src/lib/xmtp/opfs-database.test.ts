@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deleteInboxDefaultDatabase, getInboxDefaultDatabasePath } from './opfs-database';
+import {
+  deleteInboxDefaultDatabase,
+  getInboxDefaultDatabasePath,
+  xmtpDatabaseFileExists,
+} from './opfs-database';
 
 const inboxId = 'a'.repeat(64);
 
@@ -40,5 +44,23 @@ describe('XMTP inbox database recovery', () => {
 
     expect(deleteFile).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('probes an exact database path without deleting it and closes the OPFS worker', async () => {
+    const fileExists = vi.fn(async () => true);
+    const deleteFile = vi.fn(async () => true);
+    const close = vi.fn();
+
+    await expect(
+      xmtpDatabaseFileExists('xmtp-production-saved.db3', async () => ({
+        fileExists,
+        deleteFile,
+        close,
+      }))
+    ).resolves.toBe(true);
+
+    expect(fileExists).toHaveBeenCalledWith('xmtp-production-saved.db3');
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

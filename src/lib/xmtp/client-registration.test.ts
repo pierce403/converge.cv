@@ -1,6 +1,10 @@
 import { IdentifierKind, type InboxState, type Identifier } from '@xmtp/browser-sdk';
 import { describe, expect, it, vi } from 'vitest';
-import { ensureClientRegistration, installationIdsMatch } from './client-registration';
+import {
+  ensureClientRegistration,
+  InstallationRecoveryRequiredError,
+  installationIdsMatch,
+} from './client-registration';
 import { StaleInstallationError } from './device-provisioning';
 
 const inboxId = 'a'.repeat(64);
@@ -26,6 +30,8 @@ function harness(options?: {
   registerNoop?: boolean;
   registerThrowsAfterMutation?: boolean;
   accountIdentifiers?: Identifier[];
+  recoveryIdentifier?: Identifier;
+  installationId?: string;
 }) {
   let resolved = options?.resolved ?? false;
   let registered = options?.registered ?? false;
@@ -33,7 +39,7 @@ function harness(options?: {
   const events: string[] = [];
   const client = {
     inboxId,
-    installationId: '0xAABB',
+    installationId: options?.installationId ?? '0xAABB',
     isRegistered: vi.fn(async () => registered),
     register: vi.fn(async () => {
       events.push('register');
@@ -50,9 +56,10 @@ function harness(options?: {
     }),
   };
   const resolveInboxId = vi.fn(async () => (resolved ? inboxId : undefined));
-  const fetchInboxState = vi.fn(async () =>
-    inboxState(installations, options?.accountIdentifiers ?? [identifier])
-  );
+  const fetchInboxState = vi.fn(async () => ({
+    ...inboxState(installations, options?.accountIdentifiers ?? [identifier]),
+    recoveryIdentifier: options?.recoveryIdentifier,
+  }) as InboxState);
   const onInstallationReady = vi.fn(async () => {
     events.push('persist');
   });
@@ -210,7 +217,10 @@ describe('ensureClientRegistration', () => {
         { client: setup.client, identifier, policy: 'resume-only' },
         setup.dependencies
       )
-    ).rejects.toThrow(/could not be verified/i);
+    ).rejects.toMatchObject({
+      name: 'InstallationRecoveryRequiredError',
+      details: { reason: 'local-registration-not-on-ledger' },
+    });
     expect(setup.dependencies.onInstallationReady).not.toHaveBeenCalled();
   });
 
@@ -222,7 +232,165 @@ describe('ensureClientRegistration', () => {
         { client: setup.client, identifier, policy: 'resume-only' },
         setup.dependencies
       )
-    ).rejects.toThrow(/does not have a registered XMTP installation/i);
+    ).rejects.toMatchObject({
+      name: 'InstallationRecoveryRequiredError',
+      details: { reason: 'installation-unregistered' },
+    });
+    expect(setup.client.register).not.toHaveBeenCalled();
+    expect(setup.dependencies.onInstallationReady).not.toHaveBeenCalled();
+  });
+
+  it('classifies a mismatched unregistered database without mutating an 8-installation inbox', async () => {
+    const savedInstallationId = 'install-old';
+    const setup = harness({
+      resolved: true,
+      registered: false,
+      installations: [
+        savedInstallationId,
+        ...Array.from({ length: 7 }, (_, index) => `other-${index}`),
+      ],
+      recoveryIdentifier: identifier,
+    });
+
+    const error = await ensureClientRegistration(
+      {
+        client: setup.client,
+        identifier,
+        policy: 'resume-only',
+        expectedInboxId: inboxId,
+        expectedInstallationId: savedInstallationId,
+        databasePathMode: 'inbox-default',
+      },
+      setup.dependencies
+    ).catch((candidate: unknown) => candidate);
+
+    expect(error).toBeInstanceOf(InstallationRecoveryRequiredError);
+    expect((error as InstallationRecoveryRequiredError).details).toEqual({
+      reason: 'installation-mismatch',
+      inboxId,
+      expectedInstallationId: savedInstallationId,
+      localInstallationId: '0xAABB',
+      expectedInstallationVisible: true,
+      localInstallationVisible: false,
+      localInstallationRegistered: false,
+      signerIsRecoveryIdentifier: true,
+      existingInstallationCount: 8,
+      databasePathMode: 'inbox-default',
+    });
+    expect(setup.client.register).not.toHaveBeenCalled();
+    expect(setup.dependencies.onInstallationReady).not.toHaveBeenCalled();
+  });
+
+  it('adopts a mismatched local database only when it is already registered and ledger-visible', async () => {
+    const setup = harness({
+      resolved: true,
+      registered: true,
+      installations: ['install-old', 'aabb'],
+    });
+
+    const result = await ensureClientRegistration(
+      {
+        client: setup.client,
+        identifier,
+        policy: 'resume-only',
+        expectedInboxId: inboxId,
+        expectedInstallationId: 'install-old',
+        databasePathMode: 'legacy-address',
+      },
+      setup.dependencies
+    );
+
+    expect(result.installationId).toBe('0xAABB');
+    expect(setup.client.register).not.toHaveBeenCalled();
+    expect(setup.dependencies.onInstallationReady).toHaveBeenCalledWith({
+      inboxId,
+      installationId: '0xAABB',
+      installationRegistered: false,
+      databasePathMode: 'legacy-address',
+      previousInstallationId: 'install-old',
+    });
+  });
+
+  it('defers safe mismatch adoption while another existing path may hold the exact saved installation', async () => {
+    const setup = harness({
+      resolved: true,
+      registered: true,
+      installations: ['install-old', 'aabb'],
+    });
+
+    await expect(
+      ensureClientRegistration(
+        {
+          client: setup.client,
+          identifier,
+          policy: 'resume-only',
+          expectedInboxId: inboxId,
+          expectedInstallationId: 'install-old',
+          deferMismatchedInstallationAdoption: true,
+        },
+        setup.dependencies
+      )
+    ).rejects.toMatchObject({
+      name: 'InstallationRecoveryRequiredError',
+      details: {
+        localInstallationRegistered: true,
+        localInstallationVisible: true,
+      },
+    });
+    expect(setup.dependencies.onInstallationReady).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt a locally registered installation that is absent from the ledger', async () => {
+    const setup = harness({
+      resolved: true,
+      registered: true,
+      installations: ['install-old'],
+    });
+
+    await expect(
+      ensureClientRegistration(
+        {
+          client: setup.client,
+          identifier,
+          policy: 'resume-only',
+          expectedInboxId: inboxId,
+          expectedInstallationId: 'install-old',
+        },
+        setup.dependencies
+      )
+    ).rejects.toMatchObject({
+      name: 'InstallationRecoveryRequiredError',
+      details: {
+        reason: 'installation-mismatch',
+        localInstallationRegistered: true,
+        localInstallationVisible: false,
+      },
+    });
+    expect(setup.client.register).not.toHaveBeenCalled();
+  });
+
+  it('never substitutes a new candidate during strict explicit repair', async () => {
+    const setup = harness({ resolved: true, installations: [] });
+
+    await expect(
+      ensureClientRegistration(
+        {
+          client: setup.client,
+          identifier,
+          policy: 'existing-inbox',
+          expectedInboxId: inboxId,
+          expectedInstallationId: 'candidate-that-was-staged',
+          requireExpectedInstallation: true,
+        },
+        setup.dependencies
+      )
+    ).rejects.toMatchObject({
+      name: 'InstallationRecoveryRequiredError',
+      details: {
+        reason: 'installation-mismatch',
+        localInstallationId: '0xAABB',
+      },
+    });
     expect(setup.client.register).not.toHaveBeenCalled();
     expect(setup.dependencies.onInstallationReady).not.toHaveBeenCalled();
   });

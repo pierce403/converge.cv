@@ -213,7 +213,8 @@ export interface Identity {
   displayName?: string; // Optional display name
   inboxId?: string; // XMTP inbox ID
   installationId?: string; // XMTP installation ID for this device
-  staleInstallationId?: string; // Registered during an interrupted device join but no longer present locally
+  staleInstallationId?: string; // Superseded/unavailable installation retained for exact cleanup
+  installationRepairPending?: boolean; // The exact local repair candidate was persisted before registration
   needsHistorySync?: boolean;
   historySyncRequestedAt?: number;
   expectedInboxId?: string;

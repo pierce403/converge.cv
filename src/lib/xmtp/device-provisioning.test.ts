@@ -2,6 +2,7 @@ import type { InboxState, Identifier, Signer } from '@xmtp/browser-sdk';
 import { describe, expect, it, vi } from 'vitest';
 import {
   completeProvisioning,
+  getExactClientDbPath,
   getClientDbPath,
   getScwRetryChainId,
   InstallationMembershipPendingError,
@@ -761,6 +762,31 @@ describe('client identity and history policy', () => {
     expect(succeeded.historySyncRequestedAt).toBe(1234);
   });
 
+  it('records an alternate verified database path and retains only the superseded installation for cleanup', () => {
+    const repaired = recordInstallationReady(
+      {
+        address: '0x1234',
+        publicKey: '0x5678',
+        createdAt: 1,
+        installationId: 'saved-old',
+        xmtpDbPathMode: 'inbox-default',
+      },
+      {
+        inboxId: targetInbox,
+        installationId: 'verified-alternate',
+        databasePathMode: 'legacy-address',
+        previousInstallationId: 'saved-old',
+      }
+    );
+
+    expect(repaired).toMatchObject({
+      inboxId: targetInbox,
+      installationId: 'verified-alternate',
+      staleInstallationId: 'saved-old',
+      xmtpDbPathMode: 'legacy-address',
+    });
+  });
+
   it('plans fresh local key to new inbox as one registration without history', () => {
     expect(
       planClientInstallation({
@@ -794,6 +820,12 @@ describe('client identity and history policy', () => {
   it('uses the inbox-aware SDK path for new identities and preserves legacy paths', () => {
     expect(getClientDbPath('0xABCD', 'inbox-default')).toBeUndefined();
     expect(getClientDbPath('0xABCD', undefined)).toBe('xmtp-production-0xabcd.db3');
+    expect(getExactClientDbPath('0xABCD', 'inbox-default', targetInbox)).toBe(
+      `xmtp-production-${targetInbox}.db3`
+    );
+    expect(getExactClientDbPath('0xABCD', 'legacy-address', targetInbox)).toBe(
+      'xmtp-production-0xabcd.db3'
+    );
   });
 
   it('compares signer source, wallet type, and SCW chain ID', () => {

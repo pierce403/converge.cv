@@ -3,6 +3,7 @@
  */
 
 import { create } from 'zustand';
+import type { InstallationRecoveryDetails } from '@/lib/xmtp/client-registration';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type SyncStatus = 'idle' | 'syncing-conversations' | 'syncing-messages' | 'complete';
@@ -12,6 +13,7 @@ interface XmtpState {
   connectionStatus: ConnectionStatus;
   lastConnected: number | null;
   error: string | null;
+  installationRecovery: InstallationRecoveryDetails | null;
   lastSyncedAt: number | null;
   syncStatus: SyncStatus;
   syncProgress: number; // 0-100
@@ -20,6 +22,7 @@ interface XmtpState {
   setConnectionStatus: (status: ConnectionStatus) => void;
   setLastConnected: (timestamp: number) => void;
   setError: (error: string | null) => void;
+  setInstallationRecovery: (recovery: InstallationRecoveryDetails | null) => void;
   setLastSyncedAt: (timestamp: number) => void;
   setSyncStatus: (status: SyncStatus) => void;
   setSyncProgress: (progress: number) => void;
@@ -30,6 +33,7 @@ export const useXmtpStore = create<XmtpState>((set) => ({
   connectionStatus: 'disconnected',
   lastConnected: null,
   error: null,
+  installationRecovery: null,
   lastSyncedAt: null,
   syncStatus: 'idle',
   syncProgress: 0,
@@ -38,8 +42,8 @@ export const useXmtpStore = create<XmtpState>((set) => ({
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   setLastConnected: (timestamp) => set({ lastConnected: timestamp }),
   setError: (error) => set({ error }),
+  setInstallationRecovery: (installationRecovery) => set({ installationRecovery }),
   setLastSyncedAt: (timestamp) => set({ lastSyncedAt: timestamp }),
   setSyncStatus: (status) => set({ syncStatus: status }),
   setSyncProgress: (progress) => set({ syncProgress: progress }),
 }));
-

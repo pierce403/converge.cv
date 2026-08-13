@@ -176,7 +176,13 @@ Driver entry points:
 
 Purpose: local account identities (Converge keys or imported keys plus verified
 XMTP inbox/installation identifiers). The XMTP installation key itself remains
-inside the Browser SDK OPFS database.
+inside the Browser SDK OPFS database. During an explicitly confirmed settled
+browser repair, `installationId`, `staleInstallationId`,
+`installationRepairPending`, and `xmtpDbPathMode` form a small crash-resume
+journal: the exact candidate is persisted before revoke/register, while the
+superseded ID is retained only for exact cleanup. These are ordinary object
+fields in the existing identity row and require no new Dexie index or schema
+version.
 
 Index notes:
 

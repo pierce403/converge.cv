@@ -94,6 +94,7 @@ import {
   shortInboxId,
 } from './installation-recovery';
 import {
+  getExactClientDbPath,
   getClientDbPath,
   provisionFreshDeviceKey,
   provisionWithStaleInstallationRecovery,
@@ -104,11 +105,19 @@ import {
   type XmtpDbPathMode,
   type ProvisionDeviceResult,
 } from './device-provisioning';
-import { deleteInboxDefaultDatabase } from './opfs-database';
+import { deleteInboxDefaultDatabase, xmtpDatabaseFileExists } from './opfs-database';
 import {
   ensureClientRegistration,
+  isInstallationRecoveryRequiredError,
   installationIdsMatch,
+  type InstallationReadyResult,
+  type InstallationRecoveryDetails,
 } from './client-registration';
+import { prepareInstallationRepair } from './installation-repair';
+import {
+  planReconnectDatabaseAttempts,
+  type ReconnectDatabaseAttempt,
+} from './reconnect-database-selection';
 import { ContentTypeConvergeProfile, ConvergeProfileCodec, type ContentTypeId, type ConvergeProfileContent, type EncodedContent } from './profile-codec';
 import {
   ConvosJoinRequestCodec,
@@ -254,11 +263,8 @@ interface ConnectOptions {
   expectedInboxId?: string;
   expectedInstallationId?: string;
   requestHistorySync?: boolean;
-  onInstallationReady?: (result: {
-    inboxId: string;
-    installationId: string;
-    installationRegistered: boolean;
-  }) => Promise<void> | void;
+  onInstallationReady?: (result: InstallationReadyResult) => Promise<void> | void;
+  requireExpectedInstallation?: boolean;
 }
 
 export interface ConnectResult {
@@ -267,6 +273,23 @@ export interface ConnectResult {
   installationRegistered: boolean;
   historySyncRequested: boolean;
   historySyncRequired: boolean;
+}
+
+export interface RepairInstallationOptions extends ConnectOptions {
+  recovery: InstallationRecoveryDetails;
+  previousInstallationId?: string;
+  onCandidateReady(result: {
+    inboxId: string;
+    candidateInstallationId: string;
+    previousInstallationId?: string;
+    databasePathMode: XmtpDbPathMode;
+  }): Promise<void> | void;
+}
+
+export interface RepairInstallationResult extends ConnectResult {
+  previousInstallationId?: string;
+  previousInstallationRevoked: boolean;
+  previousInstallationAbsent: boolean;
 }
 
 
@@ -3680,11 +3703,188 @@ export class XmtpClient {
     return this.enqueueLifecycle(() => this.connectInternal(identity, options));
   }
 
+  repairInstallation(
+    identity: XmtpIdentity,
+    options: RepairInstallationOptions
+  ): Promise<RepairInstallationResult> {
+    return this.enqueueLifecycle(async () => {
+      try {
+        return await this.withInstallationRepairLock(options.recovery.inboxId, async () =>
+          await this.repairInstallationInternal(identity, options)
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const store = useXmtpStore.getState();
+        store.setConnectionStatus('error');
+        store.setError(message);
+        store.setInstallationRecovery(
+          store.installationRecovery ?? options.recovery
+        );
+        throw error;
+      }
+    });
+  }
+
+  private async withInstallationRepairLock<T>(
+    inboxId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    if (typeof navigator === 'undefined' || !navigator.locks) {
+      return await operation();
+    }
+    const lockName = `converge:xmtp-installation-repair:${inboxId.toLowerCase()}`;
+    return await navigator.locks.request(
+      lockName,
+      { mode: 'exclusive', ifAvailable: true },
+      async (lock) => {
+        if (!lock) {
+          throw new Error(
+            'Another Converge tab is already repairing this inbox. Finish or close that tab, then retry.'
+          );
+        }
+        return await operation();
+      }
+    );
+  }
+
+  private async repairInstallationInternal(
+    identity: XmtpIdentity,
+    options: RepairInstallationOptions
+  ): Promise<RepairInstallationResult> {
+    const recovery = options.recovery;
+    const expectedInboxId = options.expectedInboxId ?? identity.inboxId;
+    if (!expectedInboxId || expectedInboxId.toLowerCase() !== recovery.inboxId.toLowerCase()) {
+      throw new Error('The saved repair no longer matches the selected XMTP inbox.');
+    }
+    const databasePathMode =
+      recovery.databasePathMode ?? identity.xmtpDbPathMode ?? 'legacy-address';
+
+    if (this.client) {
+      await this.disconnectInternal();
+    }
+
+    const signer = await this.createSigner(identity);
+    const signerIdentifier = await signer.getIdentifier();
+    const dbPath = getClientDbPath(identity.address, databasePathMode);
+    const sdkLoggingLevel = getXmtpSdkLogLevel();
+    let candidate: Client<unknown> | null = null;
+    let preparation: Awaited<ReturnType<typeof prepareInstallationRepair>>;
+
+    try {
+      candidate = await this.retryWithDelay(
+        'client.create:installation-repair',
+        async () =>
+          await Client.create(signer, {
+            env: 'production',
+            ...(dbPath ? { dbPath } : {}),
+            appVersion: XMTP_APP_VERSION,
+            codecs: XMTP_CONTENT_CODECS,
+            loggingLevel: sdkLoggingLevel,
+            structuredLogging: false,
+            performanceLogging: false,
+            disableAutoRegister: true,
+          }),
+        {
+          attempts: 3,
+          initialDelayMs: 400,
+          shouldRetry: (error) => this.isDatabaseLockError(error),
+        }
+      );
+
+      if (
+        !candidate.inboxId ||
+        candidate.inboxId.toLowerCase() !== expectedInboxId.toLowerCase()
+      ) {
+        throw new Error('The repair database opened a different XMTP inbox.');
+      }
+      if (
+        !candidate.installationId ||
+        !installationIdsMatch(
+          candidate.installationId,
+          recovery.localInstallationId
+        )
+      ) {
+        throw new Error(
+          'The local XMTP repair candidate changed. No ledger mutation was attempted; retry connection to inspect the current database.'
+        );
+      }
+
+      const candidateLocallyRegistered = await candidate.isRegistered();
+      preparation = await prepareInstallationRepair(
+        {
+          inboxId: expectedInboxId,
+          candidateInstallationId: candidate.installationId,
+          previousInstallationId:
+            options.previousInstallationId ?? recovery.expectedInstallationId,
+          candidateLocallyRegistered,
+          signerIdentifier,
+          databasePathMode,
+        },
+        {
+          fetchInboxState: async (inboxId) => {
+            const states = await this.retryWithBackoff(
+              'installation-repair:fetchInboxStates',
+              () => Client.fetchInboxStates([inboxId], 'production')
+            );
+            return states[0];
+          },
+          revokeInstallation: async (inboxId, installationBytes) =>
+            await Client.revokeInstallations(
+              signer,
+              inboxId,
+              installationBytes,
+              'production'
+            ),
+          onCandidateReady: options.onCandidateReady,
+        }
+      );
+    } finally {
+      if (candidate) {
+        try {
+          await candidate.close();
+        } catch (error) {
+          console.warn('[XMTP] Failed to close the installation repair candidate:', error);
+        }
+      }
+    }
+
+    const connection = await this.connectInternal(
+      {
+        ...identity,
+        inboxId: expectedInboxId,
+        installationId: recovery.localInstallationId,
+        xmtpDbPathMode: databasePathMode,
+      },
+      {
+        registrationPolicy: 'existing-inbox',
+        enableHistorySync: options.enableHistorySync,
+        expectedInboxId,
+        expectedInstallationId: recovery.localInstallationId,
+        requestHistorySync: true,
+        onInstallationReady: options.onInstallationReady,
+        requireExpectedInstallation: true,
+      }
+    );
+
+    return {
+      ...connection,
+      previousInstallationId: preparation.previousInstallationId,
+      previousInstallationRevoked: preparation.previousInstallationRevoked,
+      previousInstallationAbsent: preparation.previousInstallationAbsent,
+    };
+  }
+
   private async connectInternal(
     identity: XmtpIdentity,
     options?: ConnectOptions,
   ): Promise<ConnectResult> {
-    const { setConnectionStatus, setLastConnected, setError, connectionStatus } = useXmtpStore.getState();
+    const {
+      setConnectionStatus,
+      setLastConnected,
+      setError,
+      setInstallationRecovery,
+      connectionStatus,
+    } = useXmtpStore.getState();
     this.stopBackgroundDiscoveryLoop();
     this.clearSyncStatusResetTimer();
 
@@ -3712,15 +3912,27 @@ export class XmtpClient {
           options?.expectedInstallationId &&
           !installationIdsMatch(installationId, options.expectedInstallationId)
         ) {
-          throw new Error(
-            'XMTP reused a different browser installation than the wallet-approved installation.'
+          if (options.requireExpectedInstallation) {
+            throw new Error(
+              'XMTP reused a different browser installation than the exact repair candidate. Registration was stopped.'
+            );
+          }
+          console.info(
+            '[XMTP] Updating a stale saved installation ID from the already-verified connected client.'
           );
         }
         await options?.onInstallationReady?.({
           inboxId,
           installationId,
           installationRegistered: false,
+          databasePathMode: this.identity?.xmtpDbPathMode,
+          previousInstallationId:
+            options?.expectedInstallationId &&
+            !installationIdsMatch(installationId, options.expectedInstallationId)
+              ? options.expectedInstallationId
+              : undefined,
         });
+        setInstallationRecovery(null);
         let historySyncRequested = false;
         const historySyncRequired = Boolean(options?.requestHistorySync);
         if (historySyncRequired) {
@@ -3769,6 +3981,8 @@ export class XmtpClient {
     const shouldSyncHistory = options?.enableHistorySync === true;
 
     let client: Client<unknown> | null = null;
+    let resolvedDatabasePathMode: XmtpDbPathMode =
+      identity.xmtpDbPathMode ?? 'legacy-address';
 
     try {
       if (this.shouldSkipIdentityCalls('connect:client.create')) {
@@ -3797,71 +4011,153 @@ export class XmtpClient {
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
       const signer = await this.createSigner(identity);
+      const signerIdentifier = await signer.getIdentifier();
 
       console.log('[XMTP] Calling Client.create() with signer...');
       // New identities use the SDK's inbox-aware default. Records created before
       // this migration retain their address path so a reload does not churn an installation.
-      const dbPath = getClientDbPath(identity.address, identity.xmtpDbPathMode);
       const sdkLoggingLevel = getXmtpSdkLogLevel();
-
-      console.log('[XMTP] Client.create options:', {
-        env: 'production',
-        dbPath: dbPath ?? '(SDK inbox default)',
-        appVersion: XMTP_APP_VERSION,
-        disableAutoRegister: true,
-        loggingLevel: sdkLoggingLevel,
-      });
-
-      try {
-        client = await this.retryWithDelay(
-          'client.create:opfs',
-          async () =>
-            await Client.create(signer, {
-              env: 'production',
-              ...(dbPath ? { dbPath } : {}),
-              appVersion: XMTP_APP_VERSION,
-              codecs: XMTP_CONTENT_CODECS,
-              loggingLevel: sdkLoggingLevel,
-              structuredLogging: false,
-              performanceLogging: false,
-              disableAutoRegister: true,
-            }),
-          {
-            attempts: 3,
-            initialDelayMs: 400,
-            shouldRetry: (error) => this.isDatabaseLockError(error),
+      const preferredDatabasePathMode = identity.xmtpDbPathMode ?? 'legacy-address';
+      let databaseAttempts: ReconnectDatabaseAttempt[] = [
+        { mode: preferredDatabasePathMode, deferMismatchedAdoption: false },
+      ];
+      if (
+        registrationPolicy === 'resume-only' &&
+        options?.expectedInboxId &&
+        options.expectedInstallationId
+      ) {
+        try {
+          const alternateDatabasePathMode: XmtpDbPathMode =
+            preferredDatabasePathMode === 'inbox-default'
+              ? 'legacy-address'
+              : 'inbox-default';
+          const preferredPath = getExactClientDbPath(
+            identity.address,
+            preferredDatabasePathMode,
+            options.expectedInboxId
+          );
+          const alternatePath = getExactClientDbPath(
+            identity.address,
+            alternateDatabasePathMode,
+            options.expectedInboxId
+          );
+          if (preferredPath && alternatePath && preferredPath !== alternatePath) {
+            const preferredExists = await xmtpDatabaseFileExists(preferredPath);
+            const alternateExists = await xmtpDatabaseFileExists(alternatePath);
+            databaseAttempts = planReconnectDatabaseAttempts({
+              preferredMode: preferredDatabasePathMode,
+              preferredExists,
+              alternateExists,
+            });
+            if (databaseAttempts[0]?.mode !== preferredDatabasePathMode) {
+              console.info(
+                '[XMTP] Saved database path is absent; probing the existing alternate path before creating a replacement candidate.'
+              );
+            }
           }
-        );
-      } catch (error) {
-        if (this.isRateLimitError(error)) {
-          this.noteIdentityRateLimit('connect:client.create');
+        } catch (error) {
+          console.warn(
+            '[XMTP] Could not inspect alternate database paths; continuing with the saved path only.',
+            error
+          );
         }
-        throw error;
       }
 
-      const signerIdentifier = await signer.getIdentifier();
-      const registration = await ensureClientRegistration(
-        {
-          client,
-          identifier: signerIdentifier,
-          policy: registrationPolicy,
-          expectedInboxId: options?.expectedInboxId,
-          expectedInstallationId: options?.expectedInstallationId,
-        },
-        {
-          resolveInboxId: async (identifier) =>
-            await this.retryWithBackoff('getInboxIdForIdentifier', () =>
-              getInboxIdForIdentifier(identifier, 'production')
-            ),
-          fetchInboxState: async (inboxId) => {
-            const states = await this.retryWithBackoff('client.fetchInboxStates', () =>
-              Client.fetchInboxStates([inboxId], 'production')
-            );
-            return states[0];
-          },
-          onInstallationReady: options?.onInstallationReady,
+      let registration: Awaited<ReturnType<typeof ensureClientRegistration>> | null = null;
+      let preferredRecoveryError: unknown;
+      for (let index = 0; index < databaseAttempts.length; index += 1) {
+        const attempt = databaseAttempts[index];
+        const databasePathMode = attempt.mode;
+        const dbPath = getClientDbPath(identity.address, databasePathMode);
+        console.log('[XMTP] Client.create options:', {
+          env: 'production',
+          dbPath: dbPath ?? '(SDK inbox default)',
+          databasePathMode,
+          appVersion: XMTP_APP_VERSION,
+          disableAutoRegister: true,
+          loggingLevel: sdkLoggingLevel,
+        });
+
+        try {
+          client = await this.retryWithDelay(
+            'client.create:opfs',
+            async () =>
+              await Client.create(signer, {
+                env: 'production',
+                ...(dbPath ? { dbPath } : {}),
+                appVersion: XMTP_APP_VERSION,
+                codecs: XMTP_CONTENT_CODECS,
+                loggingLevel: sdkLoggingLevel,
+                structuredLogging: false,
+                performanceLogging: false,
+                disableAutoRegister: true,
+              }),
+            {
+              attempts: 3,
+              initialDelayMs: 400,
+              shouldRetry: (error) => this.isDatabaseLockError(error),
+            }
+          );
+        } catch (error) {
+          if (this.isRateLimitError(error)) {
+            this.noteIdentityRateLimit('connect:client.create');
+          }
+          throw error;
         }
-      );
+
+        try {
+          registration = await ensureClientRegistration(
+            {
+              client,
+              identifier: signerIdentifier,
+              policy: registrationPolicy,
+              expectedInboxId: options?.expectedInboxId,
+              expectedInstallationId: options?.expectedInstallationId,
+              databasePathMode,
+              deferMismatchedInstallationAdoption: attempt.deferMismatchedAdoption,
+              requireExpectedInstallation: options?.requireExpectedInstallation,
+            },
+            {
+              resolveInboxId: async (identifier) =>
+                await this.retryWithBackoff('getInboxIdForIdentifier', () =>
+                  getInboxIdForIdentifier(identifier, 'production')
+                ),
+              fetchInboxState: async (inboxId) => {
+                const states = await this.retryWithBackoff('client.fetchInboxStates', () =>
+                  Client.fetchInboxStates([inboxId], 'production')
+                );
+                return states[0];
+              },
+              onInstallationReady: options?.onInstallationReady,
+            }
+          );
+          resolvedDatabasePathMode = databasePathMode;
+          break;
+        } catch (error) {
+          const canTryAnotherExistingPath =
+            isInstallationRecoveryRequiredError(error) &&
+            index < databaseAttempts.length - 1;
+          if (!canTryAnotherExistingPath) {
+            if (
+              databasePathMode !== preferredDatabasePathMode &&
+              preferredRecoveryError
+            ) {
+              throw preferredRecoveryError;
+            }
+            throw error;
+          }
+          if (databasePathMode === preferredDatabasePathMode && index === 0) {
+            preferredRecoveryError = error;
+          }
+          console.info('[XMTP] Saved database did not verify; probing the other existing path.');
+          await client.close();
+          client = null;
+        }
+      }
+
+      if (!client || !registration) {
+        throw new Error('XMTP did not open a verifiable browser database.');
+      }
       const {
         existingInstallationCount,
         installationRegistered,
@@ -3885,6 +4181,12 @@ export class XmtpClient {
         isReady: client.isReady,
       });
       this.client = client;
+      this.identity = {
+        ...identity,
+        installationId: client.installationId,
+        xmtpDbPathMode: resolvedDatabasePathMode,
+      };
+      setInstallationRecovery(null);
       this.clearXmtpCaches();
 
       if (!client.inboxId || !client.installationId) {
@@ -4061,6 +4363,9 @@ export class XmtpClient {
 
       setConnectionStatus('error');
       setError(errorMessage);
+      setInstallationRecovery(
+        isInstallationRecoveryRequiredError(error) ? error.details : null
+      );
 
       logNetworkEvent({
         direction: 'status',
@@ -4325,7 +4630,8 @@ export class XmtpClient {
   }
 
   private async disconnectInternal(): Promise<void> {
-    const { setConnectionStatus, setError } = useXmtpStore.getState();
+    const { setConnectionStatus, setError, setInstallationRecovery } =
+      useXmtpStore.getState();
     this.stopBackgroundDiscoveryLoop();
     this.clearSyncStatusResetTimer();
 
@@ -4339,6 +4645,7 @@ export class XmtpClient {
     if (!this.client) {
       setConnectionStatus('disconnected');
       setError(null);
+      setInstallationRecovery(null);
       return;
     }
 
@@ -4370,6 +4677,7 @@ export class XmtpClient {
       this.clearXmtpCaches();
       setConnectionStatus('disconnected');
       setError(null);
+      setInstallationRecovery(null);
 
       logNetworkEvent({
         direction: 'status',
@@ -6737,6 +7045,23 @@ export class XmtpClient {
       console.warn('[XMTP] Failed to fetch inbox state:', error);
       throw error;
     }
+  }
+
+  /** Read one known inbox ledger without opening or registering a local client. */
+  async getInboxStateById(inboxId: string): Promise<InboxState> {
+    const normalizedInboxId = inboxId.trim().replace(/^(?:0x)+/i, '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalizedInboxId)) {
+      throw new Error('A valid XMTP inbox ID is required to inspect installations.');
+    }
+    const states = await this.retryWithBackoff(
+      'client.fetchInboxStates:knownInbox',
+      () => Client.fetchInboxStates([normalizedInboxId], 'production')
+    );
+    const state = states[0];
+    if (!state) {
+      throw new Error(`XMTP returned no inbox state for ${normalizedInboxId}.`);
+    }
+    return state;
   }
 
   /**
