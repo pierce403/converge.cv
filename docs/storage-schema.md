@@ -5,7 +5,7 @@ This document describes Converge.cv’s **Dexie (IndexedDB)** schema: every tabl
 If you only want the source-of-truth schema definition in code, start here:
 
 - Dexie schema + migrations: `src/lib/storage/dexie-driver.ts#L36`
-- Current store definitions (v9): `src/lib/storage/dexie-driver.ts`
+- Current store definitions (v10): `src/lib/storage/dexie-driver.ts`
 
 ## Databases & namespacing
 
@@ -53,23 +53,26 @@ Dexie’s `stores({ ... })` strings are compact “index declarations”:
 - `[a+b]` → compound index
 - `storeName: null` → delete that store (table) in this schema version
 
-## Current schema (v9)
+## Current schema (v10)
 
 Defined here:
 
-- `ConvergeDB.version(9).stores(...)`: `src/lib/storage/dexie-driver.ts`
+- `ConvergeDB.version(10).stores(...)`: `src/lib/storage/dexie-driver.ts`
 
 ```ts
 conversations: 'id, lastMessageAt, pinned, archived, peerId, lastReadAt'
 messages: 'id, conversationId, sentAt, sender, [conversationId+sentAt]'
-attachments: 'id, messageId'
+attachments: 'id, messageId, cacheState, lastAccessedAt, [cacheState+lastAccessedAt]'
 attachmentData: 'id'
+remoteAttachments: '&id, messageId, conversationId'
 identity: 'address, inboxId'
 vaultSecrets: 'method'
 contacts: '&inboxId, primaryAddress, *addresses'
 deletedConversations: '&conversationId, peerId'
 ignoredConversations: null
 ```
+
+Messages use the indexed `sentAt` field for the fixed 28-day local-retention sweep. The sweep runs across every loaded inbox, cascades through `attachments`, `attachmentData`, and `remoteAttachments`, removes legacy orphan rows, then repairs each affected conversation's preview/read metadata in the same transaction. Inbound attachment messages and all of their dependent rows are also committed atomically. No schema migration is required for the cutoff because `sentAt` was already indexed.
 
 ## Stores (tables)
 

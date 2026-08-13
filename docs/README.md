@@ -19,6 +19,7 @@ This folder contains Converge.cv developer documentation and pointers to the can
 - **Conversation management**: [`conversations.md`](conversations.md)
 - **Multi-inbox identity and push contracts**: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)
+- **2026-08-12 retention/XMTP/code-size audit**: [`audits/2026-08-12-retention-xmtp-size.md`](audits/2026-08-12-retention-xmtp-size.md)
 
 ## Conventions
 

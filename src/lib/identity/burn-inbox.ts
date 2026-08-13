@@ -19,7 +19,6 @@ import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
 import { clearNeynarVerificationCacheForAddresses } from '@/lib/farcaster/neynar';
 import { removePushRegistrationForInbox } from '@/lib/push';
-import { clearResyncReadState } from '@/lib/xmtp/resync-state';
 import {
   clearIntentionalEmptyInboxState,
   markIntentionalEmptyInboxState,
@@ -400,7 +399,6 @@ const runtimeDependencies: BurnInboxDependencies = {
       syncProgress: 0,
     });
     useDebugStore.getState().clearAll();
-    clearResyncReadState();
     clearLastRoute();
   },
   setIntentionalEmptyState: (isEmpty) => {

@@ -32,6 +32,17 @@ function sanitizeNamespace(ns: string): string {
   return trimmed.replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
+export async function openStorageNamespace(ns: string): Promise<StorageDriver> {
+  const storage = new DexieDriver(sanitizeNamespace(ns));
+  try {
+    await storage.init();
+    return storage;
+  } catch (error) {
+    await storage.close().catch(() => undefined);
+    throw error;
+  }
+}
+
 export function getStorageNamespace(): string {
   return storageNamespace;
 }

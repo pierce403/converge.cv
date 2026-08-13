@@ -33,7 +33,7 @@ this contract.
 ### Inbox Registry And Runtime Isolation
 
 - The top-left identity control is an Inbox Switcher. The registry has one entry per XMTP inbox, regardless of how many account identifiers or installations that inbox has.
-- An inbox entry represents an independent social identity with its own profile, contacts, consent cache, conversations, drafts, attachments, keys, and local storage namespace. Its default switcher presentation is profile name and avatar; protocol identifiers stay in details views.
+- An inbox entry represents an independent social identity with its own profile, contacts, consent cache, conversations, attachments, keys, local storage namespace, and current memory-only composer draft. Drafts are not persisted across reloads. Its default switcher presentation is profile name and avatar; protocol identifiers stay in details views.
 - Only the selected inbox owns a live XMTP client and performs conversation, message, profile, contact, or consent sync. Switching must completely close the current client and database handles before opening the selected inbox.
 - The registry supports Create new inbox, Import keyfile, and Add this device to existing inbox. Import loads the inbox resolved by the exact imported key. If that inbox is already in the registry, report "This inbox is already loaded" and make no state change.
 - An imported account key that has no XMTP identity update may register its own new inbox. A registered imported key must resolve to its existing inbox and must not be reassigned as part of import.
@@ -126,6 +126,24 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - Wallet signatures authorize XMTP identity and installation changes. The wallet is not required for normal sends after the fresh local key is associated.
 - Explicit wallet selections resolve only to their matching connector; an unavailable connector fails visibly. EOA/SCW bytecode inspection is bounded and remains the default. When every inspection RPC fails, the user may explicitly identify the signer as a regular wallet or smart account; an explicit smart-account choice is rejected unless the connector supplied a valid chain ID.
 - Passphrase, passkey, and vault-lock controls are hidden until Converge implements real encryption-at-rest and recoverable unlock behavior.
+
+### Message Retention And Deletion
+
+- `src/lib/message-retention-policy.ts` is the single policy source: four weeks is exactly 28 days, and the same duration is converted to nanoseconds for XMTP group creation options.
+- Local retention is authoritative for Converge's decrypted data. Authentication prunes the selected namespace before the inbox UI renders; the app router independently schedules single-flight sweeps of every loaded inbox at open, hourly, and visible-tab resume without changing the active namespace. Every inbound/backfill handler rejects rows at or beyond the cutoff before persisting messages or attachment descriptors.
+- `DexieDriver.deleteMessages()` is the only cascade primitive for manual deletion, cutoff sweeps, and XMTP deletion-stream events. One transaction deletes message rows, attachment metadata, plaintext bytes, encrypted remote descriptors, clears dangling read references, bounds unread state, and recomputes the newest conversation preview/ID/sender so deleted plaintext cannot survive in chat-list metadata.
+- New user-visible single-peer and multi-member MLS groups receive `messageDisappearingSettings` with a 28-day interval at creation. Existing groups are not mutated retroactively because the setting is shared, permissioned conversation state. Self/profile and invite-control DMs keep their specialized protocol behavior.
+- The Browser SDK does not expose arbitrary per-message OPFS deletion for legacy/unconfigured conversations. Routine retention and Full Sync must never delete the active OPFS database; whole-database deletion remains restricted to explicit Burn Inbox or Clear All Browser Data flows.
+- Retention catches up on the next app open after a browser was closed. No client can guarantee deletion from peers, other devices, screenshots/exports, remote infrastructure, or Thirdweb/IPFS ciphertext.
+
+### XMTP Connection And Sync Lifecycle
+
+- Connect, disconnect, provisioning, revocation, manual conversation sync, and full-history sync operations are serialized through one lifecycle queue. A disconnect waits for an in-flight connect or sync rather than closing its worker/database underneath it; a later disconnect cannot be swallowed by an earlier one when a connect sits between them.
+- Reusing a ready same-signer client verifies the expected inbox and installation, restarts missing message/deletion streams, and restarts background discovery. Background repair is lifecycle-serialized and generation-bound, so old work cannot attach a stream to a replacement client.
+- The live message stream and native message-deletion stream are both ended and drained before `Client.close()`. Stream events are scoped to the current local namespace through the shared persistence path.
+- Full Sync is non-destructive: it force-syncs the conversation list, performs a strict retained-history backfill, applies the local retention sweep, and reloads the list. It never disconnects, clears IndexedDB, deletes OPFS, or attempts resume-only registration against a newly created database.
+- Inbox-state management reads fail closed. Timeouts, cooldowns, or empty network responses surface an error instead of presenting a fabricated zero-installation state.
+- There is no durable outbound retry queue. Text/reply/group operations therefore fail visibly when disconnected or rejected instead of returning local-only XMTP-shaped objects that could remain pending forever.
 
 ## Convos XMTP Interop
 

@@ -86,6 +86,47 @@ describe('XmtpClient address resolver cache', () => {
     };
 
     await expect(xmtp.createConversation(inboxId)).rejects.toThrow('network create failed');
-    expect(createGroup).toHaveBeenCalledWith([inboxId]);
+    expect(createGroup).toHaveBeenCalledWith(
+      [inboxId],
+      {
+        messageDisappearingSettings: {
+          fromNs: expect.any(BigInt),
+          inNs: 2_419_200_000_000_000n,
+        },
+      },
+    );
+  });
+
+  it('applies four-week disappearing messages to new multi-member groups', async () => {
+    const xmtp = new XmtpClient();
+    const group = { id: 'group-1', createdAtNs: 1_000_000n };
+    const createGroup = vi.fn(async () => group);
+    (xmtp as unknown as { client: unknown }).client = {
+      inboxId: 'self-inbox',
+      conversations: { createGroup },
+    };
+    (
+      xmtp as unknown as {
+        ensureConvosGroupProfilePublished: () => Promise<void>;
+        sendConvosProfileSnapshot: () => Promise<void>;
+      }
+    ).ensureConvosGroupProfilePublished = vi.fn(async () => undefined);
+    (
+      xmtp as unknown as {
+        sendConvosProfileSnapshot: () => Promise<void>;
+      }
+    ).sendConvosProfileSnapshot = vi.fn(async () => undefined);
+
+    await xmtp.createGroupConversation([inboxId]);
+
+    expect(createGroup).toHaveBeenCalledWith(
+      [inboxId],
+      {
+        messageDisappearingSettings: {
+          fromNs: expect.any(BigInt),
+          inNs: 2_419_200_000_000_000n,
+        },
+      },
+    );
   });
 });

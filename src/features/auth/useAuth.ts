@@ -53,6 +53,7 @@ import {
   ethereumAddressesEqual,
   requireEthereumAddress,
 } from '@/lib/utils/ethereum';
+import { getMessageRetentionCutoff } from '@/lib/message-retention-policy';
 
 export function useAuth() {
   const authStore = useAuthStore();
@@ -638,6 +639,9 @@ export function useAuth() {
         identity = { ...identity, inboxId: normalizedIdentityInboxId } as Identity;
       }
 
+      // Repair message previews and attachment rows before authenticated UI can
+      // render stale content from the selected inbox.
+      await storage.pruneMessages(getMessageRetentionCutoff());
       const secrets = await storage.getVaultSecrets();
 
       setIdentity(identity);

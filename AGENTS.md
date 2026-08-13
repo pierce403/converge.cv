@@ -78,6 +78,7 @@ read the same source of truth.
 - Future Farcaster Mini App or other XMTP alert delivery should reuse the app-scoped logical listener model through a separate authenticated app/delivery-adapter contract. Never enroll another app through Converge's public compatibility route or expose listener credentials to the browser.
 - Notification clicks open or focus Converge without automatically switching inboxes. The target inbox remains marked with an approximate activity dot until the user selects it.
 - Inbound RemoteAttachments are descriptor-first: receipt/history sync must never contact the attachment host. Only an XMTP-allowed conversation can fetch after a coalesced preferences sync inside the download slot; trusted hosts auto-load only for visible bubbles, unknown hosts require a hostname-labelled click, and every fetched payload must pass the bounded HTTPS/decrypt/static-raster policy documented in `FEATURES.md`. Attachment Accept and conversation Block/Unblock publish XMTP consent. Keep Thirdweb as the outbound ciphertext host until a separate hosting feature is requested.
+- User-visible messages default to four-week retention. Apply the 28-day cutoff before every local ingest/backfill write, cascade message/attachment/descriptor deletion transactionally, and repair conversation previews/read references. New user-visible groups request the matching XMTP disappearing setting; do not silently change existing shared conversation settings or apply it to self/profile/invite-control DMs. Routine retention and Full Sync must never delete an active XMTP OPFS database.
 
 `FEATURES.md` contains the shipped user-facing contract. `ARCHITECTURE.md` is the canonical technical implementation contract after context compaction.
 
@@ -256,6 +257,8 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - GitHub CI, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
 - Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
 - Browser push setup resolves the exact root service-worker registration and waits for that registration to activate instead of trusting the one-shot `navigator.serviceWorker.ready` result. It validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. If origin-specific root registration state remains unusable after a VAPID rotation, Converge retries on a key-versioned `/__converge-push/<key-version>/` recovery scope without clearing IndexedDB, OPFS, keys, or messages. Provider failures explicitly say that no subscription or inbox data was sent to vapid.party; the public-key GET may already have succeeded. Settings and Debug retain inline results instead of push setup alerts.
+- Four-week local message retention runs before inbox render, then sweeps every loaded inbox hourly and on visible-tab resume without switching the active namespace; XMTP native deletion events share the same Dexie cascade. New visible groups request matching protocol expiry, while existing shared settings remain unchanged.
+- XMTP connect/disconnect/manual-sync operations are serialized; a reused client restarts missing streams, and Full Sync is a strict, non-destructive sync that never clears IndexedDB or OPFS.
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
 - Update notification system with hourly checks (currently disabled for debugging)
 - Local identities remain available by default; no lock/vault UI is exposed
@@ -554,8 +557,27 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-07-14 (app version 0.5.6 + receipt-scoped XMTP push diagnostics)
+**Last Updated**: 2026-08-12 (app version 0.5.7 + message retention, connection lifecycle, and startup-size audit)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-08-12)
+
+### Four-Week Retention
+- Local messages now expire at 28 days across initial inbox open, every-loaded-inbox hourly/visibility sweeps, storage reads/search, and every live/history ingest boundary. Deletion cascades through attachment metadata/bytes/descriptors and repairs conversation previews/read references in one transaction.
+- New user-visible Convos-style groups request XMTP's matching disappearing-message duration, and Converge consumes the SDK deletion stream. Existing shared settings and specialized self/profile/invite DMs are not mutated.
+- Retention catches up when the app next opens; it cannot erase peer/device copies, screenshots/exports, infrastructure copies, or Thirdweb/IPFS ciphertext.
+
+### XMTP Connection Audit
+- Connect, disconnect, provisioning, revocation, manual sync, and full history sync are lifecycle-serialized. Ready-client reuse restores missing streams/background discovery, and generation-bound health work cannot attach an old stream to a replacement client.
+- Replaced destructive Resync All with strict, non-destructive Full Sync. Routine sync no longer disconnects or deletes the active OPFS database, which previously could create a different installation and then fail resume-only reconnect after local data had already been erased.
+- Installation-state reads now fail closed instead of showing a fabricated zero-installation state after a network/cooldown error.
+- Removed the fake local-only outbound fallback: without a durable retry worker, disconnected text/reply/group actions fail visibly and keep optimistic messages in a failed state instead of claiming they were queued.
+
+### Code-Size Audit
+- Non-core routes and QR libraries are loaded on demand. The integrated initial entry decreased from about 578 KiB to 465 KiB gzip; two duplicate 33,154-byte icons were removed.
+- Removed unreferenced modal/identity/service-worker bridge utilities, unused XMTP wrapper stubs, obsolete coverage tooling, captured debug HTML, the Vite placeholder, and an unauthenticated standalone cache-wipe page. Destructive browser-data removal remains inside the authenticated Settings flow.
+- Keep the next refactor focused on shared decoded-message classification and smaller XMTP/push/UI modules. Do not force dependency overrides merely to collapse transitive cryptography or wallet SDK versions.
 
 
 ## Latest Changes (2026-07-14)
@@ -823,7 +845,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - Removed client-side vapid.party API-key usage from the Converge push path. Converge now only uses public `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`.
 - `Enable notifications` now registers/reuses `/sw.js`, requests notification permission, creates/reuses a browser `PushSubscription`, gathers the current XMTP `inboxId` and `installationId`, normalizes SDK-exposed `conversations.hmacKeys()` topic keys, and posts a versioned XMTP registration payload directly to vapid.party.
 - `public/sw.js` now treats push payloads as metadata only, shows generic "New encrypted message" fallback copy, preserves same-origin click URLs, and focuses/opens Converge for local XMTP sync/decryption.
-- The stale `src/lib/sw-bridge` push helper is now a compatibility shim over `@/lib/push` instead of carrying a placeholder VAPID key.
+- Historical: the stale `src/lib/sw-bridge` helper briefly became a compatibility shim over `@/lib/push`; version 0.5.7 removes the unused shim entirely.
 - Debug push tooling no longer attempts client-side `/send`; real push tests must be initiated by the relay/backend side.
 - Historical limitation: no live end-to-end push delivery was claimed in this 2026-07-09 pass, when public vapid.party source still documented only generic API-key endpoints. See the 2026-07-12 entry for the current contract and remaining listener requirement.
 
@@ -1261,7 +1283,8 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
   1. Use the existing connected client if available.
   2. If creating a temporary client is necessary, create a **fresh ephemeral DB** (with a random name) and `disableAutoRegister: true`. This allows the client to start up, sign the key bundle, and act as a manager/revoker without the network interpreting it as a new installation attempt (which would fail at 10/10). Trying to reuse the existing DB path when it might correspond to an unregistered 11th installation was still causing the limit error.
 
-### Resync All Fix
+### Historical Resync All Fix (superseded in 0.5.7)
+- Do not restore the destructive clear-and-reconnect implementation described below. Version 0.5.7 replaces Resync All with non-destructive Full Sync because clearing the active OPFS database can create a new installation that resume-only reconnect must reject.
 - **Problem**: "Resync All" button cleared local messages but failed to restore them from the network. After the fix to call `conv.sync()`, conversations were still not appearing.
 - **Root Causes**: 
   1. The code was calling `client.conversations.syncAll()`, which does not exist in the JS SDK. This likely threw an error or did nothing, preventing the message fetch loop from running.
@@ -1296,7 +1319,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 - `MessageBubble` (`src/features/messages/MessageBubble.tsx`) now renders a compact “Replying to …” header above the reply body, resolving the quoted snippet from the target message when available and falling back gracefully if the original message is missing.
 
 ### Testing / Coverage (Local Note)
-- `pnpm test:coverage` now runs Vitest with the `v8` coverage provider (`@vitest/coverage-v8`) and writes standard reports to `coverage/` (HTML at `coverage/index.html`, summary JSON at `coverage/coverage-summary.json`). The old `scripts/report-v8-coverage.mjs` flow is no longer needed.
+- `pnpm test:coverage` runs Vitest with the `v8` coverage provider (`@vitest/coverage-v8`) and writes standard reports to `coverage/` (HTML at `coverage/index.html`, summary JSON at `coverage/coverage-summary.json`). Version 0.5.7 removes the obsolete `scripts/report-v8-coverage.mjs` flow.
 - Coverage scope is focused on core logic: `src/lib/**`, message bubble rendering, conversations hook, HandleXmtpProtocol, and config files. Large UI shells (`components/**`, most `features/messages/**`, XMTP client, Dexie driver, wagmi config/hooks, etc.) are excluded via `vitest.config.ts` to keep percentages meaningful.
 
 ### E2E Testing with Playwright (2025-12-09)

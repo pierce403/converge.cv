@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import jsQR from 'jsqr';
 
 interface QRScannerProps {
   onScan: (data: string) => void;
@@ -15,24 +14,39 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
   useEffect(() => {
     let animationFrame: number;
     let mounted = true;
+    let decodeQrCode: typeof import('jsqr').default | null = null;
 
     const startCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
-            facingMode: 'environment',
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-        });
-        
+        const [decoderResult, streamResult] = await Promise.allSettled([
+          import('jsqr'),
+          navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: 'environment',
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          }),
+        ]);
+
+        if (streamResult.status === 'rejected') {
+          throw streamResult.reason;
+        }
+        if (decoderResult.status === 'rejected') {
+          streamResult.value.getTracks().forEach((track) => track.stop());
+          throw decoderResult.reason;
+        }
+
+        const stream = streamResult.value;
+        decodeQrCode = decoderResult.value.default;
+
         if (!mounted) {
-          stream.getTracks().forEach(track => track.stop());
+          stream.getTracks().forEach((track) => track.stop());
           return;
         }
-        
+
         streamRef.current = stream;
-        
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
@@ -40,8 +54,12 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
           scanQRCode();
         }
       } catch (err) {
-        console.error('Camera access error:', err);
-        setError('Could not access camera. Please check permissions.');
+        console.error('QR scanner startup error:', err);
+        if (mounted) {
+          setError(
+            'Could not start the QR scanner. Please check camera permissions and your connection.'
+          );
+        }
       }
     };
 
@@ -70,7 +88,7 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
       // Scan for QR code
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      const code = decodeQrCode?.(imageData.data, imageData.width, imageData.height, {
         inversionAttempts: 'dontInvert',
       });
 
@@ -113,7 +131,12 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
         className="absolute top-4 right-4 z-10 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white"
       >
         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M6 18L18 6M6 6l12 12"
+          />
         </svg>
       </button>
 
@@ -126,13 +149,7 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
       </div>
 
       {/* Video element */}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-cover"
-        playsInline
-        muted
-        autoPlay
-      />
+      <video ref={videoRef} className="w-full h-full object-cover" playsInline muted autoPlay />
 
       {/* Hidden canvas for processing */}
       <canvas ref={canvasRef} className="hidden" />
@@ -156,4 +173,3 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
     </div>
   );
 }
-

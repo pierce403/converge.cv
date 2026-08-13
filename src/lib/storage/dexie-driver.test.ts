@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Conversation, Identity } from '@/types';
+import type { Conversation, Identity, Message } from '@/types';
 import { DexieDriver } from './dexie-driver';
 
 const conversation = (id: string, lastMessageAt: number): Conversation => ({
@@ -176,6 +176,353 @@ describe('DexieDriver targeted XMTP cleanup', () => {
         Reflect.deleteProperty(navigator, 'storage');
       }
     }
+  });
+});
+
+describe('DexieDriver message deletion', () => {
+  const message = (overrides: Partial<Message>): Message => ({
+    id: 'deleted-message',
+    conversationId: 'conversation',
+    sender: 'peer',
+    sentAt: 20,
+    type: 'text',
+    body: 'plaintext that must disappear',
+    status: 'delivered',
+    reactions: [],
+    ...overrides,
+  });
+
+  it('cascades attachment data and repairs plaintext conversation previews', async () => {
+    const deleted = message({});
+    const newest = message({ id: 'newest-remaining', sentAt: 10, body: 'safe preview' });
+    const storedConversation: Conversation = {
+      ...conversation('conversation', deleted.sentAt),
+      lastMessageId: deleted.id,
+      lastMessagePreview: deleted.body,
+      lastMessageSender: deleted.sender,
+      lastReadAt: 5,
+      lastReadMessageId: deleted.id,
+      unreadCount: 3,
+    };
+    const messages = {
+      bulkGet: vi.fn(async () => [deleted]),
+      bulkDelete: vi.fn(async () => undefined),
+      where: vi.fn(() => ({
+        between: vi.fn(() => ({
+          last: vi.fn(async () => newest),
+          filter: vi.fn((predicate: (candidate: Message) => boolean) => ({
+            count: vi.fn(async () =>
+              [
+                newest,
+                message({ id: 'self', sender: 'self-address', sentAt: 11 }),
+                message({ id: 'system', type: 'system', sentAt: 12 }),
+                message({
+                  id: 'invite',
+                  type: 'system',
+                  sentAt: 13,
+                  metadata: {
+                    invite: {
+                      kind: 'invite-request',
+                      inviteCode: 'invite-code',
+                      payload: {
+                        conversationToken: 'conversation-token',
+                        creatorInboxId: 'creator-inbox',
+                      },
+                    },
+                  },
+                }),
+              ].filter(predicate).length
+            ),
+          })),
+        })),
+      })),
+    };
+    const attachments = {
+      where: vi.fn(() => ({
+        anyOf: vi.fn(() => ({
+          toArray: vi.fn(async () => [{ id: 'attachment', messageId: deleted.id }]),
+        })),
+      })),
+      bulkDelete: vi.fn(async () => undefined),
+    };
+    const attachmentData = { bulkDelete: vi.fn(async () => undefined) };
+    const remoteAttachments = {
+      where: vi.fn(() => ({
+        anyOf: vi.fn(() => ({
+          toArray: vi.fn(async () => [{ id: 'descriptor', messageId: deleted.id }]),
+        })),
+      })),
+      bulkDelete: vi.fn(async () => undefined),
+    };
+    const conversations = {
+      get: vi.fn(async () => storedConversation),
+      put: vi.fn(async () => undefined),
+    };
+    const dataDb = {
+      conversations,
+      messages,
+      attachments,
+      attachmentData,
+      remoteAttachments,
+      transaction: vi.fn(async (...args: unknown[]) => {
+        const callback = args[args.length - 1] as () => Promise<unknown>;
+        return await callback();
+      }),
+    };
+    const driver = new DexieDriver('self-inbox');
+    (driver as unknown as { dataDb: typeof dataDb }).dataDb = dataDb;
+    (
+      driver as unknown as {
+        globalDb: { identity: { toArray: () => Promise<Identity[]> } };
+      }
+    ).globalDb = {
+      identity: {
+        toArray: vi.fn(async () => [
+          {
+            address: 'self-address',
+            publicKey: 'self-public-key',
+            createdAt: 1,
+            inboxId: 'self-inbox',
+          },
+        ]),
+      },
+    };
+
+    const result = await driver.deleteMessage(deleted.id);
+
+    expect(messages.bulkDelete).toHaveBeenCalledWith([deleted.id]);
+    expect(attachments.bulkDelete).toHaveBeenCalledWith(['attachment']);
+    expect(attachmentData.bulkDelete).toHaveBeenCalledWith(['attachment', 'descriptor']);
+    expect(remoteAttachments.bulkDelete).toHaveBeenCalledWith(['attachment', 'descriptor']);
+    expect(conversations.put).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastMessageId: newest.id,
+        lastMessagePreview: newest.body,
+        lastMessageSender: newest.sender,
+        lastReadMessageId: undefined,
+        unreadCount: 2,
+      }),
+    );
+    expect(result.deletedMessageIds).toEqual([deleted.id]);
+    expect(result.updatedConversations[0].lastMessagePreview).toBe(newest.body);
+  });
+
+  it('prunes both cutoff and native-expiry rows through the shared cascade', async () => {
+    const cutoffMessage = message({ id: 'cutoff', sentAt: 100 });
+    const nativeExpired = message({ id: 'native-expired', sentAt: 101, expiresAt: 200 });
+    const olderCollection = {
+      belowOrEqual: vi.fn(() => ({ toArray: vi.fn(async () => [cutoffMessage]) })),
+    };
+    const messages = {
+      where: vi.fn(() => olderCollection),
+      filter: vi.fn(() => ({ toArray: vi.fn(async () => [nativeExpired]) })),
+    };
+    const driver = new DexieDriver('message-prune-test');
+    (driver as unknown as { dataDb: { messages: typeof messages } }).dataDb = { messages };
+    const deleteMessages = vi.spyOn(driver, 'deleteMessages').mockResolvedValue({
+      deletedMessageIds: ['cutoff', 'native-expired'],
+      updatedConversations: [],
+    });
+    const deleteOrphanedAttachmentRows = vi.fn(async () => undefined);
+    (
+      driver as unknown as {
+        deleteOrphanedAttachmentRows: () => Promise<void>;
+      }
+    ).deleteOrphanedAttachmentRows = deleteOrphanedAttachmentRows;
+
+    await driver.pruneMessages(100, 200);
+
+    expect(olderCollection.belowOrEqual).toHaveBeenCalledWith(100);
+    expect(deleteMessages).toHaveBeenCalledWith(['cutoff', 'native-expired']);
+    expect(deleteOrphanedAttachmentRows).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes legacy attachment orphans during every retention sweep', async () => {
+    const messages = {
+      where: vi.fn(() => ({ belowOrEqual: vi.fn(() => ({ toArray: vi.fn(async () => []) })) })),
+      filter: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+      toCollection: vi.fn(() => ({ primaryKeys: vi.fn(async () => ['live-message']) })),
+    };
+    const attachments = {
+      toArray: vi.fn(async () => [
+        { id: 'live-attachment', messageId: 'live-message' },
+        { id: 'orphan-attachment', messageId: 'missing-message' },
+      ]),
+      bulkDelete: vi.fn(async () => undefined),
+    };
+    const remoteAttachments = {
+      toArray: vi.fn(async () => [
+        { id: 'live-attachment', messageId: 'live-message' },
+        { id: 'orphan-envelope', messageId: 'missing-message' },
+        { id: 'descriptor-without-metadata', messageId: 'live-message' },
+      ]),
+      bulkDelete: vi.fn(async () => undefined),
+    };
+    const attachmentData = {
+      toCollection: vi.fn(() => ({
+        primaryKeys: vi.fn(async () => [
+          'live-attachment',
+          'orphan-attachment',
+          'orphan-envelope',
+          'descriptor-without-metadata',
+          'unreferenced-data',
+        ]),
+      })),
+      bulkDelete: vi.fn(async () => undefined),
+    };
+    const dataDb = {
+      messages,
+      attachments,
+      attachmentData,
+      remoteAttachments,
+      transaction: vi.fn(async (...args: unknown[]) => {
+        const callback = args[args.length - 1] as () => Promise<unknown>;
+        return await callback();
+      }),
+    };
+    const driver = new DexieDriver('orphan-retention-test');
+    (driver as unknown as { dataDb: typeof dataDb }).dataDb = dataDb;
+    vi.spyOn(driver, 'deleteMessages').mockResolvedValue({
+      deletedMessageIds: [],
+      updatedConversations: [],
+    });
+
+    await driver.pruneMessages(100, 200);
+
+    expect(attachments.bulkDelete).toHaveBeenCalledWith(['orphan-attachment']);
+    expect(remoteAttachments.bulkDelete).toHaveBeenCalledWith([
+      'orphan-envelope',
+      'descriptor-without-metadata',
+    ]);
+    expect(attachmentData.bulkDelete).toHaveBeenCalledWith([
+      'orphan-attachment',
+      'orphan-envelope',
+      'descriptor-without-metadata',
+      'unreferenced-data',
+    ]);
+  });
+});
+
+describe('DexieDriver inbound attachment persistence', () => {
+  const receivedMessage = (sentAt = Date.now()): Message => ({
+    id: 'received-message',
+    conversationId: 'conversation',
+    sender: 'peer',
+    sentAt,
+    type: 'attachment',
+    body: 'photo.png',
+    attachmentId: 'received-attachment',
+    status: 'delivered',
+    reactions: [],
+  });
+
+  const receivedAttachment = {
+    id: 'received-attachment',
+    messageId: 'received-message',
+    filename: 'photo.png',
+    mimeType: 'image/png',
+    size: 3,
+    cacheState: 'cached' as const,
+    cachedBytes: 3,
+  };
+
+  it('writes the message and every attachment row in one transaction', async () => {
+    const message = receivedMessage();
+    const data = new ArrayBuffer(3);
+    const envelope = {
+      id: receivedAttachment.id,
+      messageId: message.id,
+      conversationId: message.conversationId,
+      url: 'https://example.ipfscdn.io/photo.enc',
+      contentDigest: 'digest',
+      secret: new Uint8Array(32),
+      salt: new Uint8Array(32),
+      nonce: new Uint8Array(12),
+      scheme: 'https',
+      contentLength: 3,
+    };
+    const messages = { put: vi.fn(async () => undefined) };
+    const attachments = { put: vi.fn(async () => undefined) };
+    const attachmentData = {
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const remoteAttachments = { put: vi.fn(async () => undefined) };
+    const conversations = {
+      get: vi.fn(async () => conversation('conversation', 0)),
+      update: vi.fn(async () => undefined),
+    };
+    const dataDb = {
+      messages,
+      attachments,
+      attachmentData,
+      remoteAttachments,
+      conversations,
+      transaction: vi.fn(async (...args: unknown[]) => {
+        const callback = args[args.length - 1] as () => Promise<unknown>;
+        return await callback();
+      }),
+    };
+    const driver = new DexieDriver('received-attachment-test');
+    (driver as unknown as { dataDb: typeof dataDb }).dataDb = dataDb;
+
+    const persisted = await driver.putReceivedAttachment({
+      message,
+      attachment: receivedAttachment,
+      data,
+      remoteEnvelope: envelope,
+    });
+
+    expect(persisted).toBe(true);
+    expect(dataDb.transaction).toHaveBeenCalledTimes(1);
+    expect(messages.put).toHaveBeenCalledWith(message);
+    expect(attachments.put).toHaveBeenCalledWith(receivedAttachment);
+    expect(attachmentData.put).toHaveBeenCalledWith({ id: receivedAttachment.id, data });
+    expect(remoteAttachments.put).toHaveBeenCalledWith(envelope);
+    expect(conversations.update).toHaveBeenCalledWith(
+      message.conversationId,
+      expect.objectContaining({ lastMessageId: message.id }),
+    );
+  });
+
+  it('writes no attachment rows when the message expires before the transaction runs', async () => {
+    const message = receivedMessage(Date.now() - 29 * 24 * 60 * 60 * 1_000);
+    const messages = { put: vi.fn(async () => undefined) };
+    const attachments = { put: vi.fn(async () => undefined) };
+    const attachmentData = {
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const remoteAttachments = { put: vi.fn(async () => undefined) };
+    const conversations = {
+      get: vi.fn(async () => undefined),
+      update: vi.fn(async () => undefined),
+    };
+    const dataDb = {
+      messages,
+      attachments,
+      attachmentData,
+      remoteAttachments,
+      conversations,
+      transaction: vi.fn(async (...args: unknown[]) => {
+        const callback = args[args.length - 1] as () => Promise<unknown>;
+        return await callback();
+      }),
+    };
+    const driver = new DexieDriver('expired-received-attachment-test');
+    (driver as unknown as { dataDb: typeof dataDb }).dataDb = dataDb;
+
+    const persisted = await driver.putReceivedAttachment({
+      message,
+      attachment: receivedAttachment,
+      data: new ArrayBuffer(3),
+    });
+
+    expect(persisted).toBe(false);
+    expect(messages.put).not.toHaveBeenCalled();
+    expect(attachments.put).not.toHaveBeenCalled();
+    expect(attachmentData.put).not.toHaveBeenCalled();
+    expect(remoteAttachments.put).not.toHaveBeenCalled();
   });
 });
 

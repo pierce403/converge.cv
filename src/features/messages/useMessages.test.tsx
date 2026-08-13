@@ -36,14 +36,16 @@ const mockStorage = {
   ),
   pruneAttachmentCache: vi.fn(async () => ({ usageBytes: 0, evictedIds: [] })),
   cacheRemoteAttachment: vi.fn(async () => ({ usageBytes: 0, evictedIds: [] })),
+  putReceivedAttachment: vi.fn(async () => true),
   reconcilePublishedAttachment: vi.fn(async () => undefined),
   deleteAttachment: vi.fn(async () => undefined),
   updateMessageStatus: vi.fn(async () => undefined),
-  deleteMessage: vi.fn(async () => undefined),
+  deleteMessage: vi.fn(async () => ({ deletedMessageIds: [], updatedConversations: [] })),
 };
 
 vi.mock('@/lib/storage', () => ({
   getStorage: vi.fn(async () => mockStorage),
+  getStorageNamespace: vi.fn(() => 'test-inbox'),
 }));
 
 vi.mock('@/lib/xmtp', () => ({
@@ -173,6 +175,40 @@ describe('useMessages resolver usage', () => {
       '0x1111111111111111111111111111111111111111',
       { context: 'useMessages:ensureContactForConversation' },
     );
+  });
+
+  it('rejects messages older than four weeks before persisting attachment data', async () => {
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.receiveMessage('c1', {
+        id: 'expired-attachment',
+        conversationId: 'c1',
+        senderAddress: 'peer-inbox',
+        content: 'old.png',
+        sentAt: Date.now() - 29 * 24 * 60 * 60 * 1_000,
+        remoteAttachment: {
+          url: 'https://example.ipfscdn.io/old.enc',
+          contentDigest: 'digest',
+          secret: new Uint8Array(32),
+          salt: new Uint8Array(32),
+          nonce: new Uint8Array(12),
+          scheme: 'https',
+          contentLength: 128,
+          filename: 'old.png',
+        },
+      });
+    });
+
+    expect(mockStorage.putRemoteAttachmentEnvelope).not.toHaveBeenCalled();
+    expect(mockStorage.putAttachmentMetadata).not.toHaveBeenCalled();
+    expect(mockStorage.putReceivedAttachment).not.toHaveBeenCalled();
+    expect(mockStorage.putMessage).not.toHaveBeenCalled();
+    expect(useMessageStore.getState().messagesByConversation.c1).toBeUndefined();
+    expect(useConversationStore.getState().conversations[0].unreadCount).toBe(0);
   });
 
   it('refuses to send from local-only fallback conversations', async () => {
@@ -447,20 +483,55 @@ describe('useMessages resolver usage', () => {
 
     expect(xmtpMock.loadRemoteAttachment).not.toHaveBeenCalled();
     expect(mockStorage.putAttachment).not.toHaveBeenCalled();
-    expect(mockStorage.putAttachmentMetadata).toHaveBeenCalledWith(
+    expect(mockStorage.putReceivedAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: 'att_incoming-attachment-1',
-        cacheState: 'metadata',
-        sourceHost: 'example.ipfscdn.io',
+        message: expect.objectContaining({ id: 'incoming-attachment-1' }),
+        attachment: expect.objectContaining({
+          id: 'att_incoming-attachment-1',
+          cacheState: 'metadata',
+          sourceHost: 'example.ipfscdn.io',
+        }),
+        remoteEnvelope: expect.objectContaining({
+          id: 'att_incoming-attachment-1',
+          conversationId: 'c1',
+          url: remoteAttachment.url,
+        }),
       }),
     );
-    expect(mockStorage.putRemoteAttachmentEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'att_incoming-attachment-1',
+  });
+
+  it('does not expose an inbound attachment when its atomic storage write fails', async () => {
+    mockStorage.putReceivedAttachment.mockRejectedValueOnce(new Error('IndexedDB write failed'));
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.receiveMessage('c1', {
+        id: 'failed-incoming-attachment',
         conversationId: 'c1',
-        url: remoteAttachment.url,
-      }),
-    );
+        senderAddress: 'peer-inbox',
+        content: 'photo.png',
+        remoteAttachment: {
+          url: 'https://example.ipfscdn.io/photo.enc',
+          contentDigest: 'digest',
+          secret: new Uint8Array(32).fill(1),
+          salt: new Uint8Array(32).fill(2),
+          nonce: new Uint8Array(12).fill(3),
+          scheme: 'https',
+          contentLength: 512,
+          filename: 'photo.png',
+        },
+        sentAt: Date.now(),
+      });
+    });
+
+    expect(mockStorage.putReceivedAttachment).toHaveBeenCalledTimes(1);
+    expect(mockStorage.putAttachmentMetadata).not.toHaveBeenCalled();
+    expect(mockStorage.putRemoteAttachmentEnvelope).not.toHaveBeenCalled();
+    expect(useMessageStore.getState().messagesByConversation.c1).toBeUndefined();
+    expect(useConversationStore.getState().conversations[0].unreadCount).toBe(0);
   });
 
   it('makes a validated legacy cache evictable only after restoring its envelope', async () => {
@@ -501,15 +572,15 @@ describe('useMessages resolver usage', () => {
       });
     });
 
-    expect(mockStorage.putRemoteAttachmentEnvelope.mock.invocationCallOrder[0]).toBeLessThan(
-      mockStorage.putAttachmentMetadata.mock.invocationCallOrder[0],
-    );
-    expect(mockStorage.putAttachmentMetadata).toHaveBeenCalledWith(
+    expect(mockStorage.putReceivedAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: 'att_legacy-attachment',
-        cacheState: 'cached',
-        cachedBytes: legacyBytes.byteLength,
-        evictable: true,
+        attachment: expect.objectContaining({
+          id: 'att_legacy-attachment',
+          cacheState: 'cached',
+          cachedBytes: legacyBytes.byteLength,
+          evictable: true,
+        }),
+        remoteEnvelope: expect.objectContaining({ id: 'att_legacy-attachment' }),
       }),
     );
   });

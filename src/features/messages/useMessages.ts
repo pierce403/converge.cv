@@ -6,8 +6,9 @@ import { useCallback } from 'react';
 import { ConsentState, type RemoteAttachment } from '@xmtp/browser-sdk';
 import { useMessageStore, useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { getStorage } from '@/lib/storage';
+import { deleteLocalMessage } from '@/lib/message-retention';
+import { shouldRetainMessage } from '@/lib/message-retention-policy';
 import { getXmtpClient, type XmtpMessage } from '@/lib/xmtp';
-import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import {
   ALLOWED_INCOMING_IMAGE_MIME_TYPES,
   classifyTrustedAttachmentHost,
@@ -523,7 +524,7 @@ export function useMessages() {
 
           const resolvedId = sentMessage.id || message.id;
           const resolvedSentAt = sentMessage.sentAt ?? message.sentAt;
-          const finalStatus: Message['status'] = sentMessage.isLocalFallback ? 'pending' : 'sent';
+          const finalStatus: Message['status'] = 'sent';
           const finalMessage: Message = {
             ...message,
             id: resolvedId,
@@ -713,7 +714,7 @@ export function useMessages() {
 
         const resolvedId = sentMessage.id || message.id;
         const resolvedSentAt = sentMessage.sentAt ?? message.sentAt;
-        const finalStatus: Message['status'] = sentMessage.isLocalFallback ? 'pending' : 'sent';
+        const finalStatus: Message['status'] = 'sent';
         const finalAttachmentId = `att_${resolvedId}`;
         const finalMessage: Message = {
           ...message,
@@ -941,22 +942,27 @@ export function useMessages() {
       options?: { isHistory?: boolean }
     ) => {
       try {
+        if (!shouldRetainMessage(xmtpMessage)) {
+          return;
+        }
         const isHistory = options?.isHistory ?? false;
         const storage = await getStorage();
         const remoteAttachment = xmtpMessage.remoteAttachment;
         const inlineAttachment = xmtpMessage.attachment;
         const attachmentId = `att_${xmtpMessage.id}`;
+        let preparedRemoteMetadata: StoredAttachment | undefined;
+        let preparedRemoteEnvelope: StoredRemoteAttachmentEnvelope | undefined;
+        let evictRemoteData = false;
 
-        // Persist only the encrypted descriptor on receipt. This deliberately
-        // happens before de-duplication so older metadata-only rows can repair
-        // themselves when XMTP returns the same message again.
+        // Prepare the encrypted descriptor before de-duplication so a replay can
+        // repair an older metadata-only row. Persistence happens later in one
+        // transaction with the parent message, preventing attachment orphans.
         if (remoteAttachment) {
           try {
             const descriptor = inspectRemoteAttachmentDescriptor(remoteAttachment);
             const existingMetadata = await storage.getAttachmentMetadata(attachmentId);
-            let metadata: StoredAttachment;
             if (!existingMetadata) {
-              metadata = {
+              preparedRemoteMetadata = {
                 id: attachmentId,
                 messageId: xmtpMessage.id,
                 filename: remoteAttachment.filename ?? 'Image attachment',
@@ -978,7 +984,7 @@ export function useMessages() {
               const legacyData = existingMetadata.cacheState === undefined
                 ? await storage.getAttachmentData(attachmentId)
                 : undefined;
-              metadata = {
+              preparedRemoteMetadata = {
                 ...existingMetadata,
                 storageRef: remoteAttachment.url,
                 sha256: remoteAttachment.contentDigest,
@@ -1001,43 +1007,48 @@ export function useMessages() {
               };
             }
             if (descriptor.failureReason) {
-              await storage.evictAttachmentData(attachmentId);
-              metadata = {
-                ...metadata,
+              evictRemoteData = true;
+              preparedRemoteMetadata = {
+                ...preparedRemoteMetadata,
                 cacheState: 'blocked',
                 cachedBytes: 0,
                 cachedAt: undefined,
                 evictable: false,
               };
             }
-            await storage.putRemoteAttachmentEnvelope(
-              remoteAttachmentEnvelope(
-                attachmentId,
-                xmtpMessage.id,
-                conversationId,
-                remoteAttachment,
-              )
+            preparedRemoteEnvelope = remoteAttachmentEnvelope(
+              attachmentId,
+              xmtpMessage.id,
+              conversationId,
+              remoteAttachment,
             );
-            await storage.putAttachmentMetadata(metadata);
           } catch (attachmentError) {
-            console.warn('[useMessages] Failed to persist attachment metadata:', attachmentError);
+            console.warn('[useMessages] Failed to prepare attachment metadata:', attachmentError);
           }
         }
 
         const inMemory = messagesByConversation[conversationId] || [];
-        if (inMemory.some((m) => m.id === xmtpMessage.id)) {
-          return;
-        }
+        const alreadyInMemory = inMemory.some((m) => m.id === xmtpMessage.id);
+        let existingMessage: Message | undefined;
         try {
-          const existing = await storage.getMessage(xmtpMessage.id);
-          if (existing) {
-            return;
-          }
+          existingMessage = await storage.getMessage(xmtpMessage.id);
         } catch {
           // ignore storage lookup errors; proceed with processing
         }
+        if (alreadyInMemory || existingMessage) {
+          if (existingMessage && preparedRemoteMetadata) {
+            await storage.putReceivedAttachment({
+              message: existingMessage,
+              attachment: preparedRemoteMetadata,
+              remoteEnvelope: preparedRemoteEnvelope,
+              evictCachedData: evictRemoteData,
+            });
+          }
+          return;
+        }
         if (remoteAttachment || inlineAttachment) {
-          let metadata = await storage.getAttachmentMetadata(attachmentId);
+          let metadata = preparedRemoteMetadata ?? await storage.getAttachmentMetadata(attachmentId);
+          let inlineData: ArrayBuffer | undefined;
 
           if (inlineAttachment && !metadata) {
             try {
@@ -1055,10 +1066,10 @@ export function useMessages() {
                 lastAccessedAt: now,
                 evictable: false,
               };
-              await storage.putAttachment(inlineMetadata, buffer);
               metadata = inlineMetadata;
+              inlineData = buffer;
             } catch (attachmentError) {
-              console.warn('[useMessages] Failed to persist inline attachment:', attachmentError);
+              console.warn('[useMessages] Failed to prepare inline attachment:', attachmentError);
             }
           }
 
@@ -1070,6 +1081,7 @@ export function useMessages() {
             conversationId,
             sender: xmtpMessage.senderAddress,
             sentAt: xmtpMessage.sentAt,
+            expiresAt: xmtpMessage.expiresAt,
             receivedAt: Date.now(),
             type: 'attachment',
             body: attachmentName,
@@ -1079,8 +1091,24 @@ export function useMessages() {
             replyTo: xmtpMessage.replyToId,
           };
 
+          if (metadata) {
+            const persisted = await storage.putReceivedAttachment({
+              message,
+              attachment: metadata,
+              data: inlineData,
+              remoteEnvelope: preparedRemoteEnvelope,
+              evictCachedData: evictRemoteData,
+            });
+            if (!persisted) {
+              return;
+            }
+          } else {
+            // Metadata preparation can fail independently. Keeping the message
+            // preserves a visible, non-downloadable bubble without writing any
+            // attachment row that could outlive its parent.
+            await storage.putMessage(message);
+          }
           addMessage(conversationId, message);
-          await storage.putMessage(message);
 
           const currentLastMessageAt =
             conversations.find((c) => c.id === conversationId)?.lastMessageAt ??
@@ -1100,8 +1128,7 @@ export function useMessages() {
           const senderLower = message.sender?.toLowerCase?.();
           const fromSelf = senderLower && (senderLower === myInbox || senderLower === myAddr);
           if (!fromSelf) {
-            const preserved = isHistory ? getResyncReadStateFor(conversationId) : undefined;
-            const comparisonBase = preserved?.lastReadAt ?? conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;
+            const comparisonBase = conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;
             const shouldIncrement = !isHistory || message.sentAt > comparisonBase;
             if (shouldIncrement) {
               incrementUnread(conversationId);
@@ -1143,6 +1170,7 @@ export function useMessages() {
           conversationId,
           sender: xmtpMessage.senderAddress,
           sentAt: xmtpMessage.sentAt,
+          expiresAt: xmtpMessage.expiresAt,
           receivedAt: Date.now(),
           type: parsedInvite ? 'system' : 'text',
           body: inviteSummary || content,
@@ -1235,8 +1263,7 @@ export function useMessages() {
         // Increment unread if not viewing this conversation
         // (This would be better handled in a global message listener)
         if (!fromSelf) {
-          const preserved = isHistory ? getResyncReadStateFor(conversationId) : undefined;
-          const comparisonBase = preserved?.lastReadAt ?? conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;
+          const comparisonBase = conversations.find((c) => c.id === conversationId)?.lastReadAt ?? 0;
           const shouldIncrement = !isHistory || message.sentAt > comparisonBase;
           if (shouldIncrement) {
             incrementUnread(conversationId);
@@ -1396,14 +1423,12 @@ export function useMessages() {
   const deleteMessage = useCallback(
     async (messageId: string) => {
       try {
-        const storage = await getStorage();
-        await storage.deleteMessage(messageId);
-        removeMessage(messageId);
+        await deleteLocalMessage(messageId);
       } catch (error) {
         console.error('Failed to delete message:', error);
       }
     },
-    [removeMessage]
+    []
   );
 
   return {

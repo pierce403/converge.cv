@@ -5,10 +5,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
-import { useConversationStore, useMessageStore } from '@/lib/stores';
-import { getStorage } from '@/lib/storage';
+import { useMessageStore } from '@/lib/stores';
 import { getXmtpClient } from '@/lib/xmtp';
-import { clearResyncReadState, getResyncReadState, setResyncReadState } from '@/lib/xmtp/resync-state';
+import { runNonDestructiveFullSync } from '@/lib/xmtp/full-sync';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore, useAuthStore } from '@/lib/stores';
@@ -17,20 +16,16 @@ import { ContactCardModal } from '@/components/ContactCardModal';
 import { ConversationDetailsModal } from '@/features/conversations/ConversationDetailsModal';
 import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 import { getConversationPresentation } from '@/lib/utils/conversation-presentation';
-import { useAuth } from '@/features/auth';
 
 export function ChatList() {
-  const { reconnectCurrentIdentity } = useAuth();
-  const { conversations, isLoading } = useConversations();
+  const { conversations, isLoading, loadConversations } = useConversations();
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [detailsConvId, setDetailsConvId] = useState<string | null>(null);
   const [pressTimer, setPressTimer] = useState<number | null>(null);
-  const [isResyncing, setIsResyncing] = useState(false);
+  const [isFullSyncing, setIsFullSyncing] = useState(false);
   type ConversationItem = typeof conversations[number];
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
-  const setConversations = useConversationStore((s) => s.setConversations);
-  const { loadConversations } = useConversations();
   const messagesByConversation = useMessageStore((s) => s.messagesByConversation);
 
   const startLongPress = (convId: string) => (e: React.MouseEvent | React.TouchEvent) => {
@@ -380,114 +375,28 @@ export function ChatList() {
         </Link>
         <button
           className="btn-secondary w-full"
-          disabled={isResyncing}
+          disabled={isFullSyncing}
           onClick={async () => {
-            if (isResyncing) return;
-            if (!confirm('This will delete all local conversations and the XMTP database, then reload everything fresh from the network. Continue?')) {
-              return;
-            }
-            setIsResyncing(true);
+            if (isFullSyncing) return;
+            setIsFullSyncing(true);
             try {
               const xmtp = getXmtpClient();
-              const currentIdentity = useAuthStore.getState().identity;
-              
-              // 1) Preserve read state before clearing
-              const storage = await getStorage();
-              const existing = await storage.listConversations();
-              const preservedReadState = new Map<string, { lastReadAt?: number; lastReadMessageId?: string | null }>();
-              for (const c of existing) {
-                if (c.lastReadAt !== undefined || c.lastReadMessageId !== undefined) {
-                  preservedReadState.set(c.id, {
-                    lastReadAt: c.lastReadAt,
-                    lastReadMessageId: c.lastReadMessageId ?? null,
-                  });
-                }
-              }
-              setResyncReadState(preservedReadState);
-              
-              // 2) Visibly clear current list
-              setConversations([]);
-              
-              // 3) Disconnect XMTP to release OPFS locks
-              console.log('[Resync] Disconnecting XMTP client...');
+              await runNonDestructiveFullSync(xmtp, { reloadConversations: loadConversations });
               try {
-                await xmtp.disconnect();
-                // Wait for OPFS locks to be released
-                await new Promise(resolve => setTimeout(resolve, 500));
-              } catch (e) {
-                console.warn('[Resync] XMTP disconnect failed:', e);
-              }
-              
-              // 4) Clear XMTP OPFS database to remove corrupted MLS state
-              console.log('[Resync] Clearing XMTP database...');
-              try {
-                const opfsAddresses = currentIdentity
-                  ? [currentIdentity.address, currentIdentity.inboxId].filter(
-                      (value): value is string => Boolean(value)
-                    )
-                  : [];
-                await storage.clearAllData({ opfsAddresses });
-              } catch (e) {
-                console.warn('[Resync] Failed to clear XMTP database:', e);
-              }
-              
-              // 5) Reconnect to XMTP (creates fresh database)
-              console.log('[Resync] Reconnecting to XMTP...');
-              if (currentIdentity) {
-                try {
-                  await reconnectCurrentIdentity();
-                } catch (e) {
-                  console.warn('[Resync] XMTP reconnect failed:', e);
-                }
-              }
-              
-              // 6) Load conversations from fresh sync
-              await loadConversations();
-              
-              // 7) Restore read state
-              const resyncedState = getResyncReadState();
-              if (resyncedState && resyncedState.size > 0) {
-                try {
-                  const refreshedStorage = await getStorage();
-                  for (const [conversationId, state] of resyncedState.entries()) {
-                    const existingConversation = await refreshedStorage.getConversation(conversationId);
-                    if (!existingConversation) continue;
-                    const updates: Partial<typeof existingConversation> = {};
-                    if (state.lastReadAt !== undefined) {
-                      updates.lastReadAt = state.lastReadAt;
-                    }
-                    if (state.lastReadMessageId !== undefined) {
-                      updates.lastReadMessageId = state.lastReadMessageId ?? undefined;
-                    }
-                    if (Object.keys(updates).length > 0) {
-                      await refreshedStorage.putConversation({ ...existingConversation, ...updates });
-                      useConversationStore.getState().updateConversation(conversationId, updates);
-                    }
-                  }
-                } catch (e) {
-                  console.warn('[Resync] Failed to restore read state after resync:', e);
-                } finally {
-                  clearResyncReadState();
-                }
-              } else {
-                clearResyncReadState();
-              }
-              
-              try {
-                window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Resynced conversations from network' }));
+                window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Full sync finished' }));
               } catch (e) {
                 /* ignore */
               }
             } catch (err) {
-              console.error('Resync failed:', err);
-              alert('Resync failed. See console for details.');
-              clearResyncReadState();
+              console.error('Full sync failed:', err);
+              const message = err instanceof Error ? err.message : 'Full sync failed.';
+              window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
             } finally {
-              setIsResyncing(false);
+              setIsFullSyncing(false);
             }
           }}
         >
-          {isResyncing ? 'Resyncing…' : 'Resync All'}
+          {isFullSyncing ? 'Syncing…' : 'Full Sync'}
         </button>
       </div>
 

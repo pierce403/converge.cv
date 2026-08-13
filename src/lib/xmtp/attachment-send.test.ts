@@ -40,6 +40,20 @@ describe('XmtpClient attachment send failures', () => {
     );
   });
 
+  it('rejects text, reply, and group creation while disconnected instead of inventing a queue', async () => {
+    const client = new XmtpClient();
+
+    await expect(client.sendMessage('conversation-1', 'hello')).rejects.toThrow(
+      'XMTP is not connected',
+    );
+    await expect(client.sendReply('conversation-1', 'message-1', 'hello')).rejects.toThrow(
+      'XMTP is not connected',
+    );
+    await expect(client.createGroupConversation(['a'.repeat(64)])).rejects.toThrow(
+      'XMTP is not connected',
+    );
+  });
+
   it('propagates connected XMTP failures instead of returning a local-only message', async () => {
     const client = new XmtpClient();
     const lookupError = new Error('conversation lookup failed');

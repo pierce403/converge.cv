@@ -167,17 +167,14 @@ There are two distinct concepts:
 | Hide group (aka deleteGroup) | Same as above | `deleteGroup()` calls `hideConversation`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L875) |
 | Skip recreating on inbound messages | `isConversationDeleted/isPeerDeleted` gates message handler | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L209) |
 
-## How “Resync All” works
+## How “Full Sync” works
 
-The “Resync All” button is destructive: it wipes local IndexedDB tables and the XMTP OPFS database, reconnects XMTP, and reloads.
+Full Sync is strict and non-destructive. It keeps the active XMTP client, database, and installation; force-syncs the conversation list; backfills only retained history; applies the local 28-day sweep; and reloads the list.
 
-- UI flow: [`src/features/conversations/ChatList.tsx`](../src/features/conversations/ChatList.tsx#L335)
-- Read-state preservation helpers: [`src/lib/xmtp/resync-state.ts`](../src/lib/xmtp/resync-state.ts#L1)
+- UI flow: [`src/features/conversations/ChatList.tsx`](../src/features/conversations/ChatList.tsx)
+- Tested orchestration: [`src/lib/xmtp/full-sync.ts`](../src/lib/xmtp/full-sync.ts)
 
-Important interactions:
-
-- `deletedConversations` markers are persisted in IndexedDB, so a “deleted” conversation should not reappear after resync.
-- A resync temporarily stores read state in `globalThis.__cv_resync_read_state` and restores it after repopulating conversations.
+It never disconnects, clears IndexedDB, or deletes the active XMTP OPFS database. A failed network step surfaces an error and leaves existing local data and `deletedConversations` markers intact.
 
 ## Inconsistencies / gotchas (worth fixing)
 
@@ -190,29 +187,8 @@ These are code-level inconsistencies that can surprise future work.
 
 Net effect: muting may prevent message ingestion entirely, not just notifications/badges.
 
-2) **System message previews in storage can be wrong**
 
-- `DexieDriver.putMessage()` updates `lastMessagePreview` to `'📎 Attachment'` for any non-text message type (including `system`):
-  [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L410)
-- Chat list logic expects system previews to show the body: [`src/features/conversations/ChatList.tsx`](../src/features/conversations/ChatList.tsx#L200)
-- Layout patches the preview in-memory after storing the system message, but the persisted preview still uses the generic string:
-  [`src/app/Layout.tsx`](../src/app/Layout.tsx#L486)
-
-3) **Deleting a conversation does not delete attachment blobs**
-
-- `deleteConversation()` deletes from `conversations` + `messages` only: [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L341)
-
-This can orphan `attachments/attachmentData` rows.
-
-4) **`topic` semantics differ depending on creator**
-
-- Local fallback sets group `topic` to `null` (`isGroup ? null : id`): [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L656)
-- XMTP sync sets `topic: id` for both DMs and groups: [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L2033)
-- New DM uses `xmtpConv.topic`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L394)
-
-If UI starts relying on `topic`, it needs a canonical rule.
-
-5) **Archived conversations are written but not really viewable**
+3) **Archived conversations are written but not really viewable**
 
 - `toggleArchive()` flips the flag: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L623)
 - `loadConversations()` only loads `archived: false`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L216)

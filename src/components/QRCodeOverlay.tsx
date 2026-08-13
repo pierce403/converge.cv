@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import QRCode from 'qrcode';
 
 interface QRCodeOverlayProps {
   address: string;
@@ -11,14 +10,30 @@ export function QRCodeOverlay({ address, onClose }: QRCodeOverlayProps) {
   const [qr, setQr] = useState<string>('');
 
   useEffect(() => {
+    let cancelled = false;
     const payload = `xmtp:ethereum:${address}`;
-    QRCode.toDataURL(payload, { margin: 1, width: 300 }).then(setQr).catch(() => setQr(''));
+    setQr('');
+    void import('qrcode')
+      .then(({ default: QRCode }) => QRCode.toDataURL(payload, { margin: 1, width: 300 }))
+      .then((dataUrl) => {
+        if (!cancelled) setQr(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setQr('');
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [address]);
 
   if (typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[25000] flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[25000] flex items-center justify-center p-4 bg-black/80"
+      onClick={onClose}
+    >
       <div className="relative" onClick={(e) => e.stopPropagation()}>
         {/* Close button */}
         <button
@@ -27,7 +42,12 @@ export function QRCodeOverlay({ address, onClose }: QRCodeOverlayProps) {
           title="Close"
         >
           <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
 
@@ -56,7 +76,6 @@ export function QRCodeOverlay({ address, onClose }: QRCodeOverlayProps) {
         </p>
       </div>
     </div>,
-    document.body,
+    document.body
   );
 }
-

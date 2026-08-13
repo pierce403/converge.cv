@@ -21,6 +21,8 @@ interface MessageState {
   addMessage: (conversationId: string, message: Message) => void;
   updateMessage: (messageId: string, updates: Partial<Message>) => void;
   removeMessage: (messageId: string) => void;
+  removeMessages: (messageIds: Iterable<string>) => void;
+  pruneMessages: (cutoff: number, now?: number) => void;
   setLoading: (conversationId: string, loading: boolean) => void;
   setSending: (sending: boolean) => void;
   clearMessages: (conversationId: string) => void;
@@ -110,6 +112,34 @@ export const useMessageStore = create<MessageState>((set) => ({
 
       return { messagesByConversation: newMessages };
     }),
+
+  removeMessages: (messageIds) =>
+    set((state) => {
+      const ids = new Set(messageIds);
+      if (ids.size === 0) return state;
+      return {
+        messagesByConversation: Object.fromEntries(
+          Object.entries(state.messagesByConversation).map(([conversationId, messages]) => [
+            conversationId,
+            messages.filter((message) => !ids.has(message.id)),
+          ]),
+        ),
+      };
+    }),
+
+  pruneMessages: (cutoff, now = Date.now()) =>
+    set((state) => ({
+      messagesByConversation: Object.fromEntries(
+        Object.entries(state.messagesByConversation).map(([conversationId, messages]) => [
+          conversationId,
+          messages.filter(
+            (message) =>
+              message.sentAt > cutoff &&
+              (message.expiresAt === undefined || message.expiresAt > now),
+          ),
+        ]),
+      ),
+    })),
 
   setLoading: (conversationId, loading) =>
     set((state) => {

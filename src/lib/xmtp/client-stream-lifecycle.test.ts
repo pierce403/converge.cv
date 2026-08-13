@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@xmtp/browser-sdk';
+
+const retentionMocks = vi.hoisted(() => ({
+  deleteLocalMessage: vi.fn(async () => ({
+    deletedMessageIds: [],
+    updatedConversations: [],
+  })),
+}));
+
+vi.mock('@/lib/message-retention', () => ({
+  deleteLocalMessage: retentionMocks.deleteLocalMessage,
+}));
+
 import { XmtpClient } from './client';
 
 type StreamHarness = {
@@ -53,6 +65,40 @@ class ControlledStream implements AsyncIterable<StreamMessage> {
   return = this.end;
 
   [Symbol.asyncIterator](): AsyncIterator<StreamMessage> {
+    return this;
+  }
+}
+
+class ControlledDeletionStream implements AsyncIterable<string> {
+  isDone = false;
+  private firstMessageId: string | null;
+  private pendingNext: ((result: IteratorResult<string>) => void) | null = null;
+  readonly end = vi.fn(async (): Promise<IteratorResult<string>> => {
+    this.isDone = true;
+    this.pendingNext?.({ done: true, value: undefined });
+    this.pendingNext = null;
+    return { done: true, value: undefined };
+  });
+
+  constructor(messageId: string) {
+    this.firstMessageId = messageId;
+  }
+
+  next = async (): Promise<IteratorResult<string>> => {
+    if (this.firstMessageId) {
+      const value = this.firstMessageId;
+      this.firstMessageId = null;
+      return { done: false, value };
+    }
+    if (this.isDone) return { done: true, value: undefined };
+    return await new Promise<IteratorResult<string>>((resolve) => {
+      this.pendingNext = resolve;
+    });
+  };
+
+  return = this.end;
+
+  [Symbol.asyncIterator](): AsyncIterator<string> {
     return this;
   }
 }
@@ -114,6 +160,192 @@ describe('XmtpClient message stream cleanup', () => {
     expect(end).toHaveBeenCalledOnce();
   });
 
+  it('serializes concurrent connection lifecycle operations', async () => {
+    const xmtp = new XmtpClient();
+    const events: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const result = {
+      inboxId: 'inbox',
+      installationId: 'installation',
+      installationRegistered: false,
+      historySyncRequested: false,
+      historySyncRequired: false,
+    };
+    const connectInternal = vi.fn(async (identity: { address: string }) => {
+      events.push(`start:${identity.address}`);
+      if (identity.address === 'first') await firstGate;
+      events.push(`end:${identity.address}`);
+      return result;
+    });
+    (
+      xmtp as unknown as {
+        connectInternal: typeof connectInternal;
+      }
+    ).connectInternal = connectInternal;
+
+    const first = xmtp.connect({ address: 'first', privateKey: '0x01' });
+    const second = xmtp.connect({ address: 'second', privateKey: '0x02' });
+    await vi.waitFor(() => expect(events).toEqual(['start:first']));
+    releaseFirst?.();
+    await Promise.all([first, second]);
+
+    expect(events).toEqual(['start:first', 'end:first', 'start:second', 'end:second']);
+  });
+
+  it('does not close the client underneath an in-flight manual sync', async () => {
+    const xmtp = new XmtpClient();
+    const events: string[] = [];
+    let releaseSync: (() => void) | undefined;
+    const syncGate = new Promise<void>((resolve) => {
+      releaseSync = resolve;
+    });
+    (
+      xmtp as unknown as { syncConversationsInternal: () => Promise<void> }
+    ).syncConversationsInternal = vi.fn(async () => {
+      events.push('sync:start');
+      await syncGate;
+      events.push('sync:end');
+    });
+    (
+      xmtp as unknown as { disconnectInternal: () => Promise<void> }
+    ).disconnectInternal = vi.fn(async () => {
+      events.push('disconnect');
+    });
+
+    const sync = xmtp.syncConversations({ force: true });
+    const disconnect = xmtp.disconnect();
+    await vi.waitFor(() => expect(events).toEqual(['sync:start']));
+    releaseSync?.();
+    await Promise.all([sync, disconnect]);
+
+    expect(events).toEqual(['sync:start', 'sync:end', 'disconnect']);
+  });
+
+  it('preserves a disconnect requested after an intervening connect', async () => {
+    const xmtp = new XmtpClient();
+    const events: string[] = [];
+    let releaseFirstDisconnect: (() => void) | undefined;
+    const firstDisconnectGate = new Promise<void>((resolve) => {
+      releaseFirstDisconnect = resolve;
+    });
+    let disconnectCount = 0;
+    (
+      xmtp as unknown as { disconnectInternal: () => Promise<void> }
+    ).disconnectInternal = vi.fn(async () => {
+      disconnectCount += 1;
+      const current = disconnectCount;
+      events.push(`disconnect:${current}:start`);
+      if (current === 1) await firstDisconnectGate;
+      events.push(`disconnect:${current}:end`);
+    });
+    (
+      xmtp as unknown as { connectInternal: () => Promise<unknown> }
+    ).connectInternal = vi.fn(async () => {
+      events.push('connect');
+      return {
+        inboxId: 'inbox',
+        installationId: 'installation',
+        installationRegistered: true,
+        historySyncRequested: false,
+        historySyncRequired: false,
+      };
+    });
+
+    const firstDisconnect = xmtp.disconnect();
+    const connect = xmtp.connect({ address: 'identity', privateKey: '0x01' });
+    const finalDisconnect = xmtp.disconnect();
+    await vi.waitFor(() => expect(events).toEqual(['disconnect:1:start']));
+    releaseFirstDisconnect?.();
+    await Promise.all([firstDisconnect, connect, finalDisconnect]);
+
+    expect(events).toEqual([
+      'disconnect:1:start',
+      'disconnect:1:end',
+      'connect',
+      'disconnect:2:start',
+      'disconnect:2:end',
+    ]);
+  });
+
+  it('propagates conversation sync failures for strict manual syncs', async () => {
+    const xmtp = new XmtpClient();
+    const failure = new Error('network sync failed');
+    (xmtp as unknown as { client: unknown }).client = {};
+    (
+      xmtp as unknown as { conversationsSyncWithRecovery: () => Promise<void> }
+    ).conversationsSyncWithRecovery = vi.fn(async () => {
+      throw failure;
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      xmtp.syncConversations({ force: true, strict: true, reason: 'manual-full-sync' }),
+    ).rejects.toBe(failure);
+  });
+
+  it('invalidates queued background maintenance when its client generation stops', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    let releaseLifecycle: (() => void) | undefined;
+    const lifecycleGate = new Promise<void>((resolve) => {
+      releaseLifecycle = resolve;
+    });
+    const enqueueLifecycle = (
+      xmtp as unknown as {
+        enqueueLifecycle: <T>(operation: () => Promise<T>) => Promise<T>;
+      }
+    ).enqueueLifecycle.bind(xmtp);
+    const blocker = enqueueLifecycle(async () => await lifecycleGate);
+    const oldClient = {};
+    (xmtp as unknown as { client: unknown }).client = oldClient;
+    const startMessages = vi.fn(async () => undefined);
+    const startDeletions = vi.fn(async () => undefined);
+    const sync = vi.fn(async () => undefined);
+    const scan = vi.fn(async () => undefined);
+    (
+      xmtp as unknown as {
+        startMessageStream: typeof startMessages;
+        startMessageDeletionStream: typeof startDeletions;
+        syncConversationsInternal: typeof sync;
+        scanInviteJoinRequests: typeof scan;
+        startBackgroundDiscoveryLoop: () => void;
+        stopBackgroundDiscoveryLoop: () => void;
+      }
+    ).startMessageStream = startMessages;
+    (
+      xmtp as unknown as { startMessageDeletionStream: typeof startDeletions }
+    ).startMessageDeletionStream = startDeletions;
+    (
+      xmtp as unknown as { syncConversationsInternal: typeof sync }
+    ).syncConversationsInternal = sync;
+    (
+      xmtp as unknown as { scanInviteJoinRequests: typeof scan }
+    ).scanInviteJoinRequests = scan;
+
+    (
+      xmtp as unknown as { startBackgroundDiscoveryLoop: () => void }
+    ).startBackgroundDiscoveryLoop();
+    vi.advanceTimersByTime(60_000);
+    await Promise.resolve();
+    (
+      xmtp as unknown as { stopBackgroundDiscoveryLoop: () => void }
+    ).stopBackgroundDiscoveryLoop();
+    (xmtp as unknown as { client: unknown }).client = {};
+    releaseLifecycle?.();
+    await blocker;
+    await (
+      xmtp as unknown as { lifecycleTail: Promise<void> }
+    ).lifecycleTail;
+
+    expect(startMessages).not.toHaveBeenCalled();
+    expect(startDeletions).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
+  });
+
   it('ends the message stream before closing the XMTP client', async () => {
     vi.useFakeTimers();
     const xmtp = new XmtpClient();
@@ -133,6 +365,41 @@ describe('XmtpClient message stream cleanup', () => {
     await disconnect;
 
     expect(events).toEqual(['stream:end', 'client:close']);
+  });
+
+  it('mirrors native message deletions locally and ends that stream before close', async () => {
+    vi.useFakeTimers();
+    retentionMocks.deleteLocalMessage.mockClear();
+    const xmtp = new XmtpClient();
+    const events: string[] = [];
+    const stream = new ControlledDeletionStream('expired-message');
+    const originalEnd = stream.end.getMockImplementation();
+    stream.end.mockImplementation(async () => {
+      events.push('deletion-stream:end');
+      return await originalEnd!();
+    });
+    const close = vi.fn(async () => {
+      events.push('client:close');
+    });
+    (xmtp as unknown as { client: unknown }).client = {
+      close,
+      conversations: {
+        streamMessageDeletions: vi.fn(async () => stream),
+      },
+    };
+
+    await (
+      xmtp as unknown as { startMessageDeletionStream: () => Promise<void> }
+    ).startMessageDeletionStream();
+    await vi.waitFor(() => {
+      expect(retentionMocks.deleteLocalMessage).toHaveBeenCalledWith('expired-message');
+    });
+
+    const disconnect = xmtp.disconnect();
+    await vi.runAllTimersAsync();
+    await disconnect;
+
+    expect(events).toEqual(['deletion-stream:end', 'client:close']);
   });
 
   it('waits for in-flight message handling before closing the XMTP client', async () => {
@@ -298,6 +565,49 @@ describe('XmtpClient message stream cleanup', () => {
     expect(end).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(console.error).toHaveBeenCalledWith('[XMTP] Error closing message stream:', streamError);
+  });
+
+  it('does not hang client close when ending the deletion stream fails', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const xmtp = new XmtpClient();
+    const streamError = new Error('deletion stream end failed');
+    const deletionStream = {
+      isDone: false,
+      end: vi.fn(async () => {
+        throw streamError;
+      }),
+    };
+    const neverSettles = new Promise<void>(() => undefined);
+    const close = vi.fn(async () => undefined);
+    (
+      xmtp as unknown as {
+        client: unknown;
+        messageDeletionStream: unknown;
+        messageDeletionStreamTask: Promise<void>;
+      }
+    ).client = { close };
+    (
+      xmtp as unknown as {
+        messageDeletionStream: unknown;
+      }
+    ).messageDeletionStream = deletionStream;
+    (
+      xmtp as unknown as {
+        messageDeletionStreamTask: Promise<void>;
+      }
+    ).messageDeletionStreamTask = neverSettles;
+
+    const disconnect = xmtp.disconnect();
+    await vi.runAllTimersAsync();
+    await disconnect;
+
+    expect(deletionStream.end).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(console.error).toHaveBeenCalledWith(
+      '[XMTP] Error closing message deletion stream:',
+      streamError,
+    );
   });
 
   it('closes the current client before statically revoking its installation', async () => {

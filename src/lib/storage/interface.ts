@@ -50,6 +50,19 @@ export interface PublishedAttachmentReconciliation {
   remoteEnvelope?: StoredRemoteAttachmentEnvelope;
 }
 
+export interface ReceivedAttachmentPersistence {
+  message: Message;
+  attachment: Attachment;
+  data?: ArrayBuffer;
+  remoteEnvelope?: StoredRemoteAttachmentEnvelope;
+  evictCachedData?: boolean;
+}
+
+export interface MessageDeletionResult {
+  deletedMessageIds: string[];
+  updatedConversations: Conversation[];
+}
+
 export interface StorageDriver {
   // Initialization
   init(): Promise<void>;
@@ -79,7 +92,9 @@ export interface StorageDriver {
   putMessage(message: Message): Promise<void>;
   getMessage(id: string): Promise<Message | undefined>;
   listMessages(conversationId: string, opts?: PageOpts): Promise<Message[]>;
-  deleteMessage(id: string): Promise<void>;
+  deleteMessage(id: string): Promise<MessageDeletionResult>;
+  deleteMessages(ids: string[]): Promise<MessageDeletionResult>;
+  pruneMessages(cutoff: number, now?: number): Promise<MessageDeletionResult>;
   updateMessageStatus(id: string, status: Message['status']): Promise<void>;
   updateMessageReactions(id: string, reactions: Message['reactions']): Promise<void>;
   deleteExpiredMessages(): Promise<number>; // returns count deleted
@@ -101,6 +116,7 @@ export interface StorageDriver {
     data: ArrayBuffer,
     maxBytes: number,
   ): Promise<AttachmentCachePruneResult>;
+  putReceivedAttachment(input: ReceivedAttachmentPersistence): Promise<boolean>;
   reconcilePublishedAttachment(input: PublishedAttachmentReconciliation): Promise<void>;
   deleteAttachment(id: string): Promise<void>;
 

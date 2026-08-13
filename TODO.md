@@ -1,6 +1,6 @@
 # converge.cv — TODO
 
-**Last updated**: 2026-07-10
+**Last updated**: 2026-08-12
 
 This is the live backlog. Keep it short and current. Completed work should move to `AGENTS.md` or stay in git history.
 
@@ -10,8 +10,6 @@ This is the live backlog. Keep it short and current. Completed work should move 
 - Complete a live two-browser XMTP validation of wallet-approved device joining,
   distinct installation IDs, reload reuse, and older-device history transfer.
 - Fix conversation mute semantics so muting doesn’t drop inbound messages (see `docs/conversations.md`).
-- Fix persisted previews for system messages (`DexieDriver.putMessage` treats non-text as attachments).
-- Add automated coverage for the “Resync All” flow.
 - Decide on service worker strategy:
   - Keep minimal `public/sw.js` (push-only) vs re-enable `vite-plugin-pwa`/Workbox.
   - If re-enabling caching, avoid “offline messaging” copy.
@@ -26,7 +24,7 @@ This is the live backlog. Keep it short and current. Completed work should move 
 ## Messaging
 
 - Image attachments shipped (RemoteAttachment + Thirdweb IPFS); add multi-file + video support next.
-- Disappearing messages (timer + local cleanup).
+- Run a real-browser/XMTP expiry integration test for a newly created 28-day disappearing conversation; mocked CI covers creation options and deletion-stream/local-cascade behavior only.
 - Delivery/read state UX.
 
 ## Conversations & Groups

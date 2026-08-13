@@ -37,4 +37,17 @@ describe('storage namespace handling', () => {
     await storage.setStorageNamespace('   ');
     expect(storage.getStorageNamespace()).toBe('default');
   });
+
+  it('opens an independent namespace without changing the active namespace', async () => {
+    localStorage.setItem('converge.storageNamespace.v1', 'active-inbox');
+    const storage = await import('./index');
+    const { DexieDriver } = await import('./dexie-driver');
+
+    await storage.openStorageNamespace('Inactive Inbox!');
+
+    expect(DexieDriver).toHaveBeenCalledWith('inactive_inbox_');
+    expect(initMock).toHaveBeenCalledOnce();
+    expect(storage.getStorageNamespace()).toBe('active-inbox');
+    expect(localStorage.getItem('converge.storageNamespace.v1')).toBe('active-inbox');
+  });
 });

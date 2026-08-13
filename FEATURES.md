@@ -17,7 +17,7 @@ model.
 ### Inbox Accounts And Switching
 
 - The top-left control is an Inbox Switcher. It has one entry per loaded XMTP inbox, not one entry per associated account key or installation.
-- Each inbox is an independent social identity, similar to managing separate brand accounts. Its profile, contacts, consent view, conversations, drafts, attachments, keys, and local caches remain isolated from every other inbox.
+- Each inbox is an independent social identity, similar to managing separate brand accounts. Its profile, contacts, consent view, conversations, attachments, keys, local caches, and current in-memory composer draft remain isolated from every other inbox. Composer drafts are not persisted across reloads.
 - Switcher entries show the inbox profile name and avatar by default. Inbox IDs, account addresses, installation IDs, and key details belong in technical details views.
 - Only the selected inbox opens an XMTP client and syncs. Switching fully closes the current client before opening the next inbox.
 - Add Inbox offers Create new inbox, Import keyfile, and Add this device to existing inbox.
@@ -94,7 +94,7 @@ model.
 - Deep links return through the chosen onboarding flow and then resume the target route.
 
 ### Current Inbox Switcher Isolation
-- Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, drafts, and keys never leak across inboxes.
+- Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, attachments, and keys never leak across inboxes; composer drafts are memory-only and reset on reload.
 - Switching inboxes triggers a full teardown of the current client/session, rehydrates the registry list, and reopens the selected identity with its own cached message history.
 - The switcher has one row per inbox and shows profile name/avatar rather than protocol identifiers. Add Inbox provides Create new inbox, Import keyfile, and Add this device to existing inbox.
 - A duplicate keyfile import stops before local mutation with "This inbox is already loaded". Creating a new inbox selects it immediately and opens the profile editor.
@@ -111,13 +111,22 @@ model.
 - Composer activity sends Convos-compatible `convos.org/typing_indicator:1.0` messages with `shouldPush:false`, and inbound typing indicators are shown transiently without being persisted as chat history.
 - JPEG, PNG, and WebP image attachments can be picked from the paper-clip button, validated by signature/static-image/dimension rules, encrypted client-side, uploaded through Thirdweb's HTTPS IPFS storage contract, and sent over the standard XMTP RemoteAttachment type. The upload transport sends only opaque ciphertext under a fixed filename, validates the returned CID, preserves actionable quota/authentication errors, and aborts after two minutes. The encrypted payload must also fit the 10 MiB wire limit. Before publishing, Converge retrieves and decrypts the uploaded ciphertext over HTTPS; upload or publish failures become visible failed messages instead of local-only images that appear sent. A successful XMTP publish remains sent even if later local-cache reconciliation fails. Inbound messages store only the encrypted descriptor until the download policy below permits a fetch.
 - Group chat composer supports @-mentions with live member suggestions; mentions render inline with highlight styling and incoming messages that mention you are visually emphasized.
-- Conversations load the most recent messages first and lazily prepend older history only when the user scrolls upward, keeping large threads fast while preserving full local storage history.
+- Conversations load the most recent messages first and lazily prepend older retained history only when the user scrolls upward, keeping large threads fast.
 - Conversation list updates are now idempotent while history is loading: duplicate DM rows are collapsed by conversation ID and canonical peer key so replayed/backfilled message events cannot flood the chat list.
 - New inbound conversations are now discovered continuously while connected: XMTP runs a throttled background discovery sync and immediately refreshes the in-memory chat list from IndexedDB after sync writes, so first-time DMs appear without reload/manual resync.
 - Messages and group updates authored by another installation of the active inbox are processed instead of being discarded as local echoes. Message IDs remain the deduplication boundary for events also produced by the current browser.
 - Read receipts are emitted only for non-self DMs and are throttled by last send time, preventing cross-client metadata spam (for example repeated `{}` rows in xmtp.chat during self-chat testing).
 - Desktop-width chat routes now render a persistent split view: conversation list on the left, selected conversation on the right, with mobile behavior unchanged.
 - Avatar rendering now prevents raw URL/data payload strings from being printed as text in avatar slots; non-image avatar values are treated as short glyphs only (otherwise initials fallback).
+- Sends, replies, and group creation fail visibly when XMTP is disconnected or rejects the operation. Converge does not label a local optimistic row as "queued" without a durable retry worker; failed messages remain visibly failed so the user can retry after reconnecting.
+
+### Four-Week Message Retention
+
+- Converge retains user-visible messages for 28 days by default. At app open, hourly while the app is running, and whenever a visible tab resumes, it sweeps every loaded inbox and transactionally removes older message rows, attachment metadata and bytes, encrypted remote-attachment descriptors, search results, reply targets, and cached conversation previews from local IndexedDB.
+- Every live-message and history/backfill ingest path applies the cutoff before it writes anything, so an older SDK history row cannot repopulate local storage after a sweep. Native XMTP expiry events use the same local deletion path.
+- Every new user-visible one-to-one or group conversation created by Converge requests XMTP message-disappearing settings beginning at creation with a 28-day duration. Existing conversations retain their existing shared setting; Converge does not silently change a group's protocol policy. Self-profile and invite-control DMs are excluded.
+- The local cutoff always applies to Converge's decrypted app database. Browser SDK deletion covers newly configured conversations through XMTP's own expiry behavior, but the Browser SDK exposes no safe arbitrary per-message OPFS deletion API for legacy conversations. Converge never destroys the whole active XMTP database as routine retention or sync maintenance.
+- Deletion runs the next time Converge opens if the browser was closed at expiry. It cannot erase copies already received by other people or devices, screenshots, exports, XMTP infrastructure outside the client contract, or encrypted attachment ciphertext retained by Thirdweb/IPFS.
 
 ### Attachment Download Security
 
@@ -203,7 +212,7 @@ model.
 
 ## Local-First Operation
 - Conversation lists, messages, profiles, and inbox-scoped data are persisted in IndexedDB (via Dexie); the small cross-inbox registry is stored in localStorage so the switcher can choose a namespace before opening it.
-- Incoming streams apply updates to the local store first, then reconcile with the network by explicitly syncing conversations; resync tools clear and repopulate local caches when needed. Disconnect ends the Browser SDK `AsyncStreamProxy` with its asynchronous `end()` API before closing the client.
+- Incoming streams apply updates to the local store first, then reconcile with the network by explicitly syncing conversations. Full Sync keeps the active IndexedDB/OPFS databases intact, performs a strict retained-history backfill, and fails visibly on error. Disconnect drains both message and deletion `AsyncStreamProxy` instances with their asynchronous `end()` API before closing the client.
 - Private keys, mnemonics, decrypted app data, and the Browser SDK database are stored locally without encryption at rest. Keyfile exports are plaintext sensitive material.
 - New identities use inbox-aware XMTP database paths; legacy identities retain their existing address-based path to avoid installation churn during migration.
 - Recent history backfill deduplicates stored messages, preserves read state for existing threads, and narrows sync windows using per-conversation timestamps to avoid replaying old messages as unread.

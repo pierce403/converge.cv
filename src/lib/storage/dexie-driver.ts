@@ -31,6 +31,8 @@ import type {
   AttachmentCachePruneResult,
   ClearAllDataResult,
   PublishedAttachmentReconciliation,
+  ReceivedAttachmentPersistence,
+  MessageDeletionResult,
   StorageDriver,
   PageOpts,
   Query,
@@ -38,6 +40,7 @@ import type {
 import type { Contact } from '../stores/contact-store';
 import { identityAddressNeedsRepair, normalizeIdentityAddresses } from '@/lib/identity/normalize';
 import { normalizeEthereumAddress } from '@/lib/utils/ethereum';
+import { shouldRetainMessage } from '@/lib/message-retention-policy';
 
 interface AttachmentData {
   id: string;
@@ -45,6 +48,9 @@ interface AttachmentData {
 }
 
 const ATTACHMENT_ACCESS_TOUCH_INTERVAL_MS = 60_000;
+
+const getMessagePreview = (message: Message): string =>
+  message.type === 'attachment' ? '📎 Attachment' : message.body.substring(0, 100);
 
 class ConvergeDB extends Dexie {
   conversations!: Table<Conversation, string>;
@@ -418,10 +424,33 @@ class ConvergeDB extends Dexie {
 export class DexieDriver implements StorageDriver {
   private globalDb: ConvergeDB; // identities, vault
   private dataDb: ConvergeDB;   // conversations, messages, contacts, attachments
+  private readonly namespace: string;
 
   constructor(namespace = 'default') {
+    this.namespace = namespace;
     this.globalDb = new ConvergeDB('ConvergeDB');
     this.dataDb = new ConvergeDB(`ConvergeDB:${namespace}`);
+  }
+
+  private async getSelfMessageSenders(): Promise<Set<string>> {
+    const normalize = (value?: string) => value?.trim().toLowerCase() ?? '';
+    const namespace = normalize(this.namespace);
+    const senders = new Set<string>(namespace ? [namespace] : []);
+
+    try {
+      const identities = await this.globalDb.identity.toArray();
+      for (const identity of identities) {
+        const inboxId = normalize(identity.inboxId);
+        if (namespace !== 'default' && inboxId !== namespace) continue;
+        if (inboxId) senders.add(inboxId);
+        const address = normalize(identity.address);
+        if (address) senders.add(address);
+      }
+    } catch (error) {
+      console.warn('[Storage] Could not resolve every self sender while repairing unread state.', error);
+    }
+
+    return senders;
   }
 
   async init(): Promise<void> {
@@ -558,17 +587,17 @@ export class DexieDriver implements StorageDriver {
 
   // Messages
   async putMessage(message: Message): Promise<void> {
+    if (!shouldRetainMessage(message)) {
+      return;
+    }
     await this.dataDb.messages.put(message);
-    
+
     // Update conversation lastMessageAt and preview
     const conversation = await this.dataDb.conversations.get(message.conversationId);
-    if (conversation) {
-      const preview = message.type === 'attachment'
-        ? '📎 Attachment'
-        : message.body.substring(0, 100);
+    if (conversation && message.sentAt >= conversation.lastMessageAt) {
       await this.dataDb.conversations.update(message.conversationId, {
         lastMessageAt: message.sentAt,
-        lastMessagePreview: preview,
+        lastMessagePreview: getMessagePreview(message),
         lastMessageId: message.id,
         lastMessageSender: message.sender,
       });
@@ -576,14 +605,16 @@ export class DexieDriver implements StorageDriver {
   }
 
   async getMessage(id: string): Promise<Message | undefined> {
-    return await this.dataDb.messages.get(id);
+    const message = await this.dataDb.messages.get(id);
+    return message && shouldRetainMessage(message) ? message : undefined;
   }
 
   async listMessages(conversationId: string, opts?: PageOpts): Promise<Message[]> {
     let collection = this.dataDb.messages
       .where('[conversationId+sentAt]')
       .between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey])
-      .reverse();
+      .reverse()
+      .filter((message) => shouldRetainMessage(message));
 
     if (opts?.before) {
       collection = collection.filter((m) => m.sentAt < opts.before!);
@@ -605,7 +636,98 @@ export class DexieDriver implements StorageDriver {
     return messages.reverse();
   }
 
-  async deleteMessage(id: string): Promise<void> {
+  async deleteMessage(id: string): Promise<MessageDeletionResult> {
+    return await this.deleteMessages([id]);
+  }
+
+  async deleteMessages(ids: string[]): Promise<MessageDeletionResult> {
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return { deletedMessageIds: [], updatedConversations: [] };
+    }
+
+    const selfMessageSenders = await this.getSelfMessageSenders();
+    return await this.dataDb.transaction(
+      'rw',
+      [
+        this.dataDb.conversations,
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
+      ],
+      async () => {
+        const existingMessages = (await this.dataDb.messages.bulkGet(uniqueIds)).filter(
+          (message): message is Message => message !== undefined,
+        );
+        if (existingMessages.length === 0) {
+          return { deletedMessageIds: [], updatedConversations: [] };
+        }
+
+        const deletedMessageIds = existingMessages.map((message) => message.id);
+        const deletedMessageIdSet = new Set(deletedMessageIds);
+        const conversationIds = Array.from(
+          new Set(existingMessages.map((message) => message.conversationId)),
+        );
+        const attachments = await this.dataDb.attachments
+          .where('messageId')
+          .anyOf(deletedMessageIds)
+          .toArray();
+        const attachmentIds = attachments.map((attachment) => attachment.id);
+        const envelopes = await this.dataDb.remoteAttachments
+          .where('messageId')
+          .anyOf(deletedMessageIds)
+          .toArray();
+        const envelopeIds = Array.from(
+          new Set([...attachmentIds, ...envelopes.map((envelope) => envelope.id)]),
+        );
+
+        await this.dataDb.messages.bulkDelete(deletedMessageIds);
+        await this.dataDb.attachments.bulkDelete(attachmentIds);
+        await this.dataDb.attachmentData.bulkDelete(envelopeIds);
+        await this.dataDb.remoteAttachments.bulkDelete(envelopeIds);
+
+        const updatedConversations: Conversation[] = [];
+        for (const conversationId of conversationIds) {
+          const conversation = await this.dataDb.conversations.get(conversationId);
+          if (!conversation) {
+            continue;
+          }
+          const conversationMessages = this.dataDb.messages
+            .where('[conversationId+sentAt]')
+            .between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey]);
+          const newestMessage = await conversationMessages.last();
+          const remainingUnreadCandidates = await conversationMessages
+            .filter(
+              (message) =>
+                message.sentAt > (conversation.lastReadAt ?? 0) &&
+                (message.type !== 'system' || Boolean(message.metadata?.invite)) &&
+                !selfMessageSenders.has(message.sender.trim().toLowerCase()),
+            )
+            .count();
+          const lastReadMessageId =
+            conversation.lastReadMessageId && deletedMessageIdSet.has(conversation.lastReadMessageId)
+              ? undefined
+              : conversation.lastReadMessageId;
+          const updatedConversation: Conversation = {
+            ...conversation,
+            lastMessageAt: newestMessage?.sentAt ?? conversation.createdAt,
+            lastMessagePreview: newestMessage ? getMessagePreview(newestMessage) : undefined,
+            lastMessageId: newestMessage?.id,
+            lastMessageSender: newestMessage?.sender,
+            lastReadMessageId,
+            unreadCount: Math.min(conversation.unreadCount, remainingUnreadCandidates),
+          };
+          await this.dataDb.conversations.put(updatedConversation);
+          updatedConversations.push(updatedConversation);
+        }
+
+        return { deletedMessageIds, updatedConversations };
+      }
+    );
+  }
+
+  private async deleteOrphanedAttachmentRows(): Promise<void> {
     await this.dataDb.transaction(
       'rw',
       [
@@ -615,14 +737,53 @@ export class DexieDriver implements StorageDriver {
         this.dataDb.remoteAttachments,
       ],
       async () => {
-        const attachments = await this.dataDb.attachments.where('messageId').equals(id).toArray();
-        const attachmentIds = attachments.map((attachment) => attachment.id);
-        await this.dataDb.messages.delete(id);
-        await this.dataDb.attachments.bulkDelete(attachmentIds);
-        await this.dataDb.attachmentData.bulkDelete(attachmentIds);
-        await this.dataDb.remoteAttachments.bulkDelete(attachmentIds);
-      }
+        const messageIds = new Set(
+          (await this.dataDb.messages.toCollection().primaryKeys()).map(String),
+        );
+        const attachments = await this.dataDb.attachments.toArray();
+        const envelopes = await this.dataDb.remoteAttachments.toArray();
+        const retainedAttachments = attachments.filter((attachment) =>
+          messageIds.has(attachment.messageId),
+        );
+        const retainedAttachmentMessages = new Map(
+          retainedAttachments.map((attachment) => [attachment.id, attachment.messageId]),
+        );
+        const orphanedAttachmentIds = attachments
+          .filter((attachment) => !retainedAttachmentMessages.has(attachment.id))
+          .map((attachment) => attachment.id);
+        const orphanedEnvelopeIds = envelopes
+          .filter(
+            (envelope) => retainedAttachmentMessages.get(envelope.id) !== envelope.messageId,
+          )
+          .map((envelope) => envelope.id);
+        const orphanedDataIds = (await this.dataDb.attachmentData.toCollection().primaryKeys())
+          .map(String)
+          .filter((id) => !retainedAttachmentMessages.has(id));
+
+        await this.dataDb.attachments.bulkDelete(orphanedAttachmentIds);
+        await this.dataDb.remoteAttachments.bulkDelete(orphanedEnvelopeIds);
+        await this.dataDb.attachmentData.bulkDelete(orphanedDataIds);
+      },
     );
+  }
+
+  async pruneMessages(cutoff: number, now = Date.now()): Promise<MessageDeletionResult> {
+    const olderMessages = await this.dataDb.messages.where('sentAt').belowOrEqual(cutoff).toArray();
+    const independentlyExpiredMessages = await this.dataDb.messages
+      .filter(
+        (message) =>
+          message.sentAt > cutoff &&
+          message.expiresAt !== undefined &&
+          message.expiresAt <= now,
+      )
+      .toArray();
+    const result = await this.deleteMessages(
+      [...olderMessages, ...independentlyExpiredMessages].map((message) => message.id),
+    );
+    // Older releases could persist attachment rows before their parent message.
+    // Every retention sweep repairs those legacy/interrupted-write orphans too.
+    await this.deleteOrphanedAttachmentRows();
+    return result;
   }
 
   async updateMessageStatus(id: string, status: Message['status']): Promise<void> {
@@ -639,27 +800,7 @@ export class DexieDriver implements StorageDriver {
       .filter((m) => m.expiresAt !== undefined && m.expiresAt < now)
       .toArray();
 
-    await this.dataDb.transaction(
-      'rw',
-      [
-        this.dataDb.messages,
-        this.dataDb.attachments,
-        this.dataDb.attachmentData,
-        this.dataDb.remoteAttachments,
-      ],
-      async () => {
-        const messageIds = new Set(expired.map((message) => message.id));
-        const attachments = await this.dataDb.attachments
-          .filter((attachment) => messageIds.has(attachment.messageId))
-          .toArray();
-        const attachmentIds = attachments.map((attachment) => attachment.id);
-        await this.dataDb.messages.bulkDelete(Array.from(messageIds));
-        await this.dataDb.attachments.bulkDelete(attachmentIds);
-        await this.dataDb.attachmentData.bulkDelete(attachmentIds);
-        await this.dataDb.remoteAttachments.bulkDelete(attachmentIds);
-      }
-    );
-    return expired.length;
+    return (await this.deleteMessages(expired.map((message) => message.id))).deletedMessageIds.length;
   }
 
   // Attachments
@@ -896,6 +1037,70 @@ export class DexieDriver implements StorageDriver {
         usageBytes = usageBytes - previousBytes + data.byteLength;
         return { usageBytes, evictedIds };
       }
+    );
+  }
+
+  async putReceivedAttachment(input: ReceivedAttachmentPersistence): Promise<boolean> {
+    if (
+      input.attachment.messageId !== input.message.id ||
+      input.message.attachmentId !== input.attachment.id
+    ) {
+      throw new Error('Inbound attachment does not match its message');
+    }
+    if (
+      input.remoteEnvelope &&
+      (input.remoteEnvelope.id !== input.attachment.id ||
+        input.remoteEnvelope.messageId !== input.message.id ||
+        input.remoteEnvelope.conversationId !== input.message.conversationId)
+    ) {
+      throw new Error('Inbound attachment descriptor does not match its message');
+    }
+    if (input.data && input.evictCachedData) {
+      throw new Error('Inbound attachment cannot cache and evict bytes in the same write');
+    }
+
+    return await this.dataDb.transaction(
+      'rw',
+      [
+        this.dataDb.conversations,
+        this.dataDb.messages,
+        this.dataDb.attachments,
+        this.dataDb.attachmentData,
+        this.dataDb.remoteAttachments,
+      ],
+      async () => {
+        // The cutoff is checked inside the same transaction as every dependent
+        // row so crossing the retention boundary cannot leave attachment data
+        // without a retained message.
+        if (!shouldRetainMessage(input.message)) {
+          return false;
+        }
+
+        await this.dataDb.messages.put(input.message);
+        await this.dataDb.attachments.put(input.attachment);
+        if (input.data) {
+          await this.dataDb.attachmentData.put({
+            id: input.attachment.id,
+            data: input.data,
+          });
+        } else if (input.evictCachedData) {
+          await this.dataDb.attachmentData.delete(input.attachment.id);
+        }
+        if (input.remoteEnvelope) {
+          await this.dataDb.remoteAttachments.put(input.remoteEnvelope);
+        }
+
+        const conversation = await this.dataDb.conversations.get(input.message.conversationId);
+        if (conversation && input.message.sentAt >= conversation.lastMessageAt) {
+          await this.dataDb.conversations.update(input.message.conversationId, {
+            lastMessageAt: input.message.sentAt,
+            lastMessagePreview: getMessagePreview(input.message),
+            lastMessageId: input.message.id,
+            lastMessageSender: input.message.sender,
+          });
+        }
+        return true;
+      },
     );
   }
 
@@ -1156,6 +1361,7 @@ export class DexieDriver implements StorageDriver {
     return await this.dataDb.messages
       .filter(
         (m: Message) =>
+          shouldRetainMessage(m) &&
           m.type === 'text' &&
           (m.body.toLowerCase().includes(queryLower) ||
             m.sender.toLowerCase().includes(queryLower))
@@ -1166,21 +1372,9 @@ export class DexieDriver implements StorageDriver {
 
   // Maintenance
   async vacuum(): Promise<void> {
-    // Dexie doesn't need explicit vacuum like SQLite
-    // but we can delete orphaned data
-    const messageIds = new Set((await this.dataDb.messages.toArray()).map((m: Message) => m.id));
-    const attachments = await this.dataDb.attachments.toArray();
-
-    const orphaned = attachments.filter((a: Attachment) => !messageIds.has(a.messageId));
-    await Promise.all(orphaned.map((a) => this.deleteAttachment(a.id)));
-
-    const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
-    const orphanedEnvelopes = await this.dataDb.remoteAttachments
-      .filter((envelope) => !attachmentIds.has(envelope.id))
-      .toArray();
-    await this.dataDb.remoteAttachments.bulkDelete(
-      orphanedEnvelopes.map((envelope) => envelope.id)
-    );
+    // Dexie does not need SQLite-style compaction, but maintenance still repairs
+    // any attachment rows left by legacy or interrupted multi-table writes.
+    await this.deleteOrphanedAttachmentRows();
   }
 
   async getStorageSize(): Promise<number> {

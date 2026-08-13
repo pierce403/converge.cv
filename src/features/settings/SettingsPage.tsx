@@ -1434,6 +1434,17 @@ export function SettingsPage() {
                   <span className="text-sm text-amber-300">Local only</span>
                 </div>
               </div>
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="font-medium">Message Retention</div>
+                    <div className="text-sm text-primary-200">
+                      Messages, previews, and attachment data are removed from every loaded inbox in this browser after four weeks while Converge is open. New chats request the same XMTP disappearing-message period; existing chats keep their shared setting.
+                    </div>
+                  </div>
+                  <span className="whitespace-nowrap text-sm text-green-500">28 days</span>
+                </div>
+              </div>
             </div>
           </section>
 

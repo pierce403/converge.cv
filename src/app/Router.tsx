@@ -1,24 +1,63 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Layout } from './Layout';
-import { OnboardingPage, useAuth } from '@/features/auth';
+import { useAuth } from '@/features/auth/useAuth';
 import { ChatWorkspace } from '@/features/conversations/ChatWorkspace';
-import { NewChatPage } from '@/features/conversations/NewChatPage';
-import { SettingsPage } from '@/features/settings';
-import { DebugPage } from '@/features/debug';
-import { SearchPage } from '@/features/search';
-import { ContactsPage } from '@/features/contacts/ContactsPage';
-import { NewGroupPage } from '@/features/conversations/NewGroupPage';
-import { GroupSettingsPage } from '@/features/conversations/GroupSettingsPage';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
 import { UserConnectRedirect, InboxConnectRedirect, InviteConnectRedirect } from '@/app/deeplinks';
-import { StartDmPage } from '@/features/conversations/StartDmPage';
-import { ContactLinkPage } from '@/features/contacts/ContactLinkPage';
-import { InviteClaimPage } from '@/features/conversations/InviteClaimPage';
 import { closeStorage, getStorageNamespace } from '@/lib/storage';
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
 import { resetXmtpClient } from '@/lib/xmtp/client';
 import { disablePush } from '@/lib/push';
+import { startMessageRetentionScheduler } from '@/lib/message-retention';
+
+const OnboardingPage = lazy(() =>
+  import('@/features/auth/OnboardingPage').then(({ OnboardingPage }) => ({
+    default: OnboardingPage,
+  }))
+);
+const NewChatPage = lazy(() =>
+  import('@/features/conversations/NewChatPage').then(({ NewChatPage }) => ({
+    default: NewChatPage,
+  }))
+);
+const SettingsPage = lazy(() =>
+  import('@/features/settings/SettingsPage').then(({ SettingsPage }) => ({ default: SettingsPage }))
+);
+const DebugPage = lazy(() =>
+  import('@/features/debug/DebugPage').then(({ DebugPage }) => ({ default: DebugPage }))
+);
+const SearchPage = lazy(() =>
+  import('@/features/search/SearchPage').then(({ SearchPage }) => ({ default: SearchPage }))
+);
+const ContactsPage = lazy(() =>
+  import('@/features/contacts/ContactsPage').then(({ ContactsPage }) => ({ default: ContactsPage }))
+);
+const NewGroupPage = lazy(() =>
+  import('@/features/conversations/NewGroupPage').then(({ NewGroupPage }) => ({
+    default: NewGroupPage,
+  }))
+);
+const GroupSettingsPage = lazy(() =>
+  import('@/features/conversations/GroupSettingsPage').then(({ GroupSettingsPage }) => ({
+    default: GroupSettingsPage,
+  }))
+);
+const StartDmPage = lazy(() =>
+  import('@/features/conversations/StartDmPage').then(({ StartDmPage }) => ({
+    default: StartDmPage,
+  }))
+);
+const ContactLinkPage = lazy(() =>
+  import('@/features/contacts/ContactLinkPage').then(({ ContactLinkPage }) => ({
+    default: ContactLinkPage,
+  }))
+);
+const InviteClaimPage = lazy(() =>
+  import('@/features/conversations/InviteClaimPage').then(({ InviteClaimPage }) => ({
+    default: InviteClaimPage,
+  }))
+);
 
 export function AppRouter() {
   const { isAuthenticated, checkExistingIdentity } = useAuth();
@@ -28,6 +67,11 @@ export function AppRouter() {
   const clearAllFlag =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('clear_all_data') === 'true';
+
+  useEffect(() => {
+    if (clearAllFlag) return;
+    return startMessageRetentionScheduler();
+  }, [clearAllFlag]);
 
   useEffect(() => {
     if (!clearAllFlag || clearAllRef.current) {
@@ -70,7 +114,9 @@ export function AppRouter() {
             };
           });
 
-        const idbWithDatabases = indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> };
+        const idbWithDatabases = indexedDB as unknown as {
+          databases?: () => Promise<Array<{ name?: string }>>;
+        };
         const dbs = await idbWithDatabases?.databases?.();
         if (Array.isArray(dbs) && dbs.length > 0) {
           for (const db of dbs) {
@@ -98,7 +144,9 @@ export function AppRouter() {
       }
 
       try {
-        const storageManager = navigator.storage as unknown as { getDirectory?: () => Promise<FileSystemDirectoryHandle> };
+        const storageManager = navigator.storage as unknown as {
+          getDirectory?: () => Promise<FileSystemDirectoryHandle>;
+        };
         if (storageManager?.getDirectory) {
           const opfsRoot = await storageManager.getDirectory();
           // @ts-expect-error - OPFS API types
@@ -112,7 +160,7 @@ export function AppRouter() {
       } catch (e) {
         console.error('[AppRouter] Failed to clear XMTP OPFS databases:', e);
         alert(
-          'Converge removed IndexedDB data but could not remove every XMTP database file. Close other Converge tabs and clear this site\'s browser storage before using the app again.'
+          "Converge removed IndexedDB data but could not remove every XMTP database file. Close other Converge tabs and clear this site's browser storage before using the app again."
         );
         window.location.replace('/onboarding');
         return;
@@ -120,8 +168,16 @@ export function AppRouter() {
 
       try {
         if (typeof window !== 'undefined') {
-          try { window.localStorage.clear(); } catch (err) { /* ignore */ }
-          try { window.sessionStorage.clear(); } catch (err) { /* ignore */ }
+          try {
+            window.localStorage.clear();
+          } catch (err) {
+            /* ignore */
+          }
+          try {
+            window.sessionStorage.clear();
+          } catch (err) {
+            /* ignore */
+          }
         }
       } catch (e) {
         console.warn('[AppRouter] Failed to clear web storage (non-fatal):', e);
@@ -200,6 +256,8 @@ export function AppRouter() {
     </div>
   );
 
+  const lazyPage = (page: ReactNode) => <Suspense fallback={loadingScreen}>{page}</Suspense>;
+
   if (clearAllFlag) {
     return (
       <Routes>
@@ -222,7 +280,7 @@ export function AppRouter() {
 
     return (
       <Routes>
-        <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/onboarding" element={lazyPage(<OnboardingPage />)} />
         <Route path="/i/:inboxId" element={<InboxConnectRedirect />} />
         <Route path="/u/:userId" element={<UserConnectRedirect />} />
         <Route path="/invite" element={<InviteConnectRedirect />} />
@@ -239,18 +297,18 @@ export function AppRouter() {
       <Route path="/" element={<Layout />}>
         <Route index element={<ChatWorkspace />} />
         <Route path="chat/:id" element={<ChatWorkspace />} />
-        <Route path="chat/:conversationId/settings" element={<GroupSettingsPage />} />
-        <Route path="new-chat" element={<NewChatPage />} />
-        <Route path="new-group" element={<NewGroupPage />} />
-        <Route path="search" element={<SearchPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="debug" element={<DebugPage />} />
-        <Route path="contacts" element={<ContactsPage />} />
+        <Route path="chat/:conversationId/settings" element={lazyPage(<GroupSettingsPage />)} />
+        <Route path="new-chat" element={lazyPage(<NewChatPage />)} />
+        <Route path="new-group" element={lazyPage(<NewGroupPage />)} />
+        <Route path="search" element={lazyPage(<SearchPage />)} />
+        <Route path="settings" element={lazyPage(<SettingsPage />)} />
+        <Route path="debug" element={lazyPage(<DebugPage />)} />
+        <Route path="contacts" element={lazyPage(<ContactsPage />)} />
         {/* New simplified deep links */}
-        <Route path="i/:inboxId" element={<StartDmPage />} />
-        <Route path="u/:userId" element={<ContactLinkPage />} />
-        <Route path="invite" element={<InviteClaimPage />} />
-        <Route path="invite/:code" element={<InviteClaimPage />} />
+        <Route path="i/:inboxId" element={lazyPage(<StartDmPage />)} />
+        <Route path="u/:userId" element={lazyPage(<ContactLinkPage />)} />
+        <Route path="invite" element={lazyPage(<InviteClaimPage />)} />
+        <Route path="invite/:code" element={lazyPage(<InviteClaimPage />)} />
         <Route path="/handle-xmtp-protocol" element={<HandleXmtpProtocol />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

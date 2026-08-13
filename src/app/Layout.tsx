@@ -9,9 +9,9 @@ import { WalletSignatureModal } from '@/components/WalletSignatureModal';
 import { useAuthStore, useConversationStore, useContactStore, useInboxRegistryStore, useMessageStore } from '@/lib/stores';
 import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
+import { shouldRetainMessage } from '@/lib/message-retention-policy';
 import { getXmtpClient } from '@/lib/xmtp';
 import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation';
-import { getResyncReadStateFor } from '@/lib/xmtp/resync-state';
 import type { Conversation } from '@/types';
 import type { XmtpMessage } from '@/lib/xmtp';
 import buildInfo from '@/build-info.json';
@@ -752,6 +752,10 @@ export function Layout() {
       }>;
       const { conversationId, message, isHistory } = customEvent.detail;
 
+      if (!shouldRetainMessage(message)) {
+        return;
+      }
+
       console.log('[Layout] Global message listener: received message', {
         conversationId,
         messageId: message.id,
@@ -818,7 +822,6 @@ export function Layout() {
         const resolvedAvatar = contact?.preferredAvatar ?? contact?.avatar;
 
         let conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
-        const preservedReadState = getResyncReadStateFor(conversationId);
 
         const peerKeyBase = contact?.inboxId || senderInboxId;
 
@@ -854,8 +857,7 @@ export function Layout() {
                 archived: false,
                 lastMessageId: message.id,
                 lastMessageSender: message.senderAddress,
-                lastReadAt: preservedReadState?.lastReadAt ?? 0,
-                lastReadMessageId: preservedReadState?.lastReadMessageId ?? undefined,
+                lastReadAt: 0,
                 ...groupDetailsToConversationUpdates(groupDetails),
               };
               addConversation(groupConversation);
@@ -891,8 +893,7 @@ export function Layout() {
             displayAvatar: resolvedAvatar,
             lastMessageId: message.id,
             lastMessageSender: message.senderAddress,
-            lastReadAt: preservedReadState?.lastReadAt ?? 0,
-            lastReadMessageId: preservedReadState?.lastReadMessageId ?? undefined,
+            lastReadAt: 0,
           };
 
           addConversation(newConversation);
@@ -946,26 +947,6 @@ export function Layout() {
             await storage.putConversation({ ...conversation, ...updates });
             conversation = { ...conversation, ...updates } as Conversation;
           }
-          if (preservedReadState) {
-            const readUpdates: Partial<Conversation> = {};
-            if (
-              preservedReadState.lastReadAt !== undefined &&
-              (conversation.lastReadAt ?? 0) < preservedReadState.lastReadAt
-            ) {
-              readUpdates.lastReadAt = preservedReadState.lastReadAt;
-            }
-            if (
-              preservedReadState.lastReadMessageId !== undefined &&
-              conversation.lastReadMessageId !== preservedReadState.lastReadMessageId
-            ) {
-              readUpdates.lastReadMessageId = preservedReadState.lastReadMessageId ?? undefined;
-            }
-            if (Object.keys(readUpdates).length > 0) {
-              updateConversation(conversation.id, readUpdates);
-              await storage.putConversation({ ...conversation, ...readUpdates });
-              conversation = { ...conversation, ...readUpdates } as Conversation;
-            }
-          }
           // Deduplicate against existing by peer id also when conversation already existed
           try {
             const store = useConversationStore.getState();
@@ -1005,6 +986,10 @@ export function Layout() {
       }>;
       const { conversationId, system } = custom.detail;
       try {
+        const sentAt = system.sentAt || Date.now();
+        if (!shouldRetainMessage({ sentAt })) {
+          return;
+        }
         const storage = await getStorage();
         const existing = await storage.getMessage(system.id);
         if (existing) {
@@ -1014,7 +999,7 @@ export function Layout() {
           id: system.id,
           conversationId,
           sender: system.senderInboxId || 'system',
-          sentAt: system.sentAt || Date.now(),
+          sentAt,
           receivedAt: Date.now(),
           type: 'system' as const,
           body: system.body,
