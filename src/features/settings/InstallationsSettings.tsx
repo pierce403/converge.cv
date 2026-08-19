@@ -3,10 +3,23 @@
  */
 
 import { useCallback, useState, useEffect, useRef } from 'react';
+import { IdentifierKind, type Identifier } from '@xmtp/browser-sdk';
 import { useAuthStore } from '@/lib/stores';
-import { getXmtpClient } from '@/lib/xmtp';
+import { getXmtpClient, type XmtpIdentity } from '@/lib/xmtp';
 import { installationIdsMatch } from '@/lib/xmtp/client-registration';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
+import { useWalletConnection, wagmiConfigNative } from '@/lib/wagmi';
+import { getPublicClient } from '@wagmi/core';
+import {
+  ethereumAddressesEqual,
+  normalizeEthereumAddress,
+} from '@/lib/utils/ethereum';
+import { classifyWalletBytecode } from '@/lib/wagmi/wallet-account';
+import {
+  walletInspectionChainIds,
+  withWalletInspectionTimeout,
+} from '@/lib/wagmi/wallet-inspection';
+import { formatWalletConnectionError } from '@/features/auth/wallet-connection-error';
 
 interface KeyPackageStatus {
   lifetime?: {
@@ -23,6 +36,36 @@ interface Installation {
   keyPackageStatus?: KeyPackageStatus;
 }
 
+interface SafeInboxState {
+  inboxId?: string;
+  recoveryIdentifier?: Identifier;
+  accountIdentifiers?: Identifier[];
+  installations?: Array<{ id: string; bytes: Uint8Array; clientTimestampNs?: bigint }>;
+}
+
+async function resolveWalletType(
+  accountAddress: string,
+  connectedChainId?: number
+): Promise<{ walletType: 'EOA' | 'SCW'; chainId?: number }> {
+  for (const inspectionChainId of walletInspectionChainIds(connectedChainId)) {
+    try {
+      const publicClient = getPublicClient(wagmiConfigNative, {
+        chainId: inspectionChainId,
+      });
+      if (!publicClient) continue;
+      const bytecode = await withWalletInspectionTimeout(
+        publicClient.getBytecode({ address: accountAddress as `0x${string}` })
+      );
+      if (classifyWalletBytecode(bytecode) === 'SCW') {
+        return { walletType: 'SCW', chainId: inspectionChainId };
+      }
+    } catch (error) {
+      console.warn(`[Installations] Bytecode inspection on chain ${inspectionChainId} failed:`, error);
+    }
+  }
+  return { walletType: 'EOA', chainId: connectedChainId };
+}
+
 export function InstallationsSettings() {
   const identity = useAuthStore((state) => state.identity);
   const connectionStatus = useXmtpStore((state) => state.connectionStatus);
@@ -34,7 +77,26 @@ export function InstallationsSettings() {
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [isFetchingStatuses, setIsFetchingStatuses] = useState(false);
   const [verifiedCurrentInstallationId, setVerifiedCurrentInstallationId] = useState<string | null>(null);
+  const [recoveryAddress, setRecoveryAddress] = useState<string | null>(null);
+  const [pendingRevocation, setPendingRevocation] = useState<{ id: string; bytes: Uint8Array } | null>(null);
+  const [showRecoveryWalletModal, setShowRecoveryWalletModal] = useState(false);
+  const [recoveryWalletError, setRecoveryWalletError] = useState<string | null>(null);
+  const [isRevokingWithWallet, setIsRevokingWithWallet] = useState(false);
   const loadGenerationRef = useRef(0);
+
+  const {
+    connectWallet,
+    walletOptions,
+    isConnected: isWalletConnected,
+    address: connectedWalletAddress,
+    chainId: connectedWalletChainId,
+    signMessage,
+  } = useWalletConnection();
+
+  const isDirectRecoverySigner = Boolean(
+    identity?.privateKey &&
+      (!recoveryAddress || (identity?.address && ethereumAddressesEqual(identity.address, recoveryAddress)))
+  );
 
   const loadInstallations = useCallback(async () => {
     const loadGeneration = ++loadGenerationRef.current;
@@ -45,21 +107,25 @@ export function InstallationsSettings() {
     try {
       const xmtp = getXmtpClient();
       console.log('[Installations] Loading installations, connected:', xmtp.isConnected());
-      type SafeInboxStateLite = {
-        installations?: Array<{ id: string; clientTimestampNs?: bigint }>;
-      };
       const inboxState = (
         xmtp.isConnected()
           ? await xmtp.getInboxState()
           : identity?.inboxId
             ? await xmtp.getInboxStateById(identity.inboxId)
             : await xmtp.getInboxState()
-      ) as unknown as SafeInboxStateLite;
+      ) as unknown as SafeInboxState;
       if (!isCurrentLoad()) return;
       console.log('[Installations] Inbox state:', inboxState);
-      
+
+      const recoveryIdent = inboxState?.recoveryIdentifier;
+      let recAddress: string | null = null;
+      if (recoveryIdent?.identifierKind === IdentifierKind.Ethereum && recoveryIdent.identifier) {
+        recAddress = normalizeEthereumAddress(recoveryIdent.identifier);
+      }
+      setRecoveryAddress(recAddress);
+
       // Sort installations by creation date (newest first)
-      const sortedInstallations = [...(inboxState.installations || [])].sort((a, b) => {
+      const sortedInstallations = [...(inboxState?.installations || [])].sort((a, b) => {
         const aTime = a.clientTimestampNs || 0n;
         const bTime = b.clientTimestampNs || 0n;
         return aTime > bTime ? -1 : aTime < bTime ? 1 : 0;
@@ -81,7 +147,7 @@ export function InstallationsSettings() {
         try {
           const installationIds = sortedInstallations.map((inst) => inst.id);
           const statuses = await xmtp.getKeyPackageStatuses(installationIds);
-          
+
           const installationsWithStatus = sortedInstallations.map((installation) => ({
             ...installation,
             keyPackageStatus: statuses.get(installation.id),
@@ -104,7 +170,7 @@ export function InstallationsSettings() {
       setHasLoaded(false);
       console.error('[Installations] Failed to load:', err);
       const errorMsg = err instanceof Error ? err.message : 'Failed to load installations';
-      
+
       // Provide helpful error messages
       if (errorMsg.includes('Client not connected')) {
         setError('XMTP not connected. Please connect first to view installations.');
@@ -159,37 +225,117 @@ export function InstallationsSettings() {
     };
   }, [connectionStatus, identity?.inboxId, loadInstallations]);
 
+  const executeRevocation = async (
+    target: { id: string; bytes: Uint8Array },
+    signerIdentity: XmtpIdentity,
+    inboxId: string
+  ) => {
+    setRevokingId(target.id);
+    setError(null);
+    try {
+      const xmtp = getXmtpClient();
+      console.log('[Installations] Revoking installation:', target.id, 'with identity:', signerIdentity.address);
+      await xmtp.revokeInstallationsWithRecoveryIdentity(
+        signerIdentity,
+        inboxId,
+        [target.bytes]
+      );
+      console.log('[Installations] ✅ Revocation successful');
+      alert('Installation revoked successfully!');
+      setShowRecoveryWalletModal(false);
+      setPendingRevocation(null);
+      await loadInstallations();
+    } catch (err) {
+      console.error('[Installations] Failed to revoke:', err);
+      throw err;
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
   const handleRevoke = async (installationBytes: Uint8Array, installationId: string) => {
     if (!verifiedCurrentInstallationId) {
       setError('Reconnect XMTP and refresh installations before revoking a device.');
       return;
     }
-    if (
-      !confirm(
-        'Are you sure you want to revoke this installation? That device will no longer be able to send or receive messages.'
-      )
-    ) {
+    const targetInboxId = identity?.inboxId;
+    if (!targetInboxId) {
+      setError('Inbox ID is unavailable. Please reconnect.');
       return;
     }
 
-    setRevokingId(installationId);
-    setError(null);
-    try {
-      const xmtp = getXmtpClient();
-      
-      console.log('[Installations] Revoking installation:', installationId);
-      await xmtp.revokeInstallations([installationBytes]);
-      console.log('[Installations] ✅ Revocation successful');
-      
-      alert('Installation revoked successfully!');
-      
-      await loadInstallations();
-    } catch (err) {
-      console.error('[Installations] Failed to revoke:', err);
-      setError(err instanceof Error ? err.message : 'Failed to revoke installation');
-    } finally {
-      setRevokingId(null);
+    const target = { id: installationId, bytes: installationBytes };
+
+    // 1. If local key is the recovery signer (e.g. standalone Converge inbox):
+    if (isDirectRecoverySigner && identity?.privateKey && identity?.address) {
+      if (
+        !confirm(
+          'Are you sure you want to revoke this installation? That device will no longer be able to send or receive messages.'
+        )
+      ) {
+        return;
+      }
+      try {
+        await executeRevocation(
+          target,
+          {
+            address: identity.address,
+            privateKey: identity.privateKey,
+            inboxId: targetInboxId,
+          },
+          targetInboxId
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to revoke installation');
+      }
+      return;
     }
+
+    // 2. If recovery wallet is connected:
+    const hasMatchingConnectedWallet =
+      isWalletConnected &&
+      Boolean(connectedWalletAddress) &&
+      Boolean(recoveryAddress) &&
+      ethereumAddressesEqual(connectedWalletAddress, recoveryAddress);
+
+    if (hasMatchingConnectedWallet && signMessage) {
+      if (
+        !confirm(
+          `Revoke installation ${formatInstallationId(installationId)}?\n\nThis will send an XMTP revocation signature request to your connected recovery wallet (${formatInstallationId(recoveryAddress!)}).`
+        )
+      ) {
+        return;
+      }
+      try {
+        let walletType: 'EOA' | 'SCW' = 'EOA';
+        let chainId = connectedWalletChainId;
+        try {
+          const inspectionResult = await resolveWalletType(connectedWalletAddress!, connectedWalletChainId);
+          walletType = inspectionResult.walletType;
+          chainId = inspectionResult.chainId;
+        } catch (inspErr) {
+          console.warn('[Installations] Could not inspect wallet bytecode:', inspErr);
+        }
+        await executeRevocation(
+          target,
+          {
+            address: connectedWalletAddress!,
+            chainId,
+            walletType,
+            signMessage: async (msg) => await signMessage(msg, connectedWalletAddress!),
+          },
+          targetInboxId
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to revoke installation');
+      }
+      return;
+    }
+
+    // 3. Otherwise open the recovery wallet modal
+    setPendingRevocation(target);
+    setRecoveryWalletError(null);
+    setShowRecoveryWalletModal(true);
   };
 
   const formatInstallationId = (id: string) => {
@@ -204,20 +350,20 @@ export function InstallationsSettings() {
       const date = new Date(ms);
       const now = Date.now();
       const diff = now - ms;
-      
+
       // Show relative time if within last 30 days
       if (diff < 30 * 24 * 60 * 60 * 1000) {
         const seconds = Math.floor(diff / 1000);
         const minutes = Math.floor(seconds / 60);
         const hours = Math.floor(minutes / 60);
         const days = Math.floor(hours / 24);
-        
+
         if (days > 0) return `${days}d ago`;
         if (hours > 0) return `${hours}h ago`;
         if (minutes > 0) return `${minutes}m ago`;
         return 'Just now';
       }
-      
+
       return date.toLocaleDateString();
     } catch {
       return 'Unknown';
@@ -230,14 +376,14 @@ export function InstallationsSettings() {
       const ms = Number(notAfter) * 1000; // notAfter is in seconds
       const now = Date.now();
       const diff = ms - now;
-      
+
       if (diff < 0) return 'Expired';
-      
+
       const days = Math.floor(diff / (24 * 60 * 60 * 1000));
       if (days > 365) return `${Math.floor(days / 365)}y`;
       if (days > 30) return `${Math.floor(days / 30)}mo`;
       if (days > 0) return `${days}d`;
-      
+
       const hours = Math.floor(diff / (60 * 60 * 1000));
       return `${hours}h`;
     } catch {
@@ -432,6 +578,125 @@ export function InstallationsSettings() {
           </div>
         )}
       </div>
+
+      {showRecoveryWalletModal && pendingRevocation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="relative w-full max-w-md rounded-2xl border border-primary-800/70 bg-primary-950/95 p-6 text-primary-50 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold">Authorize Revocation</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRecoveryWalletModal(false);
+                  setPendingRevocation(null);
+                  setRecoveryWalletError(null);
+                }}
+                className="rounded-full p-1.5 text-primary-300 transition hover:bg-primary-900/70"
+                aria-label="Close modal"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M6 6l12 12M6 18L18 6" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+
+            <p className="text-xs text-primary-200">
+              XMTP protocol rules require authorization from the inbox <strong>Recovery Wallet</strong> to revoke device installations.
+            </p>
+
+            {recoveryAddress && (
+              <div className="rounded-lg border border-primary-800/60 bg-primary-900/40 p-3 space-y-1">
+                <div className="text-xs font-semibold uppercase tracking-wider text-primary-300">
+                  Required Recovery Wallet
+                </div>
+                <div className="font-mono text-xs text-accent-300 break-all">
+                  {recoveryAddress}
+                </div>
+              </div>
+            )}
+
+            {recoveryWalletError && (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-300">
+                {recoveryWalletError}
+              </div>
+            )}
+
+            {isWalletConnected && connectedWalletAddress && (
+              <div className="text-xs text-primary-300">
+                Currently connected: <span className="font-mono text-primary-100">{formatInstallationId(connectedWalletAddress)}</span>
+                {recoveryAddress && !ethereumAddressesEqual(connectedWalletAddress, recoveryAddress) && (
+                  <div className="text-yellow-400 mt-1">
+                    Connected address does not match the recovery wallet. Connect the recovery wallet below.
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-2 pt-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-primary-300">
+                Connect Recovery Wallet
+              </div>
+              <div className="space-y-2">
+                {walletOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={async () => {
+                      setRecoveryWalletError(null);
+                      setIsRevokingWithWallet(true);
+                      try {
+                        const connected = await connectWallet(option);
+                        const address = connected?.accounts?.[0];
+                        if (!address || !connected?.signMessage) {
+                          throw new Error('Wallet connected without an account-bound signer. Please reconnect.');
+                        }
+                        if (recoveryAddress && !ethereumAddressesEqual(address, recoveryAddress)) {
+                          throw new Error(
+                            `Connected wallet (${formatInstallationId(address)}) does not match the recovery wallet (${formatInstallationId(recoveryAddress)}). Please switch to the recovery account in your wallet.`
+                          );
+                        }
+                        let walletType: 'EOA' | 'SCW' = 'EOA';
+                        let chainId = connected.chainId;
+                        try {
+                          const inspectionResult = await resolveWalletType(address, connected.chainId);
+                          walletType = inspectionResult.walletType;
+                          chainId = inspectionResult.chainId;
+                        } catch (inspErr) {
+                          console.warn('[Installations] Could not inspect wallet bytecode:', inspErr);
+                        }
+                        await executeRevocation(
+                          pendingRevocation,
+                          {
+                            address,
+                            chainId,
+                            walletType,
+                            signMessage: connected.signMessage,
+                          },
+                          identity?.inboxId ?? ''
+                        );
+                      } catch (err) {
+                        setRecoveryWalletError(formatWalletConnectionError(err));
+                      } finally {
+                        setIsRevokingWithWallet(false);
+                      }
+                    }}
+                    disabled={isRevokingWithWallet || option.disabled}
+                    className="w-full p-3 bg-primary-950/60 hover:bg-primary-900 border border-primary-800/60 hover:border-accent-400 rounded-lg flex items-center gap-3 transition-colors text-left disabled:opacity-50"
+                  >
+                    <span className="text-2xl">{option.icon}</span>
+                    <div>
+                      <div className="text-sm font-medium text-primary-50">{option.name}</div>
+                      {option.description && (
+                        <div className="text-xs text-primary-300">{option.description}</div>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
+

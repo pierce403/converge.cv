@@ -7535,6 +7535,77 @@ export class XmtpClient {
   }
 
   /**
+   * Revoke specific installations using an explicit recovery identity / wallet
+   * @param recoveryIdentity - Identity holding the recovery signer (private key or wallet signMessage)
+   * @param inboxId - The inbox ID
+   * @param installationIds - Array of installation ID bytes to revoke
+   */
+  async revokeInstallationsWithRecoveryIdentity(
+    recoveryIdentity: XmtpIdentity,
+    inboxId: string,
+    installationIds: Uint8Array[]
+  ): Promise<void> {
+    if (!installationIds.length) return;
+    let signer = await this.createSigner(recoveryIdentity);
+    try {
+      await Client.revokeInstallations(signer, inboxId, installationIds, 'production');
+    } catch (error) {
+      const mismatch = extractWrongChainIdDetails(error instanceof Error ? error.message : String(error));
+      if (
+        mismatch &&
+        recoveryIdentity.walletType === 'SCW' &&
+        recoveryIdentity.chainId !== mismatch.initiallyAddedWith
+      ) {
+        if (isLegacyScwChainZeroMismatch(mismatch)) {
+          throw new Error(legacyScwChainZeroRecoveryMessage());
+        }
+        signer = await this.createSigner({
+          ...recoveryIdentity,
+          chainId: mismatch.initiallyAddedWith,
+          walletType: 'SCW',
+        });
+        try {
+          await Client.revokeInstallations(signer, inboxId, installationIds, 'production');
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          if (isSignatureValidationFailure(retryMessage)) {
+            throw new Error(
+              `XMTP could not validate the smart-wallet recovery signature on chain ${mismatch.initiallyAddedWith}. Revoke an installation from an already-connected Convos/XMTP device, then retry Converge.`
+            );
+          }
+          throw retryError;
+        }
+      } else {
+        throw error;
+      }
+    }
+    console.log('[XMTP] ✅ Installations revoked with recovery identity successfully');
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'installations:revoke_with_recovery',
+      details: `Revoked ${installationIds.length} installation(s) for inbox ${inboxId}`,
+    });
+  }
+
+  /**
+   * Revoke specific installations using an explicit signer
+   */
+  async revokeInstallationsWithSigner(
+    signer: Signer,
+    inboxId: string,
+    installationIds: Uint8Array[]
+  ): Promise<void> {
+    if (!installationIds.length) return;
+    await Client.revokeInstallations(signer, inboxId, installationIds, 'production');
+    console.log('[XMTP] ✅ Installations revoked with signer successfully');
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'installations:revoke_with_signer',
+      details: `Revoked ${installationIds.length} installation(s) for inbox ${inboxId}`,
+    });
+  }
+
+  /**
    * Revoke this browser installation without accepting an arbitrary installation
    * ID from UI code. XMTP does not allow a connected client to revoke its own
    * current installation, so capture its recovery signer and ID, close the
