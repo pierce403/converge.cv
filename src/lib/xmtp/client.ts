@@ -1095,6 +1095,7 @@ export class XmtpClient {
       await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
         attempts: 3,
         initialDelayMs: 800,
+        timeoutMs: 15000,
         shouldRetry: (err) => this.isTransientSyncError(err),
         onRateLimit: () => this.noteGlobalRateLimit(`conversations.sync:${reason}`),
       });
@@ -1267,11 +1268,48 @@ export class XmtpClient {
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
+  private async withTimeout<T>(
+    label: string,
+    promise: Promise<T>,
+    timeoutMs: number
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`[XMTP] ${label} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private async runWithBoundedConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    fn: (item: T) => Promise<R>
+  ): Promise<R[]> {
+    const results: R[] = [];
+    for (let i = 0; i < items.length; i += concurrency) {
+      const chunk = items.slice(i, i + concurrency);
+      const chunkResults = await Promise.all(chunk.map(fn));
+      results.push(...chunkResults);
+    }
+    return results;
+  }
+
   private async retryWithDelay<T>(label: string, fn: () => Promise<T>, opts?: {
     attempts?: number;
     initialDelayMs?: number;
     factor?: number;
     jitter?: boolean;
+    timeoutMs?: number;
     shouldRetry?: (err: unknown, attempt: number) => boolean;
     onRateLimit?: (err: unknown) => void;
   }): Promise<T> {
@@ -1282,6 +1320,9 @@ export class XmtpClient {
     let lastErr: unknown = undefined;
     for (let i = 0; i < attempts; i++) {
       try {
+        if (typeof opts?.timeoutMs === 'number' && opts.timeoutMs > 0) {
+          return await this.withTimeout(label, fn(), opts.timeoutMs);
+        }
         return await fn();
       } catch (err) {
         lastErr = err;
@@ -2715,21 +2756,27 @@ export class XmtpClient {
     return this.validateGroupMembersForInvite(group);
   }
 
-  private async buildGroupDetails(conversationId: string, group: Awaited<ReturnType<typeof this.getGroupConversation>>): Promise<GroupDetails> {
+  private async buildGroupDetails(
+    conversationId: string,
+    group: Awaited<ReturnType<typeof this.getGroupConversation>>,
+    options?: { skipGroupSync?: boolean }
+  ): Promise<GroupDetails> {
     const safeGroup = group;
     if (!safeGroup) {
       throw new Error(`Group ${conversationId} unavailable`);
     }
 
-    try {
-      await safeGroup.sync?.();
-    } catch (error) {
-      console.warn('[XMTP] Failed to sync group before reading metadata:', conversationId, error);
+    if (!options?.skipGroupSync && typeof safeGroup.sync === 'function') {
+      try {
+        await this.withTimeout('group.sync', safeGroup.sync(), 8000);
+      } catch (error) {
+        console.warn('[XMTP] Failed to sync group before reading metadata:', conversationId, error);
+      }
     }
 
     let members: GroupMember[] = [];
     try {
-      members = await safeGroup.members();
+      members = await this.withTimeout('group.members', safeGroup.members(), 5000);
     } catch (error) {
       console.warn('[XMTP] Failed to load group members:', conversationId, error);
     }
@@ -2737,7 +2784,7 @@ export class XmtpClient {
     const adminInboxIds = await (async () => {
       if (typeof safeGroup.listAdmins !== 'function') return [] as string[];
       try {
-        return await safeGroup.listAdmins();
+        return await this.withTimeout('group.listAdmins', safeGroup.listAdmins(), 5000);
       } catch (error) {
         console.warn('[XMTP] Failed to list group admins:', conversationId, error);
         return [] as string[];
@@ -2747,7 +2794,7 @@ export class XmtpClient {
     const superAdminInboxIds = await (async () => {
       if (typeof safeGroup.listSuperAdmins !== 'function') return [] as string[];
       try {
-        return await safeGroup.listSuperAdmins();
+        return await this.withTimeout('group.listSuperAdmins', safeGroup.listSuperAdmins(), 5000);
       } catch (error) {
         console.warn('[XMTP] Failed to list group super admins:', conversationId, error);
         return [] as string[];
@@ -3999,6 +4046,25 @@ export class XmtpClient {
     const historySinceMs = this.identity.lastSyncedAt;
     let streamsReadyForHistory = false;
     console.log('[XMTP] Starting conversation sync and message streaming...');
+
+    let syncWatchdogTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      syncWatchdogTimer = null;
+      if (this.client !== client) return;
+      const current = useXmtpStore.getState().syncStatus;
+      if (current === 'syncing-conversations' || current === 'syncing-messages') {
+        console.warn(`[XMTP] Sync status watchdog triggered after 20s (was ${current}) - settling progress bar`);
+        setSyncProgress(100);
+        setSyncStatus('complete');
+        const statusClient = client;
+        this.syncStatusResetTimer = setTimeout(() => {
+          this.syncStatusResetTimer = null;
+          if (this.client !== statusClient) return;
+          setSyncStatus('idle');
+          setSyncProgress(0);
+        }, 2000);
+      }
+    }, 20000);
+
     try {
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
@@ -4062,6 +4128,11 @@ export class XmtpClient {
       });
       setSyncStatus('idle');
       setSyncProgress(0);
+    } finally {
+      if (syncWatchdogTimer) {
+        clearTimeout(syncWatchdogTimer);
+        syncWatchdogTimer = null;
+      }
     }
 
     if (!streamsReadyForHistory) {
@@ -5147,6 +5218,7 @@ export class XmtpClient {
       convos = await this.retryWithDelay('conversations.list', () => this.client!.conversations.list(), {
         attempts: 2,
         initialDelayMs: 500,
+        timeoutMs: 10000,
         shouldRetry: (err) => this.isTransientSyncError(err),
         onRateLimit: () => this.noteGlobalRateLimit('conversations.list'),
       });
@@ -5171,6 +5243,7 @@ export class XmtpClient {
       const dms = await this.retryWithDelay('conversations.listDms', () => this.client!.conversations.listDms(), {
         attempts: 2,
         initialDelayMs: 500,
+        timeoutMs: 10000,
         shouldRetry: (err) => this.isTransientSyncError(err),
         onRateLimit: () => this.noteGlobalRateLimit('conversations.listDms'),
       });
@@ -5178,21 +5251,20 @@ export class XmtpClient {
 
       dmIdSet = new Set((dms || []).map((d) => (d.id || '').toString()).filter(Boolean));
 
-      // Persist DMs to storage to ensure they appear after a resync
-      for (const dm of dms) {
+      // Persist DMs to storage with bounded concurrency to ensure they appear after a resync
+      await this.runWithBoundedConcurrency(dms || [], 6, async (dm) => {
         try {
           const id = dm.id?.toString();
-          if (!id) continue;
+          if (!id) return;
 
           const exists = await storage.getConversation(id);
-          if (exists) continue;
+          if (exists) return;
 
           // Get the peer's inbox ID using the async method
           // This is the actual identity of the person we're chatting with
           let peerInboxId: string | undefined;
           try {
-            // peerInboxId() is an async method on the DM type
-            peerInboxId = await dm.peerInboxId();
+            peerInboxId = await this.withTimeout('dm.peerInboxId', dm.peerInboxId(), 5000);
           } catch (peerIdErr) {
             console.warn('[XMTP] Failed to get peerInboxId for DM:', id, peerIdErr);
           }
@@ -5202,7 +5274,7 @@ export class XmtpClient {
           // be populated properly when messages are backfilled
           if (!peerInboxId) {
             console.warn('[XMTP] Skipping DM without peerInboxId:', id);
-            continue;
+            return;
           }
 
           const createdAt = dm.createdAtNs
@@ -5227,7 +5299,7 @@ export class XmtpClient {
         } catch (dmErr) {
           console.warn('[XMTP] Failed to persist DM during sync:', dmErr);
         }
-      }
+      });
     } catch (e) {
       // If listDms fails, proceed without the set; group detection below is still conservative
       console.warn('[XMTP] listDms failed during syncConversations; continuing without DM filter', e);
@@ -5239,77 +5311,80 @@ export class XmtpClient {
     // a conversation was a group.
     try {
       const myInboxLower = this.client?.inboxId?.toLowerCase?.() ?? this.identity?.inboxId?.toLowerCase?.();
-      for (const c of convos as Array<{ id?: string; createdAtNs?: bigint }>) {
-        const id = c?.id as string | undefined;
-        if (!id) continue;
-        const exists = await storage.getConversation(id);
-        if (dmIdSet.has(id)) {
-          continue;
-        }
+      const candidateGroups = (convos as Array<{ id?: string; createdAtNs?: bigint }>).filter(
+        (c) => c?.id && !dmIdSet.has(c.id as string)
+      );
 
-        // Probe the SDK object even when a local row already exists. Local shape is
-        // not a reliable discriminator after an inbound-message race.
-        let group = null as Awaited<ReturnType<typeof this.getGroupConversation>> | null;
+      await this.runWithBoundedConcurrency(candidateGroups, 6, async (c) => {
+        const id = c.id as string;
         try {
-          group = await this.getGroupConversation(id);
-        } catch {
-          group = null;
-        }
-        if (!group) continue;
+          const exists = await storage.getConversation(id);
 
-        try {
-          const details = await this.buildGroupDetails(id, group);
-          const isMember = (() => {
-            if (!myInboxLower) {
-              return true;
-            }
-            return details.members.some(
-              (member) => member.inboxId && member.inboxId.toLowerCase() === myInboxLower
-            );
-          })();
-          if (!exists && !isMember) {
-            console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
-            continue;
+          // Probe the SDK object even when a local row already exists. Local shape is
+          // not a reliable discriminator after an inbound-message race.
+          let group: Awaited<ReturnType<XmtpClient['getGroupConversation']>> = null;
+          try {
+            group = await this.withTimeout('getGroupConversation', this.getGroupConversation(id), 5000);
+          } catch {
+            group = null;
           }
-
-          const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
-          const authoritative = groupDetailsToConversationUpdates(details, exists);
-          const conversation: Conversation = {
-            ...(exists ?? {
-              id,
-              peerId: id,
-              topic: id,
-              createdAt,
-              lastMessageAt: createdAt,
-              lastMessagePreview: '',
-              unreadCount: 0,
-              pinned: false,
-              archived: false,
-            }),
-            ...authoritative,
-            id,
-          };
-          await storage.putConversation(conversation);
-
-          if (exists) {
-            useConversationStore.getState().updateConversation(id, authoritative);
-          }
+          if (!group) return;
 
           try {
-            await this.ensureConvosGroupProfilePublished(id, group);
-          } catch (error) {
-            console.warn('[XMTP] Failed to publish profile for synced group (non-fatal):', error);
-          }
+            const details = await this.buildGroupDetails(id, group, { skipGroupSync: true });
+            const isMember = (() => {
+              if (!myInboxLower) {
+                return true;
+              }
+              return details.members.some(
+                (member) => member.inboxId && member.inboxId.toLowerCase() === myInboxLower
+              );
+            })();
+            if (!exists && !isMember) {
+              console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
+              return;
+            }
 
-          logNetworkEvent({
-            direction: 'status',
-            event: exists ? 'conversations:sync:group_updated' : 'conversations:sync:group_added',
-            details: `${exists ? 'Updated' : 'Inserted'} group ${id}`,
-          });
-        } catch (persistErr) {
-          console.warn('[XMTP] Failed to reconcile group conversation after sync', id, persistErr);
+            const createdAt = c?.createdAtNs ? Number((c.createdAtNs as bigint) / 1000000n) : Date.now();
+            const authoritative = groupDetailsToConversationUpdates(details, exists);
+            const conversation: Conversation = {
+              ...(exists ?? {
+                id,
+                peerId: id,
+                topic: id,
+                createdAt,
+                lastMessageAt: createdAt,
+                lastMessagePreview: '',
+                unreadCount: 0,
+                pinned: false,
+                archived: false,
+              }),
+              ...authoritative,
+              id,
+            };
+            await storage.putConversation(conversation);
+
+            if (exists) {
+              useConversationStore.getState().updateConversation(id, authoritative);
+            }
+
+            // Publish Convos group profile in background without blocking the sync loop
+            void this.ensureConvosGroupProfilePublished(id, group).catch((error) => {
+              console.warn('[XMTP] Failed to publish profile for synced group (non-fatal):', error);
+            });
+
+            logNetworkEvent({
+              direction: 'status',
+              event: exists ? 'conversations:sync:group_updated' : 'conversations:sync:group_added',
+              details: `${exists ? 'Updated' : 'Inserted'} group ${id}`,
+            });
+          } catch (persistErr) {
+            console.warn('[XMTP] Failed to reconcile group conversation after sync', id, persistErr);
+          }
+        } catch (groupErr) {
+          console.warn('[XMTP] Failed processing group during sync', id, groupErr);
         }
-      }
+      });
     } catch (ensureErr) {
       console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
     }
@@ -5425,6 +5500,7 @@ export class XmtpClient {
         dms = await this.retryWithDelay('conversations.listDms', () => this.client!.conversations.listDms(), {
           attempts: 2,
           initialDelayMs: 500,
+          timeoutMs: 10000,
           shouldRetry: (err) => this.isTransientSyncError(err),
           onRateLimit: () => this.noteGlobalRateLimit('history:conversations.listDms'),
         });
@@ -5478,6 +5554,7 @@ export class XmtpClient {
               await this.retryWithDelay(`dm.sync:${dm.id ?? 'unknown'}`, () => dmWithSync.sync!(), {
                 attempts: 3,
                 initialDelayMs: 750,
+                timeoutMs: 8000,
                 shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
                 onRateLimit: () => this.noteConversationRateLimit(dmId, 'dm.sync'),
               });
@@ -5512,7 +5589,11 @@ export class XmtpClient {
             ),
             limit: messageLimit,
           };
-          const decodedMessages = await dm.messages(perConversationOptions);
+          const decodedMessages = await this.withTimeout(
+            `dm.messages:${dmId}`,
+            dm.messages(perConversationOptions),
+            8000
+          );
           this.syncCounters.backfillMessages += decodedMessages.length;
           // Oldest first so previews/unreads evolve naturally
           decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
@@ -5802,6 +5883,7 @@ export class XmtpClient {
         const allConvs = await this.retryWithDelay('conversations.list', () => this.client!.conversations.list(), {
           attempts: 2,
           initialDelayMs: 500,
+          timeoutMs: 10000,
           shouldRetry: (err) => this.isTransientSyncError(err),
           onRateLimit: () => this.noteGlobalRateLimit('history:conversations.list'),
         });
@@ -5850,6 +5932,7 @@ export class XmtpClient {
                 await this.retryWithDelay(`group.sync:${conv.id ?? 'unknown'}`, () => convWithSync.sync!(), {
                   attempts: 3,
                   initialDelayMs: 750,
+                  timeoutMs: 8000,
                   shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
                   onRateLimit: () => this.noteConversationRateLimit(conv.id!, 'group.sync'),
                 });
@@ -5885,7 +5968,11 @@ export class XmtpClient {
               ),
               limit: messageLimit,
             };
-            const decodedMessages = await conv.messages(perConversationOptions);
+            const decodedMessages = await this.withTimeout(
+              `group.messages:${conv.id}`,
+              conv.messages(perConversationOptions),
+              8000
+            );
             this.syncCounters.backfillMessages += decodedMessages.length;
             decodedMessages.sort((a, b) => (a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0));
             for (const m of decodedMessages) {
@@ -6653,18 +6740,18 @@ export class XmtpClient {
         console.warn('[XMTP] loadOwnProfile: Conversation sync failed (continuing):', convSyncErr);
       }
 
-      let dm = await this.client.conversations.getDmByInboxId(inboxId);
+      let dm = await this.withTimeout('getDmByInboxId', this.client.conversations.getDmByInboxId(inboxId), 5000).catch(() => null);
 
       // If still no self-DM, try listing all DMs - sometimes the index isn't updated immediately
       if (!dm) {
         console.log('[XMTP] loadOwnProfile: getDmByInboxId returned null, checking all DMs...');
         try {
-          const allDms = await this.client.conversations.listDms();
+          const allDms = await this.withTimeout('listDms', this.client.conversations.listDms(), 8000).catch(() => []);
           console.log('[XMTP] loadOwnProfile: Found', allDms.length, 'total DMs');
           // Look for self-DM by checking peer inbox ID
           for (const d of allDms) {
             try {
-              const peerId = await d.peerInboxId();
+              const peerId = await this.withTimeout('peerInboxId', d.peerInboxId(), 3000).catch(() => null);
               if (peerId?.toLowerCase() === inboxId.toLowerCase()) {
                 console.log('[XMTP] loadOwnProfile: Found self-DM via listDms');
                 dm = d;
@@ -6688,7 +6775,9 @@ export class XmtpClient {
       let syncSucceeded = false;
       try {
         console.log('[XMTP] loadOwnProfile: Syncing self-DM messages...');
-        await dm.sync();
+        if (typeof dm.sync === 'function') {
+          await this.withTimeout('selfDm.sync', dm.sync(), 8000);
+        }
         syncSucceeded = true;
       } catch (syncError) {
         const errMsg = syncError instanceof Error ? syncError.message : String(syncError);
@@ -6700,7 +6789,7 @@ export class XmtpClient {
         }
       }
 
-      const msgs = await dm.messages();
+      const msgs = await this.withTimeout('selfDm.messages', dm.messages(), 8000).catch(() => []);
       console.log('[XMTP] loadOwnProfile: Found', msgs.length, 'messages in self-DM');
 
       // Scan newest → oldest for a profile record
