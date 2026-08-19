@@ -56,6 +56,7 @@ import {
   type WalletTypeHint,
 } from '@/lib/wagmi/wallet-inspection';
 import { getInstallationRecoveryView } from './installation-recovery-view';
+import { clearAllBrowserData } from '@/lib/identity/clear-browser-data';
 
 type WalletSignMessage = (message: string, accountAddress?: string) => Promise<string>;
 interface InstallationRecoveryResult {
@@ -107,7 +108,6 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const {
     identity,
-    logout,
     burnIdentity,
     reconnectCurrentIdentity,
     repairCurrentInstallation,
@@ -897,158 +897,13 @@ export function SettingsPage() {
       )
     ) {
       try {
-        // Helper: robustly clear cookies for all paths/domains on this origin
-        const clearAllCookies = async () => {
-          try {
-            const raw = document.cookie;
-            if (!raw) return;
-            const cookiePairs = raw.split(';');
-            const names = cookiePairs
-              .map((c) => c.trim())
-              .filter(Boolean)
-              .map((c) => (c.includes('=') ? c.slice(0, c.indexOf('=')) : c));
-
-            // Generate domain variants: exact host, parent domains, and dotted forms
-            const host = location.hostname;
-            const parts = host.split('.');
-            const domainVariants = new Set<string>([host]);
-            for (let i = 0; i < parts.length; i++) {
-              const dom = parts.slice(i).join('.');
-              if (dom) {
-                domainVariants.add(dom);
-                domainVariants.add('.' + dom);
-              }
-            }
-
-            // Generate path variants from deepest to root
-            const path = location.pathname || '/';
-            const segments = path.split('/').filter(Boolean);
-            const pathVariants = new Set<string>(['/']);
-            for (let i = 0; i < segments.length; i++) {
-              pathVariants.add('/' + segments.slice(0, i + 1).join('/'));
-            }
-
-            const expires = 'Thu, 01 Jan 1970 00:00:00 GMT';
-            const setExpired = (name: string, opts: string) => {
-              try { document.cookie = `${name}=; Expires=${expires}; Max-Age=0; ${opts}`; } catch (e) { /* ignore set-cookie failure */ }
-              try { document.cookie = `${name}=; Expires=${expires}; ${opts}`; } catch (e) { /* ignore set-cookie failure */ }
-            };
-
-            // Without domain attribute (current host implied)
-            for (const name of names) {
-              for (const p of pathVariants) {
-                setExpired(name, `Path=${p}; SameSite=Lax`);
-                // Try with Secure attribute as some cookies were set with SameSite=None; Secure
-                setExpired(name, `Path=${p}; SameSite=None; Secure`);
-              }
-            }
-
-            // With explicit domain attribute variants
-            for (const name of names) {
-              for (const d of domainVariants) {
-                for (const p of pathVariants) {
-                  setExpired(name, `Domain=${d}; Path=${p}; SameSite=Lax`);
-                  setExpired(name, `Domain=${d}; Path=${p}; SameSite=None; Secure`);
-                }
-              }
-            }
-          } catch (err) {
-            console.warn('[Settings] Failed to clear some cookies (non-fatal):', err);
-          }
-        };
-        // Delete remote relay registrations while their local retry metadata is
-        // still present. A failed relay cleanup blocks the destructive reset so
-        // it can be retried instead of being stranded permanently.
-        const pushCleanupComplete = await disablePush();
-        const pushCleanupStatus = await getAppPushStatus();
-        if (!pushCleanupComplete || pushCleanupStatus.pendingDeletionCount > 0) {
-          alert(
-            `Could not remove ${pushCleanupStatus.pendingDeletionCount || 'all'} push relay registration${pushCleanupStatus.pendingDeletionCount === 1 ? '' : 's'}. Check your connection and retry Clear All Browser Data.`
-          );
-          return;
-        }
-
-        // 1) Disconnect wallet to prevent auto-reconnect on next load
         try {
           await disconnectWallet();
           console.log('[Settings] Disconnected wallet via wagmi');
         } catch (e) {
           console.warn('[Settings] Wallet disconnect failed (non-fatal):', e);
         }
-
-        // 2) Fully logout (disconnect XMTP, clear IndexedDB + XMTP OPFS, reset state)
-        try {
-          await logout();
-          console.log('[Settings] Performed app logout and storage cleanup');
-        } catch (e) {
-          console.warn('[Settings] Logout encountered an error (continuing):', e);
-        }
-
-        // 3) Clear personalization reminder flags and any local/session storage app data
-        try {
-          if (typeof window !== 'undefined') {
-            // Remove legacy global key
-            try { window.localStorage.removeItem('personalization-reminder'); } catch (e) {
-              console.warn('[Settings] Failed to remove legacy personalization key:', e);
-            }
-            // Remove per-identity keys
-            try {
-              const keys: string[] = [];
-              for (let i = 0; i < window.localStorage.length; i++) {
-                const k = window.localStorage.key(i);
-                if (k) keys.push(k);
-              }
-              for (const k of keys) {
-                if (k.startsWith('personalization-reminder:')) {
-                  window.localStorage.removeItem(k);
-                }
-              }
-            } catch (e) {
-              console.warn('[Settings] Failed to enumerate personalization keys:', e);
-            }
-            // As this is "Clear All Data", clear all local/session storage as a final sweep
-            try { window.localStorage.clear(); } catch (e) {
-              console.warn('[Settings] Failed to clear localStorage:', e);
-            }
-            try { window.sessionStorage.clear(); } catch (e) {
-              console.warn('[Settings] Failed to clear sessionStorage:', e);
-            }
-          }
-        } catch (e) {
-          console.warn('[Settings] Failed to clear personalization flags or web storage (non-fatal):', e);
-        }
-
-        // 4) Clear cookies for this origin (best-effort)
-        await clearAllCookies();
-
-        // 5) Clear service worker caches and unregister SW (force a fresh start)
-        try {
-          if ('caches' in window) {
-            const cacheNames = await caches.keys();
-            await Promise.all(cacheNames.map((name) => caches.delete(name)));
-            console.log('[Settings] Cleared service worker caches');
-          }
-          if ('serviceWorker' in navigator) {
-            // Unregister all known registrations
-            const registrations = await navigator.serviceWorker.getRegistrations();
-            await Promise.all(registrations.map((reg) => reg.unregister()));
-            // Also try the current scope registration (Safari compatibility)
-            try {
-              const reg = await navigator.serviceWorker.getRegistration();
-              if (reg) await reg.unregister();
-            } catch (e) {
-              console.warn('[Settings] SW getRegistration/unregister failed (non-fatal):', e);
-            }
-            console.log('[Settings] Unregistered service workers');
-          }
-        } catch (e) {
-          console.warn('[Settings] Failed to clear SW caches or unregister SW (non-fatal):', e);
-        }
-
-        // 6) Trigger a hard reload with a clear flag to wipe databases on fresh load
-        // This avoids "blocked" events from open connections in the current session
-        console.log('[Settings] scheduling clear-all-data via reload');
-        window.location.href = '/settings?clear_all_data=true';
+        await clearAllBrowserData();
       } catch (error) {
         console.error('Failed to clear data:', error);
         alert('Failed to clear data');

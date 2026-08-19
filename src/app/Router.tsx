@@ -5,11 +5,8 @@ import { useAuth } from '@/features/auth/useAuth';
 import { ChatWorkspace } from '@/features/conversations/ChatWorkspace';
 import { HandleXmtpProtocol } from '@/app/HandleXmtpProtocol';
 import { UserConnectRedirect, InboxConnectRedirect, InviteConnectRedirect } from '@/app/deeplinks';
-import { closeStorage, getStorageNamespace } from '@/lib/storage';
-import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
-import { resetXmtpClient } from '@/lib/xmtp/client';
-import { disablePush } from '@/lib/push';
 import { startMessageRetentionScheduler } from '@/lib/message-retention';
+import { clearAllBrowserData } from '@/lib/identity/clear-browser-data';
 
 const OnboardingPage = lazy(() =>
   import('@/features/auth/OnboardingPage').then(({ OnboardingPage }) => ({
@@ -82,134 +79,7 @@ export function AppRouter() {
 
     const wipe = async () => {
       console.log('[AppRouter] Detected clear_all_data flag - wiping local state...');
-
-      const pushCleanupComplete = await disablePush();
-      if (!pushCleanupComplete) {
-        console.warn(
-          '[AppRouter] Some push relay registrations could not be deleted; preserving push cleanup state.'
-        );
-      }
-
-      try {
-        await resetXmtpClient();
-      } catch (e) {
-        console.warn('[AppRouter] Failed to reset XMTP client (non-fatal):', e);
-      }
-
-      try {
-        await closeStorage();
-      } catch (e) {
-        console.warn('[AppRouter] Failed to close storage (non-fatal):', e);
-      }
-
-      try {
-        const deleteDb = async (name: string) =>
-          new Promise<void>((resolve, reject) => {
-            const req = indexedDB.deleteDatabase(name);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error ?? new Error(`Failed to delete ${name}`));
-            req.onblocked = () => {
-              console.warn('[AppRouter] DB delete blocked:', name);
-              reject(new Error(`Deletion of ${name} was blocked by another Converge tab.`));
-            };
-          });
-
-        const idbWithDatabases = indexedDB as unknown as {
-          databases?: () => Promise<Array<{ name?: string }>>;
-        };
-        const dbs = await idbWithDatabases?.databases?.();
-        if (Array.isArray(dbs) && dbs.length > 0) {
-          for (const db of dbs) {
-            if (db.name) {
-              if (!pushCleanupComplete && db.name === 'ConvergePushState') {
-                continue;
-              }
-              console.log('[AppRouter] Deleting DB:', db.name);
-              await deleteDb(db.name);
-            }
-          }
-        } else {
-          const fallbackNamespace = getStorageNamespace();
-          await deleteDb('ConvergeDB');
-          await deleteDb(`ConvergeDB:${fallbackNamespace}`);
-          await deleteDb('ConvergeDB:default');
-        }
-      } catch (e) {
-        console.error('[AppRouter] Failed to delete IndexedDB databases:', e);
-        alert(
-          `${e instanceof Error ? e.message : 'Browser data deletion was blocked.'} Close other Converge tabs and retry Clear All Browser Data.`
-        );
-        window.location.replace('/settings');
-        return;
-      }
-
-      try {
-        const storageManager = navigator.storage as unknown as {
-          getDirectory?: () => Promise<FileSystemDirectoryHandle>;
-        };
-        if (storageManager?.getDirectory) {
-          const opfsRoot = await storageManager.getDirectory();
-          // @ts-expect-error - OPFS API types
-          for await (const [name] of opfsRoot.entries()) {
-            if (name.startsWith('xmtp-') && name.endsWith('.db3')) {
-              await opfsRoot.removeEntry(name);
-              console.log('[AppRouter] Cleared OPFS DB:', name);
-            }
-          }
-        }
-      } catch (e) {
-        console.error('[AppRouter] Failed to clear XMTP OPFS databases:', e);
-        alert(
-          "Converge removed IndexedDB data but could not remove every XMTP database file. Close other Converge tabs and clear this site's browser storage before using the app again."
-        );
-        window.location.replace('/onboarding');
-        return;
-      }
-
-      try {
-        if (typeof window !== 'undefined') {
-          try {
-            window.localStorage.clear();
-          } catch (err) {
-            /* ignore */
-          }
-          try {
-            window.sessionStorage.clear();
-          } catch (err) {
-            /* ignore */
-          }
-        }
-      } catch (e) {
-        console.warn('[AppRouter] Failed to clear web storage (non-fatal):', e);
-      }
-
-      try {
-        useInboxRegistryStore.getState().reset();
-      } catch (e) {
-        console.warn('[AppRouter] Failed to reset inbox registry (non-fatal):', e);
-      }
-
-      try {
-        useAuthStore.getState().logout();
-      } catch (e) {
-        console.warn('[AppRouter] Failed to reset auth store (non-fatal):', e);
-      }
-
-      try {
-        if ('caches' in window) {
-          const cacheNames = await caches.keys();
-          await Promise.all(cacheNames.map((name) => caches.delete(name)));
-        }
-        if ('serviceWorker' in navigator) {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(registrations.map((reg) => reg.unregister()));
-        }
-      } catch (e) {
-        console.warn('[AppRouter] Failed to clear SW caches/registrations (non-fatal):', e);
-      }
-
-      console.log('[AppRouter] Wipe complete. Reloading clean entry point.');
-      window.location.replace('/onboarding');
+      await clearAllBrowserData();
     };
 
     void wipe();
