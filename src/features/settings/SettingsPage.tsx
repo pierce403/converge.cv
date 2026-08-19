@@ -898,7 +898,10 @@ export function SettingsPage() {
     ) {
       try {
         try {
-          await disconnectWallet();
+          await Promise.race([
+            disconnectWallet(),
+            new Promise((resolve) => setTimeout(resolve, 1000)),
+          ]);
           console.log('[Settings] Disconnected wallet via wagmi');
         } catch (e) {
           console.warn('[Settings] Wallet disconnect failed (non-fatal):', e);

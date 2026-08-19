@@ -18,6 +18,39 @@ import { disablePush } from '@/lib/push';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
 import { clearIntentionalEmptyInboxState } from '@/features/auth/onboarding-state';
 
+async function withTimeout<T>(
+  action: () => Promise<T> | T,
+  ms: number,
+  fallbackValue: T,
+  description: string
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      console.warn(
+        `[ClearData] Operation '${description}' timed out after ${ms}ms - continuing.`
+      );
+      resolve(fallbackValue);
+    }, ms);
+
+    Promise.resolve()
+      .then(action)
+      .then((res) => {
+        if (timer) {
+          clearTimeout(timer);
+          resolve(res);
+        }
+      })
+      .catch((err) => {
+        if (timer) {
+          clearTimeout(timer);
+          console.warn(`[ClearData] Operation '${description}' failed:`, err);
+          resolve(fallbackValue);
+        }
+      });
+  });
+}
+
 export async function clearAllCookies(): Promise<void> {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     return;
@@ -86,28 +119,35 @@ export async function clearAllBrowserData(options?: {
 }): Promise<void> {
   console.log('[ClearData] Starting comprehensive browser data wipe...');
 
-  // 1. Best-effort push cleanup (do not allow remote push errors to block local wipe)
-  try {
-    await disablePush();
-  } catch (error) {
-    console.warn('[ClearData] Push cleanup encountered an error (continuing):', error);
-  }
+  // Step 1: Best-effort push cleanup with 2s timeout
+  console.log('[ClearData] Step 1/8: Push cleanup...');
+  await withTimeout(
+    () => disablePush(),
+    2000,
+    false,
+    'disablePush'
+  );
 
-  // 2. Disconnect XMTP client so open OPFS/VFS handles are released
-  try {
-    await resetXmtpClient();
-  } catch (error) {
-    console.warn('[ClearData] Failed to reset XMTP client (continuing):', error);
-  }
+  // Step 2: Disconnect XMTP client with 2s timeout to release OPFS/VFS handles
+  console.log('[ClearData] Step 2/8: Resetting XMTP client...');
+  await withTimeout(
+    () => resetXmtpClient(),
+    2000,
+    undefined,
+    'resetXmtpClient'
+  );
 
-  // 3. Close the active Dexie singleton connection
-  try {
-    await closeStorage();
-  } catch (error) {
-    console.warn('[ClearData] Failed to close storage (continuing):', error);
-  }
+  // Step 3: Close active Dexie connection with 1s timeout
+  console.log('[ClearData] Step 3/8: Closing storage connections...');
+  await withTimeout(
+    () => closeStorage(),
+    1000,
+    undefined,
+    'closeStorage'
+  );
 
-  // 4. Collect all known database names
+  // Step 4: Collect database names and delete all databases
+  console.log('[ClearData] Step 4/8: Deleting IndexedDB databases...');
   const dbNamesToDelete = new Set<string>([
     'ConvergeDB',
     'ConvergeDB:default',
@@ -134,7 +174,12 @@ export async function clearAllBrowserData(options?: {
         databases?: () => Promise<Array<{ name?: string }>>;
       };
       if (typeof idbWithDatabases?.databases === 'function') {
-        const dbs = await idbWithDatabases.databases();
+        const dbs = await withTimeout(
+          () => idbWithDatabases.databases!(),
+          1000,
+          [],
+          'enumerateIDB'
+        );
         if (Array.isArray(dbs)) {
           for (const db of dbs) {
             if (db.name) {
@@ -148,76 +193,83 @@ export async function clearAllBrowserData(options?: {
     console.warn('[ClearData] Failed to enumerate indexedDB databases:', error);
   }
 
-  // 5. Delete every database
   for (const name of dbNamesToDelete) {
-    try {
-      console.log('[ClearData] Deleting Dexie DB:', name);
-      await Dexie.delete(name);
-    } catch (e) {
-      console.warn(`[ClearData] Dexie.delete failed for ${name}, trying raw IDB:`, e);
-      if (typeof indexedDB !== 'undefined') {
-        try {
-          await new Promise<void>((resolve) => {
-            const req = indexedDB.deleteDatabase(name);
-            req.onsuccess = () => resolve();
-            req.onerror = () => resolve();
-            req.onblocked = () => {
-              console.warn(`[ClearData] deleteDatabase blocked for ${name}`);
-              setTimeout(() => resolve(), 300);
-            };
-          });
-        } catch (idbErr) {
-          console.warn(`[ClearData] indexedDB.deleteDatabase failed for ${name}:`, idbErr);
-        }
-      }
+    console.log('[ClearData] Deleting database:', name);
+    // Try Dexie.delete with 1s timeout
+    await withTimeout(
+      () => Dexie.delete(name),
+      1000,
+      undefined,
+      `deleteDexie:${name}`
+    );
+
+    if (typeof indexedDB !== 'undefined') {
+      await withTimeout(
+        () =>
+          new Promise<void>((resolve) => {
+            try {
+              const req = indexedDB.deleteDatabase(name);
+              req.onsuccess = () => resolve();
+              req.onerror = () => resolve();
+              req.onblocked = () => {
+                console.warn(`[ClearData] deleteDatabase blocked for ${name}`);
+                setTimeout(() => resolve(), 300);
+              };
+            } catch {
+              resolve();
+            }
+          }),
+        1000,
+        undefined,
+        `deleteRawIDB:${name}`
+      );
     }
   }
 
-  // 6. Delete all OPFS files (xmtp-*.db3 and SQLite files)
+  // Step 5: Delete all OPFS files (xmtp-*.db3 and SQLite files)
+  console.log('[ClearData] Step 5/8: Cleaning OPFS files...');
   try {
-    const storageManager = typeof navigator !== 'undefined'
-      ? (navigator.storage as unknown as { getDirectory?: () => Promise<FileSystemDirectoryHandle> })
-      : undefined;
+    const storageManager =
+      typeof navigator !== 'undefined'
+        ? (navigator.storage as unknown as {
+            getDirectory?: () => Promise<FileSystemDirectoryHandle>;
+          })
+        : undefined;
     if (storageManager?.getDirectory) {
-      const opfsRoot = await storageManager.getDirectory();
-      // @ts-expect-error - OPFS API types
-      for await (const [name] of opfsRoot.entries()) {
-        if (name.startsWith('xmtp-') || name.endsWith('.db3') || name.endsWith('.sqlite')) {
-          try {
-            await opfsRoot.removeEntry(name, { recursive: true });
-            console.log('[ClearData] Cleared OPFS entry:', name);
-          } catch (fileErr) {
-            console.warn(`[ClearData] Failed to remove OPFS entry ${name}:`, fileErr);
+      await withTimeout(
+        async () => {
+          const opfsRoot = await storageManager.getDirectory!();
+          // @ts-expect-error - OPFS API types
+          if (typeof opfsRoot.entries === 'function') {
+            // @ts-expect-error - OPFS API types
+            for await (const [name] of opfsRoot.entries()) {
+              if (
+                name.startsWith('xmtp-') ||
+                name.endsWith('.db3') ||
+                name.endsWith('.sqlite') ||
+                name.includes('xmtp')
+              ) {
+                try {
+                  await opfsRoot.removeEntry(name, { recursive: true });
+                  console.log('[ClearData] Cleared OPFS entry:', name);
+                } catch (fileErr) {
+                  console.warn(`[ClearData] Failed to remove OPFS entry ${name}:`, fileErr);
+                }
+              }
+            }
           }
-        }
-      }
+        },
+        1500,
+        undefined,
+        'clearOPFS'
+      );
     }
   } catch (error) {
     console.warn('[ClearData] Failed to clear OPFS directory:', error);
   }
 
-  // 7. Clear Cookies
-  try {
-    await clearAllCookies();
-  } catch (error) {
-    console.warn('[ClearData] Failed to clear cookies:', error);
-  }
-
-  // 8. Clear Service Worker Caches & Unregister Workers
-  try {
-    if (typeof window !== 'undefined' && 'caches' in window) {
-      const cacheNames = await caches.keys();
-      await Promise.all(cacheNames.map((name) => caches.delete(name)));
-    }
-    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map((reg) => reg.unregister()));
-    }
-  } catch (error) {
-    console.warn('[ClearData] Failed to clear SW caches/registrations:', error);
-  }
-
-  // 9. Reset all in-memory Zustand stores
+  // Step 6: Reset all in-memory Zustand stores
+  console.log('[ClearData] Step 6/8: Resetting stores and clearing web storage...');
   try {
     useInboxRegistryStore.getState().reset();
     useAuthStore.getState().logout();
@@ -248,19 +300,53 @@ export async function clearAllBrowserData(options?: {
     console.warn('[ClearData] Failed to reset in-memory stores:', error);
   }
 
-  // 10. Clear Web Storage (localStorage & sessionStorage) after store resets
+  // Clear Web Storage immediately after store resets
   try {
     if (typeof window !== 'undefined') {
       window.localStorage.clear();
       window.sessionStorage.clear();
+      console.log('[ClearData] Cleared localStorage and sessionStorage');
     }
   } catch (error) {
     console.warn('[ClearData] Failed to clear web storage:', error);
   }
 
-  console.log('[ClearData] ✅ All browser data cleared successfully');
+  // Step 7: Clear Cookies & Service Worker Caches
+  console.log('[ClearData] Step 7/8: Clearing cookies and service workers...');
+  try {
+    await clearAllCookies();
+  } catch (error) {
+    console.warn('[ClearData] Failed to clear cookies:', error);
+  }
+
+  try {
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      await withTimeout(
+        () => caches.keys().then((names) => Promise.all(names.map((n) => caches.delete(n)))),
+        1000,
+        [],
+        'clearCaches'
+      );
+    }
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      await withTimeout(
+        () =>
+          navigator.serviceWorker.getRegistrations().then((regs) =>
+            Promise.all(regs.map((r) => r.unregister()))
+          ),
+        1000,
+        [],
+        'unregisterSW'
+      );
+    }
+  } catch (error) {
+    console.warn('[ClearData] Failed to clear SW caches/registrations:', error);
+  }
+
+  console.log('[ClearData] Step 8/8: ✅ All browser data cleared successfully');
 
   if (!options?.skipNavigation && typeof window !== 'undefined') {
+    // Navigate cleanly to onboarding
     window.location.replace('/onboarding');
   }
 }
