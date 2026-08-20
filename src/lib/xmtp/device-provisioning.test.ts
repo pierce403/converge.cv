@@ -6,12 +6,10 @@ import {
   getClientDbPath,
   getPersistentClientDbPath,
   getScwRetryChainId,
-  InstallationMembershipPendingError,
   InstallationLimitError,
   planClientInstallation,
-  provisionFreshDeviceKey,
+  provisionExternalWalletDevice,
   provisionWithStaleInstallationRecovery,
-  ReassignmentRequiredError,
   recordInstallationReady,
   shouldRequestHistorySync,
   signerIdentityKey,
@@ -20,13 +18,8 @@ import {
 } from './device-provisioning';
 
 const targetInbox = 'a'.repeat(64);
-const otherInbox = 'b'.repeat(64);
 const targetIdentifier = {
   identifier: `0x${'11'.repeat(20)}`,
-  identifierKind: 0,
-} as Identifier;
-const deviceIdentifier = {
-  identifier: `0x${'22'.repeat(20)}`,
   identifierKind: 0,
 } as Identifier;
 
@@ -37,7 +30,6 @@ const signer = (identifier: Identifier): Signer => ({
 });
 
 function setup(options?: {
-  deviceInbox?: string;
   installationIds?: string[];
   omitInboxState?: boolean;
   locallyRegistered?: boolean;
@@ -45,20 +37,15 @@ function setup(options?: {
   staticInstallationStaysStale?: boolean;
   staticInstallationVisibleAfter?: number;
   registerThrowsAfterMutation?: boolean;
-  addAccountThrowsAfterMutation?: boolean;
-  addAccountMissingExistingMemberAttempts?: number;
-  addAccountError?: Error;
   targetIsCurrentAuthority?: boolean;
 }) {
-  let associatedDeviceInbox = options?.deviceInbox;
-  let associatedIdentifier = deviceIdentifier;
   const installationIds = [...(options?.installationIds ?? [])];
   let locallyRegistered =
     options?.locallyRegistered ?? installationIds.includes('installation-new');
   let delayedVisibilityReads = 0;
   let registrationCanBecomeVisible = locallyRegistered;
   const events: string[] = [];
-  let addAccountAttempts = 0;
+
   const register = vi.fn(async () => {
     registrationCanBecomeVisible = true;
     if (!options?.registerNoop) {
@@ -75,24 +62,7 @@ function setup(options?: {
       throw new Error('registration response was interrupted');
     }
   });
-  const addAccount = vi.fn(async (newSigner: Signer) => {
-    addAccountAttempts += 1;
-    if (
-      options?.addAccountMissingExistingMemberAttempts !== undefined &&
-      addAccountAttempts <= options.addAccountMissingExistingMemberAttempts
-    ) {
-      throw new Error('Missing existing member');
-    }
-    if (options?.addAccountError) {
-      throw options.addAccountError;
-    }
-    events.push('add-account');
-    associatedIdentifier = await newSigner.getIdentifier();
-    associatedDeviceInbox = targetInbox;
-    if (options?.addAccountThrowsAfterMutation) {
-      throw new Error('association response was interrupted');
-    }
-  });
+
   const close = vi.fn(async () => undefined);
   let fetchManagerInboxState = async (): Promise<InboxState> => {
     throw new Error('Manager inbox-state reader was not initialized.');
@@ -105,14 +75,13 @@ function setup(options?: {
     },
     isRegistered: vi.fn(async () => locallyRegistered),
     register,
-    unsafe_addAccount: addAccount,
-    fetchInboxIdByIdentifier: vi.fn(async () => associatedDeviceInbox),
+    fetchInboxIdByIdentifier: vi.fn(async () => targetInbox),
     close,
   };
   const resolveInboxId = vi.fn(async (identifier: Identifier) =>
     identifier.identifier.toLowerCase() === targetIdentifier.identifier.toLowerCase()
       ? targetInbox
-      : associatedDeviceInbox
+      : undefined
   );
   const fetchInboxState = vi.fn(async () => {
     if (
@@ -137,7 +106,6 @@ function setup(options?: {
           installations: installationIds.map((id) => ({ id })),
           accountIdentifiers: [
             ...(options?.targetIsCurrentAuthority === false ? [] : [targetIdentifier]),
-            ...(associatedDeviceInbox === targetInbox ? [associatedIdentifier] : []),
           ],
         } as InboxState);
   });
@@ -154,15 +122,14 @@ function setup(options?: {
   return {
     manager,
     register,
-    addAccount,
     close,
     events,
     dependencies: { resolveInboxId, fetchInboxState, createManager, sleep },
   };
 }
 
-describe('fresh device provisioning', () => {
-  it('replaces one stale local installation without changing the staged key flow', async () => {
+describe('direct external wallet device provisioning', () => {
+  it('replaces one stale local installation without changing the wallet flow', async () => {
     const stale = new StaleLocalInstallationError(targetInbox, 'installation-stale');
     const provision = vi
       .fn<(resumeInstallationId?: string) => Promise<string>>()
@@ -196,7 +163,7 @@ describe('fresh device provisioning', () => {
     expect(reset).toHaveBeenCalledOnce();
   });
 
-  it('registers the replacement installation before associating the preserved device key', async () => {
+  it('registers the replacement installation directly under the external wallet', async () => {
     const staleHarness = setup({
       locallyRegistered: true,
       staticInstallationStaysStale: true,
@@ -205,11 +172,10 @@ describe('fresh device provisioning', () => {
     const replacementHarness = setup();
     replacementHarness.manager.installationId = 'installation-replacement';
     const target = signer(targetIdentifier);
-    const device = signer(deviceIdentifier);
     let attempt = 0;
     const provision = async (knownInstallationId?: string) => {
       const harness = attempt++ === 0 ? staleHarness : replacementHarness;
-      return await provisionFreshDeviceKey(target, device, targetInbox, {
+      return await provisionExternalWalletDevice(target, targetInbox, {
         ...harness.dependencies,
         knownInstallationId,
       });
@@ -223,9 +189,7 @@ describe('fresh device provisioning', () => {
 
     expect(result.installationId).toBe('installation-replacement');
     expect(staleHarness.register).not.toHaveBeenCalled();
-    expect(staleHarness.addAccount).not.toHaveBeenCalled();
     expect(replacementHarness.register).toHaveBeenCalledOnce();
-    expect(replacementHarness.addAccount).toHaveBeenCalledOnce();
   });
 
   it('rechecks 10/10 capacity before opening a replacement installation', async () => {
@@ -240,9 +204,8 @@ describe('fresh device provisioning', () => {
     let attempt = 0;
     const provision = async (knownInstallationId?: string) => {
       const harness = attempt++ === 0 ? staleHarness : fullHarness;
-      return await provisionFreshDeviceKey(
+      return await provisionExternalWalletDevice(
         signer(targetIdentifier),
-        signer(deviceIdentifier),
         targetInbox,
         { ...harness.dependencies, knownInstallationId }
       );
@@ -260,12 +223,11 @@ describe('fresh device provisioning', () => {
     expect(fullHarness.register).not.toHaveBeenCalled();
   });
 
-  it('registers one target-inbox installation before adding a fresh device key', async () => {
+  it('registers one target-inbox installation directly for external wallet', async () => {
     const harness = setup();
 
-    const result = await provisionFreshDeviceKey(
+    const result = await provisionExternalWalletDevice(
       signer(targetIdentifier),
-      signer(deviceIdentifier),
       targetInbox,
       harness.dependencies
     );
@@ -273,25 +235,19 @@ describe('fresh device provisioning', () => {
     expect(result).toEqual({
       inboxId: targetInbox,
       installationId: 'installation-new',
-      accountAdded: true,
       installationRegistered: true,
     });
     expect(harness.register).toHaveBeenCalledTimes(1);
-    expect(harness.addAccount).toHaveBeenCalledWith(expect.any(Object), true);
-    expect(harness.register.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.addAccount.mock.invocationCallOrder[0]
-    );
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 
-  it('reports lifecycle phases and persists the manager installation before mutation', async () => {
+  it('reports lifecycle phases and persists the installation before mutation', async () => {
     const harness = setup();
     const phases: string[] = [];
     const onInstallationReady = vi.fn(async () => undefined);
 
-    await provisionFreshDeviceKey(
+    await provisionExternalWalletDevice(
       signer(targetIdentifier),
-      signer(deviceIdentifier),
       targetInbox,
       {
         ...harness.dependencies,
@@ -310,113 +266,37 @@ describe('fresh device provisioning', () => {
       'registering-installation',
       'installation-registered',
       'verifying-installation',
-      'associating-key',
-      'association-submitted',
-      'verifying-association',
       'complete',
     ]);
   });
 
-  it('reuses the same installation and association after reload', async () => {
+  it('reuses the same installation after reload', async () => {
     const harness = setup({
-      deviceInbox: targetInbox,
       installationIds: ['installation-new'],
     });
 
-    const result = await provisionFreshDeviceKey(
+    const result = await provisionExternalWalletDevice(
       signer(targetIdentifier),
-      signer(deviceIdentifier),
       targetInbox,
       harness.dependencies
     );
 
     expect(result.installationRegistered).toBe(false);
-    expect(result.accountAdded).toBe(false);
     expect(harness.register).not.toHaveBeenCalled();
-    expect(harness.addAccount).not.toHaveBeenCalled();
   });
 
-  it('allows two distinct device keys to resolve to one inbox with distinct installations', async () => {
-    const first = setup();
-    first.manager.installationId = 'installation-device-a';
-    const second = setup();
-    second.manager.installationId = 'installation-device-b';
-
-    const [firstResult, secondResult] = await Promise.all([
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer(deviceIdentifier),
-        targetInbox,
-        first.dependencies
-      ),
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer({ identifier: `0x${'33'.repeat(20)}`, identifierKind: 0 } as Identifier),
-        targetInbox,
-        second.dependencies
-      ),
-    ]);
-
-    expect(firstResult.inboxId).toBe(targetInbox);
-    expect(secondResult.inboxId).toBe(targetInbox);
-    expect(firstResult.installationId).not.toBe(secondResult.installationId);
-  });
-
-  it('retries association visibility before reporting success', async () => {
-    const harness = setup();
-    const fetchAssociation = harness.manager.fetchInboxIdByIdentifier as ReturnType<typeof vi.fn>;
-    fetchAssociation
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValue(targetInbox);
-
-    const result = await provisionFreshDeviceKey(
-      signer(targetIdentifier),
-      signer(deviceIdentifier),
-      targetInbox,
-      harness.dependencies
-    );
-
-    expect(result.accountAdded).toBe(true);
-    expect(fetchAssociation.mock.calls.length).toBeGreaterThanOrEqual(3);
-  });
-
-  it('waits beyond the old eight-attempt window for network association visibility', async () => {
-    const harness = setup();
-    let deviceNetworkLookups = 0;
-    harness.dependencies.resolveInboxId = vi.fn(async (identifier: Identifier) => {
-      if (identifier.identifier.toLowerCase() === targetIdentifier.identifier.toLowerCase()) {
-        return targetInbox;
-      }
-      deviceNetworkLookups += 1;
-      return deviceNetworkLookups >= 11 ? targetInbox : undefined;
-    });
-
-    const result = await provisionFreshDeviceKey(
-      signer(targetIdentifier),
-      signer(deviceIdentifier),
-      targetInbox,
-      harness.dependencies
-    );
-
-    expect(result.accountAdded).toBe(true);
-    expect(deviceNetworkLookups).toBeGreaterThan(8);
-  });
-
-  it('blocks at 10 installations before registration or association', async () => {
+  it('blocks at 10 installations before registration', async () => {
     const harness = setup({ installationIds: Array.from({ length: 10 }, (_, i) => `i-${i}`) });
 
     await expect(
-      provisionFreshDeviceKey(
+      provisionExternalWalletDevice(
         signer(targetIdentifier),
-        signer(deviceIdentifier),
         targetInbox,
         harness.dependencies
       )
     ).rejects.toBeInstanceOf(InstallationLimitError);
 
     expect(harness.register).not.toHaveBeenCalled();
-    expect(harness.addAccount).not.toHaveBeenCalled();
     expect(harness.dependencies.createManager).not.toHaveBeenCalled();
   });
 
@@ -425,11 +305,10 @@ describe('fresh device provisioning', () => {
       'installation-new',
       ...Array.from({ length: 9 }, (_, index) => `other-${index}`),
     ];
-    const harness = setup({ deviceInbox: targetInbox, installationIds });
+    const harness = setup({ installationIds });
 
-    const result = await provisionFreshDeviceKey(
+    const result = await provisionExternalWalletDevice(
       signer(targetIdentifier),
-      signer(deviceIdentifier),
       targetInbox,
       {
         ...harness.dependencies,
@@ -441,98 +320,20 @@ describe('fresh device provisioning', () => {
     expect(harness.register).not.toHaveBeenCalled();
   });
 
-  it('maps SDK installation-limit failures during manager creation to the recoverable error', async () => {
-    const harness = setup({
-      installationIds: Array.from({ length: 9 }, (_, index) => `existing-${index}`),
-    });
-    harness.dependencies.createManager = vi.fn(async () => {
-      throw new Error('TooManyInstallations');
-    });
-
-    await expect(
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer(deviceIdentifier),
-        targetInbox,
-        harness.dependencies
-      )
-    ).rejects.toBeInstanceOf(InstallationLimitError);
-  });
-
   it('resumes when register throws after the manager becomes locally registered', async () => {
     const harness = setup({
       registerThrowsAfterMutation: true,
       staticInstallationVisibleAfter: 3,
     });
 
-    const result = await provisionFreshDeviceKey(
+    const result = await provisionExternalWalletDevice(
       signer(targetIdentifier),
-      signer(deviceIdentifier),
       targetInbox,
       harness.dependencies
     );
 
     expect(result.installationRegistered).toBe(true);
-    expect(result.accountAdded).toBe(true);
     expect(harness.manager.isRegistered).toHaveBeenCalled();
-  });
-
-  it('waits until the manager installation is a published inbox member before association', async () => {
-    const harness = setup({ staticInstallationVisibleAfter: 3 });
-
-    const result = await provisionFreshDeviceKey(
-      signer(targetIdentifier),
-      signer(deviceIdentifier),
-      targetInbox,
-      harness.dependencies
-    );
-
-    expect(result.installationRegistered).toBe(true);
-    expect(result.accountAdded).toBe(true);
-    expect(harness.manager.isRegistered).toHaveBeenCalled();
-    expect(harness.register).toHaveBeenCalledOnce();
-    expect(harness.dependencies.fetchInboxState.mock.calls.length).toBeGreaterThan(3);
-    expect(harness.events.indexOf('installation-visible')).toBeLessThan(
-      harness.events.indexOf('add-account')
-    );
-  });
-
-  it('stops after bounded association retries when fresh membership never propagates', async () => {
-    const harness = setup({
-      staticInstallationStaysStale: true,
-      addAccountMissingExistingMemberAttempts: 8,
-    });
-
-    await expect(
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer(deviceIdentifier),
-        targetInbox,
-        harness.dependencies
-      )
-    ).rejects.toBeInstanceOf(InstallationMembershipPendingError);
-
-    expect(harness.register).toHaveBeenCalledOnce();
-    expect(harness.addAccount).toHaveBeenCalledTimes(8);
-  });
-
-  it('retries Missing existing member with the same fresh installation', async () => {
-    const harness = setup({
-      staticInstallationStaysStale: true,
-      addAccountMissingExistingMemberAttempts: 2,
-    });
-
-    const result = await provisionFreshDeviceKey(
-      signer(targetIdentifier),
-      signer(deviceIdentifier),
-      targetInbox,
-      harness.dependencies
-    );
-
-    expect(result.installationRegistered).toBe(true);
-    expect(result.accountAdded).toBe(true);
-    expect(harness.register).toHaveBeenCalledOnce();
-    expect(harness.addAccount).toHaveBeenCalledTimes(3);
   });
 
   it('resumes a locally registered installation after static membership catches up', async () => {
@@ -541,9 +342,8 @@ describe('fresh device provisioning', () => {
       staticInstallationVisibleAfter: 3,
     });
 
-    const result = await provisionFreshDeviceKey(
+    const result = await provisionExternalWalletDevice(
       signer(targetIdentifier),
-      signer(deviceIdentifier),
       targetInbox,
       {
         ...harness.dependencies,
@@ -552,7 +352,6 @@ describe('fresh device provisioning', () => {
     );
 
     expect(result.installationRegistered).toBe(false);
-    expect(result.accountAdded).toBe(true);
     expect(harness.register).not.toHaveBeenCalled();
   });
 
@@ -563,9 +362,8 @@ describe('fresh device provisioning', () => {
     });
 
     await expect(
-      provisionFreshDeviceKey(
+      provisionExternalWalletDevice(
         signer(targetIdentifier),
-        signer(deviceIdentifier),
         targetInbox,
         {
           ...harness.dependencies,
@@ -575,101 +373,42 @@ describe('fresh device provisioning', () => {
     ).rejects.toBeInstanceOf(StaleLocalInstallationError);
 
     expect(harness.register).not.toHaveBeenCalled();
-    expect(harness.addAccount).not.toHaveBeenCalled();
   });
 
   it('fails closed when register returns but the local installation remains unregistered', async () => {
     const harness = setup({ registerNoop: true });
 
     await expect(
-      provisionFreshDeviceKey(
+      provisionExternalWalletDevice(
         signer(targetIdentifier),
-        signer(deviceIdentifier),
         targetInbox,
         harness.dependencies
       )
     ).rejects.toThrow('not registered in its local XMTP database');
 
     expect(harness.register).toHaveBeenCalledOnce();
-    expect(harness.addAccount).not.toHaveBeenCalled();
-  });
-
-  it('does not retry unrelated add-account failures', async () => {
-    const harness = setup({ addAccountError: new Error('signature rejected') });
-
-    await expect(
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer(deviceIdentifier),
-        targetInbox,
-        harness.dependencies
-      )
-    ).rejects.toThrow('signature rejected');
-
-    expect(harness.addAccount).toHaveBeenCalledOnce();
-  });
-
-  it('resumes verification when add-account throws after the association reaches the ledger', async () => {
-    const harness = setup({ addAccountThrowsAfterMutation: true });
-
-    const result = await provisionFreshDeviceKey(
-      signer(targetIdentifier),
-      signer(deviceIdentifier),
-      targetInbox,
-      harness.dependencies
-    );
-
-    expect(result.inboxId).toBe(targetInbox);
-    expect(result.accountAdded).toBe(true);
-    expect(harness.dependencies.resolveInboxId).toHaveBeenCalledWith(deviceIdentifier);
-  });
-
-  it('does not finish an interrupted add-account until the independent resolver sees it', async () => {
-    const harness = setup({ addAccountThrowsAfterMutation: true });
-    harness.dependencies.resolveInboxId = vi.fn(async (identifier: Identifier) =>
-      identifier.identifier.toLowerCase() === targetIdentifier.identifier.toLowerCase()
-        ? targetInbox
-        : undefined
-    );
-
-    await expect(
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer(deviceIdentifier),
-        targetInbox,
-        harness.dependencies
-      )
-    ).rejects.toThrow('association is not visible everywhere yet');
-
-    const deviceLookups = harness.dependencies.resolveInboxId.mock.calls.filter(
-      ([identifier]) => identifier.identifier === deviceIdentifier.identifier
-    );
-    expect(deviceLookups.length).toBeGreaterThan(1);
   });
 
   it('fails closed when target inbox capacity cannot be fetched', async () => {
     const harness = setup({ omitInboxState: true });
 
     await expect(
-      provisionFreshDeviceKey(
+      provisionExternalWalletDevice(
         signer(targetIdentifier),
-        signer(deviceIdentifier),
         targetInbox,
         harness.dependencies
       )
     ).rejects.toThrow('could not verify the installation limit');
 
     expect(harness.register).not.toHaveBeenCalled();
-    expect(harness.addAccount).not.toHaveBeenCalled();
   });
 
   it('requires the approving wallet to remain a current inbox authority', async () => {
     const harness = setup({ targetIsCurrentAuthority: false });
 
     await expect(
-      provisionFreshDeviceKey(
+      provisionExternalWalletDevice(
         signer(targetIdentifier),
-        signer(deviceIdentifier),
         targetInbox,
         harness.dependencies
       )
@@ -677,22 +416,6 @@ describe('fresh device provisioning', () => {
 
     expect(harness.dependencies.createManager).not.toHaveBeenCalled();
     expect(harness.register).not.toHaveBeenCalled();
-    expect(harness.addAccount).not.toHaveBeenCalled();
-  });
-
-  it('refuses to reassign a key that already belongs to another inbox', async () => {
-    const harness = setup({ deviceInbox: otherInbox });
-
-    await expect(
-      provisionFreshDeviceKey(
-        signer(targetIdentifier),
-        signer(deviceIdentifier),
-        targetInbox,
-        harness.dependencies
-      )
-    ).rejects.toBeInstanceOf(ReassignmentRequiredError);
-
-    expect(harness.dependencies.createManager).not.toHaveBeenCalled();
   });
 });
 
@@ -732,7 +455,7 @@ describe('client identity and history policy', () => {
     expect(complete.historySyncRequestedAt).toBeUndefined();
   });
 
-  it('keeps failed history requests pending and records successful requests', () => {
+  it('keeps failed history requests pending and tracks requested history accurately without false clear', () => {
     const identity = {
       address: '0x1234',
       publicKey: '0x5678',
@@ -759,8 +482,10 @@ describe('client identity and history policy', () => {
       },
       1234
     );
-    expect(succeeded.needsHistorySync).toBe(false);
+    // needsHistorySync is NOT cleared merely because publication succeeded
+    expect(succeeded.needsHistorySync).toBe(true);
     expect(succeeded.historySyncRequestedAt).toBe(1234);
+    expect(succeeded.historySyncStatus).toBe('requested');
   });
 
   it('records an alternate verified database path and retains only the superseded installation for cleanup', () => {

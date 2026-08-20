@@ -31,7 +31,11 @@ import {
   withWalletInspectionTimeout,
   type WalletTypeHint,
 } from '@/lib/wagmi/wallet-inspection';
-import { normalizeEthereumAddress, requireEthereumAddress } from '@/lib/utils/ethereum';
+import {
+  ethereumAddressesEqual,
+  normalizeEthereumAddress,
+  requireEthereumAddress,
+} from '@/lib/utils/ethereum';
 import { getStorage } from '@/lib/storage';
 import { formatXmtpIdentifier } from '@/lib/xmtp/identifiers';
 import { StaleInstallationError } from '@/lib/xmtp/device-provisioning';
@@ -200,7 +204,7 @@ export function OnboardingPage() {
   const registryEntries = useInboxRegistryStore((state) => state.entries);
   const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
 
-  const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile'>('landing');
+  const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile' | 'migration'>('landing');
   const [statusMessage, setStatusMessage] = useState('Setting things up…');
   const [error, setError] = useState<string | null>(null);
   const [walletCandidate, setWalletCandidate] = useState<WalletIdentityCandidate | null>(null);
@@ -224,6 +228,14 @@ export function OnboardingPage() {
   const [pendingProvisioning, setPendingProvisioning] = useState<Identity | null>(null);
   const [showInitialProfile, setShowInitialProfile] = useState(false);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const currentIdentity = useAuthStore((state) => state.identity);
+
+  useEffect(() => {
+    if (currentIdentity?.migrationRequired) {
+      setView('migration');
+    }
+  }, [currentIdentity?.migrationRequired]);
 
   useEffect(() => {
     hydrateRegistry();
@@ -896,6 +908,27 @@ export function OnboardingPage() {
       }
       setError(err instanceof Error ? err.message : 'Failed to add this local account key. Please try again.');
       setView('results');
+    }
+  };
+
+  const handleMigrate = async () => {
+    if (!walletCandidate) {
+      setError('Please connect the linked wallet first.');
+      return;
+    }
+    setError(null);
+    setStatusMessage('Migrating identity to direct wallet control…');
+    setView('processing');
+    try {
+      await auth.migrateDeviceJoinIdentity({
+        onStatus: setStatusMessage,
+      });
+      const pendingTarget = getPendingTargetUrl();
+      window.location.assign(pendingTarget ?? '/');
+    } catch (err) {
+      console.error('[Migration] Failed to migrate identity:', err);
+      setError(err instanceof Error ? err.message : 'Migration failed. Please try again.');
+      setView('migration');
     }
   };
 
@@ -1646,8 +1679,84 @@ export function OnboardingPage() {
           </div>
 
           <div className="rounded-xl border border-primary-800/40 bg-primary-950/40 p-4 text-xs text-primary-300">
-            Converge generates a fresh key only after approval. It does not create or abandon a temporary inbox. Matching the inbox ID does not restore old messages by itself; an older installation may need to be online.
+            Converge registers this browser installation directly under your wallet identity. Matching the inbox ID does not restore old messages by itself; an older installation may need to be online.
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderMigration = () => {
+    const targetWallet =
+      currentIdentity?.migrationTargetWallet ||
+      currentIdentity?.linkedWalletAddress ||
+      '';
+    const isConnectedToTarget = Boolean(
+      walletCandidate &&
+        targetWallet &&
+        ethereumAddressesEqual(walletCandidate.address, targetWallet)
+    );
+
+    return (
+      <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
+        <div className="w-full max-w-md space-y-6 rounded-2xl border border-primary-800 bg-primary-950/90 p-6 shadow-2xl backdrop-blur-xl">
+          <div className="text-center space-y-2">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/20 text-amber-400">
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </div>
+            <h2 className="text-xl font-bold tracking-tight text-white">
+              XMTP Identity Migration Required
+            </h2>
+            <p className="text-sm text-primary-300">
+              Converge now connects directly to your external wallet for this inbox instead of using a generated intermediary key.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-primary-800/80 bg-primary-900/60 p-4 space-y-1">
+            <div className="text-xs text-primary-400 font-semibold uppercase tracking-wider">
+              Required Owner Wallet
+            </div>
+            <div className="font-mono text-sm break-all text-primary-200">
+              {targetWallet || 'Linked Wallet'}
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg border border-red-500/30 bg-red-950/40 p-3 text-xs text-red-300">
+              {error}
+            </div>
+          )}
+
+          {!isConnectedToTarget || !walletCandidate ? (
+            <div className="space-y-4">
+              <p className="text-xs text-primary-400">
+                Connect the required wallet ({shortAddress(targetWallet || '')}) to approve this one-time migration.
+              </p>
+              <WalletSelector
+                onWalletConnected={handleWalletConnected}
+                onBack={async () => {
+                  await resetWalletFlow();
+                  setView('landing');
+                }}
+                backLabel="← Cancel"
+              />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/40 p-3 text-xs text-emerald-300">
+                Wallet connected: <span className="font-mono">{shortAddress(walletCandidate.address)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleMigrate}
+                className="w-full rounded-xl bg-accent-600 py-3.5 px-4 font-semibold text-white shadow-lg transition-all hover:bg-accent-500 active:scale-[0.99]"
+              >
+                Approve Migration in Wallet
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1665,6 +1774,10 @@ export function OnboardingPage() {
         />
       </div>
     );
+  }
+
+  if (view === 'migration') {
+    return renderMigration();
   }
 
   if (view === 'landing') {

@@ -49,4 +49,4 @@ This is the live backlog. Keep it short and current. Completed work should move 
 - Video attachments.
 - Link previews.
 - Message forwarding.
-- Existing-device approval for adding a fresh local key without requiring a wallet.
+- Existing-device approval for adding a new device without requiring a wallet.

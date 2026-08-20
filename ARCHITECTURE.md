@@ -67,37 +67,31 @@ this contract.
 
 ### Product Terms
 
-- A Converge local account key is an XMTP account identity backed by a secp256k1 private key.
-- An XMTP inbox ID is the stable messaging destination. Multiple account identities can resolve to one inbox.
-- An XMTP installation is the device/app-instance key stored in the Browser SDK SQLite database. It is not the local account key.
+- A Converge local account key is an XMTP account identity backed by a secp256k1 private key stored in IndexedDB.
+- An external-wallet identity uses the external wallet address itself as the XMTP account identity. No private key is stored in app storage.
+- An XMTP inbox ID is the stable messaging destination.
+- An XMTP installation is the device/app-instance key stored in the Browser SDK SQLite database.
 - Create new Converge inbox means a new local account key, a new XMTP inbox, and this browser's first installation for that inbox.
 - Restore from keyfile means reuse the exact private key or mnemonic. A new browser resolves that account to its existing inbox and registers a distinct installation.
-- Add this device to existing inbox means create a fresh local account key, associate it with the target inbox, and reuse one browser installation authorized by a wallet that already controls that inbox.
+- Add this device to existing inbox registers this browser installation directly under the external wallet identity, without generating intermediate local EOA keys.
 
-### Wallet-Approved Device Bootstrap
+### External-Wallet Device Bootstrap
 
-1. Resolve the wallet identifier through the XMTP identity ledger. A prospective `Client.inboxId` is not proof that a ledger inbox exists.
+1. Resolve the wallet identifier through the XMTP identity ledger.
 2. Check the target inbox installation count before any registration. At 10/10, stop and offer the existing static recovery flow.
-3. Generate the fresh local account key without creating a client for it.
-4. Confirm through the ledger that the fresh key has no inbox. If it already resolves anywhere, block; the normal flow never reassigns it.
-5. Open the wallet signer with the SDK's inbox-aware default database path and `disableAutoRegister: true`.
-6. Ask the manager's own `preferences.fetchInboxState()` network view whether the exact local installation is already a published member. Browser SDK 6.1.2 `isRegistered()` proves only that the local database is ready; it cannot skip publication or membership verification.
-7. If the installation is absent and the manager is not locally ready, call `register()` once for that installation, then poll the manager's network-refreshed inbox state for the exact `installationId`. Also require the connected wallet to remain a current account or recovery authority. A previously ready pending manager that remains network-absent is stale and enters the one-time repair below.
-8. Call `unsafe_addAccount(freshSigner, true)`. Libxmtp pre-signs this update with the current installation as the existing member, so the XMTP publish endpoint remains the final protocol authorization boundary. After a fresh registration, state readers can lag across XMTP nodes; retry only the exact non-mutating `Missing existing member` rejection for a bounded period while refetching manager state. The pinned SDK requires `true` even for an unregistered key, so the fresh-key ledger preflight prevents reassignment.
-9. Wait until the fresh identifier resolves to the target inbox and appears in the target inbox identity state.
-10. Close the wallet manager and reopen the same default inbox database with the fresh signer.
-11. Require both the target `inboxId` and the wallet-approved `installationId` to match before marking onboarding complete.
-12. Publish a bounded, deduplicated device-history request for the joined device and explain that an older installation must be online to provide decrypted history. Persist requests that could not be published for a deliberate later retry; publishing the request is not proof that an archive arrived.
+3. Open the wallet signer with the SDK's inbox-aware default database path and `disableAutoRegister: true`.
+4. Ask the manager's own `preferences.fetchInboxState()` network view whether the exact local installation is already a published member.
+5. If the installation is absent and the manager is not locally ready, call `register()` once for that installation under the wallet identity, then verify the exact `installationId` in network state.
+6. Store the identity record with `identityKind: 'wallet'` (no local private key).
+7. Reconnect signer-less using `Client.build(identifier)` for routine messaging and background sync without prompting the wallet.
+8. Publish a bounded device-history request for the joined device.
 
-The manager and final local-key client intentionally share the SDK default path, `xmtp-production-<inbox-id>.db3`. Existing identities without a path-mode marker retain the previous address-based path so upgrading does not create an installation on the next reload.
+### Multi-Tab Database Concurrency Protection
 
-Provisioning persists the manager installation ID before registration or account association. It checks that exact installation through both `manager.preferences.fetchInboxState()` and an independent network reader; local `isRegistered()` never substitutes for either. After a fresh registration, a bounded `Missing existing member` retry handles cross-node publication lag without regenerating a key or installation. The server rejects every attempt until it recognizes the installation as an existing member, so the retry cannot publish an unauthorized identity update. The fresh account association must then converge through the manager resolver, the independent network resolver, and the target inbox identity state.
-
-If a pending inbox-default manager database is locally ready but its installation remains absent from the network after bounded registration polling, Converge may repair it exactly once. The repair closes the manager, deletes only that pending `xmtp-production-<inbox-id>.db3` database, clears the pending installation marker, preserves the staged local account key, refetches the target inbox, and rechecks the 10/10 installation limit before creating a replacement installation. It must not run for legacy/custom database paths, a network-visible installation, or more than once in one provisioning attempt. At 10/10 it stops and offers the normal safe recovery flow without opening the replacement client. Interrupted responses otherwise preserve the same key and installation, then surface a deliberate resume action on the inbox choice screen; startup never resumes wallet approval automatically. `Client.create` uses explicit `new-inbox`, `existing-inbox`, or `resume-only` registration policy; existing-inbox and reload paths pin the persisted installation ID and fail closed rather than falling back to inbox creation or silently accepting another installation.
-
-The pinned Browser SDK predates XMTP's April 2026 `waitForRegistrationVisible` quorum option, and the option is not present in published stable 7.0.0 either. Until Converge deliberately upgrades to a release that actually exposes it, Converge must not pass that unsupported option. Converge combines explicit network-state polling with bounded retries of only the server's `Missing existing member` rejection; final association convergence remains a separate proof after publication.
-
-`Client.create({ disableAutoRegister: true })` still assigns a prospective deterministic `inboxId` for a signer that has no identity update. Converge therefore uses `client.isRegistered()` for local registration readiness and resolves the signer independently through the network. It never calls `preferences.fetchInboxState()` as a fresh-inbox existence test. A permitted transition persists the installation first, calls `register()` at most once, then verifies all three facts before completion: the signer resolves to the expected inbox, the signer appears as an authorized account or recovery identifier, and the normalized installation ID appears in `installations`. Conversation sync and stream startup happen after this identity boundary and are non-fatal to an already verified inbox installation.
+XMTP OPFS SQLite databases cannot be safely accessed concurrently across browser tabs. Converge enforces tab concurrency using the Web Locks API:
+- When connecting an inbox, Converge attempts to acquire an exclusive lock on `converge:xmtp-inbox-database:<inboxId>` with `{ ifAvailable: true }`.
+- If another tab already holds the database open, connection fails immediately with a clear error preventing database corruption.
+- When the client disconnects or the tab closes, the lock is released cleanly.
 
 ### Settled Browser Installation Recovery
 

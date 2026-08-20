@@ -64,7 +64,7 @@ import {
   normalizeEthereumAddress as normalizeEthereumAccountAddress,
   requireEthereumAddress,
 } from '@/lib/utils/ethereum';
-import { inboxIdsMatch } from '@/lib/utils/inbox';
+import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
 import { canonicalizeHexInput } from '@/lib/utils/hex';
 import type { ClientRegistrationPolicy } from './registration-policy';
 import {
@@ -98,11 +98,13 @@ import {
   getExactClientDbPath,
   getClientDbPath,
   getPersistentClientDbPath,
-  provisionFreshDeviceKey,
+  provisionExternalWalletDevice,
   provisionWithStaleInstallationRecovery,
   shouldRequestHistorySync,
   signerIdentityKey,
   StaleLocalInstallationError,
+  stateHasIdentifier,
+  identifiersMatch,
   type DeviceProvisioningPhase,
   type XmtpDbPathMode,
   type ProvisionDeviceResult,
@@ -252,14 +254,27 @@ export interface AccountReassignmentResult {
   installationId?: string;
 }
 
-export interface DeviceProvisioningOptions {
-  targetIdentity: XmtpIdentity;
-  deviceIdentity: XmtpIdentity;
+export interface ExternalWalletProvisioningOptions {
+  walletIdentity: XmtpIdentity;
   expectedInboxId: string;
   knownInstallationId?: string;
   onInstallationReady?: (installationId: string) => Promise<void> | void;
   onInstallationReset?: (installationId: string) => Promise<void> | void;
   onPhase?: (phase: DeviceProvisioningPhase) => Promise<void> | void;
+}
+
+export interface MigrateDeviceJoinOptions {
+  walletIdentity: XmtpIdentity;
+  localEoaAddress: string;
+  expectedInboxId: string;
+  knownInstallationId?: string;
+  onPhase?: (phase: string) => Promise<void> | void;
+}
+
+export interface MigrateDeviceJoinResult {
+  success: boolean;
+  inboxId: string;
+  installationId: string;
 }
 
 export interface RevokeOldestInstallationsOptions {
@@ -499,6 +514,53 @@ export class XmtpClient {
     inboxState: { hit: 0, miss: 0 },
     addressInbox: { hit: 0, miss: 0, network: 0, cooldownSkip: 0 },
   };
+  private databaseLockRelease: (() => void) | null = null;
+
+  private async acquireInboxDatabaseLock(inboxId: string): Promise<boolean> {
+    if (typeof navigator === 'undefined' || !navigator.locks) {
+      return true;
+    }
+    this.releaseInboxDatabaseLock();
+
+    const lockName = `converge:xmtp-inbox-database:${inboxId.toLowerCase()}`;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      navigator.locks
+        .request(lockName, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+          if (!lock) {
+            if (!settled) {
+              settled = true;
+              resolve(false);
+            }
+            return Promise.resolve();
+          }
+          return new Promise<void>((releaseLock) => {
+            this.databaseLockRelease = () => {
+              this.databaseLockRelease = null;
+              releaseLock();
+            };
+            if (!settled) {
+              settled = true;
+              resolve(true);
+            }
+          });
+        })
+        .catch((err) => {
+          console.warn('[XMTP] Lock acquisition error:', err);
+          if (!settled) {
+            settled = true;
+            resolve(true);
+          }
+        });
+    });
+  }
+
+  private releaseInboxDatabaseLock(): void {
+    if (this.databaseLockRelease) {
+      this.databaseLockRelease();
+      this.databaseLockRelease = null;
+    }
+  }
 
   private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
     const task = this.lifecycleTail.then(operation, operation);
@@ -4573,9 +4635,21 @@ export class XmtpClient {
       console.log('[XMTP] SDK version: @xmtp/browser-sdk@' + xmtpPackage.version);
       console.log('[XMTP] User Agent:', navigator.userAgent);
 
-      const signer = await this.createSigner(identity);
-      const signerIdentifier = await signer.getIdentifier();
-      let databaseInboxId = options?.expectedInboxId;
+      const hasSigner = Boolean(identity.privateKey || identity.signMessage);
+      let signer: Signer | undefined;
+      let signerIdentifier: Identifier;
+
+      if (hasSigner) {
+        signer = await this.createSigner(identity);
+        signerIdentifier = await signer.getIdentifier();
+      } else {
+        signerIdentifier = {
+          identifier: normalizeEthereumAccountAddress(identity.address) ?? identity.address.trim().toLowerCase(),
+          identifierKind: IdentifierKind.Ethereum,
+        };
+      }
+
+      let databaseInboxId = options?.expectedInboxId ?? identity.inboxId;
       if (!databaseInboxId && (identity.xmtpDbPathMode ?? 'legacy-address') === 'inbox-default') {
         databaseInboxId =
           (await this.retryWithBackoff('connect:resolve-database-inbox', () =>
@@ -4583,7 +4657,16 @@ export class XmtpClient {
           )) ?? (await generateInboxId(signerIdentifier));
       }
 
-      console.log('[XMTP] Calling Client.create() with signer...');
+      if (databaseInboxId) {
+        const lockAcquired = await this.acquireInboxDatabaseLock(databaseInboxId);
+        if (!lockAcquired) {
+          throw new Error(
+            'This inbox is currently open in another browser tab. Please switch to that tab or close it.'
+          );
+        }
+      }
+
+      console.log(`[XMTP] Calling Client.${signer ? 'create()' : 'build()'}...`);
       // New identities use the deterministic inbox-aware filename. Records
       // created before that migration retain their address filename. Both are
       // opened through the named OPFS VFS so storage failure cannot silently
@@ -4654,7 +4737,7 @@ export class XmtpClient {
                 'rwc'
               )
             : getClientDbPath(identity.address, databasePathMode);
-        console.log('[XMTP] Client.create options:', {
+        console.log(`[XMTP] Client.${signer ? 'create' : 'build'} options:`, {
           env: 'production',
           dbPath: dbPath ?? '(SDK inbox default)',
           databasePathMode,
@@ -4664,26 +4747,48 @@ export class XmtpClient {
         });
 
         try {
-          client = await this.retryWithDelay(
-            'client.create:opfs',
-            async () =>
-              await Client.create(signer, {
-                env: 'production',
-                ...(dbPath ? { dbPath } : {}),
-                appVersion: XMTP_APP_VERSION,
-                codecs: XMTP_CONTENT_CODECS,
-                loggingLevel: sdkLoggingLevel,
-                structuredLogging: false,
-                performanceLogging: false,
-                historySyncUrl: getXmtpHistorySyncUrl(),
-                disableAutoRegister: true,
-              }),
-            {
-              attempts: 3,
-              initialDelayMs: 400,
-              shouldRetry: (error) => this.isDatabaseLockError(error),
-            }
-          );
+          if (signer) {
+            client = await this.retryWithDelay(
+              'client.create:opfs',
+              async () =>
+                await Client.create(signer!, {
+                  env: 'production',
+                  ...(dbPath ? { dbPath } : {}),
+                  appVersion: XMTP_APP_VERSION,
+                  codecs: XMTP_CONTENT_CODECS,
+                  loggingLevel: sdkLoggingLevel,
+                  structuredLogging: false,
+                  performanceLogging: false,
+                  historySyncUrl: getXmtpHistorySyncUrl(),
+                  disableAutoRegister: true,
+                }),
+              {
+                attempts: 3,
+                initialDelayMs: 400,
+                shouldRetry: (error) => this.isDatabaseLockError(error),
+              }
+            );
+          } else {
+            client = await this.retryWithDelay(
+              'client.build:opfs',
+              async () =>
+                await Client.build(signerIdentifier, {
+                  env: 'production',
+                  ...(dbPath ? { dbPath } : {}),
+                  appVersion: XMTP_APP_VERSION,
+                  codecs: XMTP_CONTENT_CODECS,
+                  loggingLevel: sdkLoggingLevel,
+                  structuredLogging: false,
+                  performanceLogging: false,
+                  historySyncUrl: getXmtpHistorySyncUrl(),
+                }),
+              {
+                attempts: 3,
+                initialDelayMs: 400,
+                shouldRetry: (error) => this.isDatabaseLockError(error),
+              }
+            );
+          }
         } catch (error) {
           if (this.isRateLimitError(error)) {
             this.noteIdentityRateLimit('connect:client.create');
@@ -4812,41 +4917,34 @@ export class XmtpClient {
   }
 
   /**
-   * Register or reuse this browser installation under wallet authority, then
-   * associate a fresh local account key with the same inbox and database.
+   * Register or reuse this browser installation under wallet authority.
+   * Directly uses the external wallet identity without creating a local EOA.
    */
-  provisionDeviceKeyForInbox(options: DeviceProvisioningOptions): Promise<ProvisionDeviceResult> {
-    return this.enqueueLifecycle(() => this.provisionDeviceKeyForInboxInternal(options));
+  provisionExternalWalletDevice(
+    options: ExternalWalletProvisioningOptions
+  ): Promise<ProvisionDeviceResult> {
+    return this.enqueueLifecycle(() =>
+      this.provisionExternalWalletDeviceInternal(options)
+    );
   }
 
-  private async provisionDeviceKeyForInboxInternal({
-    targetIdentity,
-    deviceIdentity,
+  private async provisionExternalWalletDeviceInternal({
+    walletIdentity,
     expectedInboxId,
     knownInstallationId,
     onInstallationReady,
     onInstallationReset,
     onPhase,
-  }: DeviceProvisioningOptions): Promise<ProvisionDeviceResult> {
-    if (!deviceIdentity.privateKey) {
-      throw new Error('A fresh local private key is required to add this device.');
-    }
-    if (deviceIdentity.xmtpDbPathMode !== 'inbox-default') {
-      throw new Error(
-        'Device provisioning recovery requires the inbox-aware XMTP database path.'
-      );
-    }
-
+  }: ExternalWalletProvisioningOptions): Promise<ProvisionDeviceResult> {
     if (this.client) {
       await this.disconnectInternal();
     }
 
-    const targetSigner = await this.createSigner(targetIdentity);
-    const deviceSigner = await this.createSigner(deviceIdentity);
+    const walletSigner = await this.createSigner(walletIdentity);
     const sdkLoggingLevel = getXmtpSdkLogLevel();
 
     const provision = async (resumeInstallationId?: string) =>
-      await provisionFreshDeviceKey(targetSigner, deviceSigner, expectedInboxId, {
+      await provisionExternalWalletDevice(walletSigner, expectedInboxId, {
         resolveInboxId: async (identifier) =>
           await getInboxIdForIdentifier(identifier, 'production'),
         fetchInboxState: async (inboxId) => {
@@ -4860,7 +4958,7 @@ export class XmtpClient {
           await Client.create(signer, {
             env: 'production',
             dbPath: getPersistentClientDbPath(
-              deviceIdentity.address,
+              walletIdentity.address,
               'inbox-default',
               expectedInboxId,
               'rwc'
@@ -4884,8 +4982,6 @@ export class XmtpClient {
           installationId: error.installationId,
         });
         await onPhase?.('repairing-installation');
-        // Clear the persisted expectation before deleting the database so a reload
-        // cannot compare the replacement installation against the stale ID.
         await onInstallationReset?.(error.installationId);
         const deleted = await deleteInboxDefaultDatabase(error.inboxId);
         console.info('[XMTP] Pending inbox database reset complete', {
@@ -4895,6 +4991,162 @@ export class XmtpClient {
         });
       }
     );
+  }
+
+  /**
+   * Migrate a legacy device-join identity to direct external wallet control.
+   */
+  migrateDeviceJoinIdentity(
+    options: MigrateDeviceJoinOptions
+  ): Promise<MigrateDeviceJoinResult> {
+    return this.enqueueLifecycle(() =>
+      this.migrateDeviceJoinIdentityInternal(options)
+    );
+  }
+
+  private async migrateDeviceJoinIdentityInternal({
+    walletIdentity,
+    localEoaAddress,
+    expectedInboxId,
+    knownInstallationId,
+    onPhase,
+  }: MigrateDeviceJoinOptions): Promise<MigrateDeviceJoinResult> {
+    const notify = async (phase: string) => {
+      await onPhase?.(phase);
+    };
+
+    await notify('preflight');
+    if (this.client) {
+      await this.disconnectInternal();
+    }
+
+    const walletSigner = await this.createSigner(walletIdentity);
+    const walletIdentifier = await walletSigner.getIdentifier();
+    const localEoaIdentifier: Identifier = {
+      identifier: normalizeEthereumAccountAddress(localEoaAddress) ?? localEoaAddress.toLowerCase(),
+      identifierKind: IdentifierKind.Ethereum,
+    };
+
+    const resolvedWalletInboxId = normalizeInboxId(
+      await getInboxIdForIdentifier(walletIdentifier, 'production')
+    );
+    const expected = normalizeInboxId(expectedInboxId);
+    if (!expected || !resolvedWalletInboxId || resolvedWalletInboxId !== expected) {
+      throw new Error('The connected wallet does not resolve to the target XMTP inbox.');
+    }
+
+    const initialStates = await Client.fetchInboxStates([expected], 'production');
+    let currentState = initialStates[0];
+    if (!currentState) {
+      throw new Error('XMTP did not return inbox state for the target inbox.');
+    }
+
+    const walletControlsInbox = stateHasIdentifier(currentState, walletIdentifier);
+    if (!walletControlsInbox) {
+      throw new Error(
+        'The connected wallet is not a current account or recovery authority for this inbox.'
+      );
+    }
+
+    const sdkLoggingLevel = getXmtpSdkLogLevel();
+    const dbPath = getPersistentClientDbPath(
+      walletIdentity.address,
+      'inbox-default',
+      expected,
+      'rwc'
+    );
+
+    // 1. If the local EOA is the recovery identifier, move recovery authority to the wallet first
+    const localEoaIsRecovery = Boolean(
+      currentState.recoveryIdentifier &&
+        identifiersMatch(currentState.recoveryIdentifier, localEoaIdentifier)
+    );
+
+    if (localEoaIsRecovery) {
+      await notify('updating-recovery');
+      console.info('[XMTP] Moving recovery identifier to connected wallet...');
+      const recoveryClient = await Client.create(walletSigner, {
+        env: 'production',
+        dbPath,
+        appVersion: XMTP_APP_VERSION,
+        codecs: XMTP_CONTENT_CODECS,
+        loggingLevel: sdkLoggingLevel,
+        structuredLogging: false,
+        performanceLogging: false,
+        historySyncUrl: getXmtpHistorySyncUrl(),
+        disableAutoRegister: true,
+      });
+      try {
+        await recoveryClient.changeRecoveryIdentifier(walletIdentifier);
+      } finally {
+        await recoveryClient.close();
+      }
+
+      const postRecoveryStates = await Client.fetchInboxStates([expected], 'production');
+      currentState = postRecoveryStates[0];
+      if (
+        !currentState ||
+        !currentState.recoveryIdentifier ||
+        !identifiersMatch(currentState.recoveryIdentifier, walletIdentifier)
+      ) {
+        throw new Error('Failed to verify recovery identifier update on XMTP network.');
+      }
+      console.info('[XMTP] ✅ Recovery identifier successfully moved to wallet');
+    }
+
+    // 2. If the local EOA is in accountIdentifiers, remove it
+    const localEoaIsMember = currentState.accountIdentifiers?.some((candidate) =>
+      identifiersMatch(candidate, localEoaIdentifier)
+    );
+
+    if (localEoaIsMember) {
+      await notify('removing-local-account');
+      console.info('[XMTP] Removing local EOA from inbox account identifiers...');
+      const removeAccountClient = await Client.create(walletSigner, {
+        env: 'production',
+        dbPath,
+        appVersion: XMTP_APP_VERSION,
+        codecs: XMTP_CONTENT_CODECS,
+        loggingLevel: sdkLoggingLevel,
+        structuredLogging: false,
+        performanceLogging: false,
+        historySyncUrl: getXmtpHistorySyncUrl(),
+        disableAutoRegister: true,
+      });
+      try {
+        await removeAccountClient.removeAccount(localEoaIdentifier);
+      } finally {
+        await removeAccountClient.close();
+      }
+    }
+
+    // 3. Verify from fresh network state
+    await notify('verifying-network-state');
+    const finalStates = await Client.fetchInboxStates([expected], 'production');
+    const finalState = finalStates[0];
+    if (!finalState) {
+      throw new Error('Could not retrieve final inbox state from XMTP network.');
+    }
+
+    const finalResolvedWalletInbox = normalizeInboxId(
+      await getInboxIdForIdentifier(walletIdentifier, 'production')
+    );
+    if (finalResolvedWalletInbox !== expected) {
+      throw new Error('Wallet inbox ID changed unexpectedly during migration.');
+    }
+
+    if (stateHasIdentifier(finalState, localEoaIdentifier)) {
+      throw new Error(
+        'Local account key is still present on the XMTP inbox ledger. Migration was not completed.'
+      );
+    }
+
+    await notify('complete');
+    return {
+      success: true,
+      inboxId: expected,
+      installationId: knownInstallationId || finalState.installations?.[0]?.id || '',
+    };
   }
 
   /**
@@ -5103,6 +5355,7 @@ export class XmtpClient {
         await new Promise(resolve => setTimeout(resolve, 300));
       }
 
+      this.releaseInboxDatabaseLock();
       this.client = null;
       this.identity = null;
       this.inviteDerivedKey = null;
@@ -5119,6 +5372,8 @@ export class XmtpClient {
         details: 'XMTP client disconnected',
       });
       console.log('[XMTP] XMTP client fully disconnected');
+    } else {
+      this.releaseInboxDatabaseLock();
     }
   }
 

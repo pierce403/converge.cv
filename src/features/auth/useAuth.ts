@@ -24,7 +24,6 @@ import type { Identity } from '@/types';
 import { useWalletConnection } from '@/lib/wagmi';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
 import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
-import { generateLocalAppIdentity } from '@/lib/identity/local-app-key';
 import {
   extractWrongChainIdDetails,
   isLegacyScwChainZeroMismatch,
@@ -34,7 +33,6 @@ import {
   completeProvisioning,
   getScwRetryChainId,
   recordInstallationReady,
-  StaleInstallationError,
 } from '@/lib/xmtp/device-provisioning';
 import { loadStoredIdentityForXmtp } from './xmtp-storage';
 import { findPendingKeyfileRestore } from './keyfile-resume';
@@ -55,6 +53,10 @@ import {
   requireEthereumAddress,
 } from '@/lib/utils/ethereum';
 import { getMessageRetentionCutoff } from '@/lib/message-retention-policy';
+import {
+  isLegacyDeviceJoinIdentity,
+  migrateLegacyDeviceJoinIdentity,
+} from '@/lib/identity/migration';
 
 export function useAuth() {
   const authStore = useAuthStore();
@@ -654,6 +656,24 @@ export function useAuth() {
       await storage.pruneMessages(getMessageRetentionCutoff());
       const secrets = await storage.getVaultSecrets();
 
+      // Check if this identity requires migration to direct external wallet model
+      if (isLegacyDeviceJoinIdentity(identity)) {
+        console.info(
+          '[Auth] Legacy device-join identity detected; migration to direct external wallet required.'
+        );
+        identity = {
+          ...identity,
+          migrationRequired: true,
+          migrationTargetWallet: identity.linkedWalletAddress,
+          migrationOldLocalAddress: identity.address,
+        };
+        setIdentity(identity);
+        setVaultSecrets(secrets ?? null);
+        setAuthenticated(false);
+        setVaultUnlocked(false);
+        return false;
+      }
+
       setIdentity(identity);
       setVaultSecrets(secrets ?? null);
       const isPendingProvisioning = identity.provisioningPending === true || !identity.inboxId;
@@ -661,29 +681,6 @@ export function useAuth() {
         setAuthenticated(true);
         setVaultUnlocked(true);
         clearIntentionalEmptyInboxState();
-      }
-
-      if (
-        isPendingProvisioning &&
-        identity.provisioningMode === 'device-join' &&
-        identity.privateKey
-      ) {
-        const pendingProbe = await getXmtpClient().probeIdentity({
-          address: identity.address,
-          privateKey: identity.privateKey,
-        });
-        if (
-          !pendingProbe.inboxId ||
-          !inboxIdsMatch(
-            pendingProbe.inboxId,
-            identity.expectedInboxId ?? identity.inboxId
-          )
-        ) {
-          console.info(
-            '[Auth] Pending local account key is not associated with its target inbox yet; returning to the onboarding choices.'
-          );
-          return false;
-        }
       }
 
       if (typeof identity.lastSyncedAt === 'number') {
@@ -717,31 +714,37 @@ export function useAuth() {
           setAuthenticated(true);
           setVaultUnlocked(true);
         }
-      } else if (walletAddress && ethereumAddressesEqual(walletAddress, identity.address)) {
-        console.log('[Auth] Reconnecting wallet-based identity with wallet signer');
-        const signMessage = async (message: string) => {
-          if (!walletSignMessage) {
-            throw new Error('Wallet signing is not available. Please reconnect your wallet.');
+      } else {
+        // Direct external-wallet identity: connect signer-less (or with signer if wallet currently connected)
+        console.log('[Auth] Connecting external-wallet identity (signer-less routine startup)');
+        const signMessage =
+          walletAddress && ethereumAddressesEqual(walletAddress, identity.address) && walletSignMessage
+            ? async (message: string) => {
+                return await walletSignMessage(message, identity.address);
+              }
+            : undefined;
+
+        const connection = await connectXmtpSafely(
+          identity.address,
+          undefined,
+          walletChainId ?? identity.walletChainId,
+          signMessage,
+          {
+            registrationPolicy: 'resume-only',
+            enableHistorySync: shouldSyncHistory,
+            requestHistorySync: shouldRequestDeviceHistory,
+            walletType: identity.walletType,
+            labelOverride: identity.displayName,
+            required: isPendingProvisioning,
+            expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
+            expectedInstallationId: expectedInstallationForStoredIdentity(identity),
           }
-          return await walletSignMessage(message, identity.address);
-        };
-        const connection = await connectXmtpSafely(identity.address, undefined, walletChainId, signMessage, {
-          registrationPolicy: 'resume-only',
-          enableHistorySync: shouldSyncHistory,
-          requestHistorySync: shouldRequestDeviceHistory,
-          walletType: identity.walletType,
-          labelOverride: identity.displayName,
-          required: isPendingProvisioning,
-          expectedInboxId: identity.expectedInboxId ?? identity.inboxId,
-          expectedInstallationId: expectedInstallationForStoredIdentity(identity),
-        });
+        );
         if (isPendingProvisioning && connection) {
           clearIntentionalEmptyInboxState();
           setAuthenticated(true);
           setVaultUnlocked(true);
         }
-      } else {
-        console.log('[Auth] Wallet-based identity found but wallet not connected - skipping XMTP connection');
       }
 
       if (identity.inboxId) {
@@ -982,123 +985,41 @@ export function useAuth() {
         throw new Error(INBOX_ALREADY_LOADED_MESSAGE);
       }
 
-      const currentStorage = await getStorage();
-      const pendingIdentity = (await currentStorage.listIdentities()).find(
-        (candidate) =>
-          candidate.provisioningMode === 'device-join' &&
-          candidate.provisioningPending === true &&
-          Boolean(candidate.privateKey) &&
-          inboxIdsMatch(candidate.expectedInboxId, targetInboxId)
-      );
-      const pendingInstallationIsRegistered = Boolean(
-        pendingIdentity?.installationId &&
-          probe.inboxState?.installations?.some(
-            (installation) =>
-              installation.id.replace(/^0x/i, '').toLowerCase() ===
-              pendingIdentity.installationId?.replace(/^0x/i, '').toLowerCase()
-          )
-      );
-      const pendingStaleInstallationIsRegistered = Boolean(
-        pendingIdentity?.staleInstallationId &&
-          probe.inboxState?.installations?.some(
-            (installation) =>
-              installation.id.replace(/^0x/i, '').toLowerCase() ===
-              pendingIdentity.staleInstallationId?.replace(/^0x/i, '').toLowerCase()
-          )
-      );
-      if (pendingIdentity?.staleInstallationId && !pendingStaleInstallationIsRegistered) {
-        pendingIdentity.staleInstallationId = undefined;
-        await currentStorage.putIdentity({ ...pendingIdentity });
-      }
-      if (pendingIdentity?.staleInstallationId && pendingStaleInstallationIsRegistered) {
-        throw new StaleInstallationError(
-          targetInboxId,
-          pendingIdentity.staleInstallationId
-        );
-      }
-      if (probe.installationCount >= 10 && !pendingInstallationIsRegistered) {
+      if (probe.installationCount >= 10) {
         throw new Error(
-          'Installation limit reached (10/10). Revoke an old installation before adding this device.'
+          'Installation limit reached (10/10). Revoke an old installation in your wallet settings before adding this device.'
         );
       }
-      const generated = pendingIdentity
-        ? {
-            identity: pendingIdentity,
-            privateKey: pendingIdentity.privateKey as `0x${string}`,
-            mnemonic: pendingIdentity.mnemonic ?? '',
-          }
-        : generateLocalAppIdentity();
-      const stagedIdentity: Identity = {
-        ...generated.identity,
-        inboxId: targetInboxId,
-        identityKind: 'local-app',
-        provisioningMode: 'device-join',
-        provisioningPending: true,
-        xmtpDbPathMode: 'inbox-default',
-        linkedWalletAddress: targetWalletAddress,
-        linkedWalletChainId: chainId,
-        linkedAt: pendingIdentity?.linkedAt ?? Date.now(),
-        displayName: options?.label || generated.identity.displayName,
-        needsHistorySync: true,
-        expectedInboxId: targetInboxId,
-      };
-
-      // Persist the fresh key before the first ledger mutation. If association
-      // succeeds but a later verification is interrupted, startup can safely
-      // resume this exact key without registering it as a standalone inbox.
-      await currentStorage.putIdentity(stagedIdentity);
 
       let lastProvisioningPhase = 'preflight';
       const provision = async (provisioningChainId = chainId) => {
         try {
-          return await xmtp.provisionDeviceKeyForInbox({
-            targetIdentity: {
+          return await xmtp.provisionExternalWalletDevice({
+            walletIdentity: {
               address: targetWalletAddress,
               chainId: provisioningChainId,
               walletType,
               signMessage,
             },
-            deviceIdentity: {
-              address: stagedIdentity.address,
-              privateKey: generated.privateKey,
-              xmtpDbPathMode: 'inbox-default',
-            },
             expectedInboxId: targetInboxId,
-            knownInstallationId: stagedIdentity.installationId,
-            onInstallationReady: async (installationId) => {
-              stagedIdentity.installationId = installationId;
-              if (
-                stagedIdentity.staleInstallationId?.replace(/^0x/i, '').toLowerCase() ===
-                installationId.replace(/^0x/i, '').toLowerCase()
-              ) {
-                stagedIdentity.staleInstallationId = undefined;
-              }
-              await currentStorage.putIdentity({ ...stagedIdentity, installationId });
-            },
-            onInstallationReset: async (installationId) => {
-              if (installationIdsMatch(stagedIdentity.installationId, installationId)) {
-                stagedIdentity.installationId = undefined;
-              }
-              await currentStorage.putIdentity({ ...stagedIdentity, installationId: undefined });
-            },
             onPhase: async (phase) => {
               lastProvisioningPhase = phase;
               const messages = {
-                preflight: 'Checking the target inbox and fresh local account key…',
+                preflight: 'Checking the target inbox…',
                 'opening-manager': 'Opening this browser installation…',
                 'manager-ready': 'Browser installation ready…',
                 'registering-installation': 'Approve this browser installation in your wallet…',
-                'installation-registered': 'Installation approved. Preparing the local account key…',
+                'installation-registered': 'Installation approved. Finalizing…',
                 'verifying-installation':
                   'Waiting for XMTP to publish this browser installation…',
                 'repairing-installation':
                   'Replacing an interrupted browser installation…',
-                'associating-key': 'Associating the fresh local account key…',
-                'association-submitted': 'Local account key accepted. Waiting for XMTP confirmation…',
-                'verifying-association': 'Verifying the new key against your existing inbox…',
-                complete: 'Local account key verified. Opening your inbox…',
+                'associating-key': 'Verifying wallet identity…',
+                'association-submitted': 'Verifying…',
+                'verifying-association': 'Verifying inbox membership…',
+                complete: 'Installation verified. Opening your inbox…',
               } as const;
-              options?.onStatus?.(messages[phase]);
+              options?.onStatus?.(messages[phase] ?? phase);
             },
           });
         } catch (error) {
@@ -1137,22 +1058,32 @@ export function useAuth() {
         }
 
         const deviceIdentity: Identity = {
-          ...stagedIdentity,
+          address: targetWalletAddress,
+          publicKey: '',
+          privateKey: undefined,
+          mnemonic: undefined,
+          identityKind: 'wallet',
+          walletType,
+          walletChainId: chainId,
           inboxId: targetInboxId,
           installationId: provisioned.installationId,
+          xmtpDbPathMode: 'inbox-default',
+          displayName: options?.label || `${targetWalletAddress.slice(0, 6)}…${targetWalletAddress.slice(-4)}`,
+          createdAt: Date.now(),
           needsHistorySync: true,
+          expectedInboxId: targetInboxId,
         };
 
         await setStorageNamespace(targetInboxId);
-        const storage = await getStorage();
-        await storage.putIdentity(deviceIdentity);
+        const currentStorage = await getStorage();
+        await currentStorage.putIdentity(deviceIdentity);
         setIdentity(deviceIdentity);
 
         const connection = await connectXmtpSafely(
           deviceIdentity.address,
-          deviceIdentity.privateKey,
           undefined,
-          undefined,
+          chainId,
+          signMessage,
           {
             registrationPolicy: 'resume-only',
             enableHistorySync: true,
@@ -1170,7 +1101,7 @@ export function useAuth() {
           !installationIdsMatch(connection.installationId, provisioned.installationId)
         ) {
           throw new Error(
-            'The local account key did not reopen the wallet-approved XMTP installation.'
+            'The browser client did not reopen the wallet-approved XMTP installation.'
           );
         }
 
@@ -1195,23 +1126,6 @@ export function useAuth() {
           deviceKeyAddress: deviceIdentity.address,
         };
       } catch (error) {
-        let surfacedError = error;
-        const provisioningMessage = error instanceof Error ? error.message : String(error);
-        if (
-          /different local installation while resuming device setup|did not reopen the wallet-approved browser installation/i.test(
-            provisioningMessage
-          ) &&
-          stagedIdentity.installationId
-        ) {
-          stagedIdentity.staleInstallationId = stagedIdentity.installationId;
-          stagedIdentity.installationId = undefined;
-          await currentStorage.putIdentity({ ...stagedIdentity });
-          setIdentity({ ...stagedIdentity });
-          surfacedError = new StaleInstallationError(
-            targetInboxId,
-            stagedIdentity.staleInstallationId
-          );
-        }
         if (previousSession.isAuthenticated && previousSession.identity) {
           try {
             await setStorageNamespace(previousNamespace);
@@ -1240,10 +1154,84 @@ export function useAuth() {
             console.warn('[Auth] Failed to restore the prior inbox after device setup:', restoreError);
           }
         }
-        throw surfacedError;
+        throw error;
       }
     },
     [connectXmtpSafely, setAuthenticated, setIdentity, setVaultUnlocked]
+  );
+
+  const migrateDeviceJoinIdentity = useCallback(
+    async (options?: {
+      onStatus?: (message: string) => void;
+      onPhase?: (phase: string) => void;
+    }) => {
+      if (!walletAddress) {
+        throw new Error('Please connect your wallet to migrate this identity.');
+      }
+      if (!walletSignMessage) {
+        throw new Error('Wallet signing is not available. Please reconnect your wallet.');
+      }
+      const activeIdentity = authStore.identity;
+      if (!activeIdentity) {
+        throw new Error('No identity is currently loaded for migration.');
+      }
+      const signMessage = async (message: string) => {
+        return await walletSignMessage(message, walletAddress);
+      };
+
+      const migrated = await migrateLegacyDeviceJoinIdentity({
+        localIdentity: activeIdentity,
+        walletAddress,
+        walletChainId,
+        walletType: activeIdentity.walletType ?? 'EOA',
+        signMessage,
+        onPhase: (phase) => {
+          options?.onPhase?.(phase);
+          const messages: Record<string, string> = {
+            preflight: 'Checking wallet and target inbox…',
+            'updating-recovery': 'Moving recovery authority to your wallet…',
+            'removing-local-account': 'Approve removing the generated local key in your wallet…',
+            'verifying-network-state': 'Verifying updated inbox state on the XMTP network…',
+            'updating-local-storage': 'Updating local identity storage…',
+            complete: 'Migration verified. Opening inbox…',
+          };
+          options?.onStatus?.(messages[phase] ?? phase);
+        },
+      });
+
+      setIdentity(migrated);
+      setAuthenticated(true);
+      setVaultUnlocked(true);
+      clearIntentionalEmptyInboxState();
+
+      await connectXmtpSafely(
+        migrated.address,
+        undefined,
+        migrated.walletChainId,
+        signMessage,
+        {
+          registrationPolicy: 'resume-only',
+          enableHistorySync: true,
+          labelOverride: migrated.displayName,
+          required: true,
+          expectedInboxId: migrated.inboxId,
+          expectedInstallationId: migrated.installationId,
+          requestHistorySync: true,
+        }
+      );
+
+      return migrated;
+    },
+    [
+      walletAddress,
+      walletSignMessage,
+      walletChainId,
+      authStore.identity,
+      setIdentity,
+      setAuthenticated,
+      setVaultUnlocked,
+      connectXmtpSafely,
+    ]
   );
 
   return {
@@ -1256,5 +1244,6 @@ export function useAuth() {
     reconnectCurrentIdentity,
     repairCurrentInstallation,
     addDeviceToExistingWalletInbox,
+    migrateDeviceJoinIdentity,
   };
 }

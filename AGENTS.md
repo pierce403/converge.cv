@@ -107,21 +107,18 @@ Restore from keyfile →
 
 Add this device to existing inbox →
   Connect wallet that owns existing inbox →
-  Probe target inbox and installation limit without creating a client for the new key →
-  Generate a fresh local account key →
-  Register/reuse this browser installation under wallet authority →
+  Probe target inbox and installation limit without generating intermediate keys →
+  Register/reuse this browser installation directly under wallet identity →
   Refresh that exact installation through the manager and independent network state →
-  Retry only XMTP's rejected `Missing existing member` response while a fresh registration propagates →
-  If locally ready but still network-absent, preserve the key and replace the pending default DB/installation once after a new 10/10 check →
-  Associate the fresh key only after proving it is unassociated and the wallet is still current authority →
-  Reopen the same inbox database with the fresh key → verify inbox and installation IDs → request history
+  Connect signer-less for routine messaging without storing wallet private key in browser → verify inbox and installation IDs → request history
 ```
 
 ### Key Functions
 - `createIdentity(address, privateKey, options)` - Creates a new inbox or restores a key, then persists verified runtime IDs.
-- `checkExistingIdentity()` - Reconnects a stored identity; returns to onboarding when none exists.
-- `addDeviceToExistingWalletInbox()` - Generates a fresh key, provisions it into the wallet's existing inbox, reconnects with that key, and verifies both IDs.
-- `provisionDeviceKeyForInbox()` - Low-level wallet-authorized association path with ledger and 10/10 preflight checks.
+- `checkExistingIdentity()` - Reconnects a stored identity signer-less if external-wallet, or with local key; returns to onboarding when none exists. Detects legacy device-join records needing migration.
+- `addDeviceToExistingWalletInbox()` - Provisions the browser installation directly under the external wallet identity, connects signer-less, and verifies both IDs.
+- `provisionExternalWalletDevice()` - Direct external-wallet device provisioning with ledger and 10/10 preflight checks.
+- `migrateLegacyDeviceJoinIdentity()` - Idempotent one-click migration removing legacy local EOA member keys from XMTP inbox under wallet authority and converting stored identity to direct wallet model.
 - `reassignAccountToInbox()` - Refuses cross-inbox reassignment. Any future destructive reassignment needs a separate explicit confirmation flow and stranding warning.
 
 ---

@@ -688,11 +688,10 @@ export function SettingsPage() {
       }
     );
 
-    console.info('[Settings] Added a fresh local account key to existing inbox', {
+    console.info('[Settings] Registered browser installation for external-wallet inbox', {
       targetAddress: target.address,
       targetWalletType: target.walletType,
       targetChainId: target.chainId ?? null,
-      deviceKeyAddress: result.deviceKeyAddress,
       inboxId: result.inboxId,
       installationId: result.installationId,
     });
@@ -1348,7 +1347,9 @@ export function SettingsPage() {
                   {identity?.address}
                 </div>
                 <div className="mt-2 text-xs text-primary-300">
-                  This local account key signs Converge messages. Export is available under Advanced.
+                  {identity?.privateKey
+                    ? 'This local account key signs Converge messages. Export is available under Advanced.'
+                    : 'This external wallet is the account identity for this XMTP inbox.'}
                 </div>
               </div>
 
@@ -1359,7 +1360,7 @@ export function SettingsPage() {
               >
                 <div>
                   <div className="font-medium">Add This Device to Existing Inbox</div>
-                  <div className="text-sm text-primary-200">Create a fresh local account key approved by a wallet that controls the inbox</div>
+                  <div className="text-sm text-primary-200">Register this browser installation directly under an external wallet inbox</div>
                 </div>
                 <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1919,7 +1920,7 @@ function ConnectExistingInboxModal({
 
         <div className="p-4 space-y-3">
           <p className="text-sm text-primary-200">
-            Converge generates a fresh local account key, registers or reuses one browser installation in the target inbox, and keeps your current inbox unchanged. It will not move a registered key; reassignment would strand that key&apos;s previous inbox.
+            Converge registers this browser installation directly under your wallet identity, connects signer-less for routine messaging, and keeps your current inbox unchanged.
           </p>
 
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">

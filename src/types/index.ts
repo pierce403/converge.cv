@@ -190,7 +190,7 @@ export interface ConvosJoinRequesterProfile {
 export interface Identity {
   address: string;
   publicKey: string;
-  privateKey?: string; // Stored unencrypted in IndexedDB until encryption-at-rest is implemented
+  privateKey?: string; // Stored unencrypted in IndexedDB for local-app and imported local identities
   identityKind?: 'local-app' | 'wallet' | 'imported';
   walletType?: 'EOA' | 'SCW';
   walletChainId?: number;
@@ -217,6 +217,10 @@ export interface Identity {
   installationRepairPending?: boolean; // Latest live repair candidate was journaled before registration
   needsHistorySync?: boolean;
   historySyncRequestedAt?: number;
+  historySyncStatus?: 'none' | 'pending' | 'requested' | 'completed';
+  migrationRequired?: boolean;
+  migrationTargetWallet?: string;
+  migrationOldLocalAddress?: string;
   expectedInboxId?: string;
   farcasterFid?: number; // Farcaster FID for contact syncing
   mnemonic?: string; // Optional BIP39 phrase; currently stored unencrypted in IndexedDB
