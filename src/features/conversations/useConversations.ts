@@ -156,6 +156,24 @@ export function useConversations() {
         // ignore cleanup failure
       }
 
+      // Older default-contact rows predate the explicit DM discriminator. They
+      // are authoritative local DMs, not provisional unknown conversations, so
+      // migrate them before peer-based de-duplication runs.
+      const migratedDefaultConversations = await Promise.all(
+        conversations.map(async (conversation) => {
+          const isLegacyDefaultDm =
+            conversation.isGroup === undefined &&
+            (conversation.id.startsWith('default-') ||
+              conversation.topic?.startsWith('default:'));
+          if (!isLegacyDefaultDm) return conversation;
+
+          const migrated = { ...conversation, isGroup: false };
+          await storage.putConversation(migrated);
+          return migrated;
+        })
+      );
+      conversations = migratedDefaultConversations;
+
       if (conversations.length === 0) {
         const now = Date.now();
         const seededConversations: Conversation[] = [];
@@ -193,6 +211,7 @@ export function useConversations() {
             lastReadAt: timestamp,
             lastReadMessageId: undefined,
             createdAt: timestamp,
+            isGroup: false,
           };
 
           await storage.putConversation(seededConversation);
@@ -229,8 +248,9 @@ export function useConversations() {
             const toDelete: string[] = [];
 
             for (const c of updated) {
-              if (!c || c.isGroup) {
-                // groups unaffected
+              if (!c || c.isGroup !== false) {
+                // Groups and provisional/unknown shapes are unaffected. Only
+                // authoritative DMs are safe to canonicalize or peer-dedupe.
                 continue;
               }
               const peerLower = c.peerId?.toLowerCase?.() || '';
@@ -630,30 +650,14 @@ export function useConversations() {
         const mutedUntil = isMuted ? undefined : now + 365 * 24 * 60 * 60 * 1000; // ~1 year
         await storage.putConversation({ ...conversation, mutedUntil });
         updateConversation(conversationId, { mutedUntil });
-        const normalizedPeer =
-          typeof conversation.peerId === 'string' && conversation.peerId
-            ? conversation.peerId.toLowerCase()
-            : conversationId;
-        if (!isMuted) {
-          try {
-            await storage.markConversationDeleted({
-              conversationId,
-              peerId: normalizedPeer,
-              deletedAt: now,
-              reason: 'user-muted',
-            });
-          } catch (markerError) {
-            console.warn('[useConversations] Failed to record mute marker', markerError);
-          }
-        } else {
-          try {
-            await storage.unmarkConversationDeletion(conversationId);
-            if (normalizedPeer) {
-              await storage.unmarkPeerDeletion(normalizedPeer);
-            }
-          } catch (markerError) {
-            console.warn('[useConversations] Failed to clear mute marker', markerError);
-          }
+        // Mute controls notifications only. Older builds wrote a deletion
+        // tombstone here, which caused all later inbound messages to be dropped.
+        try {
+          // The storage read repairs only legacy `user-muted` markers and
+          // deliberately preserves real `user-hidden` deletion tombstones.
+          await storage.isConversationDeleted(conversationId);
+        } catch (markerError) {
+          console.warn('[useConversations] Failed to clear legacy mute marker', markerError);
         }
       } catch (error) {
         console.error('Failed to toggle mute:', error);

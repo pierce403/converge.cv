@@ -225,52 +225,22 @@ export function useMessages() {
           return;
         }
 
-        // Access the internal XMTP client instance
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const client = (xmtp as any).client;
-        if (!client) {
-          console.warn('[useMessages] Cannot sync conversation: XMTP client instance not available');
-          return;
-        }
-
         try {
-          // Get the XMTP conversation object
-          const xmtpConv = await client.conversations.getConversationById(conversationId);
-          if (!xmtpConv) {
-            console.warn('[useMessages] Cannot sync conversation: XMTP conversation not found');
-            return;
-          }
-
-          // Sync messages for this conversation (both DMs and groups support sync())
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (typeof (xmtpConv as any).sync === 'function') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (xmtpConv as any).sync();
-            console.log('[useMessages] ✅ Synced conversation from XMTP:', conversationId);
-          } else {
-            console.warn('[useMessages] Conversation does not support sync() method');
-          }
-
-          const syncedAt = Date.now();
-          updateConversation(conversationId, { lastSyncedAt: syncedAt });
-          try {
-            const storage = await getStorage();
-            const existing = await storage.getConversation(conversationId);
-            if (existing) {
-              await storage.putConversation({ ...existing, lastSyncedAt: syncedAt });
-            }
-          } catch (syncErr) {
-            console.warn('[useMessages] Failed to persist conversation sync timestamp', syncErr);
-          }
+          // The wrapper performs SDK sync + messages() replay and waits for
+          // canonical Dexie ingestion before this hook reloads local rows.
+          await xmtp.syncConversationMessages(conversationId);
+          console.log('[useMessages] ✅ Synced and ingested conversation:', conversationId);
         } catch (syncError) {
           xmtp.recordRateLimitForConversation(conversationId, syncError, 'conversation.sync');
           console.warn('[useMessages] Failed to sync conversation from XMTP:', syncError);
+          throw syncError;
         }
       } catch (error) {
         console.error('[useMessages] Error syncing conversation:', error);
+        throw error;
       }
     },
-    [conversations, updateConversation]
+    [conversations]
   );
 
   /**
@@ -283,12 +253,19 @@ export function useMessages() {
       opts?: { pageSize?: number }
     ): Promise<{ count: number; hasMore: boolean }> => {
       const pageSize = opts?.pageSize ?? MESSAGE_PAGE_SIZE;
+      let networkSyncError: unknown;
       try {
         setLoading(conversationId, true);
 
         // If syncing from network, sync the conversation first
         if (syncFromNetwork) {
-          await syncConversation(conversationId, { force: true });
+          try {
+            await syncConversation(conversationId, { force: true });
+          } catch (error) {
+            // Still reload any rows that were durably salvaged before surfacing
+            // the strict repair failure to the pull-to-refresh caller.
+            networkSyncError = error;
+          }
         }
 
         const storage = await getStorage();
@@ -312,9 +289,15 @@ export function useMessages() {
             // Non-fatal if offline
           }
         })();
+        if (networkSyncError) {
+          throw networkSyncError;
+        }
         return { count: messages.length, hasMore: messages.length >= pageSize };
       } catch (error) {
         console.error('Failed to load messages:', error);
+        if (syncFromNetwork) {
+          throw error;
+        }
         return { count: 0, hasMore: false };
       } finally {
         setLoading(conversationId, false);
@@ -1032,8 +1015,13 @@ export function useMessages() {
         let existingMessage: Message | undefined;
         try {
           existingMessage = await storage.getMessage(xmtpMessage.id);
-        } catch {
-          // ignore storage lookup errors; proceed with processing
+        } catch (lookupError) {
+          // An in-memory copy is not proof of durable ingestion. Retrying after
+          // a storage failure must remain possible instead of silently treating
+          // the message as persisted.
+          if (alreadyInMemory) {
+            throw lookupError;
+          }
         }
         if (alreadyInMemory || existingMessage) {
           if (existingMessage && preparedRemoteMetadata) {
@@ -1240,11 +1228,11 @@ export function useMessages() {
           // Non-fatal; continue
         }
 
-        // Add to store
-        addMessage(conversationId, message);
-
-        // Persist to storage
+        // Persist before publishing to memory so a failed Dexie write can be
+        // retried by history recovery instead of becoming an in-memory-only
+        // duplicate that suppresses every later replay.
         await storage.putMessage(message);
+        addMessage(conversationId, message);
 
         // Update conversation
         const currentLastMessageAt =
@@ -1271,6 +1259,7 @@ export function useMessages() {
         }
       } catch (error) {
         console.error('Failed to receive message:', error);
+        throw error;
       }
     },
     [

@@ -151,6 +151,16 @@ import {
   normalizeConvosInboxId,
   type ConvosProfileEvent,
 } from './convos-profile-state';
+import {
+  awaitXmtpMessageIngestion,
+  dispatchXmtpDurableSideEffect,
+  dispatchXmtpMessage,
+  getXmtpMessageConsumerGeneration,
+  getXmtpMessageIngestionFailureCount,
+  hasXmtpDurableConsumers,
+  XMTP_MESSAGE_CONSUMER_READY_EVENT,
+  type XmtpMessageEventDetail,
+} from './message-events';
 
 // Intentionally no runtime debug flag here to avoid lint/type issues.
 
@@ -174,6 +184,33 @@ const XMTP_APP_VERSION = `converge-app/${buildInfo.version}`;
 const XMTP_HISTORY_SYNC_PATH = '/api/xmtp-history';
 const DEVICE_HISTORY_REQUEST_TIMEOUT_MS = 10 * 1000;
 const DEVICE_HISTORY_REQUEST_COOLDOWN_MS = 60 * 1000;
+
+class XmtpOperationTimeoutError extends Error {
+  readonly code = 'XMTP_OPERATION_TIMEOUT';
+
+  constructor(label: string, timeoutMs: number) {
+    super(`[XMTP] ${label} timed out after ${timeoutMs}ms`);
+    this.name = 'XmtpOperationTimeoutError';
+  }
+}
+
+class XmtpMessageIngestionError extends Error {
+  readonly originalError: unknown;
+
+  constructor(error: unknown) {
+    super(
+      error instanceof Error
+        ? `Decoded message persistence failed: ${error.message}`
+        : 'Decoded message persistence failed'
+    );
+    this.name = 'XmtpMessageIngestionError';
+    this.originalError = error;
+  }
+}
+
+function aggregateXmtpErrors(errors: unknown[], message: string): Error {
+  return Object.assign(new Error(message), { errors });
+}
 
 function getXmtpHistorySyncUrl(): string {
   if (typeof window === 'undefined' || !window.location.origin) {
@@ -491,20 +528,34 @@ export class XmtpClient {
   private identity: XmtpIdentity | null = null;
   private messageStream: AsyncStreamProxy<unknown> | null = null;
   private messageStreamTask: Promise<void> | null = null;
+  private messageStreamStartPromise: Promise<void> | null = null;
+  private conversationStream: AsyncStreamProxy<unknown> | null = null;
+  private conversationStreamTask: Promise<void> | null = null;
+  private conversationStreamStartPromise: Promise<void> | null = null;
   private messageDeletionStream: AsyncStreamProxy<string> | null = null;
   private messageDeletionStreamTask: Promise<void> | null = null;
+  private messageDeletionStreamStartPromise: Promise<void> | null = null;
   private lifecycleTail: Promise<void> = Promise.resolve();
   private backgroundDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
-  private backgroundDiscoveryInFlight = false;
   private backgroundDiscoveryGeneration = 0;
+  private streamLifecycleGeneration = 0;
+  private runtimeRecoveryCleanup: (() => void) | null = null;
+  private recoveryQueued = false;
+  private pendingRecoveryReasons = new Set<string>();
+  private pendingRecoveryConversationIds = new Set<string>();
   private syncStatusResetTimer: ReturnType<typeof setTimeout> | null = null;
   private attachmentPreferenceSyncClient: Client<unknown> | null = null;
   private attachmentPreferenceSyncPromise: Promise<void> | null = null;
   private attachmentPreferenceSyncedAt = 0;
   private deviceHistoryRequestEpoch = 0;
   private deviceHistoryRequests = new Map<string, DeviceHistoryRequestEntry>();
+  private pendingDeviceHistoryClient: Client<unknown> | null = null;
+  private legacyHistoryRepairPending = false;
+  private legacyHistoryRepairInboxId: string | null = null;
   private static readonly PROFILE_CONTENT_TYPE = ContentTypeConvergeProfile;
   private static readonly BACKGROUND_DISCOVERY_INTERVAL_MS = 60 * 1000;
+  private static readonly LEGACY_HISTORY_REPAIR_VERSION =
+    'durable-message-checkpoints-v1';
   // Suppress noisy retries for inboxIds that trigger identity backend parse errors
   private inboxErrorCooldown: Map<string, number> = new Map();
   // Track which inboxIds have already logged an error this session (to reduce noise)
@@ -515,8 +566,18 @@ export class XmtpClient {
     addressInbox: { hit: 0, miss: 0, network: 0, cooldownSkip: 0 },
   };
   private databaseLockRelease: (() => void) | null = null;
+  private databaseClosePending: Promise<void> | null = null;
+  private statefulOperationFlights = new Map<
+    string,
+    { client: Client<unknown>; promise: Promise<unknown> }
+  >();
 
   private async acquireInboxDatabaseLock(inboxId: string): Promise<boolean> {
+    if (this.databaseClosePending) {
+      throw new Error(
+        'The previous XMTP database worker did not finish closing. Reload this tab before reconnecting.'
+      );
+    }
     if (typeof navigator === 'undefined' || !navigator.locks) {
       return true;
     }
@@ -560,6 +621,27 @@ export class XmtpClient {
       this.databaseLockRelease();
       this.databaseLockRelease = null;
     }
+  }
+
+  private retainDatabaseLockUntilCloseSettles(
+    closePromise: Promise<void>,
+    label: string
+  ): void {
+    this.databaseClosePending = closePromise;
+    void closePromise.then(
+      () => {
+        if (this.databaseClosePending === closePromise) {
+          this.databaseClosePending = null;
+          this.releaseInboxDatabaseLock();
+        }
+      },
+      (error) => {
+        // Keep the tab-scoped Web Lock held after a failed late close. Opening a
+        // competing worker against the same OPFS database is less safe than
+        // requiring a reload (which releases the browser lock automatically).
+        console.error(`[XMTP] ${label} failed after its deadline:`, error);
+      }
+    );
   }
 
   private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
@@ -618,6 +700,7 @@ export class XmtpClient {
   private identityBackoffMs = 0;
   private identityCooldownLogUntil = 0;
   private handledInviteMessages: Set<string> = new Set();
+  private inviteScanFlight: { client: Client<unknown>; promise: Promise<void> } | null = null;
   private convosProfileUpdateSentForConversation: Map<string, string> = new Map();
   private convosProfileUpdateInFlight: Map<string, Promise<void>> = new Map();
   private inviteDerivedKey: Uint8Array | null = null;
@@ -626,6 +709,59 @@ export class XmtpClient {
 
   private normalizeInboxIdKey(value: string): string {
     return value.trim().replace(/^0x/i, '').toLowerCase();
+  }
+
+  private dispatchDecodedMessage(
+    detail: Omit<XmtpMessageEventDetail, 'ownerInboxId'>,
+    ownerInboxId = this.client?.inboxId
+  ): void {
+    void dispatchXmtpMessage({
+      ...detail,
+      ownerInboxId,
+    }).catch((error) => {
+      console.error('[XMTP] Failed to dispatch decoded message:', error);
+    });
+  }
+
+  private async ingestDecodedMessage(
+    detail: Omit<XmtpMessageEventDetail, 'ownerInboxId'>,
+    ownerInboxId = this.client?.inboxId
+  ): Promise<void> {
+    try {
+      await dispatchXmtpMessage({
+        ...detail,
+        ownerInboxId,
+      });
+    } catch (error) {
+      throw new XmtpMessageIngestionError(error);
+    }
+  }
+
+  private dispatchDurableSideEffect(
+    effect: Parameters<typeof dispatchXmtpDurableSideEffect>[0],
+    ownerInboxId = this.client?.inboxId
+  ): void {
+    const ownedEffect = {
+      ...effect,
+      detail: { ...effect.detail, ownerInboxId },
+    } as Parameters<typeof dispatchXmtpDurableSideEffect>[0];
+    void dispatchXmtpDurableSideEffect(ownedEffect).catch((error) => {
+      console.error('[XMTP] Failed to dispatch durable side effect:', error);
+    });
+  }
+
+  private async ingestDurableSideEffect(
+    effect: Parameters<typeof dispatchXmtpDurableSideEffect>[0],
+    ownerInboxId = this.client?.inboxId
+  ): Promise<void> {
+    try {
+      await dispatchXmtpDurableSideEffect({
+        ...effect,
+        detail: { ...effect.detail, ownerInboxId },
+      } as Parameters<typeof dispatchXmtpDurableSideEffect>[0]);
+    } catch (error) {
+      throw new XmtpMessageIngestionError(error);
+    }
   }
 
   private clearXmtpCaches(): void {
@@ -649,6 +785,7 @@ export class XmtpClient {
 
   private invalidateDeviceHistoryRequestFlights(): void {
     this.deviceHistoryRequestEpoch += 1;
+    this.pendingDeviceHistoryClient = null;
     const now = Date.now();
     for (const [key, entry] of this.deviceHistoryRequests) {
       if (entry.cooldownUntil <= now && !entry.inFlight) {
@@ -674,33 +811,64 @@ export class XmtpClient {
   ): Promise<boolean> {
     if (this.client !== client) return false;
 
-    let streamsReady = true;
-    if (!this.messageStream && !this.messageStreamTask) {
+    const startMessage = async () => {
+      if (this.messageStream || this.messageStreamTask) return true;
       try {
-        await this.startMessageStream();
+        await this.withTimeout(
+          'message stream startup',
+          this.startMessageStream(),
+          8_000
+        );
+        return this.client === client;
       } catch (error) {
-        streamsReady = false;
         console.warn(
           '[XMTP] Message stream did not start before device history request; continuing without blocking connection:',
           error
         );
+        return false;
       }
-    }
-
-    if (this.client !== client) return false;
-    if (!this.messageDeletionStream && !this.messageDeletionStreamTask) {
+    };
+    const startConversations = async () => {
+      if (this.conversationStream || this.conversationStreamTask) return;
       try {
-        await this.startMessageDeletionStream();
+        await this.withTimeout(
+          'conversation stream startup',
+          this.startConversationStream(),
+          8_000
+        );
       } catch (error) {
-        streamsReady = false;
+        // Message delivery remains usable without this discovery accelerator;
+        // the periodic recovery pass will retry it.
+        console.warn(
+          '[XMTP] Conversation stream did not start; background discovery will retry:',
+          error
+        );
+      }
+    };
+    const startDeletions = async () => {
+      if (this.messageDeletionStream || this.messageDeletionStreamTask) return true;
+      try {
+        await this.withTimeout(
+          'message deletion stream startup',
+          this.startMessageDeletionStream(),
+          8_000
+        );
+        return this.client === client;
+      } catch (error) {
         console.warn(
           '[XMTP] Message deletion stream did not start before device history request; continuing without blocking connection:',
           error
         );
+        return false;
       }
-    }
+    };
 
-    return streamsReady && this.client === client;
+    const [messageReady, , deletionReady] = await Promise.all([
+      startMessage(),
+      startConversations(),
+      startDeletions(),
+    ]);
+    return messageReady && deletionReady && this.client === client;
   }
 
   private async requestDeviceHistory(client: Client<unknown>): Promise<boolean> {
@@ -791,7 +959,52 @@ export class XmtpClient {
       clearInterval(this.backgroundDiscoveryTimer);
       this.backgroundDiscoveryTimer = null;
     }
-    this.backgroundDiscoveryInFlight = false;
+    this.runtimeRecoveryCleanup?.();
+    this.runtimeRecoveryCleanup = null;
+    this.pendingRecoveryReasons.clear();
+    this.pendingRecoveryConversationIds.clear();
+  }
+
+  private legacyHistoryRepairStorageKey(inboxId: string): string {
+    return `converge:xmtp-history-repair:${XmtpClient.LEGACY_HISTORY_REPAIR_VERSION}:${inboxId.toLowerCase()}`;
+  }
+
+  private prepareLegacyHistoryRepair(inboxId: string): boolean {
+    const normalizedInboxId = inboxId.toLowerCase();
+    this.legacyHistoryRepairInboxId = normalizedInboxId;
+    try {
+      this.legacyHistoryRepairPending =
+        typeof window !== 'undefined' &&
+        window.localStorage.getItem(
+          this.legacyHistoryRepairStorageKey(normalizedInboxId)
+        ) !== XmtpClient.LEGACY_HISTORY_REPAIR_VERSION;
+    } catch (error) {
+      // Storage can be unavailable in privacy modes. Repeating a safe retained
+      // replay is preferable to trusting checkpoints written by older builds.
+      console.warn('[XMTP] Could not read retained-history repair marker:', error);
+      this.legacyHistoryRepairPending = true;
+    }
+    return this.legacyHistoryRepairPending;
+  }
+
+  private completeLegacyHistoryRepair(inboxId: string): void {
+    if (this.legacyHistoryRepairInboxId !== inboxId.toLowerCase()) return;
+    try {
+      window.localStorage.setItem(
+        this.legacyHistoryRepairStorageKey(inboxId),
+        XmtpClient.LEGACY_HISTORY_REPAIR_VERSION
+      );
+      this.legacyHistoryRepairPending = false;
+    } catch (error) {
+      console.warn('[XMTP] Could not persist retained-history repair marker:', error);
+    }
+  }
+
+  private invalidateStreamStartups(): void {
+    this.streamLifecycleGeneration += 1;
+    this.messageStreamStartPromise = null;
+    this.conversationStreamStartPromise = null;
+    this.messageDeletionStreamStartPromise = null;
   }
 
   private clearSyncStatusResetTimer(): void {
@@ -807,63 +1020,185 @@ export class XmtpClient {
     }
 
     this.stopBackgroundDiscoveryLoop();
-    const generation = this.backgroundDiscoveryGeneration;
     this.backgroundDiscoveryTimer = setInterval(() => {
-      const activeClient = this.client;
-      if (!activeClient || this.backgroundDiscoveryInFlight) {
-        return;
-      }
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         return;
       }
+      this.scheduleInboxRecovery('background-discovery');
+    }, XmtpClient.BACKGROUND_DISCOVERY_INTERVAL_MS);
 
-      this.backgroundDiscoveryInFlight = true;
-      void this.enqueueLifecycle(async () => {
+    const recoverVisibleInbox = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        this.scheduleInboxRecovery('browser-resume');
+      }
+    };
+    const recoverWhenConsumerIsReady = () => {
+      this.scheduleInboxRecovery('message-consumer-ready');
+    };
+    window.addEventListener('online', recoverVisibleInbox);
+    window.addEventListener('pageshow', recoverVisibleInbox);
+    window.addEventListener(
+      XMTP_MESSAGE_CONSUMER_READY_EVENT,
+      recoverWhenConsumerIsReady
+    );
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', recoverVisibleInbox);
+    }
+    this.runtimeRecoveryCleanup = () => {
+      window.removeEventListener('online', recoverVisibleInbox);
+      window.removeEventListener('pageshow', recoverVisibleInbox);
+      window.removeEventListener(
+        XMTP_MESSAGE_CONSUMER_READY_EVENT,
+        recoverWhenConsumerIsReady
+      );
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', recoverVisibleInbox);
+      }
+    };
+  }
+
+  private scheduleInboxRecovery(reason: string, conversationId?: string): void {
+    const activeClient = this.client;
+    if (!activeClient) return;
+    const activeInboxId = activeClient.inboxId;
+    if (!activeInboxId) return;
+
+    this.pendingRecoveryReasons.add(reason);
+    if (conversationId) {
+      this.pendingRecoveryConversationIds.add(conversationId);
+    }
+    if (this.recoveryQueued) return;
+
+    this.recoveryQueued = true;
+    void this.enqueueLifecycle(async () => {
+      if (this.client !== activeClient) return;
+      const reasons = Array.from(this.pendingRecoveryReasons);
+      const conversationIds = Array.from(this.pendingRecoveryConversationIds);
+      this.pendingRecoveryReasons.clear();
+      this.pendingRecoveryConversationIds.clear();
+      const recoveryReason = reasons.join(',') || reason;
+      const generation = this.backgroundDiscoveryGeneration;
+      const forceRecovery =
+        conversationIds.length > 0 ||
+        reasons.some((candidate) => candidate !== 'background-discovery');
+
+      const streamsReady = await this.ensureMessageStreamsBeforeHistoryRequest(activeClient);
+      if (this.client !== activeClient || generation !== this.backgroundDiscoveryGeneration) return;
+
+      // Activation may finish before the authenticated Layout mounts. The
+      // initial full replay is already buffered; wait for both durable
+      // consumers instead of issuing another replay that still cannot prove
+      // persistence. Their ready event schedules this recovery immediately.
+      if (this.legacyHistoryRepairPending && !hasXmtpDurableConsumers()) {
+        return;
+      }
+
+      const runLegacyHistoryRepair =
+        this.legacyHistoryRepairPending &&
+        this.legacyHistoryRepairInboxId === activeInboxId.toLowerCase() &&
+        hasXmtpDurableConsumers();
+      if (runLegacyHistoryRepair) {
+        const failures: unknown[] = [];
+        const consumerGeneration = getXmtpMessageConsumerGeneration();
+        const ingestionFailuresBefore =
+          getXmtpMessageIngestionFailureCount();
         try {
-          if (generation !== this.backgroundDiscoveryGeneration || this.client !== activeClient) {
-            return;
-          }
-          if (!this.messageStream && !this.messageStreamTask) {
-            await this.startMessageStream();
-          }
-          if (generation !== this.backgroundDiscoveryGeneration || this.client !== activeClient) {
-            return;
-          }
-          if (!this.messageDeletionStream && !this.messageDeletionStreamTask) {
-            await this.startMessageDeletionStream();
-          }
-          if (generation !== this.backgroundDiscoveryGeneration || this.client !== activeClient) {
-            return;
-          }
           await this.syncConversationsInternal({
             soft: true,
-            minIntervalMs: 45 * 1000,
-            reason: 'background-discovery',
+            reason: `${recoveryReason}:legacy-history-repair`,
+            force: true,
+            strict: true,
           });
-          if (generation !== this.backgroundDiscoveryGeneration || this.client !== activeClient) {
-            return;
-          }
-          await this.scanInviteJoinRequests('background-discovery');
         } catch (error) {
-          console.warn('[XMTP] Background conversation discovery failed:', error);
-        } finally {
-          if (generation === this.backgroundDiscoveryGeneration) {
-            this.backgroundDiscoveryInFlight = false;
-          }
+          failures.push(error);
         }
-      });
-    }, XmtpClient.BACKGROUND_DISCOVERY_INTERVAL_MS);
+        if (this.client !== activeClient || generation !== this.backgroundDiscoveryGeneration) return;
+        try {
+          await this.syncHistory({
+            mode: 'full',
+            skipConversationSync: true,
+            force: true,
+            strict: true,
+          });
+        } catch (error) {
+          failures.push(error);
+        }
+        await awaitXmtpMessageIngestion();
+        if (
+          !hasXmtpDurableConsumers() ||
+          getXmtpMessageConsumerGeneration() !== consumerGeneration ||
+          this.client !== activeClient ||
+          generation !== this.backgroundDiscoveryGeneration
+        ) {
+          failures.push(
+            new Error('The durable message consumer changed during repair')
+          );
+        }
+        if (
+          getXmtpMessageIngestionFailureCount() !== ingestionFailuresBefore
+        ) {
+          failures.push(
+            new Error('One or more retained messages could not be persisted')
+          );
+        }
+        if (failures.length > 0) {
+          throw aggregateXmtpErrors(
+            failures,
+            'One-time retained-history repair did not complete durably'
+          );
+        }
+        this.completeLegacyHistoryRepair(activeInboxId);
+      } else {
+        await this.syncConversationsInternal({
+          soft: true,
+          minIntervalMs: 45 * 1000,
+          reason: recoveryReason,
+          force: forceRecovery,
+        });
+        if (this.client !== activeClient || generation !== this.backgroundDiscoveryGeneration) return;
+
+        await this.syncHistory({
+          mode: 'recent',
+          conversationIds: conversationIds.length > 0 ? conversationIds : undefined,
+          lookbackMs: 10 * 60 * 1000,
+          skipConversationSync: true,
+          force: forceRecovery,
+        });
+      }
+      this.scheduleInviteJoinRequestScan(recoveryReason);
+      if (
+        streamsReady &&
+        this.pendingDeviceHistoryClient === activeClient &&
+        this.client === activeClient
+      ) {
+        const requested = await this.requestDeviceHistory(activeClient);
+        if (requested && this.pendingDeviceHistoryClient === activeClient) {
+          this.pendingDeviceHistoryClient = null;
+        }
+      }
+    }).catch((error) => {
+      console.warn('[XMTP] Inbox recovery failed:', error);
+    }).finally(() => {
+      this.recoveryQueued = false;
+      if (this.pendingRecoveryReasons.size > 0 && this.client) {
+        this.scheduleInboxRecovery('coalesced-recovery');
+      }
+    });
   }
 
   private async refreshConversationStoreFromStorage(
     storage: Awaited<ReturnType<typeof getStorage>>,
-    context: string
-  ): Promise<void> {
+    context: string,
+    strict = false
+  ): Promise<boolean> {
     try {
       const latest = await storage.listConversations({ archived: false });
       useConversationStore.getState().setConversations(latest);
+      return true;
     } catch (error) {
       console.warn(`[XMTP] Failed to refresh conversation store after ${context}:`, error);
+      if (strict) throw error;
+      return false;
     }
   }
 
@@ -1152,12 +1487,17 @@ export class XmtpClient {
     if (!this.client) {
       throw new Error('Client not connected');
     }
+    const activeClient = this.client;
 
     const runSync = async () => {
-      await this.retryWithDelay('conversations.sync', () => this.client!.conversations.sync(), {
+      await this.retryWithDelay('conversations.sync', () => this.runStatefulOperation(
+        'conversations.sync',
+        'conversations.sync',
+        () => activeClient.conversations.sync(),
+        15_000,
+      ), {
         attempts: 3,
         initialDelayMs: 800,
-        timeoutMs: 15000,
         shouldRetry: (err) => this.isTransientSyncError(err),
         onRateLimit: () => this.noteGlobalRateLimit(`conversations.sync:${reason}`),
       });
@@ -1341,7 +1681,7 @@ export class XmtpClient {
         promise,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            reject(new Error(`[XMTP] ${label} timed out after ${timeoutMs}ms`));
+            reject(new XmtpOperationTimeoutError(label, timeoutMs));
           }, timeoutMs);
         }),
       ]);
@@ -1350,6 +1690,41 @@ export class XmtpClient {
         clearTimeout(timer);
       }
     }
+  }
+
+  /**
+   * Run a state-mutating SDK operation at most once per active client.
+   * Browser SDK calls cannot be cancelled, so a deadline must not trigger an
+   * overlapping retry against the same worker and OPFS database.
+   */
+  private async runStatefulOperation<T>(
+    key: string,
+    label: string,
+    operation: () => Promise<T>,
+    timeoutMs: number
+  ): Promise<T> {
+    const owner = this.client;
+    if (!owner) {
+      throw new Error('Client not connected');
+    }
+
+    const existing = this.statefulOperationFlights.get(key);
+    let promise: Promise<T>;
+    if (existing && existing.client === owner) {
+      promise = existing.promise as Promise<T>;
+    } else {
+      promise = Promise.resolve().then(operation);
+      const entry = { client: owner, promise: promise as Promise<unknown> };
+      this.statefulOperationFlights.set(key, entry);
+      const clear = () => {
+        if (this.statefulOperationFlights.get(key) === entry) {
+          this.statefulOperationFlights.delete(key);
+        }
+      };
+      void promise.then(clear, clear);
+    }
+
+    return await this.withTimeout(label, promise, timeoutMs);
   }
 
   private async runWithBoundedConcurrency<T, R>(
@@ -1388,6 +1763,11 @@ export class XmtpClient {
         return await fn();
       } catch (err) {
         lastErr = err;
+        // Promise.race does not cancel the underlying SDK operation. Starting
+        // another attempt here would create overlapping worker/database work.
+        if (err instanceof XmtpOperationTimeoutError) {
+          throw err;
+        }
         if (this.isRateLimitError(err)) {
           try {
             opts?.onRateLimit?.(err);
@@ -1454,25 +1834,20 @@ export class XmtpClient {
     senderInboxId: string;
     sentAtNs?: bigint;
     content?: unknown;
-  }): void {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    window.dispatchEvent(
-      new CustomEvent('xmtp:group-updated', {
-        detail: {
+  }, ownerInboxId?: string): void {
+    this.dispatchDurableSideEffect({
+      type: 'group-updated',
+      detail: {
           conversationId: message.conversationId,
           content: message.content,
-        },
-      })
-    );
+      },
+    }, ownerInboxId);
 
     const body = this.formatGroupUpdatedLabel(message.content) || 'Group updated';
     const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
-    window.dispatchEvent(
-      new CustomEvent('xmtp:system', {
-        detail: {
+    this.dispatchDurableSideEffect({
+      type: 'system',
+      detail: {
           conversationId: message.conversationId,
           system: {
             id: `sys_${message.id}`,
@@ -1480,9 +1855,8 @@ export class XmtpClient {
             body,
             sentAt,
           },
-        },
-      })
-    );
+      },
+    }, ownerInboxId);
   }
 
   /**
@@ -1837,6 +2211,18 @@ export class XmtpClient {
     return decoded.inviteSlug ? decoded : null;
   }
 
+  private isProfileSideChannelMessage(msg: unknown): boolean {
+    if (!msg || typeof msg !== 'object') return false;
+    return Boolean(
+      XmtpClient.extractProfileUpdate(msg) ||
+        contentTypeMatches(
+          XmtpClient.getContentTypeFromMessageObject(msg),
+          XmtpClient.PROFILE_CONTENT_TYPE,
+        ) ||
+        XmtpClient.extractConvosProfileUpdates(msg).length > 0
+    );
+  }
+
   private async processProfileSideChannel(msg: unknown): Promise<boolean> {
     if (!msg || typeof msg !== 'object') return false;
     const anyMsg = msg as Record<string, unknown>;
@@ -1892,9 +2278,20 @@ export class XmtpClient {
             const group = await this.getGroupConversation(conversationId);
             if (group) {
               if (convosProfiles.some((profile) => profile.source === 'profileSnapshot')) {
-                await group.sync?.();
+                if (typeof group.sync === 'function') {
+                  await this.runStatefulOperation(
+                    `group.sync:${conversationId}`,
+                    `group.sync:${conversationId}`,
+                    () => group.sync!(),
+                    8_000,
+                  );
+                }
               }
-              const currentMembers = await group.members();
+              const currentMembers = await this.withTimeout(
+                `group.members:${conversationId}`,
+                group.members(),
+                5_000,
+              );
               knownMemberInboxes = new Set(
                 currentMembers.map((member) => normalizeConvosInboxId(member.inboxId)).filter(Boolean),
               );
@@ -2004,9 +2401,13 @@ export class XmtpClient {
     return isConvosSilentContentType(contentType);
   }
 
-  private dispatchConvosJoinRequest(msg: unknown, isHistory: boolean): boolean {
+  private async dispatchConvosJoinRequest(
+    msg: unknown,
+    isHistory: boolean,
+    ownerInboxId = this.client?.inboxId
+  ): Promise<boolean> {
     const joinRequest = XmtpClient.extractConvosJoinRequest(msg);
-    if (!joinRequest?.inviteSlug || !msg || typeof msg !== 'object' || typeof window === 'undefined') {
+    if (!joinRequest?.inviteSlug || !msg || typeof msg !== 'object') {
       return false;
     }
     const anyMsg = msg as Record<string, unknown>;
@@ -2019,23 +2420,24 @@ export class XmtpClient {
     const sentAt = typeof anyMsg['sentAtNs'] === 'bigint'
       ? Number(anyMsg['sentAtNs'] / 1000000n)
       : Date.now();
-    window.dispatchEvent(
-      new CustomEvent('xmtp:message', {
-        detail: {
-          conversationId,
-          message: {
-            id: messageId,
-            conversationId,
-            senderAddress: senderInboxId,
-            content: joinRequest.inviteSlug,
-            contentTypeId: ContentTypeConvosJoinRequest.typeId,
-            sentAt,
-            convosJoinRequest: joinRequest,
-          },
-          isHistory,
-        },
-      })
-    );
+    const detail = {
+      conversationId,
+      message: {
+        id: messageId,
+        conversationId,
+        senderAddress: senderInboxId,
+        content: joinRequest.inviteSlug,
+        contentTypeId: ContentTypeConvosJoinRequest.typeId,
+        sentAt,
+        convosJoinRequest: joinRequest,
+      },
+      isHistory,
+    } satisfies Omit<XmtpMessageEventDetail, 'ownerInboxId'>;
+    if (isHistory) {
+      await this.ingestDecodedMessage(detail, ownerInboxId);
+    } else {
+      this.dispatchDecodedMessage(detail, ownerInboxId);
+    }
     return true;
   }
 
@@ -2830,7 +3232,12 @@ export class XmtpClient {
 
     if (!options?.skipGroupSync && typeof safeGroup.sync === 'function') {
       try {
-        await this.withTimeout('group.sync', safeGroup.sync(), 8000);
+        await this.runStatefulOperation(
+          `group.sync:${conversationId}`,
+          `group.sync:${conversationId}`,
+          () => safeGroup.sync!(),
+          8_000,
+        );
       } catch (error) {
         console.warn('[XMTP] Failed to sync group before reading metadata:', conversationId, error);
       }
@@ -2960,7 +3367,11 @@ export class XmtpClient {
       const maybeAny: any = safeGroup as any;
       const rawPermissions =
         typeof maybeAny.permissions === 'function'
-          ? await maybeAny.permissions()
+          ? await this.withTimeout(
+              `group.permissions:${conversationId}`,
+              Promise.resolve(maybeAny.permissions()),
+              5_000
+            )
           : maybeAny.permissions;
 
       if (rawPermissions?.policySet) {
@@ -3145,14 +3556,33 @@ export class XmtpClient {
     }
   }
 
-  private async scanInviteJoinRequests(reason = 'manual'): Promise<void> {
-    if (!this.client || typeof window === 'undefined') {
+  private scheduleInviteJoinRequestScan(reason: string): void {
+    const activeClient = this.client;
+    if (!activeClient || typeof window === 'undefined') return;
+    if (this.inviteScanFlight?.client === activeClient) return;
+
+    const promise = this.scanInviteJoinRequests(activeClient, reason);
+    const entry = { client: activeClient, promise };
+    this.inviteScanFlight = entry;
+    const clear = () => {
+      if (this.inviteScanFlight === entry) {
+        this.inviteScanFlight = null;
+      }
+    };
+    void promise.then(clear, clear);
+  }
+
+  private async scanInviteJoinRequests(
+    activeClient: Client<unknown>,
+    reason = 'manual'
+  ): Promise<void> {
+    if (this.client !== activeClient || typeof window === 'undefined') {
       return;
     }
 
     try {
       const consentStates = [ConsentState.Unknown];
-      const dms = await this.client.conversations.listDms({ consentStates });
+      const dms = await activeClient.conversations.listDms({ consentStates });
       if (!dms?.length) return;
 
       const storage = await getStorage();
@@ -3169,24 +3599,24 @@ export class XmtpClient {
 
           const existing = await storage.getMessage(last.id);
           if (existing) continue;
+          if (this.client !== activeClient) return;
 
           const sentAt = last.sentAtNs ? Number(last.sentAtNs / 1_000_000n) : Date.now();
-          window.dispatchEvent(
-            new CustomEvent('xmtp:message', {
-              detail: {
+          void this.dispatchDecodedMessage(
+            {
+              conversationId: last.conversationId,
+              message: {
+                id: last.id,
                 conversationId: last.conversationId,
-                message: {
-                  id: last.id,
-                  conversationId: last.conversationId,
-                  senderAddress: last.senderInboxId,
-                  content: inviteCode,
-                  contentTypeId: joinRequest ? ContentTypeConvosJoinRequest.typeId : undefined,
-                  sentAt,
-                },
-                isHistory: false,
-                scanReason: reason,
+                senderAddress: last.senderInboxId,
+                content: inviteCode,
+                contentTypeId: joinRequest ? ContentTypeConvosJoinRequest.typeId : undefined,
+                sentAt,
               },
-            })
+              isHistory: false,
+              scanReason: reason,
+            },
+            activeClient.inboxId
           );
         } catch (dmErr) {
           console.warn('[XMTP] Failed to scan invite join request DM (non-fatal):', dmErr);
@@ -3978,7 +4408,22 @@ export class XmtpClient {
     this.retainedInstallationRepairClient = null;
     if (!retained) return;
     try {
-      await retained.client.close();
+      const closePromise = Promise.resolve().then(() => retained.client.close());
+      try {
+        await this.withTimeout(
+          'retained-installation-repair-client.close',
+          closePromise,
+          5_000
+        );
+      } catch (error) {
+        if (error instanceof XmtpOperationTimeoutError) {
+          this.retainDatabaseLockUntilCloseSettles(
+            closePromise,
+            'Timed-out retained repair client close'
+          );
+        }
+        throw error;
+      }
     } catch (error) {
       console.warn('[XMTP] Failed to close the retained installation repair client:', error);
     }
@@ -4016,7 +4461,22 @@ export class XmtpClient {
     }
 
     try {
-      await retained.client.close();
+      const closePromise = Promise.resolve().then(() => retained.client.close());
+      try {
+        await this.withTimeout(
+          'superseded-installation-repair-client.close',
+          closePromise,
+          5_000
+        );
+      } catch (error) {
+        if (error instanceof XmtpOperationTimeoutError) {
+          this.retainDatabaseLockUntilCloseSettles(
+            closePromise,
+            'Timed-out superseded repair client close'
+          );
+        }
+        throw error;
+      }
     } catch (error) {
       console.warn('[XMTP] Failed to close a superseded installation repair client:', error);
     }
@@ -4065,6 +4525,7 @@ export class XmtpClient {
     });
     if (this.client !== client) {
       this.invalidateDeviceHistoryRequestFlights();
+      this.invalidateStreamStartups();
     }
     this.client = client;
     this.identity = {
@@ -4073,6 +4534,8 @@ export class XmtpClient {
       installationId: client.installationId,
       xmtpDbPathMode: databasePathMode,
     };
+    const legacyHistoryRepairNeeded =
+      this.prepareLegacyHistoryRepair(client.inboxId);
     setInstallationRecovery(null);
     this.clearXmtpCaches();
 
@@ -4105,7 +4568,6 @@ export class XmtpClient {
     });
     console.log('[XMTP] ✅ XMTP client connected', identity.address, 'inbox:', client.inboxId);
 
-    const historySinceMs = this.identity.lastSyncedAt;
     let streamsReadyForHistory = false;
     console.log('[XMTP] Starting conversation sync and message streaming...');
 
@@ -4128,15 +4590,31 @@ export class XmtpClient {
     }, 20000);
 
     try {
+      // Subscribe before reading history. Messages arriving during backfill are
+      // queued by the stream and deduplicated by the durable ingestion bridge.
+      streamsReadyForHistory = await this.ensureMessageStreamsBeforeHistoryRequest(client);
       setSyncStatus('syncing-conversations');
       setSyncProgress(0);
-      await this.syncConversationsInternal({ soft: true, reason: 'connect' });
+      await this.syncConversationsInternal({
+        soft: true,
+        reason: 'connect',
+        force: true,
+      });
 
-      if (options?.enableHistorySync === true) {
-        console.log('[XMTP] History sync enabled – fetching past messages.');
+      if (options?.enableHistorySync === true || legacyHistoryRepairNeeded) {
+        console.log(
+          legacyHistoryRepairNeeded
+            ? '[XMTP] Running one-time retained-history repair for legacy checkpoints.'
+            : '[XMTP] History sync enabled – fetching past messages.'
+        );
         setSyncStatus('syncing-messages');
         setSyncProgress(40);
-        await this.syncHistory({ mode: 'full', skipConversationSync: true });
+        await this.syncHistory({
+          mode: 'full',
+          skipConversationSync: true,
+          force: true,
+          strict: legacyHistoryRepairNeeded,
+        });
         setSyncProgress(85);
       } else {
         console.log('[XMTP] Full history sync disabled. Running a light recent sync.');
@@ -4144,17 +4622,13 @@ export class XmtpClient {
         setSyncProgress(70);
         await this.syncHistory({
           mode: 'recent',
-          sinceMs: historySinceMs,
-          conversationLimit: 8,
-          messageLimit: 200,
-          lookbackMs: 30 * 1000,
+          lookbackMs: 10 * 60 * 1000,
           skipConversationSync: true,
+          force: true,
         });
       }
 
-      streamsReadyForHistory = await this.ensureMessageStreamsBeforeHistoryRequest(client);
-      await this.scanInviteJoinRequests('connect');
-      this.startBackgroundDiscoveryLoop();
+      this.scheduleInviteJoinRequestScan('connect');
 
       try {
         logNetworkEvent({
@@ -4197,15 +4671,24 @@ export class XmtpClient {
       }
     }
 
-    if (!streamsReadyForHistory) {
+    if (
+      !streamsReadyForHistory &&
+      !this.messageStreamStartPromise &&
+      !this.messageDeletionStreamStartPromise
+    ) {
       streamsReadyForHistory = await this.ensureMessageStreamsBeforeHistoryRequest(client);
     }
     this.startBackgroundDiscoveryLoop();
+    this.scheduleInboxRecovery('connect-bootstrap');
     let historySyncRequested = false;
     if (historySyncRequired) {
       if (streamsReadyForHistory) {
         historySyncRequested = await this.requestDeviceHistory(client);
+        if (!historySyncRequested) {
+          this.pendingDeviceHistoryClient = client;
+        }
       } else {
+        this.pendingDeviceHistoryClient = client;
         console.warn(
           '[XMTP] Skipping optional device history request until live message streams can start.'
         );
@@ -4568,13 +5051,18 @@ export class XmtpClient {
         if (historySyncRequired) {
           if (streamsStartedBeforeHistory) {
             historySyncRequested = await this.requestDeviceHistory(this.client);
+            if (!historySyncRequested) {
+              this.pendingDeviceHistoryClient = this.client;
+            }
           } else {
+            this.pendingDeviceHistoryClient = this.client;
             console.warn(
               '[XMTP] Skipping optional device history request until live message streams can start.'
             );
           }
         }
         this.startBackgroundDiscoveryLoop();
+        this.scheduleInboxRecovery('client-reuse');
         console.log('[XMTP] Already connected with this signer identity, skipping reconnect');
         return {
           inboxId,
@@ -4902,15 +5390,41 @@ export class XmtpClient {
       });
 
       const failedClient = client as Client<unknown> | null;
+      let failedClientCloseTimedOut = false;
       if (failedClient) {
         try {
-          await failedClient.close();
+          const closePromise = Promise.resolve().then(() => failedClient.close());
+          try {
+            await this.withTimeout(
+              'failed-client.close',
+              closePromise,
+              5_000
+            );
+          } catch (closeError) {
+            if (closeError instanceof XmtpOperationTimeoutError) {
+              failedClientCloseTimedOut = true;
+              this.retainDatabaseLockUntilCloseSettles(
+                closePromise,
+                'Timed-out failed-client close'
+              );
+            }
+            throw closeError;
+          }
         } catch (closeError) {
           console.warn('[XMTP] Failed to close client after connect error:', closeError);
         }
       }
       this.invalidateDeviceHistoryRequestFlights();
+      this.invalidateStreamStartups();
       this.client = null;
+      this.statefulOperationFlights.clear();
+      if (!failedClientCloseTimedOut) {
+        this.releaseInboxDatabaseLock();
+      } else {
+        setError(
+          `${errorMessage} The XMTP database worker also did not finish closing; reload this tab before retrying.`
+        );
+      }
 
       throw error; // Re-throw the original error
     }
@@ -5049,6 +5563,33 @@ export class XmtpClient {
     }
 
     const sdkLoggingLevel = getXmtpSdkLogLevel();
+    const savedInstallationId = knownInstallationId?.trim() || '';
+    let verifiedLocalInstallationId = '';
+    const captureLocalInstallationId = (installationId: string | undefined) => {
+      const localInstallationId = installationId?.trim() || '';
+      if (!localInstallationId) {
+        throw new Error(
+          'The exact local XMTP database did not expose a browser installation ID.'
+        );
+      }
+      if (
+        verifiedLocalInstallationId &&
+        !installationIdsMatch(verifiedLocalInstallationId, localInstallationId)
+      ) {
+        throw new Error(
+          'The local XMTP database changed installations during migration.'
+        );
+      }
+      if (
+        savedInstallationId &&
+        !installationIdsMatch(savedInstallationId, localInstallationId)
+      ) {
+        console.warn(
+          '[XMTP] Replacing a stale saved installation ID with the exact local database installation.'
+        );
+      }
+      verifiedLocalInstallationId = localInstallationId;
+    };
     const dbPath = getPersistentClientDbPath(
       walletIdentity.address,
       'inbox-default',
@@ -5077,6 +5618,7 @@ export class XmtpClient {
         disableAutoRegister: true,
       });
       try {
+        captureLocalInstallationId(recoveryClient.installationId);
         await recoveryClient.changeRecoveryIdentifier(walletIdentifier);
       } finally {
         await recoveryClient.close();
@@ -5114,9 +5656,32 @@ export class XmtpClient {
         disableAutoRegister: true,
       });
       try {
+        captureLocalInstallationId(removeAccountClient.installationId);
         await removeAccountClient.removeAccount(localEoaIdentifier);
       } finally {
         await removeAccountClient.close();
+      }
+    }
+
+    // A legacy record can be missing installationId even when no ledger
+    // mutation is required. Open the exact local browser database to identify
+    // its installation; never substitute an arbitrary ledger installation.
+    if (!verifiedLocalInstallationId) {
+      const verificationClient = await Client.create(walletSigner, {
+        env: 'production',
+        dbPath,
+        appVersion: XMTP_APP_VERSION,
+        codecs: XMTP_CONTENT_CODECS,
+        loggingLevel: sdkLoggingLevel,
+        structuredLogging: false,
+        performanceLogging: false,
+        historySyncUrl: getXmtpHistorySyncUrl(),
+        disableAutoRegister: true,
+      });
+      try {
+        captureLocalInstallationId(verificationClient.installationId);
+      } finally {
+        await verificationClient.close();
       }
     }
 
@@ -5140,12 +5705,26 @@ export class XmtpClient {
         'Local account key is still present on the XMTP inbox ledger. Migration was not completed.'
       );
     }
+    if (!verifiedLocalInstallationId) {
+      throw new Error(
+        'Migration could not verify this browser installation. Reopen the legacy account and retry.'
+      );
+    }
+    if (
+      !finalState.installations?.some((installation) =>
+        installationIdsMatch(installation.id, verifiedLocalInstallationId)
+      )
+    ) {
+      throw new Error(
+        'This browser installation is not registered on the migrated XMTP inbox.'
+      );
+    }
 
     await notify('complete');
     return {
       success: true,
       inboxId: expected,
-      installationId: knownInstallationId || finalState.installations?.[0]?.id || '',
+      installationId: verifiedLocalInstallationId,
     };
   }
 
@@ -5257,7 +5836,11 @@ export class XmtpClient {
     if (messageStream) {
       try {
         if (!messageStream.isDone) {
-          await messageStream.end();
+          await this.withTimeout(
+            'message stream end',
+            messageStream.end(),
+            5_000
+          );
         }
         streamEnded = true;
         console.log('[XMTP] Message stream closed');
@@ -5272,7 +5855,11 @@ export class XmtpClient {
     // hatch and must not be blocked by a consumer that may never wake up.
     if (messageStreamTask && streamEnded) {
       try {
-        await messageStreamTask;
+        await this.withTimeout(
+          'message stream consumer shutdown',
+          messageStreamTask,
+          5_000
+        );
       } catch (error) {
         console.error('[XMTP] Error waiting for message stream consumer:', error);
       }
@@ -5280,6 +5867,42 @@ export class XmtpClient {
 
     if (this.messageStreamTask === messageStreamTask) {
       this.messageStreamTask = null;
+    }
+  }
+
+  private async stopConversationStream(): Promise<void> {
+    const stream = this.conversationStream;
+    const task = this.conversationStreamTask;
+    this.conversationStream = null;
+
+    let streamEnded = !stream || stream.isDone;
+    if (stream) {
+      try {
+        if (!stream.isDone) {
+          await this.withTimeout(
+            'conversation stream end',
+            stream.end(),
+            5_000
+          );
+        }
+        streamEnded = true;
+      } catch (error) {
+        console.error('[XMTP] Error closing conversation stream:', error);
+      }
+    }
+    if (task && streamEnded) {
+      try {
+        await this.withTimeout(
+          'conversation stream consumer shutdown',
+          task,
+          5_000
+        );
+      } catch (error) {
+        console.error('[XMTP] Error waiting for conversation stream consumer:', error);
+      }
+    }
+    if (this.conversationStreamTask === task) {
+      this.conversationStreamTask = null;
     }
   }
 
@@ -5292,7 +5915,11 @@ export class XmtpClient {
     if (stream) {
       try {
         if (!stream.isDone) {
-          await stream.end();
+          await this.withTimeout(
+            'message deletion stream end',
+            stream.end(),
+            5_000
+          );
         }
         streamEnded = true;
       } catch (error) {
@@ -5303,7 +5930,7 @@ export class XmtpClient {
     // the iterator. Do not wedge every later lifecycle operation on that task.
     if (task && streamEnded) {
       try {
-        await task;
+        await this.withTimeout('message deletion consumer shutdown', task, 5_000);
       } catch (error) {
         console.error('[XMTP] Error waiting for message deletion stream consumer:', error);
       }
@@ -5317,14 +5944,14 @@ export class XmtpClient {
     const { setConnectionStatus, setError, setInstallationRecovery } =
       useXmtpStore.getState();
     this.invalidateDeviceHistoryRequestFlights();
+    this.invalidateStreamStartups();
     this.stopBackgroundDiscoveryLoop();
     this.clearSyncStatusResetTimer();
 
     // streamAllMessages() returns an AsyncStreamProxy. Its cancellation API is
     // end()/return(), not close(); close() belongs to the XMTP client itself.
-    if (this.messageDeletionStream || this.messageDeletionStreamTask) {
-      await this.stopMessageDeletionStream();
-    }
+    await this.stopMessageDeletionStream();
+    await this.stopConversationStream();
     await this.stopMessageStream();
     await this.closeRetainedInstallationRepairClient();
 
@@ -5336,6 +5963,8 @@ export class XmtpClient {
     }
 
     if (this.client) {
+      const closingClient = this.client;
+      let closeTimedOut = false;
       logNetworkEvent({
         direction: 'outbound',
         event: 'disconnect',
@@ -5345,7 +5974,19 @@ export class XmtpClient {
       try {
         // CRITICAL: Must await client.close() to properly release OPFS database locks
         console.log('[XMTP] Closing client and releasing database locks...');
-        await this.client.close();
+        const closePromise = Promise.resolve().then(() => closingClient.close());
+        try {
+          await this.withTimeout('client.close', closePromise, 5_000);
+        } catch (error) {
+          if (error instanceof XmtpOperationTimeoutError) {
+            closeTimedOut = true;
+            this.retainDatabaseLockUntilCloseSettles(
+              closePromise,
+              'Timed-out XMTP client close'
+            );
+          }
+          throw error;
+        }
         console.log('[XMTP] ✅ Client closed successfully');
         // Wait a bit to ensure OPFS file handles are fully released
         await new Promise(resolve => setTimeout(resolve, 300));
@@ -5355,15 +5996,22 @@ export class XmtpClient {
         await new Promise(resolve => setTimeout(resolve, 300));
       }
 
-      this.releaseInboxDatabaseLock();
+      if (!closeTimedOut) {
+        this.releaseInboxDatabaseLock();
+      }
       this.client = null;
       this.identity = null;
+      this.statefulOperationFlights.clear();
       this.inviteDerivedKey = null;
       this.inviteDerivedKeyInboxId = null;
       this.inviteDerivedKeyPromise = null;
       this.clearXmtpCaches();
       setConnectionStatus('disconnected');
-      setError(null);
+      setError(
+        closeTimedOut
+          ? 'XMTP did not finish releasing its local database. Reload this tab before reconnecting.'
+          : null
+      );
       setInstallationRecovery(null);
 
       logNetworkEvent({
@@ -5400,6 +6048,7 @@ export class XmtpClient {
     if (!this.client) {
       throw new Error('Client not connected');
     }
+    const activeClient = this.client;
 
     const minIntervalMs = opts?.minIntervalMs ?? 5 * 60 * 1000;
     const soft = opts?.soft ?? false;
@@ -5449,6 +6098,11 @@ export class XmtpClient {
     }
 
     let syncFailed = false;
+    const discoveryErrors: unknown[] = [];
+    const recordDiscoveryError = (error: unknown) => {
+      syncFailed = true;
+      discoveryErrors.push(error);
+    };
     console.log('[XMTP] Syncing conversations...');
     try {
       await this.conversationsSyncWithRecovery(opts?.reason ?? 'syncConversations');
@@ -5470,10 +6124,14 @@ export class XmtpClient {
 
     let convos: Array<{ id?: string; createdAtNs?: bigint }> = [];
     try {
-      convos = await this.retryWithDelay('conversations.list', () => this.client!.conversations.list(), {
+      convos = await this.retryWithDelay('conversations.list', () => this.runStatefulOperation(
+        'conversations.list',
+        'conversations.list',
+        () => activeClient.conversations.list(),
+        10_000,
+      ), {
         attempts: 2,
         initialDelayMs: 500,
-        timeoutMs: 10000,
         shouldRetry: (err) => this.isTransientSyncError(err),
         onRateLimit: () => this.noteGlobalRateLimit('conversations.list'),
       });
@@ -5495,10 +6153,14 @@ export class XmtpClient {
     // Build a set of DM ids to avoid misclassifying them as groups
     let dmIdSet = new Set<string>();
     try {
-      const dms = await this.retryWithDelay('conversations.listDms', () => this.client!.conversations.listDms(), {
+      const dms = await this.retryWithDelay('conversations.listDms', () => this.runStatefulOperation(
+        'conversations.listDms',
+        'conversations.listDms',
+        () => activeClient.conversations.listDms(),
+        10_000,
+      ), {
         attempts: 2,
         initialDelayMs: 500,
-        timeoutMs: 10000,
         shouldRetry: (err) => this.isTransientSyncError(err),
         onRateLimit: () => this.noteGlobalRateLimit('conversations.listDms'),
       });
@@ -5513,7 +6175,7 @@ export class XmtpClient {
           if (!id) return;
 
           const exists = await storage.getConversation(id);
-          if (exists) return;
+          if (exists?.isGroup === false) return;
 
           // Get the peer's inbox ID using the async method
           // This is the actual identity of the person we're chatting with
@@ -5529,6 +6191,9 @@ export class XmtpClient {
           // be populated properly when messages are backfilled
           if (!peerInboxId) {
             console.warn('[XMTP] Skipping DM without peerInboxId:', id);
+            recordDiscoveryError(
+              new Error(`Could not resolve the peer inbox for DM ${id}`)
+            );
             return;
           }
 
@@ -5536,28 +6201,45 @@ export class XmtpClient {
             ? Number(dm.createdAtNs / BigInt(1_000_000))
             : Date.now();
 
-          const conversation: Conversation = {
-            id,
-            topic: id, // Use conversation ID as topic for DMs
-            peerId: peerInboxId.toLowerCase(), // The peer's inbox ID - this is the identity
-            createdAt,
-            lastMessageAt: createdAt,
-            unreadCount: 0,
-            pinned: false,
-            archived: false,
-            isGroup: false,
-            lastMessagePreview: '',
-          };
+          const conversation: Conversation = exists
+            ? {
+                ...exists,
+                topic: exists.topic ?? id,
+                peerId: peerInboxId.toLowerCase(),
+                isGroup: false,
+              }
+            : {
+                id,
+                topic: id, // Use conversation ID as topic for DMs
+                peerId: peerInboxId.toLowerCase(), // The peer's inbox ID - this is the identity
+                createdAt,
+                lastMessageAt: createdAt,
+                unreadCount: 0,
+                pinned: false,
+                archived: false,
+                isGroup: false,
+                lastMessagePreview: '',
+              };
 
           await storage.putConversation(conversation);
+          if (exists) {
+            useConversationStore.getState().updateConversation(id, {
+              topic: conversation.topic,
+              peerId: conversation.peerId,
+              isGroup: false,
+            });
+          }
           console.log('[XMTP] ✅ Persisted DM with peerId:', peerInboxId.slice(0, 10) + '...');
         } catch (dmErr) {
+          recordDiscoveryError(dmErr);
           console.warn('[XMTP] Failed to persist DM during sync:', dmErr);
         }
       });
     } catch (e) {
       // If listDms fails, proceed without the set; group detection below is still conservative
+      recordDiscoveryError(e);
       console.warn('[XMTP] listDms failed during syncConversations; continuing without DM filter', e);
+      if (opts?.strict) throw e;
     }
     console.log(`[XMTP] ✅ Synced ${convos.length} conversations`);
 
@@ -5580,10 +6262,16 @@ export class XmtpClient {
           let group: Awaited<ReturnType<XmtpClient['getGroupConversation']>> = null;
           try {
             group = await this.withTimeout('getGroupConversation', this.getGroupConversation(id), 5000);
-          } catch {
+          } catch (groupLookupError) {
+            if (opts?.strict) throw groupLookupError;
             group = null;
           }
-          if (!group) return;
+          if (!group) {
+            if (opts?.strict) {
+              throw new Error(`Could not classify conversation ${id} as a group`);
+            }
+            return;
+          }
 
           try {
             const details = await this.buildGroupDetails(id, group, { skipGroupSync: true });
@@ -5595,7 +6283,10 @@ export class XmtpClient {
                 (member) => member.inboxId && member.inboxId.toLowerCase() === myInboxLower
               );
             })();
-            if (!exists && !isMember) {
+            // An empty roster is not authoritative: a bounded members() read
+            // may have timed out. Keep a provisional group and reconcile it on
+            // a later recovery instead of treating "unknown" as "not a member".
+            if (!exists && details.members.length > 0 && !isMember) {
               console.info('[XMTP] Skipping group sync because current inbox is no longer a member:', id);
               return;
             }
@@ -5634,17 +6325,36 @@ export class XmtpClient {
               details: `${exists ? 'Updated' : 'Inserted'} group ${id}`,
             });
           } catch (persistErr) {
+            recordDiscoveryError(persistErr);
             console.warn('[XMTP] Failed to reconcile group conversation after sync', id, persistErr);
           }
         } catch (groupErr) {
+          recordDiscoveryError(groupErr);
           console.warn('[XMTP] Failed processing group during sync', id, groupErr);
         }
       });
     } catch (ensureErr) {
+      recordDiscoveryError(ensureErr);
       console.warn('[XMTP] Failed ensuring groups in storage during sync', ensureErr);
     }
 
-    await this.refreshConversationStoreFromStorage(storage, 'syncConversations');
+    try {
+      const refreshed = await this.refreshConversationStoreFromStorage(
+        storage,
+        'syncConversations',
+        Boolean(opts?.strict)
+      );
+      if (!refreshed) syncFailed = true;
+    } catch (refreshError) {
+      recordDiscoveryError(refreshError);
+    }
+
+    if (opts?.strict && discoveryErrors.length > 0) {
+      throw aggregateXmtpErrors(
+        discoveryErrors,
+        `Conversation discovery failed for ${discoveryErrors.length} operation${discoveryErrors.length === 1 ? '' : 's'}`
+      );
+    }
 
     if (!syncFailed) {
       const syncedAt = Date.now();
@@ -5689,29 +6399,39 @@ export class XmtpClient {
    */
   async syncHistory(opts?: {
     mode?: 'full' | 'recent';
-    sinceMs?: number;
     conversationLimit?: number;
+    conversationIds?: readonly string[];
     messageLimit?: number;
     lookbackMs?: number;
     skipConversationSync?: boolean;
     strict?: boolean;
+    force?: boolean;
   }): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
+    const activeClient = this.client;
 
     const countersBefore = { ...this.syncCounters };
 
     const mode = opts?.mode ?? 'full';
     const skipConversationSync = opts?.skipConversationSync ?? false;
     const recentMode = mode === 'recent';
-    const conversationLimit = opts?.conversationLimit ?? 8;
+    const conversationLimit = opts?.conversationLimit;
     const lookbackMs = opts?.lookbackMs ?? (recentMode ? 30 * 1000 : 10 * 60 * 1000);
-    const sinceMs = opts?.sinceMs ?? (recentMode ? this.identity?.lastSyncedAt : undefined);
     const retentionNow = Date.now();
-    const messageLimit = recentMode ? BigInt(opts?.messageLimit ?? 200) : undefined;
+    // A bounded read cannot safely advance a durability checkpoint without
+    // pagination: the SDK may return the newest N rows and strand older rows in
+    // the gap. Normal recovery therefore reads the complete retained window;
+    // callers that explicitly request a cap get a read-only replay with no
+    // checkpoint advancement.
+    const messageLimit =
+      recentMode && typeof opts?.messageLimit === 'number'
+        ? BigInt(opts.messageLimit)
+        : undefined;
+    const conversationErrors: unknown[] = [];
     const globalCooldownMs = this.getGlobalSyncCooldownMs();
-    if (recentMode && globalCooldownMs > 0) {
+    if (recentMode && globalCooldownMs > 0 && !opts?.force) {
       console.warn(`[XMTP] Skipping recent history sync due to global cooldown (${Math.round(globalCooldownMs / 1000)}s)`);
       logNetworkEvent({
         direction: 'status',
@@ -5738,24 +6458,31 @@ export class XmtpClient {
       // Backfill DMs into our app store by dispatching the same custom events
       // we use for live streaming messages.
       const storage = await getStorage();
-      let recentConversationIds: Set<string> | null = null;
-      if (recentMode) {
+      let selectedConversationIds: Set<string> | null = opts?.conversationIds?.length
+        ? new Set(opts.conversationIds)
+        : null;
+      const enumeratedConversationIds = new Set<string>();
+      if (recentMode && !selectedConversationIds && typeof conversationLimit === 'number') {
         try {
           const allConversations = await storage.listConversations();
-          recentConversationIds = selectRecentConversationIds(allConversations, conversationLimit);
+          selectedConversationIds = selectRecentConversationIds(allConversations, conversationLimit);
         } catch (err) {
           console.warn('[XMTP] Failed to build recent conversation list; falling back to full scan', err);
-          recentConversationIds = null;
+          selectedConversationIds = null;
         }
       }
       const shouldProcessConversation = (id?: string | null) =>
-        !recentConversationIds || (id ? recentConversationIds.has(id) : false);
+        !selectedConversationIds || (id ? selectedConversationIds.has(id) : false);
       let dms: Awaited<ReturnType<typeof this.client.conversations.listDms>> = [];
       try {
-        dms = await this.retryWithDelay('conversations.listDms', () => this.client!.conversations.listDms(), {
+        dms = await this.retryWithDelay('conversations.listDms', () => this.runStatefulOperation(
+          'conversations.listDms',
+          'conversations.listDms',
+          () => activeClient.conversations.listDms(),
+          10_000,
+        ), {
           attempts: 2,
           initialDelayMs: 500,
-          timeoutMs: 10000,
           shouldRetry: (err) => this.isTransientSyncError(err),
           onRateLimit: () => this.noteGlobalRateLimit('history:conversations.listDms'),
         });
@@ -5775,6 +6502,7 @@ export class XmtpClient {
           if (!shouldProcessConversation(dmId)) {
             continue;
           }
+          enumeratedConversationIds.add(dmId);
           if (await storage.isConversationDeleted(dmId)) {
             console.info('[XMTP] Skipping deleted DM conversation during history sync:', dmId);
             continue;
@@ -5782,7 +6510,7 @@ export class XmtpClient {
 
           const storedConversation = await storage.getConversation(dmId);
           let shouldSyncConversation = true;
-          if (recentMode) {
+          if (recentMode && !opts?.force) {
             const cooldownMs = this.getConversationSyncCooldownMs(dmId);
             if (cooldownMs > 0) {
               console.warn(`[XMTP] Skipping DM sync due to cooldown (${Math.round(cooldownMs / 1000)}s):`, dmId);
@@ -5800,26 +6528,33 @@ export class XmtpClient {
           // The SDK may throw an error even when sync partially succeeds (e.g., if an
           // intent failed but messages were still synced). We catch and continue since
           // messages() can still return valid data after a partial sync.
-          let attemptedSync = false;
+          let syncSucceeded = false;
           const dmWithSync = dm as unknown as { sync?: () => Promise<void> };
           if (shouldSyncConversation && typeof dmWithSync.sync === 'function') {
             try {
-              attemptedSync = true;
               this.syncCounters.dmSyncCalls += 1;
-              await this.retryWithDelay(`dm.sync:${dm.id ?? 'unknown'}`, () => dmWithSync.sync!(), {
+              await this.retryWithDelay(`dm.sync:${dm.id ?? 'unknown'}`, () => this.runStatefulOperation(
+                `dm.sync:${dmId}`,
+                `dm.sync:${dmId}`,
+                () => dmWithSync.sync!(),
+                8_000,
+              ), {
                 attempts: 3,
                 initialDelayMs: 750,
-                timeoutMs: 8000,
                 shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
                 onRateLimit: () => this.noteConversationRateLimit(dmId, 'dm.sync'),
               });
               this.reduceConversationCooldown(dmId);
+              syncSucceeded = true;
             } catch (syncErr) {
               // Check if the error message indicates a partial success
               if (this.isPartialSyncSuccess(syncErr)) {
                 // Partial success - some messages synced, continue with what we have
                 const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
                 console.debug('[XMTP] DM sync had errors but messages were synced, continuing:', dm.id, errMsg);
+                if (opts?.strict) {
+                  conversationErrors.push(syncErr);
+                }
               } else {
                 // Real sync failure - log but continue to next DM
                 if (opts?.strict) throw syncErr;
@@ -5827,11 +6562,12 @@ export class XmtpClient {
               }
             }
           }
+          // lastMessageAt is a UI preview, not proof that every earlier retained
+          // message was durably ingested. Without a real checkpoint, replay the
+          // full retention window so rediscovered conversations cannot strand a
+          // gap behind one newer local message.
           const baselineMs = recentMode
-            ? Math.max(
-                typeof sinceMs === 'number' ? sinceMs : 0,
-                storedConversation?.lastMessageAt ?? 0
-              )
+            ? (storedConversation?.lastSyncedAt ?? 0)
             : 0;
           const requestedConversationSentAfterNs =
             recentMode && baselineMs > 0
@@ -5866,29 +6602,36 @@ export class XmtpClient {
                   const emoji = (r.content ?? '').toString();
                   const ref = (r.reference ?? '').toString();
                   const action = (r.action ?? 'added').toString();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:reaction', {
-                      detail: {
+                  await this.ingestDurableSideEffect({
+                    type: 'reaction',
+                    detail: {
                         conversationId: m.conversationId,
                         referenceMessageId: ref,
                         emoji,
                         action,
                         senderInboxId: m.senderInboxId,
-                      },
-                    })
-                  );
+                    },
+                  });
                 } catch (rxErr) {
+                  if (rxErr instanceof XmtpMessageIngestionError) {
+                    throw rxErr;
+                  }
                   console.warn('[XMTP] Failed to parse reaction (backfill)', rxErr);
                 }
                 continue;
               }
             } catch (rxOuter) {
-              // ignore
+              if (rxOuter instanceof XmtpMessageIngestionError) {
+                throw rxOuter;
+              }
             }
-            if (this.dispatchConvosJoinRequest(m, true)) {
+            if (await this.dispatchConvosJoinRequest(m, true)) {
               continue;
             }
-            if (await this.processProfileSideChannel(m)) {
+            if (this.isProfileSideChannelMessage(m)) {
+              void this.processProfileSideChannel(m).catch((error) => {
+                console.warn('[XMTP] Failed to process backfilled profile metadata:', error);
+              });
               continue;
             }
             if (this.processConvosEphemeralSideChannel(m, { dispatchTyping: false })) {
@@ -5931,18 +6674,20 @@ export class XmtpClient {
                   const emoji = (r?.content ?? '').toString();
                   const ref = (r?.reference ?? '').toString();
                   const action = (r?.action ?? 'added').toString();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:reaction', {
-                      detail: {
+                  await this.ingestDurableSideEffect({
+                    type: 'reaction',
+                    detail: {
                         conversationId: m.conversationId,
                         referenceMessageId: ref,
                         emoji,
                         action,
                         senderInboxId: m.senderInboxId,
-                      },
-                    })
-                  );
+                    },
+                  });
                 } catch (rxErr) {
+                  if (rxErr instanceof XmtpMessageIngestionError) {
+                    throw rxErr;
+                  }
                   console.warn('[XMTP] Failed to parse reaction (stream)', rxErr);
                 }
                 continue;
@@ -5968,12 +6713,15 @@ export class XmtpClient {
                     expiresAt: decodedMessageExpiryMs(m),
                     replyToId,
                   };
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:message', {
-                      detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
-                    })
-                  );
+                  await this.ingestDecodedMessage({
+                    conversationId: m.conversationId,
+                    message: xmsg,
+                    isHistory: true,
+                  });
                 } catch (replyErr) {
+                  if (replyErr instanceof XmtpMessageIngestionError) {
+                    throw replyErr;
+                  }
                   console.warn('[XMTP] Failed to parse reply (backfill)', replyErr);
                 }
                 continue;
@@ -6001,20 +6749,19 @@ export class XmtpClient {
                 try {
                   const contentObj = (m as unknown as Record<string, unknown>)['content'];
                   // Structured event for UI/state updates
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:group-updated', {
-                      detail: {
+                  await this.ingestDurableSideEffect({
+                    type: 'group-updated',
+                    detail: {
                         conversationId: m.conversationId,
                         content: contentObj,
-                      },
-                    })
-                  );
+                    },
+                  });
                   const label = this.formatGroupUpdatedLabel(contentObj);
                   const body = label || 'Group updated';
                   const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:system', {
-                      detail: {
+                  await this.ingestDurableSideEffect({
+                    type: 'system',
+                    detail: {
                         conversationId: m.conversationId,
                         system: {
                           id: `sys_${m.id}`,
@@ -6022,10 +6769,12 @@ export class XmtpClient {
                           body,
                           sentAt: ts,
                         },
-                      },
-                    })
-                  );
+                    },
+                  });
                 } catch (err) {
+                  if (err instanceof XmtpMessageIngestionError) {
+                    throw err;
+                  }
                   console.warn('[XMTP] Failed to dispatch group-updated events', err);
                 }
                 continue;
@@ -6049,18 +6798,21 @@ export class XmtpClient {
                     sentAt,
                     expiresAt: decodedMessageExpiryMs(m),
                   };
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:message', {
-                      detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
-                    })
-                  );
+                  await this.ingestDecodedMessage({
+                    conversationId: m.conversationId,
+                    message: xmsg,
+                    isHistory: true,
+                  });
                 } catch (attachmentErr) {
+                  if (attachmentErr instanceof XmtpMessageIngestionError) {
+                    throw attachmentErr;
+                  }
                   console.warn('[XMTP] Failed to dispatch remote attachment (backfill)', attachmentErr);
                   const label = this.labelForContentType(typeId);
                   const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:system', {
-                      detail: {
+                  await this.ingestDurableSideEffect({
+                    type: 'system',
+                    detail: {
                         conversationId: m.conversationId,
                         system: {
                           id: `sys_${m.id}`,
@@ -6068,9 +6820,8 @@ export class XmtpClient {
                           body: label,
                           sentAt: ts,
                         },
-                      },
-                    })
-                  );
+                    },
+                  });
                 }
                 continue;
               }
@@ -6078,9 +6829,9 @@ export class XmtpClient {
               if (!isTextLike) {
                 const label = this.labelForContentType(typeId);
                 const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
-                window.dispatchEvent(
-                  new CustomEvent('xmtp:system', {
-                    detail: {
+                await this.ingestDurableSideEffect({
+                  type: 'system',
+                  detail: {
                       conversationId: m.conversationId,
                       system: {
                         id: `sys_${m.id}`,
@@ -6088,12 +6839,14 @@ export class XmtpClient {
                         body: label,
                         sentAt: ts,
                       },
-                    },
-                  })
-                );
+                  },
+                });
                 continue;
               }
             } catch (e) {
+              if (e instanceof XmtpMessageIngestionError) {
+                throw e;
+              }
               console.warn('[XMTP] Failed to classify backfill message type', e);
             }
             const xmsg = {
@@ -6105,40 +6858,59 @@ export class XmtpClient {
               expiresAt: decodedMessageExpiryMs(m),
             } as XmtpMessage;
 
-            window.dispatchEvent(
-              new CustomEvent('xmtp:message', {
-                detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
-              })
-            );
+            await this.ingestDecodedMessage({
+              conversationId: m.conversationId,
+              message: xmsg,
+              isHistory: true,
+            });
           }
           try {
-            if (attemptedSync) {
+            if (
+              syncSucceeded &&
+              messageLimit === undefined &&
+              hasXmtpDurableConsumers()
+            ) {
+              await awaitXmtpMessageIngestion();
               const now = Date.now();
-              const existing = storedConversation ?? (await storage.getConversation(dmId));
+              const existing = await storage.getConversation(dmId);
               if (existing) {
-                await storage.putConversation({ ...existing, lastSyncedAt: now });
+                await storage.updateConversationSyncState(dmId, now);
                 useConversationStore.getState().updateConversation(dmId, { lastSyncedAt: now });
               }
             }
-          } catch (syncStampErr) {
-            console.warn('[XMTP] Failed to persist DM sync timestamp', syncStampErr);
-          }
+            } catch (syncStampErr) {
+              if (opts?.strict) {
+                throw syncStampErr;
+              }
+              console.warn('[XMTP] Failed to persist DM sync timestamp', syncStampErr);
+            }
         } catch (dmErr) {
           if (this.isMissingConversationKeyError(dmErr)) {
+            if (opts?.strict) {
+              conversationErrors.push(dmErr);
+              continue;
+            }
             console.info('[XMTP] Skipping DM history backfill due to missing key:', dm.id);
             continue;
           }
-          if (opts?.strict) throw dmErr;
+          if (opts?.strict) {
+            conversationErrors.push(dmErr);
+            continue;
+          }
           console.warn('[XMTP] Failed to backfill messages for DM:', dm.id, dmErr);
         }
       }
 
       // Backfill Groups as well (group conversations may not have recent DMs)
       try {
-        const allConvs = await this.retryWithDelay('conversations.list', () => this.client!.conversations.list(), {
+        const allConvs = await this.retryWithDelay('conversations.list', () => this.runStatefulOperation(
+          'conversations.list',
+          'conversations.list',
+          () => activeClient.conversations.list(),
+          10_000,
+        ), {
           attempts: 2,
           initialDelayMs: 500,
-          timeoutMs: 10000,
           shouldRetry: (err) => this.isTransientSyncError(err),
           onRateLimit: () => this.noteGlobalRateLimit('history:conversations.list'),
         });
@@ -6151,9 +6923,10 @@ export class XmtpClient {
             if (!conv.id) {
               continue;
             }
-            if (recentMode && !shouldProcessConversation(conv.id)) {
+            if (!shouldProcessConversation(conv.id)) {
               continue;
             }
+            enumeratedConversationIds.add(conv.id);
             if (await storage.isConversationDeleted(conv.id)) {
               console.info('[XMTP] Skipping deleted group conversation during history sync:', conv.id);
               continue;
@@ -6161,7 +6934,7 @@ export class XmtpClient {
 
             const storedConversation = await storage.getConversation(conv.id);
             let shouldSyncConversation = true;
-            if (recentMode) {
+            if (recentMode && !opts?.force) {
               const cooldownMs = this.getConversationSyncCooldownMs(conv.id);
               if (cooldownMs > 0) {
                 console.warn(`[XMTP] Skipping group sync due to cooldown (${Math.round(cooldownMs / 1000)}s):`, conv.id);
@@ -6178,24 +6951,31 @@ export class XmtpClient {
             // Force sync messages for this conversation
             // The SDK may throw an error even when sync partially succeeds (e.g., if an
             // intent failed but messages were still synced). We catch and continue.
-            let attemptedSync = false;
+            let syncSucceeded = false;
             const convWithSync = conv as unknown as { sync?: () => Promise<void> };
             if (shouldSyncConversation && typeof convWithSync.sync === 'function') {
               try {
-                attemptedSync = true;
                 this.syncCounters.groupSyncCalls += 1;
-                await this.retryWithDelay(`group.sync:${conv.id ?? 'unknown'}`, () => convWithSync.sync!(), {
+                await this.retryWithDelay(`group.sync:${conv.id ?? 'unknown'}`, () => this.runStatefulOperation(
+                  `group.sync:${conv.id}`,
+                  `group.sync:${conv.id}`,
+                  () => convWithSync.sync!(),
+                  8_000,
+                ), {
                   attempts: 3,
                   initialDelayMs: 750,
-                  timeoutMs: 8000,
                   shouldRetry: (err) => this.isTransientSyncError(err) && !this.isPartialSyncSuccess(err),
                   onRateLimit: () => this.noteConversationRateLimit(conv.id!, 'group.sync'),
                 });
                 this.reduceConversationCooldown(conv.id!);
+                syncSucceeded = true;
               } catch (syncErr) {
                 if (this.isPartialSyncSuccess(syncErr)) {
                   const errMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
                   console.debug('[XMTP] Group sync had errors but messages were synced, continuing:', conv.id, errMsg);
+                  if (opts?.strict) {
+                    conversationErrors.push(syncErr);
+                  }
                 } else {
                   if (opts?.strict) throw syncErr;
                   console.warn('[XMTP] Group sync failed:', conv.id, syncErr);
@@ -6207,10 +6987,7 @@ export class XmtpClient {
               continue;
             }
             const baselineMs = recentMode
-              ? Math.max(
-                  typeof sinceMs === 'number' ? sinceMs : 0,
-                  storedConversation?.lastMessageAt ?? 0
-                )
+              ? (storedConversation?.lastSyncedAt ?? 0)
               : 0;
             const requestedConversationSentAfterNs =
               recentMode && baselineMs > 0
@@ -6244,30 +7021,37 @@ export class XmtpClient {
                     const emoji = (r?.content ?? '').toString();
                     const ref = (r?.reference ?? '').toString();
                     const action = (r?.action ?? 'added').toString();
-                    window.dispatchEvent(
-                      new CustomEvent('xmtp:reaction', {
-                        detail: {
+                    await this.ingestDurableSideEffect({
+                      type: 'reaction',
+                      detail: {
                           conversationId: m.conversationId,
                           referenceMessageId: ref,
                           emoji,
                           action,
                           senderInboxId: m.senderInboxId,
-                        },
-                      })
-                    );
+                      },
+                    });
                   } catch (rxErr) {
+                    if (rxErr instanceof XmtpMessageIngestionError) {
+                      throw rxErr;
+                    }
                     console.warn('[XMTP] Failed to parse reaction (group backfill)', rxErr);
                   }
                   continue;
                 }
-              } catch {
-                // ignore
+              } catch (rxOuter) {
+                if (rxOuter instanceof XmtpMessageIngestionError) {
+                  throw rxOuter;
+                }
               }
 
-              if (this.dispatchConvosJoinRequest(m, true)) {
+              if (await this.dispatchConvosJoinRequest(m, true)) {
                 continue;
               }
-              if (await this.processProfileSideChannel(m)) {
+              if (this.isProfileSideChannelMessage(m)) {
+                void this.processProfileSideChannel(m).catch((error) => {
+                  console.warn('[XMTP] Failed to process backfilled group profile metadata:', error);
+                });
                 continue;
               }
               if (this.processConvosEphemeralSideChannel(m, { dispatchTyping: false })) {
@@ -6295,16 +7079,32 @@ export class XmtpClient {
                 if (isGroupUpdated) {
                   try {
                     const contentObj = (m as unknown as Record<string, unknown>)['content'];
-                    window.dispatchEvent(new CustomEvent('xmtp:group-updated', { detail: { conversationId: m.conversationId, content: contentObj } }));
+                    await this.ingestDurableSideEffect({
+                      type: 'group-updated',
+                      detail: {
+                        conversationId: m.conversationId,
+                        content: contentObj,
+                      },
+                    });
                     const label = this.formatGroupUpdatedLabel(contentObj);
                     const body = label || 'Group updated';
                     const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
-                    window.dispatchEvent(
-                      new CustomEvent('xmtp:system', {
-                        detail: { conversationId: m.conversationId, system: { id: `sys_${m.id}`, senderInboxId: m.senderInboxId, body, sentAt: ts } },
-                      })
-                    );
+                    await this.ingestDurableSideEffect({
+                      type: 'system',
+                      detail: {
+                        conversationId: m.conversationId,
+                        system: {
+                          id: `sys_${m.id}`,
+                          senderInboxId: m.senderInboxId,
+                          body,
+                          sentAt: ts,
+                        },
+                      },
+                    });
                   } catch (err) {
+                    if (err instanceof XmtpMessageIngestionError) {
+                      throw err;
+                    }
                     console.warn('[XMTP] Failed to dispatch group-updated events (group backfill)', err);
                   }
                   continue;
@@ -6330,12 +7130,15 @@ export class XmtpClient {
                       expiresAt: decodedMessageExpiryMs(m),
                       replyToId,
                     };
-                    window.dispatchEvent(
-                      new CustomEvent('xmtp:message', {
-                        detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
-                      })
-                    );
+                    await this.ingestDecodedMessage({
+                      conversationId: m.conversationId,
+                      message: xmsg,
+                      isHistory: true,
+                    });
                   } catch (replyErr) {
+                    if (replyErr instanceof XmtpMessageIngestionError) {
+                      throw replyErr;
+                    }
                     console.warn('[XMTP] Failed to parse reply (group backfill)', replyErr);
                   }
                   continue;
@@ -6359,18 +7162,21 @@ export class XmtpClient {
                       sentAt,
                       expiresAt: decodedMessageExpiryMs(m),
                     };
-                    window.dispatchEvent(
-                      new CustomEvent('xmtp:message', {
-                        detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
-                      })
-                    );
+                    await this.ingestDecodedMessage({
+                      conversationId: m.conversationId,
+                      message: xmsg,
+                      isHistory: true,
+                    });
                   } catch (attachmentErr) {
+                    if (attachmentErr instanceof XmtpMessageIngestionError) {
+                      throw attachmentErr;
+                    }
                     console.warn('[XMTP] Failed to dispatch remote attachment (group backfill)', attachmentErr);
                     const label = this.labelForContentType(typeId);
                     const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
-                    window.dispatchEvent(
-                      new CustomEvent('xmtp:system', {
-                        detail: {
+                    await this.ingestDurableSideEffect({
+                      type: 'system',
+                      detail: {
                           conversationId: m.conversationId,
                           system: {
                             id: `sys_${m.id}`,
@@ -6378,9 +7184,8 @@ export class XmtpClient {
                             body: label,
                             sentAt: ts,
                           },
-                        },
-                      })
-                    );
+                      },
+                    });
                   }
                   continue;
                 }
@@ -6388,14 +7193,24 @@ export class XmtpClient {
                 if (!isTextLike) {
                   const label = this.labelForContentType(typeId);
                   const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:system', {
-                      detail: { conversationId: m.conversationId, system: { id: `sys_${m.id}`, senderInboxId: m.senderInboxId, body: label, sentAt: ts } },
-                    })
-                  );
+                  await this.ingestDurableSideEffect({
+                    type: 'system',
+                    detail: {
+                      conversationId: m.conversationId,
+                      system: {
+                        id: `sys_${m.id}`,
+                        senderInboxId: m.senderInboxId,
+                        body: label,
+                        sentAt: ts,
+                      },
+                    },
+                  });
                   continue;
                 }
               } catch (e) {
+                if (e instanceof XmtpMessageIngestionError) {
+                  throw e;
+                }
                 console.warn('[XMTP] Failed to classify group backfill message type', e);
               }
               const xmsg = {
@@ -6407,30 +7222,45 @@ export class XmtpClient {
                 expiresAt: decodedMessageExpiryMs(m),
               } as XmtpMessage;
 
-              window.dispatchEvent(
-                new CustomEvent('xmtp:message', {
-                  detail: { conversationId: m.conversationId, message: xmsg, isHistory: true },
-                })
-              );
+              await this.ingestDecodedMessage({
+                conversationId: m.conversationId,
+                message: xmsg,
+                isHistory: true,
+              });
             }
             try {
-              if (attemptedSync) {
+              if (
+                syncSucceeded &&
+                messageLimit === undefined &&
+                hasXmtpDurableConsumers()
+              ) {
+                await awaitXmtpMessageIngestion();
                 const now = Date.now();
-                const existing = storedConversation ?? (await storage.getConversation(conv.id));
+                const existing = await storage.getConversation(conv.id);
                 if (existing) {
-                  await storage.putConversation({ ...existing, lastSyncedAt: now });
+                  await storage.updateConversationSyncState(conv.id, now);
                   useConversationStore.getState().updateConversation(conv.id, { lastSyncedAt: now });
                 }
               }
             } catch (syncStampErr) {
+              if (opts?.strict) {
+                throw syncStampErr;
+              }
               console.warn('[XMTP] Failed to persist group sync timestamp', syncStampErr);
             }
           } catch (gErr) {
             if (this.isMissingConversationKeyError(gErr)) {
+              if (opts?.strict) {
+                conversationErrors.push(gErr);
+                continue;
+              }
               console.info('[XMTP] Skipping group history backfill due to missing key:', conv.id);
               continue;
             }
-            if (opts?.strict) throw gErr;
+            if (opts?.strict) {
+              conversationErrors.push(gErr);
+              continue;
+            }
             console.warn('[XMTP] Failed to backfill messages for conversation:', conv.id, gErr);
           }
         }
@@ -6439,6 +7269,31 @@ export class XmtpClient {
         console.warn('[XMTP] Failed to enumerate conversations for group backfill', listErr);
       }
 
+      if (selectedConversationIds) {
+        const missingConversationIds = Array.from(selectedConversationIds).filter(
+          (conversationId) => !enumeratedConversationIds.has(conversationId)
+        );
+        if (missingConversationIds.length > 0) {
+          const missingError = new Error(
+            `XMTP did not enumerate requested conversation${missingConversationIds.length === 1 ? '' : 's'}: ${missingConversationIds.join(', ')}`
+          );
+          if (opts?.strict) {
+            conversationErrors.push(missingError);
+          } else {
+            console.warn('[XMTP] Targeted history recovery could not find conversations:', missingConversationIds);
+          }
+        }
+      }
+
+      // Full/manual sync must not report completion while decoded messages are
+      // still queued for Dexie persistence.
+      await awaitXmtpMessageIngestion();
+      if (conversationErrors.length > 0) {
+        throw aggregateXmtpErrors(
+          conversationErrors,
+          `Failed to repair ${conversationErrors.length} conversation${conversationErrors.length === 1 ? '' : 's'}`
+        );
+      }
       console.log('[XMTP] ✅ History sync + backfill complete');
 
       try {
@@ -6463,6 +7318,82 @@ export class XmtpClient {
   }
 
   /**
+   * Authoritative user-initiated inbox repair. It refreshes conversation
+   * discovery and replays all retained messages into durable local storage.
+   */
+  syncInbox(): Promise<void> {
+    return this.enqueueLifecycle(async () => {
+      if (!this.client) {
+        throw new Error('Client not connected');
+      }
+      const failures: unknown[] = [];
+      try {
+        await this.syncConversationsInternal({
+          force: true,
+          reason: 'manual-inbox-check',
+          strict: true,
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await this.syncHistory({
+          mode: 'full',
+          skipConversationSync: true,
+          force: true,
+          strict: true,
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+      await awaitXmtpMessageIngestion();
+      if (failures.length > 0) {
+        throw aggregateXmtpErrors(
+          failures,
+          'Inbox repair completed with network or persistence errors'
+        );
+      }
+    });
+  }
+
+  /** Sync and durably ingest one conversation (used by pull-to-refresh). */
+  syncConversationMessages(conversationId: string): Promise<void> {
+    return this.enqueueLifecycle(async () => {
+      if (!this.client) {
+        throw new Error('Client not connected');
+      }
+      const failures: unknown[] = [];
+      try {
+        await this.syncConversationsInternal({
+          force: true,
+          reason: `conversation-refresh:${conversationId}`,
+          strict: true,
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await this.syncHistory({
+          mode: 'full',
+          conversationIds: [conversationId],
+          skipConversationSync: true,
+          force: true,
+          strict: true,
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+      await awaitXmtpMessageIngestion();
+      if (failures.length > 0) {
+        throw aggregateXmtpErrors(
+          failures,
+          `Conversation ${conversationId} repair completed with network or persistence errors`
+        );
+      }
+    });
+  }
+
+  /**
    * Debug/maintenance: force a full history backfill into Dexie.
    * This is intentionally not part of the default connect path.
    */
@@ -6478,25 +7409,131 @@ export class XmtpClient {
   }
 
   /**
-   * Start streaming all messages across all conversations
+   * Stream newly created conversations so a first inbound DM/group is
+   * discovered immediately instead of waiting for the maintenance interval.
    */
-  async startMessageStream(): Promise<void> {
+  private async startConversationStream(): Promise<void> {
+    if (this.conversationStream || this.conversationStreamTask) return;
+    if (this.conversationStreamStartPromise) {
+      return await this.conversationStreamStartPromise;
+    }
+    const startPromise = this.startConversationStreamInternal();
+    this.conversationStreamStartPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.conversationStreamStartPromise === startPromise) {
+        this.conversationStreamStartPromise = null;
+      }
+    }
+  }
+
+  private async startConversationStreamInternal(): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
+    const activeClient = this.client;
+    const generation = this.streamLifecycleGeneration;
 
-    if (this.messageStream || this.messageStreamTask) {
-      await this.stopMessageStream();
+    const stream = await activeClient.conversations.stream({
+      // Both streams subscribe first; the shared recovery pass performs the
+      // authoritative catch-up after they are live.
+      disableSync: true,
+      onRestart: () => this.scheduleInboxRecovery('conversation-stream-restart'),
+      onError: (error) => {
+        console.warn('[XMTP] Conversation stream error:', error);
+      },
+    });
+    if (
+      this.client !== activeClient ||
+      generation !== this.streamLifecycleGeneration
+    ) {
+      await stream.end().catch(() => undefined);
+      return;
     }
+    this.conversationStream = stream as unknown as AsyncStreamProxy<unknown>;
+
+    const task = (async () => {
+      try {
+        for await (const value of stream) {
+          if (
+            this.client !== activeClient ||
+            generation !== this.streamLifecycleGeneration
+          ) {
+            break;
+          }
+          const conversationId =
+            value && typeof value === 'object' && 'id' in value
+              ? String((value as { id?: unknown }).id ?? '')
+              : '';
+          this.scheduleInboxRecovery('conversation-stream', conversationId || undefined);
+        }
+      } catch (error) {
+        if (this.conversationStream === stream) {
+          console.warn('[XMTP] Conversation stream consumer failed:', error);
+        }
+      }
+    })();
+    this.conversationStreamTask = task;
+    const clear = () => {
+      const endedUnexpectedly = this.conversationStream === stream;
+      if (endedUnexpectedly) this.conversationStream = null;
+      if (this.conversationStreamTask === task) this.conversationStreamTask = null;
+      if (endedUnexpectedly && this.client) {
+        this.scheduleInboxRecovery('conversation-stream-ended');
+      }
+    };
+    void task.then(clear, clear);
+  }
+
+  /**
+   * Start streaming all messages across all conversations
+   */
+  async startMessageStream(): Promise<void> {
+    if (this.messageStream || this.messageStreamTask) return;
+    if (this.messageStreamStartPromise) {
+      return await this.messageStreamStartPromise;
+    }
+    const startPromise = this.startMessageStreamInternal();
+    this.messageStreamStartPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.messageStreamStartPromise === startPromise) {
+        this.messageStreamStartPromise = null;
+      }
+    }
+  }
+
+  private async startMessageStreamInternal(): Promise<void> {
+    if (!this.client) {
+      throw new Error('Client not connected');
+    }
+    const activeClient = this.client;
+    const generation = this.streamLifecycleGeneration;
 
     try {
       console.log('[XMTP] Starting message stream...');
 
       // Stream all messages (DMs and groups)
-      const stream = await this.client.conversations.streamAllMessages({
+      const stream = await activeClient.conversations.streamAllMessages({
+        // Subscribe before any potentially slow sync. Bootstrap and every
+        // restart/resume run an explicit durable catch-up after the stream is
+        // live, closing the read-before-subscribe race without blocking login.
         disableSync: true,
         consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+        onRestart: () => this.scheduleInboxRecovery('message-stream-restart'),
+        onError: (error) => {
+          console.warn('[XMTP] Message stream transport error:', error);
+        },
       });
+      if (
+        this.client !== activeClient ||
+        generation !== this.streamLifecycleGeneration
+      ) {
+        await stream.end().catch(() => undefined);
+        return;
+      }
       this.messageStream = stream;
 
       console.log('[XMTP] ✅ Message stream started');
@@ -6513,6 +7550,12 @@ export class XmtpClient {
           console.log('[XMTP] 📻 Stream loop started');
 
           for await (const message of stream) {
+            if (
+              this.client !== activeClient ||
+              generation !== this.streamLifecycleGeneration
+            ) {
+              break;
+            }
             if (!message) {
               console.warn('[XMTP] ⚠️  Message is null/undefined, skipping');
               continue;
@@ -6524,7 +7567,7 @@ export class XmtpClient {
             const streamedType = (streamedTypeId || '').toLowerCase();
             if (streamedType.includes('group') && streamedType.includes('updated')) {
               try {
-                this.dispatchGroupUpdatedEvents(message);
+                this.dispatchGroupUpdatedEvents(message, activeClient.inboxId);
               } catch (error) {
                 console.warn('[XMTP] Failed to dispatch group-updated events', error);
               }
@@ -6550,9 +7593,9 @@ export class XmtpClient {
                 // Surface as a stylized system message via a dedicated event
                 try {
                   const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:system', {
-                      detail: {
+                  this.dispatchDurableSideEffect({
+                    type: 'system',
+                    detail: {
                         conversationId: message.conversationId,
                         system: {
                           id: `sys_${message.id}`,
@@ -6560,18 +7603,16 @@ export class XmtpClient {
                           body: 'Group membership changed',
                           sentAt: ts,
                         },
-                      },
-                    })
-                  );
+                    },
+                  }, activeClient.inboxId);
                   // Also trigger a group refresh so newly added members see the group appear
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:group-updated', {
-                      detail: {
+                  this.dispatchDurableSideEffect({
+                    type: 'group-updated',
+                    detail: {
                         conversationId: message.conversationId,
                         content: {},
-                      },
-                    })
-                  );
+                    },
+                  }, activeClient.inboxId);
                 } catch (err) {
                   console.warn('[XMTP] Failed to dispatch system message event', err);
                 }
@@ -6581,39 +7622,24 @@ export class XmtpClient {
               console.warn('[XMTP] Failed to inspect message kind', err);
             }
 
-            if (this.dispatchConvosJoinRequest(message, false)) {
+            if (
+              await this.dispatchConvosJoinRequest(
+                message,
+                false,
+                activeClient.inboxId
+              )
+            ) {
               continue;
             }
-            if (await this.processProfileSideChannel(message)) {
+            if (this.isProfileSideChannelMessage(message)) {
+              // Profile/roster hydration is metadata work. Keep it off the
+              // transport loop so a slow group roster cannot block later chat.
+              void this.processProfileSideChannel(message).catch((error) => {
+                console.warn('[XMTP] Failed to process streamed profile metadata:', error);
+              });
               continue;
             }
             if (this.processConvosEphemeralSideChannel(message, { dispatchTyping: true })) {
-              continue;
-            }
-
-            // Handle Converge profile messages silently (metadata only).
-            const profileUpdate = XmtpClient.extractProfileUpdate(message);
-            if (profileUpdate) {
-              try {
-                const senderInboxId = message.senderInboxId;
-                if (senderInboxId) {
-                  const contactStore = useContactStore.getState();
-                  await contactStore.upsertContactProfile({
-                    inboxId: senderInboxId,
-                    displayName: profileUpdate.displayName,
-                    avatarUrl: profileUpdate.avatarUrl,
-                    source: 'inbox',
-                  });
-                  logNetworkEvent({
-                    direction: 'inbound',
-                    event: 'profile:received',
-                    details: `Profile update from ${senderInboxId}`,
-                    payload: JSON.stringify(profileUpdate),
-                  });
-                }
-              } catch (e) {
-                console.warn('[XMTP] Failed to process profile message', e);
-              }
               continue;
             }
 
@@ -6647,21 +7673,20 @@ export class XmtpClient {
                 try {
                   // Dispatch structured event so UI can update conversation metadata
                   const contentObj = (message as unknown as Record<string, unknown>)['content'];
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:group-updated', {
-                      detail: {
+                  this.dispatchDurableSideEffect({
+                    type: 'group-updated',
+                    detail: {
                         conversationId: message.conversationId,
                         content: contentObj,
-                      },
-                    })
-                  );
+                    },
+                  }, activeClient.inboxId);
                   // Also surface a stylized system message label
                   const label = this.formatGroupUpdatedLabel(contentObj);
                   const body = label || 'Group updated';
                   const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:system', {
-                      detail: {
+                  this.dispatchDurableSideEffect({
+                    type: 'system',
+                    detail: {
                         conversationId: message.conversationId,
                         system: {
                           id: `sys_${message.id}`,
@@ -6669,9 +7694,8 @@ export class XmtpClient {
                           body,
                           sentAt: ts,
                         },
-                      },
-                    })
-                  );
+                    },
+                  }, activeClient.inboxId);
                 } catch (err) {
                   console.warn('[XMTP] Failed to dispatch group-updated events', err);
                 }
@@ -6698,10 +7722,13 @@ export class XmtpClient {
                     expiresAt: decodedMessageExpiryMs(message),
                     replyToId,
                   };
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:message', {
-                      detail: { conversationId: message.conversationId, message: xmsg, isHistory: false },
-                    })
+                  void this.dispatchDecodedMessage(
+                    {
+                      conversationId: message.conversationId,
+                      message: xmsg,
+                      isHistory: false,
+                    },
+                    activeClient.inboxId
                   );
                 } catch (replyErr) {
                   console.warn('[XMTP] Failed to parse reply (stream)', replyErr);
@@ -6717,31 +7744,30 @@ export class XmtpClient {
                   }
                   const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
                   const attachmentLabel = remoteAttachment.filename || 'Attachment';
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:message', {
-                      detail: {
+                  void this.dispatchDecodedMessage(
+                    {
+                      conversationId: message.conversationId,
+                      message: {
+                        id: message.id,
                         conversationId: message.conversationId,
-                        message: {
-                          id: message.id,
-                          conversationId: message.conversationId,
-                          senderAddress: message.senderInboxId,
-                          content: attachmentLabel,
-                          contentTypeId: typeId,
-                          remoteAttachment,
-                          sentAt,
-                          expiresAt: decodedMessageExpiryMs(message),
-                        },
-                        isHistory: false,
+                        senderAddress: message.senderInboxId,
+                        content: attachmentLabel,
+                        contentTypeId: typeId,
+                        remoteAttachment,
+                        sentAt,
+                        expiresAt: decodedMessageExpiryMs(message),
                       },
-                    })
+                      isHistory: false,
+                    },
+                    activeClient.inboxId
                   );
                 } catch (attachmentErr) {
                   console.warn('[XMTP] Failed to dispatch remote attachment (stream)', attachmentErr);
                   const label = this.labelForContentType(typeId);
                   const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
-                  window.dispatchEvent(
-                    new CustomEvent('xmtp:system', {
-                      detail: {
+                  this.dispatchDurableSideEffect({
+                    type: 'system',
+                    detail: {
                         conversationId: message.conversationId,
                         system: {
                           id: `sys_${message.id}`,
@@ -6749,18 +7775,17 @@ export class XmtpClient {
                           body: label,
                           sentAt: ts,
                         },
-                      },
-                    })
-                  );
+                    },
+                  }, activeClient.inboxId);
                 }
                 continue;
               }
               if (!looksText) {
                 const label = this.labelForContentType(typeId);
                 const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
-                window.dispatchEvent(
-                  new CustomEvent('xmtp:system', {
-                    detail: {
+                this.dispatchDurableSideEffect({
+                  type: 'system',
+                  detail: {
                       conversationId: message.conversationId,
                       system: {
                         id: `sys_${message.id}`,
@@ -6768,9 +7793,8 @@ export class XmtpClient {
                         body: label,
                         sentAt: ts,
                       },
-                    },
-                  })
-                );
+                  },
+                }, activeClient.inboxId);
                 continue;
               }
             } catch (e) {
@@ -6793,20 +7817,24 @@ export class XmtpClient {
 
             // Dispatch to message store
             console.log('[XMTP] Dispatching custom event xmtp:message');
-            window.dispatchEvent(new CustomEvent('xmtp:message', {
-              detail: {
+            void this.dispatchDecodedMessage(
+              {
                 conversationId: message.conversationId,
                 message: {
                   id: message.id,
                   conversationId: message.conversationId,
                   senderAddress: message.senderInboxId,
-                  content: message.content,
+                  content:
+                    typeof message.content === 'string' || message.content instanceof Uint8Array
+                      ? message.content
+                      : message.fallback ?? this.formatPayload(message.content),
                   sentAt: message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now(),
                   expiresAt: decodedMessageExpiryMs(message),
                 },
                 isHistory: false,
               },
-            }));
+              activeClient.inboxId
+            );
             console.log('[XMTP] Custom event dispatched');
           }
 
@@ -6831,11 +7859,15 @@ export class XmtpClient {
       })();
       this.messageStreamTask = messageStreamTask;
       const clearMessageStreamTask = () => {
-        if (this.messageStream === stream) {
+        const endedUnexpectedly = this.messageStream === stream;
+        if (endedUnexpectedly) {
           this.messageStream = null;
         }
         if (this.messageStreamTask === messageStreamTask) {
           this.messageStreamTask = null;
+        }
+        if (endedUnexpectedly && this.client) {
+          this.scheduleInboxRecovery('message-stream-ended');
         }
       };
       void messageStreamTask.then(clearMessageStreamTask, clearMessageStreamTask);
@@ -6846,18 +7878,46 @@ export class XmtpClient {
   }
 
   private async startMessageDeletionStream(): Promise<void> {
+    if (this.messageDeletionStream || this.messageDeletionStreamTask) return;
+    if (this.messageDeletionStreamStartPromise) {
+      return await this.messageDeletionStreamStartPromise;
+    }
+    const startPromise = this.startMessageDeletionStreamInternal();
+    this.messageDeletionStreamStartPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.messageDeletionStreamStartPromise === startPromise) {
+        this.messageDeletionStreamStartPromise = null;
+      }
+    }
+  }
+
+  private async startMessageDeletionStreamInternal(): Promise<void> {
     if (!this.client) {
       throw new Error('Client not connected');
     }
-    if (this.messageDeletionStream || this.messageDeletionStreamTask) {
+    const activeClient = this.client;
+    const generation = this.streamLifecycleGeneration;
+
+    const stream = await activeClient.conversations.streamMessageDeletions();
+    if (
+      this.client !== activeClient ||
+      generation !== this.streamLifecycleGeneration
+    ) {
+      await stream.end().catch(() => undefined);
       return;
     }
-
-    const stream = await this.client.conversations.streamMessageDeletions();
     this.messageDeletionStream = stream;
     const task = (async () => {
       try {
         for await (const messageId of stream) {
+          if (
+            this.client !== activeClient ||
+            generation !== this.streamLifecycleGeneration
+          ) {
+            break;
+          }
           if (!messageId) continue;
           await deleteLocalMessage(messageId);
         }
@@ -7031,7 +8091,12 @@ export class XmtpClient {
       try {
         console.log('[XMTP] loadOwnProfile: Syncing self-DM messages...');
         if (typeof dm.sync === 'function') {
-          await this.withTimeout('selfDm.sync', dm.sync(), 8000);
+          await this.runStatefulOperation(
+            `dm.sync:${dm.id ?? 'self'}`,
+            'selfDm.sync',
+            () => dm.sync(),
+            8_000,
+          );
         }
         syncSucceeded = true;
       } catch (syncError) {
@@ -8585,13 +9650,18 @@ export class XmtpClient {
    * listeners (Layout) will aggregate and persist reactions on target messages.
    */
   async backfillReactionsForConversation(conversationId: string, max = 300): Promise<void> {
-    if (!this.client) return;
+    const activeClient = this.client;
+    const ownerInboxId = activeClient?.inboxId;
+    if (!activeClient || !ownerInboxId) return;
     try {
-      const conv = await this.client.conversations.getConversationById(conversationId);
+      const conv = await activeClient.conversations.getConversationById(conversationId);
+      if (this.client !== activeClient) return;
       if (!conv) return;
       const decoded = await conv.messages();
+      if (this.client !== activeClient) return;
       const start = Math.max(0, decoded.length - max);
       for (let i = start; i < decoded.length; i++) {
+        if (this.client !== activeClient) return;
         const m = decoded[i] as unknown as { [k: string]: unknown };
         const reactions = (m as { reactions?: Array<{ content?: unknown; senderInboxId?: string }> }).reactions;
         if (Array.isArray(reactions) && reactions.length > 0) {
@@ -8606,17 +9676,16 @@ export class XmtpClient {
               const convId = (m as unknown as { conversationId?: string }).conversationId as string | undefined;
               const sender = reactionMessage.senderInboxId;
               if (!convId || !ref || !emoji) continue;
-              window.dispatchEvent(
-                new CustomEvent('xmtp:reaction', {
-                  detail: {
+              await this.ingestDurableSideEffect({
+                type: 'reaction',
+                detail: {
                     conversationId: convId,
                     referenceMessageId: ref,
                     emoji,
                     action,
                     senderInboxId: sender,
-                  },
-                })
-              );
+                },
+              }, ownerInboxId);
             } catch (e) {
               console.warn('[XMTP] backfillReactionsForConversation parse failed', e);
             }
@@ -8637,17 +9706,16 @@ export class XmtpClient {
           const convId = (m as unknown as { conversationId?: string }).conversationId as string | undefined;
           const sender = (m as unknown as { senderInboxId?: string }).senderInboxId as string | undefined;
           if (!convId || !ref || !emoji) continue;
-          window.dispatchEvent(
-            new CustomEvent('xmtp:reaction', {
-              detail: {
+          await this.ingestDurableSideEffect({
+            type: 'reaction',
+            detail: {
                 conversationId: convId,
                 referenceMessageId: ref,
                 emoji,
                 action,
                 senderInboxId: sender,
-              },
-            })
-          );
+            },
+          }, ownerInboxId);
         } catch (e) {
           console.warn('[XMTP] backfillReactionsForConversation parse failed', e);
         }

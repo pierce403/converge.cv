@@ -15,6 +15,10 @@ vi.mock('@/lib/message-retention', () => ({
 import { XmtpClient } from './client';
 import { useXmtpStore } from '@/lib/stores/xmtp-store';
 import { signerIdentityKey } from './device-provisioning';
+import {
+  registerXmtpDurableSideEffectConsumer,
+  registerXmtpMessageConsumer,
+} from './message-events';
 
 type StreamHarness = {
   isDone: boolean;
@@ -46,8 +50,18 @@ class ControlledStream implements AsyncIterable<StreamMessage> {
     return { done: true, value: undefined };
   });
 
-  constructor(message: StreamMessage) {
+  constructor(message: StreamMessage | null = null) {
     this.firstMessage = message;
+  }
+
+  emit(message: StreamMessage): void {
+    if (this.pendingNext) {
+      const resolve = this.pendingNext;
+      this.pendingNext = null;
+      resolve({ done: false, value: message });
+    } else {
+      this.firstMessage = message;
+    }
   }
 
   next = async (): Promise<IteratorResult<StreamMessage>> => {
@@ -82,8 +96,18 @@ class ControlledDeletionStream implements AsyncIterable<string> {
     return { done: true, value: undefined };
   });
 
-  constructor(messageId: string) {
+  constructor(messageId: string | null = null) {
     this.firstMessageId = messageId;
+  }
+
+  emit(messageId: string): void {
+    if (this.pendingNext) {
+      const resolve = this.pendingNext;
+      this.pendingNext = null;
+      resolve({ done: false, value: messageId });
+    } else {
+      this.firstMessageId = messageId;
+    }
   }
 
   next = async (): Promise<IteratorResult<string>> => {
@@ -160,36 +184,43 @@ function attachReadyHistoryClient(
   }
 ): {
   startMessages: ReturnType<typeof vi.fn>;
+  startConversations: ReturnType<typeof vi.fn>;
   startDeletions: ReturnType<typeof vi.fn>;
 } {
   const startMessages = vi.fn(async () => undefined);
+  const startConversations = vi.fn(async () => undefined);
   const startDeletions = vi.fn(async () => undefined);
   const internal = xmtp as unknown as {
     client: unknown;
     identity: unknown;
     startMessageStream: typeof startMessages;
+    startConversationStream: typeof startConversations;
     startMessageDeletionStream: typeof startDeletions;
     startBackgroundDiscoveryLoop: () => void;
   };
   internal.client = client;
   internal.identity = historyIdentity;
   internal.startMessageStream = startMessages;
+  internal.startConversationStream = startConversations;
   internal.startMessageDeletionStream = startDeletions;
   internal.startBackgroundDiscoveryLoop = vi.fn();
   useXmtpStore.setState({ connectionStatus: 'connected' });
-  return { startMessages, startDeletions };
+  return { startMessages, startConversations, startDeletions };
 }
 
 function stubVerifiedClientBootstrap(xmtp: XmtpClient): {
   startMessages: ReturnType<typeof vi.fn>;
+  startConversations: ReturnType<typeof vi.fn>;
   startDeletions: ReturnType<typeof vi.fn>;
 } {
   const startMessages = vi.fn(async () => undefined);
+  const startConversations = vi.fn(async () => undefined);
   const startDeletions = vi.fn(async () => undefined);
   const internal = xmtp as unknown as {
     syncConversationsInternal: () => Promise<void>;
     syncHistory: () => Promise<void>;
     startMessageStream: typeof startMessages;
+    startConversationStream: typeof startConversations;
     startMessageDeletionStream: typeof startDeletions;
     scanInviteJoinRequests: () => Promise<void>;
     startBackgroundDiscoveryLoop: () => void;
@@ -197,10 +228,11 @@ function stubVerifiedClientBootstrap(xmtp: XmtpClient): {
   internal.syncConversationsInternal = vi.fn(async () => undefined);
   internal.syncHistory = vi.fn(async () => undefined);
   internal.startMessageStream = startMessages;
+  internal.startConversationStream = startConversations;
   internal.startMessageDeletionStream = startDeletions;
   internal.scanInviteJoinRequests = vi.fn(async () => undefined);
   internal.startBackgroundDiscoveryLoop = vi.fn();
-  return { startMessages, startDeletions };
+  return { startMessages, startConversations, startDeletions };
 }
 
 describe('XmtpClient message stream cleanup', () => {
@@ -355,6 +387,175 @@ describe('XmtpClient message stream cleanup', () => {
     });
   });
 
+  it('starts live streams before potentially slow bootstrap sync work', async () => {
+    const xmtp = new XmtpClient();
+    const events: string[] = [];
+    let finishSync: (() => void) | undefined;
+    const syncGate = new Promise<void>((resolve) => {
+      finishSync = resolve;
+    });
+    const client = {
+      inboxId: 'expected-inbox',
+      installationId: 'expected-installation',
+      isReady: true,
+      sendSyncRequest: vi.fn(async () => undefined),
+    };
+    const { startMessages, startConversations, startDeletions } =
+      stubVerifiedClientBootstrap(xmtp);
+    startMessages.mockImplementation(async () => {
+      events.push('messages');
+    });
+    startConversations.mockImplementation(async () => {
+      events.push('conversations');
+    });
+    startDeletions.mockImplementation(async () => {
+      events.push('deletions');
+    });
+    const internal = xmtp as unknown as {
+      syncConversationsInternal: () => Promise<void>;
+      scheduleInboxRecovery: (reason: string) => void;
+      activateVerifiedClient: (
+        activeClient: typeof client,
+        identity: typeof historyIdentity,
+        databasePathMode: 'inbox-default',
+        registration: {
+          inboxId: string;
+          installationId: string;
+          installationRegistered: boolean;
+          existingInstallationCount: number;
+        },
+        options?: { requestHistorySync?: boolean }
+      ) => Promise<unknown>;
+    };
+    internal.syncConversationsInternal = vi.fn(async () => {
+      events.push('sync:start');
+      await syncGate;
+      events.push('sync:end');
+    });
+    // activateVerifiedClient normally runs inside the serialized connect lifecycle.
+    // Keep its detached post-connect recovery from racing this direct unit call.
+    internal.scheduleInboxRecovery = vi.fn();
+
+    const activating = internal.activateVerifiedClient(
+      client,
+      historyIdentity,
+      'inbox-default',
+      {
+        inboxId: client.inboxId,
+        installationId: client.installationId,
+        installationRegistered: true,
+        existingInstallationCount: 1,
+      },
+    );
+    await vi.waitFor(() => expect(events).toContain('sync:start'));
+
+    expect(events).toEqual(['messages', 'conversations', 'deletions', 'sync:start']);
+    finishSync?.();
+    await activating;
+    expect(events[events.length - 1]).toBe('sync:end');
+  });
+
+  it('bounds and single-flights a hung message-stream startup', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    const stream = new ControlledStream({
+      id: 'startup-message',
+      conversationId: 'conversation-1',
+      senderInboxId: 'peer-inbox',
+      content: 'hello',
+      sentAtNs: 1n,
+    });
+    let releaseStartup: ((value: ControlledStream) => void) | undefined;
+    const pendingStartup = new Promise<ControlledStream>((resolve) => {
+      releaseStartup = resolve;
+    });
+    const streamAllMessages = vi.fn(async () => await pendingStartup);
+    const client = {
+      inboxId: 'self-inbox',
+      conversations: { streamAllMessages },
+    };
+    const internal = xmtp as unknown as {
+      client: unknown;
+      startConversationStream: () => Promise<void>;
+      startMessageDeletionStream: () => Promise<void>;
+      ensureMessageStreamsBeforeHistoryRequest: (activeClient: unknown) => Promise<boolean>;
+      messageStreamStartPromise: Promise<void> | null;
+      messageStream: ControlledStream | null;
+      stopMessageStream: () => Promise<void>;
+    };
+    internal.client = client;
+    internal.startConversationStream = vi.fn(async () => undefined);
+    internal.startMessageDeletionStream = vi.fn(async () => undefined);
+
+    const first = internal.ensureMessageStreamsBeforeHistoryRequest(client);
+    const second = internal.ensureMessageStreamsBeforeHistoryRequest(client);
+    await Promise.resolve();
+    expect(streamAllMessages).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
+    expect(streamAllMessages).toHaveBeenCalledOnce();
+
+    const underlyingStartup = internal.messageStreamStartPromise;
+    releaseStartup?.(stream);
+    await underlyingStartup;
+    expect(internal.messageStream).toBe(stream);
+    await internal.stopMessageStream();
+  });
+
+  it('ends a late stream from an invalidated client without clearing a newer startup', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    const staleStream = new ControlledStream({
+      id: 'stale-startup-message',
+      conversationId: 'conversation-1',
+      senderInboxId: 'peer-inbox',
+      content: 'hello',
+      sentAtNs: 1n,
+    });
+    let releaseStartup: ((value: ControlledStream) => void) | undefined;
+    const pendingStartup = new Promise<ControlledStream>((resolve) => {
+      releaseStartup = resolve;
+    });
+    const staleClient = {
+      inboxId: 'stale-inbox',
+      conversations: {
+        streamAllMessages: vi.fn(async () => await pendingStartup),
+      },
+    };
+    const internal = xmtp as unknown as {
+      client: unknown;
+      startConversationStream: () => Promise<void>;
+      startMessageDeletionStream: () => Promise<void>;
+      ensureMessageStreamsBeforeHistoryRequest: (activeClient: unknown) => Promise<boolean>;
+      invalidateStreamStartups: () => void;
+      messageStreamStartPromise: Promise<void> | null;
+      messageStream: ControlledStream | null;
+    };
+    internal.client = staleClient;
+    internal.startConversationStream = vi.fn(async () => undefined);
+    internal.startMessageDeletionStream = vi.fn(async () => undefined);
+
+    const timedStartup = internal.ensureMessageStreamsBeforeHistoryRequest(staleClient);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await expect(timedStartup).resolves.toBe(false);
+
+    const staleStartup = internal.messageStreamStartPromise;
+    expect(staleStartup).not.toBeNull();
+    internal.invalidateStreamStartups();
+    internal.client = { inboxId: 'current-inbox', conversations: {} };
+    const currentStartup = new Promise<void>(() => undefined);
+    internal.messageStreamStartPromise = currentStartup;
+
+    releaseStartup?.(staleStream);
+    await staleStartup;
+
+    expect(staleStream.end).toHaveBeenCalledOnce();
+    expect(internal.messageStream).toBeNull();
+    expect(internal.messageStreamStartPromise).toBe(currentStartup);
+    internal.messageStreamStartPromise = null;
+  });
+
   it('times out a hung device-history request without blocking connection or streams', async () => {
     vi.useFakeTimers();
     const xmtp = new XmtpClient();
@@ -406,8 +607,8 @@ describe('XmtpClient message stream cleanup', () => {
     await vi.advanceTimersByTimeAsync(9_999);
 
     expect(result).toBeUndefined();
-    expect(startMessages).toHaveBeenCalledOnce();
-    expect(startDeletions).toHaveBeenCalledOnce();
+    expect(startMessages).toHaveBeenCalled();
+    expect(startDeletions).toHaveBeenCalled();
     expect(useXmtpStore.getState().connectionStatus).toBe('connected');
 
     await vi.advanceTimersByTimeAsync(1);
@@ -1016,7 +1217,7 @@ describe('XmtpClient message stream cleanup', () => {
   it('propagates conversation sync failures for strict manual syncs', async () => {
     const xmtp = new XmtpClient();
     const failure = new Error('network sync failed');
-    (xmtp as unknown as { client: unknown }).client = {};
+    (xmtp as unknown as { client: unknown }).client = { inboxId: 'self-inbox' };
     (
       xmtp as unknown as { conversationsSyncWithRecovery: () => Promise<void> }
     ).conversationsSyncWithRecovery = vi.fn(async () => {
@@ -1089,6 +1290,190 @@ describe('XmtpClient message stream cleanup', () => {
     expect(scan).not.toHaveBeenCalled();
   });
 
+  it('background recovery backfills messages instead of only refreshing the list', async () => {
+    vi.useFakeTimers();
+    const xmtp = new XmtpClient();
+    (xmtp as unknown as { client: unknown }).client = {
+      inboxId: 'self-inbox',
+    };
+    const startMessages = vi.fn(async () => undefined);
+    const startConversations = vi.fn(async () => undefined);
+    const startDeletions = vi.fn(async () => undefined);
+    const syncConversations = vi.fn(async () => undefined);
+    const syncHistory = vi.fn(async () => undefined);
+    const scan = vi.fn(async () => undefined);
+    const internal = xmtp as unknown as {
+      startMessageStream: typeof startMessages;
+      startConversationStream: typeof startConversations;
+      startMessageDeletionStream: typeof startDeletions;
+      syncConversationsInternal: typeof syncConversations;
+      syncHistory: typeof syncHistory;
+      scanInviteJoinRequests: typeof scan;
+      startBackgroundDiscoveryLoop: () => void;
+      stopBackgroundDiscoveryLoop: () => void;
+      lifecycleTail: Promise<void>;
+    };
+    internal.startMessageStream = startMessages;
+    internal.startConversationStream = startConversations;
+    internal.startMessageDeletionStream = startDeletions;
+    internal.syncConversationsInternal = syncConversations;
+    internal.syncHistory = syncHistory;
+    internal.scanInviteJoinRequests = scan;
+
+    internal.startBackgroundDiscoveryLoop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await internal.lifecycleTail;
+
+    expect(startMessages).toHaveBeenCalledOnce();
+    expect(startConversations).toHaveBeenCalledOnce();
+    expect(startDeletions).toHaveBeenCalledOnce();
+    expect(syncConversations).toHaveBeenCalledOnce();
+    expect(syncHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'recent',
+        skipConversationSync: true,
+      })
+    );
+    expect(scan).toHaveBeenCalledOnce();
+    internal.stopBackgroundDiscoveryLoop();
+  });
+
+  it('marks the one-time retained-history repair only after both durable consumers succeed', async () => {
+    const xmtp = new XmtpClient();
+    const client = { inboxId: 'repair-success-inbox' };
+    const internal = xmtp as unknown as {
+      client: unknown;
+      prepareLegacyHistoryRepair: (inboxId: string) => boolean;
+      legacyHistoryRepairStorageKey: (inboxId: string) => string;
+      legacyHistoryRepairPending: boolean;
+      ensureMessageStreamsBeforeHistoryRequest: () => Promise<boolean>;
+      syncConversationsInternal: ReturnType<typeof vi.fn>;
+      syncHistory: ReturnType<typeof vi.fn>;
+      scheduleInviteJoinRequestScan: () => void;
+      scheduleInboxRecovery: (reason: string) => void;
+      lifecycleTail: Promise<void>;
+    };
+    internal.client = client;
+    const markerKey = internal.legacyHistoryRepairStorageKey(client.inboxId);
+    window.localStorage.removeItem(markerKey);
+    expect(internal.prepareLegacyHistoryRepair(client.inboxId)).toBe(true);
+    internal.ensureMessageStreamsBeforeHistoryRequest = vi.fn(async () => true);
+    internal.syncConversationsInternal = vi.fn(async () => undefined);
+    internal.syncHistory = vi.fn(async () => undefined);
+    internal.scheduleInviteJoinRequestScan = vi.fn();
+    const unregisterMessage = registerXmtpMessageConsumer(async () => undefined);
+    const unregisterSideEffects =
+      registerXmtpDurableSideEffectConsumer(async () => undefined);
+
+    internal.scheduleInboxRecovery('message-consumer-ready');
+    await internal.lifecycleTail;
+
+    expect(internal.syncHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'full', force: true, strict: true })
+    );
+    expect(window.localStorage.getItem(markerKey)).toBe(
+      'durable-message-checkpoints-v1'
+    );
+    expect(internal.legacyHistoryRepairPending).toBe(false);
+    unregisterMessage();
+    unregisterSideEffects();
+    window.localStorage.removeItem(markerKey);
+  });
+
+  it('leaves the retained-history marker pending when the durable consumer changes', async () => {
+    const xmtp = new XmtpClient();
+    const client = { inboxId: 'repair-consumer-change-inbox' };
+    let releaseHistory: (() => void) | undefined;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    const internal = xmtp as unknown as {
+      client: unknown;
+      prepareLegacyHistoryRepair: (inboxId: string) => boolean;
+      legacyHistoryRepairStorageKey: (inboxId: string) => string;
+      legacyHistoryRepairPending: boolean;
+      ensureMessageStreamsBeforeHistoryRequest: () => Promise<boolean>;
+      syncConversationsInternal: ReturnType<typeof vi.fn>;
+      syncHistory: ReturnType<typeof vi.fn>;
+      scheduleInviteJoinRequestScan: () => void;
+      scheduleInboxRecovery: (reason: string) => void;
+      lifecycleTail: Promise<void>;
+    };
+    internal.client = client;
+    const markerKey = internal.legacyHistoryRepairStorageKey(client.inboxId);
+    window.localStorage.removeItem(markerKey);
+    expect(internal.prepareLegacyHistoryRepair(client.inboxId)).toBe(true);
+    internal.ensureMessageStreamsBeforeHistoryRequest = vi.fn(async () => true);
+    internal.syncConversationsInternal = vi.fn(async () => undefined);
+    internal.syncHistory = vi.fn(async () => await historyGate);
+    internal.scheduleInviteJoinRequestScan = vi.fn();
+    const unregisterMessage = registerXmtpMessageConsumer(async () => undefined);
+    const unregisterSideEffects =
+      registerXmtpDurableSideEffectConsumer(async () => undefined);
+
+    internal.scheduleInboxRecovery('message-consumer-ready');
+    await vi.waitFor(() => expect(internal.syncHistory).toHaveBeenCalled());
+    unregisterSideEffects();
+    const unregisterReplacement =
+      registerXmtpDurableSideEffectConsumer(async () => undefined);
+    releaseHistory?.();
+    await internal.lifecycleTail;
+
+    expect(window.localStorage.getItem(markerKey)).toBeNull();
+    expect(internal.legacyHistoryRepairPending).toBe(true);
+    unregisterMessage();
+    unregisterReplacement();
+    window.localStorage.removeItem(markerKey);
+  });
+
+  it('keeps the retained-history repair pending when its marker cannot be stored', () => {
+    const xmtp = new XmtpClient();
+    const inboxId = 'repair-marker-failure-inbox';
+    const internal = xmtp as unknown as {
+      prepareLegacyHistoryRepair: (value: string) => boolean;
+      completeLegacyHistoryRepair: (value: string) => void;
+      legacyHistoryRepairStorageKey: (value: string) => string;
+      legacyHistoryRepairPending: boolean;
+    };
+    const markerKey = internal.legacyHistoryRepairStorageKey(inboxId);
+    window.localStorage.removeItem(markerKey);
+    expect(internal.prepareLegacyHistoryRepair(inboxId)).toBe(true);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new Error('storage unavailable');
+    });
+
+    internal.completeLegacyHistoryRepair(inboxId);
+
+    expect(internal.legacyHistoryRepairPending).toBe(true);
+    expect(window.localStorage.getItem(markerKey)).toBeNull();
+  });
+
+  it('surfaces manual inbox repair failures after attempting retained history', async () => {
+    const xmtp = new XmtpClient();
+    (xmtp as unknown as { client: unknown }).client = {};
+    const discoveryFailure = new Error('conversation discovery failed');
+    const syncConversations = vi.fn(async () => {
+      throw discoveryFailure;
+    });
+    const syncHistory = vi.fn(async () => undefined);
+    const internal = xmtp as unknown as {
+      syncConversationsInternal: typeof syncConversations;
+      syncHistory: typeof syncHistory;
+    };
+    internal.syncConversationsInternal = syncConversations;
+    internal.syncHistory = syncHistory;
+
+    await expect(xmtp.syncInbox()).rejects.toThrow(
+      'Inbox repair completed with network or persistence errors'
+    );
+    expect(syncConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true, strict: true })
+    );
+    expect(syncHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'full', strict: true })
+    );
+  });
+
   it('ends the message stream before closing the XMTP client', async () => {
     vi.useFakeTimers();
     const xmtp = new XmtpClient();
@@ -1145,7 +1530,7 @@ describe('XmtpClient message stream cleanup', () => {
     expect(events).toEqual(['deletion-stream:end', 'client:close']);
   });
 
-  it('waits for in-flight message handling before closing the XMTP client', async () => {
+  it('does not let slow profile metadata block message transport shutdown', async () => {
     vi.useFakeTimers();
     const xmtp = new XmtpClient();
     const events: string[] = [];
@@ -1181,8 +1566,13 @@ describe('XmtpClient message stream cleanup', () => {
           markConsumerStarted?.();
         })
     );
-    (xmtp as unknown as { dispatchConvosJoinRequest: () => boolean }).dispatchConvosJoinRequest =
-      () => false;
+    (
+      xmtp as unknown as {
+        dispatchConvosJoinRequest: () => Promise<boolean>;
+      }
+    ).dispatchConvosJoinRequest = async () => false;
+    (xmtp as unknown as { isProfileSideChannelMessage: () => boolean }).isProfileSideChannelMessage =
+      () => true;
     (xmtp as unknown as { processProfileSideChannel: typeof processProfile }).processProfileSideChannel =
       processProfile;
 
@@ -1190,15 +1580,15 @@ describe('XmtpClient message stream cleanup', () => {
     await consumerStarted;
 
     const disconnect = xmtp.disconnect();
-    await Promise.resolve();
-    expect(stream.end).toHaveBeenCalledOnce();
-    expect(close).not.toHaveBeenCalled();
-
-    releaseConsumer?.(true);
     await vi.runAllTimersAsync();
     await disconnect;
 
-    expect(events).toEqual(['stream:end', 'consumer:done', 'client:close']);
+    expect(stream.end).toHaveBeenCalledOnce();
+    expect(events).toEqual(['stream:end', 'client:close']);
+
+    releaseConsumer?.(true);
+    await Promise.resolve();
+    expect(events).toEqual(['stream:end', 'client:close', 'consumer:done']);
   });
 
   it('dispatches an application message sent by another installation in the same inbox', async () => {
@@ -1218,6 +1608,11 @@ describe('XmtpClient message stream cleanup', () => {
 
     await xmtp.startMessageStream();
     const event = await received;
+    const streamAllMessages = (
+      xmtp as unknown as {
+        client: { conversations: { streamAllMessages: ReturnType<typeof vi.fn> } };
+      }
+    ).client.conversations.streamAllMessages;
 
     expect(event.detail).toMatchObject({
       conversationId: 'conversation-1',
@@ -1228,8 +1623,119 @@ describe('XmtpClient message stream cleanup', () => {
       },
       isHistory: false,
     });
+    expect(streamAllMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disableSync: true,
+        onRestart: expect.any(Function),
+      })
+    );
 
     await xmtp.disconnect();
+  });
+
+  it('ignores a late message yielded by a stream from an invalidated client', async () => {
+    const xmtp = new XmtpClient();
+    const stream = new ControlledStream();
+    attachStreamingClient(xmtp, stream, vi.fn(async () => undefined));
+    const received = vi.fn();
+    window.addEventListener('xmtp:message', received);
+
+    await xmtp.startMessageStream();
+    const internal = xmtp as unknown as {
+      client: unknown;
+      invalidateStreamStartups: () => void;
+      messageStreamTask: Promise<void> | null;
+    };
+    internal.invalidateStreamStartups();
+    internal.client = { inboxId: 'replacement-inbox', conversations: {} };
+    stream.emit({
+      id: 'stale-message',
+      conversationId: 'old-conversation',
+      senderInboxId: 'old-peer',
+      content: 'must not cross inboxes',
+      sentAtNs: 1n,
+    });
+    await internal.messageStreamTask;
+
+    expect(received).not.toHaveBeenCalled();
+    expect(stream.end).toHaveBeenCalledOnce();
+    window.removeEventListener('xmtp:message', received);
+  });
+
+  it('ignores a late deletion yielded by a stream from an invalidated client', async () => {
+    retentionMocks.deleteLocalMessage.mockClear();
+    const xmtp = new XmtpClient();
+    const stream = new ControlledDeletionStream();
+    const client = {
+      inboxId: 'old-inbox',
+      conversations: {
+        streamMessageDeletions: vi.fn(async () => stream),
+      },
+    };
+    const internal = xmtp as unknown as {
+      client: unknown;
+      invalidateStreamStartups: () => void;
+      startMessageDeletionStream: () => Promise<void>;
+      messageDeletionStreamTask: Promise<void> | null;
+    };
+    internal.client = client;
+    await internal.startMessageDeletionStream();
+    internal.invalidateStreamStartups();
+    internal.client = { inboxId: 'replacement-inbox', conversations: {} };
+    stream.emit('old-message-id');
+    await internal.messageDeletionStreamTask;
+
+    expect(retentionMocks.deleteLocalMessage).not.toHaveBeenCalled();
+    expect(stream.end).toHaveBeenCalledOnce();
+  });
+
+  it('ignores reaction backfill that finishes after the active inbox changes', async () => {
+    const xmtp = new XmtpClient();
+    let releaseMessages: ((messages: unknown[]) => void) | undefined;
+    const messagesGate = new Promise<unknown[]>((resolve) => {
+      releaseMessages = resolve;
+    });
+    const messages = vi.fn(async () => await messagesGate);
+    const oldClient = {
+      inboxId: 'old-inbox',
+      conversations: {
+        getConversationById: vi.fn(async () => ({ messages })),
+      },
+    };
+    const internal = xmtp as unknown as { client: unknown };
+    internal.client = oldClient;
+    const consume = vi.fn(async () => undefined);
+    const unregister = registerXmtpDurableSideEffectConsumer(consume);
+
+    try {
+      const pending = xmtp.backfillReactionsForConversation('shared-conversation');
+      await vi.waitFor(() => expect(messages).toHaveBeenCalledOnce());
+      internal.client = {
+        inboxId: 'replacement-inbox',
+        conversations: {},
+      };
+      releaseMessages?.([
+        {
+          id: 'target-message',
+          conversationId: 'shared-conversation',
+          reactions: [
+            {
+              senderInboxId: 'old-peer',
+              content: {
+                content: '👍',
+                reference: 'target-message',
+                action: 'added',
+              },
+            },
+          ],
+        },
+      ]);
+      await pending;
+
+      expect(consume).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+    }
   });
 
   it('dispatches a group update sent by another installation in the same inbox', async () => {
@@ -1267,6 +1773,7 @@ describe('XmtpClient message stream cleanup', () => {
     expect(event.detail).toEqual({
       conversationId: 'group-1',
       content,
+      ownerInboxId: 'self-inbox',
     });
 
     await xmtp.disconnect();
@@ -1351,6 +1858,48 @@ describe('XmtpClient message stream cleanup', () => {
       '[XMTP] Error closing message deletion stream:',
       streamError,
     );
+  });
+
+  it('closes the client when message stream end never settles', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const xmtp = new XmtpClient();
+    const end = vi.fn(async () => await new Promise<IteratorResult<unknown>>(() => undefined));
+    const close = vi.fn(async () => undefined);
+    attachStream(xmtp, { isDone: false, end });
+    attachClient(xmtp, close);
+
+    const disconnect = xmtp.disconnect();
+    await vi.advanceTimersByTimeAsync(5_300);
+    await disconnect;
+
+    expect(end).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(console.error).toHaveBeenCalledWith(
+      '[XMTP] Error closing message stream:',
+      expect.objectContaining({ name: 'XmtpOperationTimeoutError' })
+    );
+  });
+
+  it('settles disconnect but requires reload when client close never settles', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const xmtp = new XmtpClient();
+    const close = vi.fn(
+      async () => await new Promise<void>(() => undefined)
+    );
+    attachClient(xmtp, close);
+
+    const disconnect = xmtp.disconnect();
+    await vi.advanceTimersByTimeAsync(5_300);
+    await expect(disconnect).resolves.toBeUndefined();
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(
+      (xmtp as unknown as { databaseClosePending: Promise<void> | null })
+        .databaseClosePending
+    ).not.toBeNull();
+    expect(useXmtpStore.getState().error).toContain('Reload this tab');
   });
 
   it('closes the current client before statically revoking its installation', async () => {

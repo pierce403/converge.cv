@@ -10,6 +10,7 @@ const baseConversation = (id: string, overrides: Partial<Conversation> = {}): Co
   pinned: false,
   archived: false,
   createdAt: overrides.createdAt ?? Date.now(),
+  isGroup: overrides.isGroup ?? false,
   ...overrides,
 });
 
@@ -72,5 +73,21 @@ describe('conversation store', () => {
     expect(conversations).toHaveLength(2);
     expect(conversations.find((c) => c.peerId === 'peer-a')?.id).toBe('server-3');
     expect(conversations.find((c) => c.peerId === 'peer-b')?.id).toBe('server-2');
+  });
+
+  it('keeps provisional conversations distinct from authoritative DMs', () => {
+    const store = useConversationStore.getState();
+    store.setConversations([
+      baseConversation('dm-1', { peerId: 'peer-a', isGroup: false }),
+      baseConversation('possible-group-1', {
+        peerId: 'peer-a',
+        isGroup: undefined,
+      }),
+    ]);
+
+    expect(useConversationStore.getState().conversations.map((item) => item.id)).toEqual([
+      'dm-1',
+      'possible-group-1',
+    ]);
   });
 });

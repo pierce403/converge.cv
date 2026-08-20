@@ -110,7 +110,10 @@ model.
 - Group chat composer supports @-mentions with live member suggestions; mentions render inline with highlight styling and incoming messages that mention you are visually emphasized.
 - Conversations load the most recent messages first and lazily prepend older retained history only when the user scrolls upward, keeping large threads fast.
 - Conversation list updates are now idempotent while history is loading: duplicate DM rows are collapsed by conversation ID and canonical peer key so replayed/backfilled message events cannot flood the chat list.
-- New inbound conversations are now discovered continuously while connected: XMTP runs a throttled background discovery sync and immediately refreshes the in-memory chat list from IndexedDB after sync writes, so first-time DMs appear without reload/manual resync.
+- New inbound conversations are discovered by a dedicated XMTP conversation stream while connected, so a first DM/group can appear immediately. The message stream subscribes before catch-up begins, preventing a message sent during startup sync from falling between the read and subscription.
+- Startup, stream restart, reconnect, browser-online, page-show, visible-tab resume, and the periodic maintenance pass replay missed retained messages after refreshing conversation discovery. Catch-up advances only a successfully ingested per-conversation watermark; a newer conversation-list check cannot hide an older missed message.
+- Live/backfilled messages, system messages, reactions, and group updates enter one ordered persistence queue. Events decoded before the authenticated app shell mounts are buffered, tagged with their owning inbox, and drained only after the durable consumers are ready; stale work from a previously selected inbox cannot write into the active inbox. Message IDs deduplicate replay.
+- The first repaired release runs one versioned full retained-history replay per inbox to recover messages hidden by legacy checkpoints. It records completion only after the network replay and every queued durable write succeed, so a partial attempt automatically remains eligible for a later retry.
 - Messages and group updates authored by another installation of the active inbox are processed instead of being discarded as local echoes. Message IDs remain the deduplication boundary for events also produced by the current browser.
 - Read receipts are emitted only for non-self DMs and are throttled by last send time, preventing cross-client metadata spam (for example repeated `{}` rows in xmtp.chat during self-chat testing).
 - Desktop-width chat routes now render a persistent split view: conversation list on the left, selected conversation on the right, with mobile behavior unchanged.
@@ -154,7 +157,7 @@ model.
 - The resolved lockfile must return zero findings from npm's current bulk advisory API alongside the normal typecheck, lint, test, and production-build gates. The pinned pnpm 10 client now receives HTTP 410 from npm's retired legacy audit endpoint; use a current pnpm 11 audit client until the repository performs a deliberate package-manager migration.
 
 ## Conversation Controls
-- Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp.
+- Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp. Mute affects notifications only and never hides or deletes the conversation; legacy mute-as-deletion markers are removed when encountered so new messages can arrive normally.
 - A destructive “Delete conversation” option removes the thread locally and navigates back to the inbox to prevent resurface during resyncs.
 
 ## Profile Sharing and Enrichment
@@ -209,10 +212,13 @@ model.
 
 ## Local-First Operation
 - Conversation lists, messages, profiles, and inbox-scoped data are persisted in IndexedDB (via Dexie); the small cross-inbox registry is stored in localStorage so the switcher can choose a namespace before opening it.
-- Incoming streams apply updates to the local store first, then reconcile with the network by explicitly syncing conversations. Full Sync keeps the active IndexedDB/OPFS databases intact, performs a strict retained-history backfill, and fails visibly on error. Disconnect drains both message and deletion `AsyncStreamProxy` instances with their asynchronous `end()` API before closing the client.
+- Incoming message, conversation, and deletion streams reconcile through the active inbox's serialized lifecycle. Because Browser SDK sync calls cannot be cancelled, timed-out stateful operations remain single-flight so a retry cannot overlap the same worker mutation.
+- **Check now** force-refreshes conversation discovery and replays the complete retained window into IndexedDB. Chat pull-to-refresh likewise waits for the selected conversation's network replay to finish persisting before it reloads local rows. Full Sync remains a strict, non-destructive repair that keeps the active IndexedDB/OPFS databases intact and fails visibly on error.
+- Disconnect drains the message, conversation, and deletion `AsyncStreamProxy` instances with their asynchronous `end()` API before closing the client.
+- If the XMTP database worker does not finish closing within its deadline, Converge keeps that inbox locked and asks for a tab reload instead of opening a second worker against the same local database.
 - Private keys, mnemonics, decrypted app data, and the Browser SDK database are stored locally without encryption at rest. Keyfile exports are plaintext sensitive material.
 - New identities use inbox-aware XMTP database paths; legacy identities retain their existing address-based path to avoid installation churn during migration.
-- Recent history backfill deduplicates stored messages, preserves read state for existing threads, and narrows sync windows using per-conversation timestamps to avoid replaying old messages as unread.
+- Recent history backfill deduplicates stored messages, preserves read state for existing threads, and narrows sync windows using successfully ingested per-conversation timestamps. The inbox-level last-check time throttles conversation-list work only and never excludes message history.
 
 ## Static Hosting and PWA Polish
 - The app is delivered primarily as static HTML/CSS/JS through Cloudflare Workers Static Assets. Cloudflare provides native SPA fallback, immutable hashed-asset caching, and a no-cache root service worker; one narrow Worker route streams opaque XMTP device-history uploads/downloads to the fixed XMTP service so browser CORS failures cannot block that optional feature. The route stores nothing and cannot decrypt the archive. Offline app-shell precaching and install/update prompts remain disabled while XMTP stability work continues.

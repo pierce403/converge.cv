@@ -8,7 +8,10 @@ import type { Conversation } from '@/types';
 const INBOX_ID_WITH_0X_REGEX = /^0x[0-9a-f]{64}$/i;
 
 const normalizePeerKey = (conversation: Conversation): string | null => {
-  if (conversation.isGroup) {
+  // Only an explicitly classified DM is safe to peer-dedupe. Provisional
+  // conversations have `isGroup === undefined`; treating that as a DM can
+  // collapse a new group into an unrelated one-to-one conversation.
+  if (conversation.isGroup !== false) {
     return null;
   }
   const peerId = conversation.peerId?.trim();

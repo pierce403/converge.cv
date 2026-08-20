@@ -266,6 +266,14 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
                 .then((result) => {
                   setHasMoreMessages(result.hasMore);
                 })
+                .catch((error) => {
+                  console.warn('[ConversationView] Inbox refresh failed:', error);
+                  window.dispatchEvent(
+                    new CustomEvent('ui:toast', {
+                      detail: 'Inbox refresh failed. Check your connection and try again.',
+                    })
+                  );
+                })
                 .finally(() => {
                   setIsRefreshing(false);
                   isPulling = false;
@@ -313,6 +321,14 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
           loadMessages(id, true)
             .then((result) => {
               setHasMoreMessages(result.hasMore);
+            })
+            .catch((error) => {
+              console.warn('[ConversationView] Inbox refresh failed:', error);
+              window.dispatchEvent(
+                new CustomEvent('ui:toast', {
+                  detail: 'Inbox refresh failed. Check your connection and try again.',
+                })
+              );
             })
             .finally(() => {
               setIsRefreshing(false);

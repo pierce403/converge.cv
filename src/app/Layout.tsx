@@ -12,8 +12,15 @@ import { getStorage } from '@/lib/storage';
 import { shouldRetainMessage } from '@/lib/message-retention-policy';
 import { getXmtpClient } from '@/lib/xmtp';
 import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation';
-import type { Conversation } from '@/types';
-import type { XmtpMessage } from '@/lib/xmtp';
+import type { Conversation, Message } from '@/types';
+import {
+  registerXmtpDurableSideEffectConsumer,
+  registerXmtpMessageConsumer,
+  type XmtpGroupUpdatedEventDetail,
+  type XmtpMessageEventDetail,
+  type XmtpReactionEventDetail,
+  type XmtpSystemEventDetail,
+} from '@/lib/xmtp/message-events';
 import buildInfo from '@/build-info.json';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
@@ -53,6 +60,8 @@ export function Layout() {
     state.conversations.map((conversation) => conversation.id).sort().join('|')
   );
   const { receiveMessage } = useMessages();
+  const receiveMessageRef = useRef(receiveMessage);
+  receiveMessageRef.current = receiveMessage;
   const loadContacts = useContactStore((state) => state.loadContacts);
   const { signMessage: walletSignMessage, chainId: walletChainId, isConnected: walletConnected } = useWalletConnection();
   const [showPersonalizationReminder, setShowPersonalizationReminder] = useState(false);
@@ -157,7 +166,7 @@ export function Layout() {
   const handleCheckInbox = async () => {
     setIsChecking(true);
     try {
-      await getXmtpClient().syncConversations({ force: true, reason: 'manual' });
+      await getXmtpClient().syncInbox();
     } catch (e) {
       console.error('Failed to check inbox', e);
       try {
@@ -741,16 +750,26 @@ export function Layout() {
     void run();
   }, [identity, connectionStatus]);
 
-  // Global message listener - handles ALL incoming XMTP messages
+  // Global message consumer - handles ALL incoming XMTP messages
   // Intentionally register once; store/state is accessed via getState() where needed.
   useEffect(() => {
-    const handleIncomingMessage = async (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        conversationId: string;
-        message: XmtpMessage;
-        isHistory?: boolean;
-      }>;
-      const { conversationId, message, isHistory } = customEvent.detail;
+    const handleIncomingMessage = async ({
+      conversationId,
+      message,
+      isHistory,
+      ownerInboxId,
+    }: XmtpMessageEventDetail) => {
+      const activeInboxId = getXmtpClient().getInboxId();
+      const authenticatedInboxId = useAuthStore.getState().identity?.inboxId;
+      const currentOwnerInboxId = activeInboxId ?? authenticatedInboxId;
+      if (
+        ownerInboxId &&
+        (!currentOwnerInboxId ||
+          ownerInboxId.toLowerCase() !== currentOwnerInboxId.toLowerCase())
+      ) {
+        console.info('[Layout] Skipping message queued by a superseded inbox:', message.id);
+        return;
+      }
 
       if (!shouldRetainMessage(message)) {
         return;
@@ -765,15 +784,12 @@ export function Layout() {
       try {
         const senderInboxId = message.senderAddress;
         const storage = await getStorage();
+        let storedReplayMessage: Message | undefined;
         if (await storage.isConversationDeleted(conversationId)) {
           console.info('[Layout] Skipping message for deleted conversation:', conversationId);
           return;
         }
         const normalizedSender = senderInboxId?.toLowerCase?.();
-        if (normalizedSender && (await storage.isPeerDeleted(normalizedSender))) {
-          console.info('[Layout] Skipping message for peer marked as deleted:', normalizedSender);
-          return;
-        }
 
         // Avoid re-processing messages already stored (history backfill can replay)
         try {
@@ -782,14 +798,14 @@ export function Layout() {
           if (!alreadyInMemory) {
             const existing = await storage.getMessage(message.id);
             if (existing) {
+              storedReplayMessage = existing;
               const existingConversation =
                 useConversationStore.getState().conversations.find((c) => c.id === conversationId) ??
                 (await storage.getConversation(conversationId));
               if (existingConversation && !useConversationStore.getState().conversations.find((c) => c.id === conversationId)) {
                 addConversation(existingConversation);
               }
-              console.info('[Layout] Skipping duplicate message already stored:', message.id);
-              return;
+              console.info('[Layout] Repairing message already stored but absent from memory:', message.id);
             }
           } else {
             console.info('[Layout] Skipping duplicate message already in memory:', message.id);
@@ -837,49 +853,32 @@ export function Layout() {
           }
         }
 
-        // A message only identifies its sender, not whether its conversation is a DM
-        // or group. Ask XMTP before applying sender-based DM assumptions so a new
-        // group cannot become a permanently DM-shaped local record.
-        if (!conversation) {
-          try {
-            const groupDetails = await getXmtpClient().fetchGroupDetails(conversationId);
-            if (groupDetails) {
-              const createdAt = message.sentAt || Date.now();
-              const groupConversation: Conversation = {
-                id: conversationId,
-                peerId: conversationId,
-                topic: conversationId,
-                createdAt,
-                lastMessageAt: createdAt,
-                lastMessagePreview: '',
-                unreadCount: 0,
-                pinned: false,
-                archived: false,
-                lastMessageId: message.id,
-                lastMessageSender: message.senderAddress,
-                lastReadAt: 0,
-                ...groupDetailsToConversationUpdates(groupDetails),
-              };
-              addConversation(groupConversation);
-              await storage.putConversation(groupConversation);
-              conversation = groupConversation;
-              console.log('[Layout] Classified unknown XMTP conversation as a group:', conversationId);
-            }
-          } catch (classificationError) {
-            console.warn('[Layout] Failed to classify unknown XMTP conversation:', classificationError);
-          }
+        if (
+          conversation?.isGroup === false &&
+          normalizedSender &&
+          (await storage.isPeerDeleted(normalizedSender))
+        ) {
+          console.info(
+            '[Layout] Skipping DM message for peer marked as deleted:',
+            normalizedSender
+          );
+          return;
         }
 
+        let hydrateProvisionalGroup = false;
         if (!conversation) {
           console.log('[Layout] Creating new conversation for:', conversationId);
 
-          const peerId = peerKeyBase ?? senderInboxId ?? 'unknown-peer';
-          // Avoid creating a self-DM conversation
-          const myInbox = getXmtpClient().getInboxId()?.toLowerCase();
-          if (peerId && myInbox && peerId.toLowerCase() === myInbox) {
-            console.log('[Layout] Skipping creation of self-DM conversation');
-            return;
-          }
+          const candidatePeerId = peerKeyBase ?? senderInboxId ?? 'unknown-peer';
+          const myInbox = currentOwnerInboxId?.toLowerCase();
+          // Same-inbox authorship can be another installation sending into a
+          // group. If classification is temporarily unavailable, preserve the
+          // message under its authoritative conversation ID and let discovery
+          // reconcile the provisional shape later.
+          const senderIsSelf = Boolean(
+            candidatePeerId && myInbox && candidatePeerId.toLowerCase() === myInbox
+          );
+          const peerId = senderIsSelf ? conversationId : candidatePeerId;
           const newConversation: Conversation = {
             id: conversationId,
             peerId,
@@ -889,37 +888,23 @@ export function Layout() {
             unreadCount: 0,
             pinned: false,
             archived: false,
-            displayName: resolvedDisplayName,
-            displayAvatar: resolvedAvatar,
+            displayName: senderIsSelf ? 'Conversation' : resolvedDisplayName,
+            displayAvatar: senderIsSelf ? undefined : resolvedAvatar,
             lastMessageId: message.id,
             lastMessageSender: message.senderAddress,
             lastReadAt: 0,
           };
 
-          addConversation(newConversation);
           await storage.putConversation(newConversation);
+          addConversation(newConversation);
 
           console.log('[Layout] ✅ New conversation created:', newConversation);
 
           conversation = newConversation;
-          // Deduplicate: remove any other DM with same peer id
-          try {
-            const store = useConversationStore.getState();
-            const peerKey = (peerKeyBase ?? peerId)?.toLowerCase?.();
-            if (peerKey) {
-              const dupes = store.conversations.filter(
-                (c) => !c.isGroup && c.id !== newConversation.id && c.peerId.toLowerCase() === peerKey
-              );
-              for (const d of dupes) {
-                store.removeConversation(d.id);
-                try {
-                  await storage.deleteConversation(d.id);
-                } catch (e) {
-                  /* ignore */
-                }
-              }
-            }
-          } catch (e) { /* ignore */ }
+          hydrateProvisionalGroup = true;
+          // The shape is not authoritative until XMTP metadata resolves. Do not
+          // run peer-based DM de-duplication here: a first group message from an
+          // existing DM peer would otherwise delete that legitimate DM.
         } else {
           // Update display fields using the PEER's profile, not the sender of this message.
           const contactStoreNow = useContactStore.getState();
@@ -948,43 +933,104 @@ export function Layout() {
             conversation = { ...conversation, ...updates } as Conversation;
           }
           // Deduplicate against existing by peer id also when conversation already existed
-          try {
-            const store = useConversationStore.getState();
-            const peerKey = (conversation!.peerId ?? peerKeyBase)?.toLowerCase?.();
-            if (peerKey) {
-              const dupes = store.conversations.filter(
-                (c) => !c.isGroup && c.id !== conversation!.id && c.peerId.toLowerCase() === peerKey
-              );
-              for (const d of dupes) {
-                store.removeConversation(d.id);
-                try {
-                  await storage.deleteConversation(d.id);
-                } catch (e) {
-                  /* ignore */
+          if (conversation.isGroup === false) {
+            try {
+              const store = useConversationStore.getState();
+              const peerKey = (conversation.peerId ?? peerKeyBase)?.toLowerCase?.();
+              if (peerKey) {
+                const dupes = store.conversations.filter(
+                  (c) =>
+                    c.isGroup === false &&
+                    c.id !== conversation!.id &&
+                    c.peerId.toLowerCase() === peerKey
+                );
+                for (const d of dupes) {
+                  store.removeConversation(d.id);
+                  try {
+                    await storage.deleteConversation(d.id);
+                  } catch (e) {
+                    /* ignore */
+                  }
                 }
               }
-            }
-          } catch (e) { /* ignore */ }
+            } catch (e) { /* ignore */ }
+          }
         }
 
         console.log('[Layout] Processing message with receiveMessage()');
-        await receiveMessage(conversationId, message, { isHistory: Boolean(isHistory) });
+        if (storedReplayMessage) {
+          // Repair any pre-atomic partial write, then expose the confirmed
+          // durable row to Zustand. This also heals users affected by older
+          // builds where the message committed but its preview/UI update did not.
+          await storage.putMessage(storedReplayMessage);
+          useMessageStore
+            .getState()
+            .addMessage(conversationId, storedReplayMessage);
+        } else {
+          await receiveMessageRef.current(conversationId, message, {
+            isHistory: Boolean(isHistory),
+          });
+        }
 
         console.log('[Layout] ✅ Message processed successfully');
+
+        // Group metadata is useful, but it is not part of the durable delivery
+        // critical path. Persist the message first, then reconcile a provisional
+        // conversation asynchronously so a slow roster/permissions request can
+        // never hold up later incoming messages.
+        if (hydrateProvisionalGroup) {
+          const expectedOwnerInboxId = ownerInboxId ?? currentOwnerInboxId;
+          void getXmtpClient()
+            .fetchGroupDetails(conversationId)
+            .then(async (groupDetails) => {
+              if (!groupDetails) return;
+              const latestOwnerInboxId =
+                getXmtpClient().getInboxId() ??
+                useAuthStore.getState().identity?.inboxId;
+              if (
+                expectedOwnerInboxId &&
+                (!latestOwnerInboxId ||
+                  expectedOwnerInboxId.toLowerCase() !==
+                    latestOwnerInboxId.toLowerCase())
+              ) {
+                return;
+              }
+              const currentStorage = await getStorage();
+              const storedConversation =
+                await currentStorage.getConversation(conversationId);
+              if (!storedConversation) return;
+              const updates = groupDetailsToConversationUpdates(
+                groupDetails,
+                storedConversation
+              );
+              useConversationStore
+                .getState()
+                .updateConversation(conversationId, updates);
+              await currentStorage.putConversation({
+                ...storedConversation,
+                ...updates,
+              });
+            })
+            .catch((classificationError) => {
+              console.warn(
+                '[Layout] Failed to hydrate provisional XMTP conversation:',
+                classificationError
+              );
+            });
+        }
       } catch (error) {
         console.error('[Layout] Failed to handle incoming message:', error);
+        throw error;
       }
     };
 
-    console.log('[Layout] 🎧 Global message listener registered');
-    window.addEventListener('xmtp:message', handleIncomingMessage);
+    console.log('[Layout] 🎧 Global message consumer registered');
+    const unregisterMessageConsumer = registerXmtpMessageConsumer(handleIncomingMessage);
     // Also handle system messages (e.g., membership changes)
-    const handleSystemMessage = async (event: Event) => {
-      const custom = event as CustomEvent<{
-        conversationId: string;
-        system: { id: string; senderInboxId?: string; body: string; sentAt?: number };
-      }>;
-      const { conversationId, system } = custom.detail;
+    const handleSystemMessage = async ({
+      conversationId,
+      system,
+    }: XmtpSystemEventDetail) => {
       try {
         const sentAt = system.sentAt || Date.now();
         if (!shouldRetainMessage({ sentAt })) {
@@ -1006,8 +1052,8 @@ export function Layout() {
           status: 'delivered' as const,
           reactions: [],
         };
-        useMessageStore.getState().addMessage(conversationId, msg);
         await storage.putMessage(msg);
+        useMessageStore.getState().addMessage(conversationId, msg);
         const currentLastMessageAt =
           useConversationStore.getState().conversations.find((c) => c.id === conversationId)?.lastMessageAt ??
           (await storage.getConversation(conversationId))?.lastMessageAt ??
@@ -1020,20 +1066,13 @@ export function Layout() {
         }
       } catch (err) {
         console.warn('[Layout] Failed to handle system message', err);
+        throw err;
       }
     };
-    window.addEventListener('xmtp:system', handleSystemMessage);
 
     // Handle inbound reactions and aggregate onto the target message
-    const handleReaction = async (event: Event) => {
+    const handleReaction = async (detail: XmtpReactionEventDetail) => {
       try {
-        const custom = event as CustomEvent<{
-          conversationId: string;
-          referenceMessageId: string;
-          emoji: string;
-          action: string;
-          senderInboxId?: string;
-        }>;
         const empty = {
           conversationId: '',
           referenceMessageId: '',
@@ -1041,48 +1080,45 @@ export function Layout() {
           action: '',
           senderInboxId: '' as string | undefined,
         };
-        const { conversationId, referenceMessageId, emoji, action, senderInboxId } = custom.detail || empty;
+        const { conversationId, referenceMessageId, emoji, action, senderInboxId } = detail || empty;
         if (!conversationId || !referenceMessageId || !emoji) return;
 
         const state = useMessageStore.getState();
         const msgs = state.messagesByConversation[conversationId] || [];
-        const target = msgs.find((m) => m.id === referenceMessageId);
+        const storage = await getStorage();
+        const inMemoryTarget = msgs.find((m) => m.id === referenceMessageId);
+        const target = inMemoryTarget ?? (await storage.getMessage(referenceMessageId));
         if (!target) return;
         const mineInbox = getXmtpClient().getInboxId()?.toLowerCase();
         const sender = (senderInboxId || '').toLowerCase();
         const current = target.reactions || [];
         if ((action || 'added').toLowerCase() === 'removed') {
           const filtered = current.filter((r) => !(r.emoji === emoji && r.sender?.toLowerCase?.() === sender));
-          state.updateMessage(referenceMessageId, { reactions: filtered });
-          try {
-            const storage = await getStorage();
-            await storage.updateMessageReactions(referenceMessageId, filtered);
-          } catch {
-            // ignore persist failure
+          await storage.updateMessageReactions(referenceMessageId, filtered);
+          if (inMemoryTarget) {
+            state.updateMessage(referenceMessageId, { reactions: filtered });
           }
         } else {
           // add, but enforce single instance per emoji per sender
           const filtered = current.filter((r) => !(r.emoji === emoji && r.sender?.toLowerCase?.() === sender));
           filtered.push({ emoji, sender: senderInboxId || mineInbox || 'peer', timestamp: Date.now() });
-          state.updateMessage(referenceMessageId, { reactions: filtered });
-          try {
-            const storage = await getStorage();
-            await storage.updateMessageReactions(referenceMessageId, filtered);
-          } catch {
-            // ignore persist failure
+          await storage.updateMessageReactions(referenceMessageId, filtered);
+          if (inMemoryTarget) {
+            state.updateMessage(referenceMessageId, { reactions: filtered });
           }
         }
       } catch (err) {
         console.warn('[Layout] Failed to handle reaction', err);
+        throw err;
       }
     };
-    window.addEventListener('xmtp:reaction', handleReaction);
 
     // Handle group metadata updates (name/image/description and membership changes)
-    const handleGroupUpdated = async (event: Event) => {
+    const handleGroupUpdated = async ({
+      conversationId,
+      content,
+    }: XmtpGroupUpdatedEventDetail) => {
       try {
-        const custom = event as CustomEvent<{ conversationId: string; content: unknown }>;
-        const { conversationId, content } = custom.detail || {};
         if (!conversationId) return;
 
         // Attempt a lightweight local patch first, then refresh every group update
@@ -1131,7 +1167,7 @@ export function Layout() {
 
         // Even metadata events are refreshed authoritatively. This also fills member
         // state and heals records created by older versions as DM-shaped entries.
-        try {
+        void (async () => {
           const xmtp = getXmtpClient();
           const details = await xmtp.fetchGroupDetails(conversationId);
           if (details) {
@@ -1142,14 +1178,40 @@ export function Layout() {
               useConversationStore.getState().updateConversation(conversationId, authoritative);
             }
           }
-        } catch (err) {
+        })().catch((err) => {
           console.warn('[Layout] Failed to refresh group details after update', err);
-        }
+        });
       } catch (err) {
         console.warn('[Layout] Failed to handle xmtp:group-updated event', err);
+        throw err;
       }
     };
-    window.addEventListener('xmtp:group-updated', handleGroupUpdated);
+
+    const unregisterDurableSideEffectConsumer =
+      registerXmtpDurableSideEffectConsumer(async (effect) => {
+        const activeInboxId =
+          getXmtpClient().getInboxId() ??
+          useAuthStore.getState().identity?.inboxId;
+        if (
+          effect.detail.ownerInboxId &&
+          (!activeInboxId ||
+            effect.detail.ownerInboxId.toLowerCase() !==
+              activeInboxId.toLowerCase())
+        ) {
+          console.info(
+            '[Layout] Skipping durable side effect queued by a superseded inbox:',
+            effect.type
+          );
+          return;
+        }
+        if (effect.type === 'system') {
+          await handleSystemMessage(effect.detail);
+        } else if (effect.type === 'reaction') {
+          await handleReaction(effect.detail);
+        } else {
+          await handleGroupUpdated(effect.detail);
+        }
+      });
 
     // Handle read receipts for status updates (no bubbles)
     const handleReadReceipt = async (event: Event) => {
@@ -1181,12 +1243,10 @@ export function Layout() {
     window.addEventListener('xmtp:read-receipt', handleReadReceipt);
 
     return () => {
-      console.log('[Layout] 🔇 Global message listener unregistered');
-      window.removeEventListener('xmtp:message', handleIncomingMessage);
-      window.removeEventListener('xmtp:system', handleSystemMessage);
+      console.log('[Layout] 🔇 Global message consumer unregistered');
+      unregisterMessageConsumer();
+      unregisterDurableSideEffectConsumer();
       window.removeEventListener('xmtp:read-receipt', handleReadReceipt);
-      window.removeEventListener('xmtp:reaction', handleReaction);
-      window.removeEventListener('xmtp:group-updated', handleGroupUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -42,6 +42,124 @@ describe('DexieDriver conversation ordering', () => {
   });
 });
 
+describe('DexieDriver message persistence', () => {
+  it('writes the message and conversation preview in one transaction', async () => {
+    const storedConversation = conversation('conversation-1', 100);
+    const messages = { put: vi.fn(async () => undefined) };
+    const conversations = {
+      get: vi.fn(async () => storedConversation),
+      update: vi.fn(async () => 1),
+    };
+    const transaction = vi.fn(
+      async (_mode: string, _tables: unknown[], operation: () => Promise<void>) =>
+        await operation()
+    );
+    const driver = new DexieDriver('message-transaction-test');
+    (driver as unknown as {
+      dataDb: {
+        messages: typeof messages;
+        conversations: typeof conversations;
+        transaction: typeof transaction;
+      };
+    }).dataDb = { messages, conversations, transaction };
+    const now = Date.now();
+    const message: Message = {
+      id: 'message-1',
+      conversationId: 'conversation-1',
+      sender: 'peer-1',
+      sentAt: now,
+      receivedAt: now,
+      type: 'text',
+      body: 'hello',
+      status: 'delivered',
+      reactions: [],
+    };
+
+    await driver.putMessage(message);
+
+    expect(transaction).toHaveBeenCalledWith(
+      'rw',
+      [messages, conversations],
+      expect.any(Function)
+    );
+    expect(messages.put).toHaveBeenCalledWith(message);
+    expect(conversations.update).toHaveBeenCalledWith(
+      'conversation-1',
+      expect.objectContaining({
+        lastMessageId: 'message-1',
+        lastMessagePreview: 'hello',
+      })
+    );
+  });
+
+  it('updates a sync checkpoint without overwriting the message preview', async () => {
+    const conversations = {
+      update: vi.fn(async () => 1),
+    };
+    const driver = new DexieDriver('sync-checkpoint-test');
+    (driver as unknown as {
+      dataDb: { conversations: typeof conversations };
+    }).dataDb = { conversations };
+
+    await driver.updateConversationSyncState('conversation-1', 1234);
+
+    expect(conversations.update).toHaveBeenCalledWith('conversation-1', {
+      lastSyncedAt: 1234,
+    });
+  });
+});
+
+describe('DexieDriver deletion markers', () => {
+  it('repairs legacy mute markers instead of dropping inbound messages', async () => {
+    const legacyMute = {
+      conversationId: 'muted-conversation',
+      peerId: 'muted-peer',
+      deletedAt: 1,
+      reason: 'user-muted' as const,
+    };
+    const deletedConversations = {
+      get: vi.fn(async () => legacyMute),
+      delete: vi.fn(async () => undefined),
+    };
+    const driver = new DexieDriver('legacy-mute-marker-test');
+    (driver as unknown as { dataDb: { deletedConversations: typeof deletedConversations } }).dataDb = {
+      deletedConversations,
+    };
+
+    await expect(driver.isConversationDeleted('muted-conversation')).resolves.toBe(false);
+    expect(deletedConversations.delete).toHaveBeenCalledWith('muted-conversation');
+  });
+
+  it('preserves real hidden markers while clearing peer mute markers', async () => {
+    const records = [
+      {
+        conversationId: 'legacy-muted',
+        peerId: 'peer',
+        deletedAt: 1,
+        reason: 'user-muted' as const,
+      },
+      {
+        conversationId: 'hidden',
+        peerId: 'peer',
+        deletedAt: 2,
+        reason: 'user-hidden' as const,
+      },
+    ];
+    const collection = { toArray: vi.fn(async () => records) };
+    const deletedConversations = {
+      where: vi.fn(() => ({ equals: vi.fn(() => collection) })),
+      bulkDelete: vi.fn(async () => undefined),
+    };
+    const driver = new DexieDriver('peer-marker-repair-test');
+    (driver as unknown as { dataDb: { deletedConversations: typeof deletedConversations } }).dataDb = {
+      deletedConversations,
+    };
+
+    await expect(driver.isPeerDeleted('PEER')).resolves.toBe(true);
+    expect(deletedConversations.bulkDelete).toHaveBeenCalledWith(['legacy-muted']);
+  });
+});
+
 describe('DexieDriver identity isolation', () => {
   const validIdentity: Identity = {
     address: `0x${'11'.repeat(20)}`,

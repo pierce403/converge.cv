@@ -4,10 +4,13 @@ import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMessages } from './useMessages';
 import { useAuthStore, useContactStore, useConversationStore, useMessageStore } from '@/lib/stores';
-import type { Attachment, Conversation, StoredRemoteAttachmentEnvelope } from '@/types';
+import type { Attachment, Conversation, Message, StoredRemoteAttachmentEnvelope } from '@/types';
 import type { Contact } from '@/lib/stores/contact-store';
 
 const xmtpMock = {
+  isConnected: vi.fn(() => true),
+  getConversationSyncCooldownMs: vi.fn(() => 0),
+  recordRateLimitForConversation: vi.fn(),
   resolveInboxIdForAddress: vi.fn(),
   refreshInboxProfile: vi.fn(),
   sendMessage: vi.fn(),
@@ -15,12 +18,14 @@ const xmtpMock = {
   sendReadReceipt: vi.fn(),
   loadRemoteAttachment: vi.fn(),
   updateConversationConsentState: vi.fn(),
+  syncConversationMessages: vi.fn(),
 };
 
 const mockStorage = {
   putMessage: vi.fn(async () => undefined),
   getMessage: vi.fn(async () => undefined),
   getConversation: vi.fn(async () => undefined),
+  listMessages: vi.fn<() => Promise<Message[]>>(async () => []),
   putAttachment: vi.fn(async () => undefined),
   putAttachmentMetadata: vi.fn(async () => undefined),
   markAttachmentFailed: vi.fn(async () => true),
@@ -152,12 +157,77 @@ describe('useMessages resolver usage', () => {
       content: new Uint8Array([1, 2, 3]),
     });
     xmtpMock.updateConversationConsentState.mockResolvedValue(undefined);
+    xmtpMock.syncConversationMessages.mockResolvedValue(undefined);
     mockStorage.getMessage.mockResolvedValue(undefined);
     mockStorage.getConversation.mockResolvedValue(undefined);
     mockStorage.getAttachment.mockResolvedValue(null);
     mockStorage.getAttachmentMetadata.mockResolvedValue(undefined);
     mockStorage.getAttachmentData.mockResolvedValue(undefined);
     mockStorage.getRemoteAttachmentEnvelope.mockResolvedValue(undefined);
+  });
+
+  it('pull-to-refresh waits for XMTP messages to be ingested before loading Dexie', async () => {
+    const persisted = {
+      id: 'synced-message',
+      conversationId: 'c1',
+      sender: 'peer-inbox',
+      sentAt: Date.now(),
+      receivedAt: Date.now(),
+      type: 'text' as const,
+      body: 'recovered',
+      status: 'delivered' as const,
+      reactions: [],
+    };
+    xmtpMock.syncConversationMessages.mockImplementationOnce(async () => {
+      mockStorage.listMessages.mockResolvedValueOnce([persisted]);
+    });
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.loadMessages('c1', true);
+    });
+
+    expect(xmtpMock.syncConversationMessages).toHaveBeenCalledWith('c1');
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([persisted]);
+  });
+
+  it('reloads salvaged rows but still surfaces a strict pull-to-refresh failure', async () => {
+    const persisted = {
+      id: 'partially-salvaged-message',
+      conversationId: 'c1',
+      sender: 'peer-inbox',
+      sentAt: Date.now(),
+      receivedAt: Date.now(),
+      type: 'text' as const,
+      body: 'recovered before failure',
+      status: 'delivered' as const,
+      reactions: [],
+    };
+    xmtpMock.syncConversationMessages.mockRejectedValueOnce(
+      new Error('strict repair failed')
+    );
+    mockStorage.listMessages.mockResolvedValueOnce([persisted]);
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let failure: unknown;
+    await act(async () => {
+      try {
+        await api!.loadMessages('c1', true);
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(failure).toEqual(expect.objectContaining({ message: 'strict repair failed' }));
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([persisted]);
   });
 
   it('resolves inbox ID only once per send preflight', async () => {
@@ -507,26 +577,32 @@ describe('useMessages resolver usage', () => {
       render(<Harness onReady={(value) => (api = value)} />);
     });
 
+    let receiveError: unknown;
     await act(async () => {
-      await api!.receiveMessage('c1', {
-        id: 'failed-incoming-attachment',
-        conversationId: 'c1',
-        senderAddress: 'peer-inbox',
-        content: 'photo.png',
-        remoteAttachment: {
-          url: 'https://example.ipfscdn.io/photo.enc',
-          contentDigest: 'digest',
-          secret: new Uint8Array(32).fill(1),
-          salt: new Uint8Array(32).fill(2),
-          nonce: new Uint8Array(12).fill(3),
-          scheme: 'https',
-          contentLength: 512,
-          filename: 'photo.png',
-        },
-        sentAt: Date.now(),
-      });
+      try {
+        await api!.receiveMessage('c1', {
+          id: 'failed-incoming-attachment',
+          conversationId: 'c1',
+          senderAddress: 'peer-inbox',
+          content: 'photo.png',
+          remoteAttachment: {
+            url: 'https://example.ipfscdn.io/photo.enc',
+            contentDigest: 'digest',
+            secret: new Uint8Array(32).fill(1),
+            salt: new Uint8Array(32).fill(2),
+            nonce: new Uint8Array(12).fill(3),
+            scheme: 'https',
+            contentLength: 512,
+            filename: 'photo.png',
+          },
+          sentAt: Date.now(),
+        });
+      } catch (error) {
+        receiveError = error;
+      }
     });
 
+    expect(receiveError).toEqual(expect.objectContaining({ message: 'IndexedDB write failed' }));
     expect(mockStorage.putReceivedAttachment).toHaveBeenCalledTimes(1);
     expect(mockStorage.putAttachmentMetadata).not.toHaveBeenCalled();
     expect(mockStorage.putRemoteAttachmentEnvelope).not.toHaveBeenCalled();

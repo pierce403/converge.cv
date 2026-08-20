@@ -25,6 +25,7 @@ const mockStorage = {
     conversationRecord = conv;
   }),
   listConversations: vi.fn(async (): Promise<Conversation[]> => []),
+  isConversationDeleted: vi.fn(async () => false),
   isPeerDeleted: vi.fn(async () => false),
   markConversationDeleted: vi.fn(async () => undefined),
   unmarkConversationDeletion: vi.fn(async () => undefined),
@@ -91,7 +92,7 @@ describe('useConversations controls', () => {
     mockStorage.isPeerDeleted.mockResolvedValue(false);
   });
 
-  it('toggles mute/unmute and records deletion markers', async () => {
+  it('toggles mute/unmute without treating the conversation as deleted', async () => {
     let api: ReturnType<typeof useConversations> | null = null;
     await act(async () => {
       render(<Harness onReady={(value) => (api = value)} />);
@@ -102,17 +103,48 @@ describe('useConversations controls', () => {
     });
 
     expect(conversationRecord.mutedUntil).toBeDefined();
-    expect(mockStorage.markConversationDeleted).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: 'c1', reason: 'user-muted' })
-    );
+    expect(mockStorage.markConversationDeleted).not.toHaveBeenCalled();
+    expect(mockStorage.isConversationDeleted).toHaveBeenCalledWith('c1');
 
     await act(async () => {
       await api!.toggleMute('c1');
     });
 
     expect(conversationRecord.mutedUntil).toBeUndefined();
-    expect(mockStorage.unmarkConversationDeletion).toHaveBeenCalledWith('c1');
-    expect(mockStorage.unmarkPeerDeletion).toHaveBeenCalledWith('peer-1');
+    expect(mockStorage.isConversationDeleted).toHaveBeenCalledTimes(2);
+    expect(mockStorage.unmarkPeerDeletion).not.toHaveBeenCalled();
+  });
+
+  it('does not delete a provisional conversation during DM cleanup', async () => {
+    const authoritativeDm: Conversation = {
+      ...conversationRecord,
+      id: 'dm-1',
+      peerId: 'peer-1',
+      isGroup: false,
+    };
+    const provisionalConversation: Conversation = {
+      ...conversationRecord,
+      id: 'possible-group-1',
+      peerId: 'peer-1',
+      isGroup: undefined,
+    };
+    mockStorage.listConversations.mockResolvedValue([
+      authoritativeDm,
+      provisionalConversation,
+    ]);
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.loadConversations();
+    });
+    await waitFor(() => {
+      expect(useConversationStore.getState().conversations).toHaveLength(2);
+    });
+
+    expect(mockStorage.deleteConversation).not.toHaveBeenCalled();
   });
 
   it('hides conversations and clears local state', async () => {

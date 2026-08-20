@@ -541,6 +541,10 @@ export class DexieDriver implements StorageDriver {
 
   async isConversationDeleted(conversationId: string): Promise<boolean> {
     const record = await this.dataDb.deletedConversations.get(conversationId);
+    if (record?.reason === 'user-muted') {
+      await this.dataDb.deletedConversations.delete(conversationId);
+      return false;
+    }
     return Boolean(record);
   }
 
@@ -549,8 +553,14 @@ export class DexieDriver implements StorageDriver {
       return false;
     }
     const normalized = peerId.toLowerCase();
-    const record = await this.dataDb.deletedConversations.where('peerId').equals(normalized).first();
-    return Boolean(record);
+    const records = await this.dataDb.deletedConversations.where('peerId').equals(normalized).toArray();
+    const legacyMuteRecords = records.filter((record) => record.reason === 'user-muted');
+    if (legacyMuteRecords.length > 0) {
+      await this.dataDb.deletedConversations.bulkDelete(
+        legacyMuteRecords.map((record) => record.conversationId)
+      );
+    }
+    return records.some((record) => record.reason !== 'user-muted');
   }
 
   async unmarkConversationDeletion(conversationId: string): Promise<void> {
@@ -585,23 +595,40 @@ export class DexieDriver implements StorageDriver {
     await this.dataDb.conversations.update(id, patch);
   }
 
+  async updateConversationSyncState(
+    id: string,
+    lastSyncedAt: number
+  ): Promise<void> {
+    await this.dataDb.conversations.update(id, { lastSyncedAt });
+  }
+
   // Messages
   async putMessage(message: Message): Promise<void> {
     if (!shouldRetainMessage(message)) {
       return;
     }
-    await this.dataDb.messages.put(message);
+    await this.dataDb.transaction(
+      'rw',
+      [this.dataDb.messages, this.dataDb.conversations],
+      async () => {
+        await this.dataDb.messages.put(message);
 
-    // Update conversation lastMessageAt and preview
-    const conversation = await this.dataDb.conversations.get(message.conversationId);
-    if (conversation && message.sentAt >= conversation.lastMessageAt) {
-      await this.dataDb.conversations.update(message.conversationId, {
-        lastMessageAt: message.sentAt,
-        lastMessagePreview: getMessagePreview(message),
-        lastMessageId: message.id,
-        lastMessageSender: message.sender,
-      });
-    }
+        // Keep the message row and its conversation preview atomic. If either
+        // write fails, a replay must not find a hidden message row that never
+        // reached the in-memory UI.
+        const conversation = await this.dataDb.conversations.get(
+          message.conversationId
+        );
+        if (conversation && message.sentAt >= conversation.lastMessageAt) {
+          await this.dataDb.conversations.update(message.conversationId, {
+            lastMessageAt: message.sentAt,
+            lastMessagePreview: getMessagePreview(message),
+            lastMessageId: message.id,
+            lastMessageSender: message.sender,
+          });
+        }
+      }
+    );
   }
 
   async getMessage(id: string): Promise<Message | undefined> {
