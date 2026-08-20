@@ -2,7 +2,7 @@
  * Wagmi configuration for wallet connections
  */
 
-import { http, createConfig as createWagmiConfig } from '@wagmi/core';
+import { http, fallback, createConfig as createWagmiConfig } from '@wagmi/core';
 import { mainnet, base, baseSepolia } from '@wagmi/core/chains';
 import { injected, metaMask, coinbaseWallet, walletConnect } from '@wagmi/connectors';
 
@@ -13,9 +13,20 @@ const projectId =
 
 const chains = [mainnet, base, baseSepolia] as const;
 const transports = {
-  [mainnet.id]: http(),
-  [base.id]: http(),
-  [baseSepolia.id]: http(),
+  [mainnet.id]: fallback([
+    http('https://cloudflare-eth.com'),
+    http('https://ethereum-rpc.publicnode.com'),
+    http('https://rpc.ankr.com/eth'),
+  ]),
+  [base.id]: fallback([
+    http('https://mainnet.base.org'),
+    http('https://base-rpc.publicnode.com'),
+    http('https://base.llamarpc.com'),
+  ]),
+  [baseSepolia.id]: fallback([
+    http('https://sepolia.base.org'),
+    http('https://base-sepolia-rpc.publicnode.com'),
+  ]),
 };
 
 const nativeConnectors = [

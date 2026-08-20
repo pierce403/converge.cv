@@ -834,6 +834,12 @@ export function OnboardingPage() {
 
       setWalletAssociationAcknowledged(false);
       setWalletCandidate(candidate);
+
+      if (view === 'migration' || currentIdentity?.migrationRequired) {
+        setError(null);
+        return;
+      }
+
       setStatusMessage('Checking XMTP for inboxes…');
       setView('probing');
 
@@ -848,9 +854,11 @@ export function OnboardingPage() {
       setError(null);
       setView('results');
     } catch (err) {
-      console.error('[Onboarding] Wallet probe failed:', err);
+      console.error('[Onboarding] Wallet connection / probe failed:', err);
       setError(err instanceof Error ? err.message : 'Unable to reach XMTP right now. Please try again.');
-      setView('wallet');
+      if (view !== 'migration' && !currentIdentity?.migrationRequired) {
+        setView('wallet');
+      }
       throw err;
     }
   };
