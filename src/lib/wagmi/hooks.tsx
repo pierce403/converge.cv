@@ -151,9 +151,10 @@ async function probeWalletConnector(
   connector: Connector
 ): Promise<WalletConnectResult | undefined> {
   try {
-    const accounts = normalizeWalletAccounts(
-      await withWalletProbeTimeout(connector.getAccounts())
-    );
+    const accounts =
+      normalizeWalletAccounts(
+        await withWalletProbeTimeout(connector.getAccounts())
+      ) ?? [];
     if (!accounts[0]) return undefined;
     const chainId = await withWalletProbeTimeout(connector.getChainId()).catch(
       () => undefined
@@ -287,7 +288,8 @@ function NativeWalletConnectionProvider({ children }: { children: ReactNode }) {
           provider: 'native',
           message,
           run: async () => {
-            const activeAccounts = normalizeWalletAccounts(await connector.getAccounts());
+            const activeAccounts =
+              normalizeWalletAccounts(await connector.getAccounts()) ?? [];
             if (
               !activeAccounts.some((activeAddress) =>
                 ethereumAddressesEqual(activeAddress, accountAddress)
