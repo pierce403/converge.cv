@@ -16,7 +16,7 @@ export interface ProfileEditorIntent {
 export type ExplicitOnboardingAction = 'connect' | 'import';
 
 export interface OnboardingEntryDecision {
-  view: 'landing';
+  view: 'landing' | 'wallet';
   resumeAction?: 'device-join';
   legacyActionToConsume?: ExplicitOnboardingAction;
 }
@@ -24,6 +24,7 @@ export interface OnboardingEntryDecision {
 export function decideOnboardingEntry(options: {
   explicitAction?: ExplicitOnboardingAction;
   pendingProvisioning?: Identity | null;
+  pendingWalletFlow?: 'onboarding' | 'generic' | 'settings-inbox';
 }): OnboardingEntryDecision {
   const resumeAction =
     options.pendingProvisioning?.provisioningMode === 'device-join' &&
@@ -31,12 +32,12 @@ export function decideOnboardingEntry(options: {
       ? 'device-join'
       : undefined;
 
-  // Every unauthenticated entry starts on choices. Legacy query parameters are
-  // consumed so they cannot reopen a flow on refresh, but they no longer skip
-  // the landing screen. Likewise, interrupted setup is exposed as a resume
-  // choice instead of triggering redirects or signature prompts on page load.
+  // A user-started external-wallet handoff is the sole automatic resume path;
+  // it restores only the chooser and session probe, never a signature prompt.
+  // Other unauthenticated entries stay on choices. Legacy query parameters are
+  // consumed so they cannot reopen a flow on refresh.
   return {
-    view: 'landing',
+    view: options.pendingWalletFlow === 'onboarding' ? 'wallet' : 'landing',
     resumeAction,
     legacyActionToConsume: options.explicitAction,
   };

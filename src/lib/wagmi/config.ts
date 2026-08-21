@@ -31,7 +31,13 @@ const transports = {
 
 const nativeConnectors = [
   injected(),
-  metaMask(),
+  metaMask({
+    dappMetadata: {
+      name: 'Converge',
+      url: 'https://converge.cv',
+      iconUrl: 'https://converge.cv/icons/icon-192.png',
+    },
+  }),
   coinbaseWallet({
     appName: 'Converge',
     preference: { options: 'all', telemetry: false }, // Support both EOA and smart wallets; disable Coinbase telemetry

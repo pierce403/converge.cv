@@ -31,6 +31,8 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
     isConnecting,
     walletOptions,
     signMessage,
+    pendingWalletConnection,
+    resumeWalletConnection,
   } = useWalletConnection();
   const [error, setError] = useState<string | null>(null);
   const chainIdRef = useRef(chainId);
@@ -46,6 +48,7 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
     hasSigner: boolean;
     promise: Promise<void>;
   } | null>(null);
+  const resumePromiseRef = useRef<Promise<void> | null>(null);
 
   const emitConnected = useCallback(
     async (
@@ -105,6 +108,33 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
     [onWalletConnected]
   );
 
+  const resumePendingConnection = useCallback(() => {
+    if (pendingWalletConnection?.flow !== 'onboarding') return;
+    if (resumePromiseRef.current) return;
+
+    const promise = resumeWalletConnection('onboarding')
+      .then(async (result) => {
+        const resumedAddress = result?.accounts?.[0];
+        if (!resumedAddress) return;
+        connectorStartAddressRef.current = null;
+        setConnectorPending(false);
+        await emitConnected(
+          resumedAddress,
+          result.chainId ?? chainIdRef.current,
+          result.signMessage
+        );
+      })
+      .catch((resumeError) => {
+        console.warn('Could not resume the pending wallet handoff:', resumeError);
+      })
+      .finally(() => {
+        if (resumePromiseRef.current === promise) {
+          resumePromiseRef.current = null;
+        }
+      });
+    resumePromiseRef.current = promise;
+  }, [emitConnected, pendingWalletConnection?.flow, resumeWalletConnection]);
+
   const handleConnect = async (wallet: WalletOption) => {
     setError(null);
     setInspectionFallback(null);
@@ -112,7 +142,7 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
     setConnectorPending(true);
     try {
       // Let the connector own mobile deep links so its session can resume on return.
-      const result = await connectWallet(wallet);
+      const result = await connectWallet(wallet, { flow: 'onboarding' });
       if (result && result.accounts && result.accounts[0]) {
         await emitConnected(
           result.accounts[0],
@@ -132,6 +162,23 @@ export function WalletSelector({ onWalletConnected, onBack, backLabel, onImportK
   useEffect(() => {
     chainIdRef.current = chainId;
   }, [chainId]);
+
+  useEffect(() => {
+    resumePendingConnection();
+
+    const onReturn = () => resumePendingConnection();
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') resumePendingConnection();
+    };
+    window.addEventListener('pageshow', onReturn);
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pageshow', onReturn);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [resumePendingConnection]);
 
   // If already connected when component mounts, proceed once
   useEffect(() => {
