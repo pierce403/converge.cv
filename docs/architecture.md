@@ -14,9 +14,9 @@ Converge.cv is a Signal-like, local-first Progressive Web App built on XMTP prot
 
 ## Key product principles
 
-- **Choice-first onboarding** (show Create, Restore, and Add this device before any identity or wallet action; successful creation then opens the dismissible profile editor)
+- **Choice-first onboarding** (show Create, Restore, and Connect external wallet before any identity or wallet action; successful creation then opens the dismissible profile editor)
 - **Inbox-based account switching** (one profile row per inbox, one connected inbox at a time, isolated local namespaces)
-- **Wallets as optional authority** (wallet approval joins/recover/administers an existing inbox; normal messaging uses the local Converge key)
+- **Direct external-wallet identity** (the wallet address itself is the XMTP account identity; approval registers this browser installation and routine messaging reopens signer-less)
 - **Local-first** (data persists on-device via IndexedDB)
 - **Honest local security** (browser data is unencrypted at rest; incomplete lock/passphrase/passkey controls stay hidden)
 - **Experimental app-level push** (one browser toggle and per-inbox routing/activity state; the Cloudflare relay is deployed and tested, while live-stream gaps and mobile reliability remain explicit limitations)

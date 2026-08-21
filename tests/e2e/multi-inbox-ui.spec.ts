@@ -30,7 +30,7 @@ test('first-run profile and profile-based inbox switching', async ({ page }) => 
   await expect(page.getByRole('heading', { name: 'Welcome to Converge' })).toBeVisible();
   await expect(createInbox).toBeVisible();
   const addDevice = page.getByRole('button').filter({
-    has: page.getByText('Add this device to existing inbox', { exact: true }),
+    has: page.getByText('Connect external wallet', { exact: true }),
   });
   await expect(addDevice).toBeVisible();
   await expect(

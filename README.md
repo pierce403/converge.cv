@@ -12,10 +12,10 @@ Converge is a static, local-first messaging PWA for XMTP protocol v3. It uses Re
 
 Converge treats XMTP accounts, inboxes, and installations as separate things:
 
-- **Onboarding** always starts on the inbox choice screen. Nothing is created and no wallet opens until the user chooses Create new inbox, Restore from keyfile, or Add this device to existing inbox. After a new inbox is ready, Converge opens the dismissible Color Animal name/avatar editor before the main messaging UI.
+- **Onboarding** always starts on the inbox choice screen. Nothing is created and no wallet opens until the user chooses Create new inbox, Restore from keyfile, or Connect external wallet. After a new inbox is ready, Converge opens the dismissible Color Animal name/avatar editor before the main messaging UI.
 - **Create new Converge inbox** generates a local secp256k1 account key, creates a new XMTP inbox, and registers this browser installation.
 - **Restore from keyfile** reuses the exact private key or mnemonic from the file. On a browser without its XMTP database, that same account resolves to the same inbox and registers a new installation.
-- **Add this device to existing inbox** registers this browser installation directly under an external wallet identity. No intermediate local EOA keys or private keys are created or stored. Converge connects signer-less for routine messaging.
+- **Connect external wallet** uses the external wallet itself as the XMTP account identity and registers this browser installation under it. No intermediate local EOA keys or private keys are created or stored. Converge reconnects signer-less for routine messaging.
 - **Wallet approval** is authority for an existing inbox. It does not silently create a wallet inbox or move an already-registered Converge key.
 
 The top-left Inbox Switcher has one profile-name/avatar row per inbox. Only the selected inbox connects and syncs. Add Inbox supports creation, exact-key import, and wallet-approved device join; importing a key that resolves to an already loaded inbox stops with `This inbox is already loaded`.

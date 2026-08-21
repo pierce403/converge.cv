@@ -24,24 +24,24 @@ this contract.
 
 ### Onboarding Lifecycle
 
-- Every unauthenticated visit starts on the inbox choice screen with Create new inbox, Restore from keyfile, and Add this device to existing inbox. Startup must not automatically create an inbox or enter wallet approval.
+- Every unauthenticated visit starts on the inbox choice screen with Create new inbox, Restore from keyfile, and Connect external wallet. Startup must not automatically create an inbox or enter wallet approval.
 - Create new inbox generates a local account key and registers its new XMTP inbox and first installation only after the user chooses it. It then opens the existing dismissible profile editor, prefilled with the deterministic Color Animal name, before the main messaging UI.
 - Creating another inbox later selects it immediately and opens the same profile editor.
 - Burning the final loaded inbox returns to the same inbox choice screen instead of silently creating a replacement inbox.
-- An interrupted wallet-approved device join is represented by an explicit resume action on the choice screen. Startup may discover the pending record, but it must not open the wallet flow until the user chooses to resume it.
+- An interrupted external-wallet connection is represented by an explicit resume action on the choice screen. Startup may discover the pending record, but it must not open the wallet flow until the user chooses to resume it.
 
 ### Inbox Registry And Runtime Isolation
 
 - The top-left identity control is an Inbox Switcher. The registry has one entry per XMTP inbox, regardless of how many account identifiers or installations that inbox has.
 - An inbox entry represents an independent social identity with its own profile, contacts, consent cache, conversations, attachments, keys, local storage namespace, and current memory-only composer draft. Drafts are not persisted across reloads. Its default switcher presentation is profile name and avatar; protocol identifiers stay in details views.
 - Only the selected inbox owns a live XMTP client and performs conversation, message, profile, contact, or consent sync. Switching must completely close the current client and database handles before opening the selected inbox.
-- The registry supports Create new inbox, Import keyfile, and Add this device to existing inbox. Import loads the inbox resolved by the exact imported key. If that inbox is already in the registry, report "This inbox is already loaded" and make no state change.
+- The registry supports Create new inbox, Import keyfile, and Connect external wallet. Import loads the inbox resolved by the exact imported key. If that inbox is already in the registry, report "This inbox is already loaded" and make no state change.
 - An imported account key that has no XMTP identity update may register its own new inbox. A registered imported key must resolve to its existing inbox and must not be reassigned as part of import.
 
 ### Account Keys, Installations, And Wallet Authority
 
 - Use "local account key" or "Converge key" for the exportable secp256k1 key stored by the app. Reserve "installation" or "installation key" for the separate XMTP SDK key in the inbox database.
-- The local account key is the normal application signer. Wallets are optional authority for joining an existing inbox, recovery, and identity administration; routine messaging must not require wallet prompts.
+- Generated and restored inboxes use their local account key as the application signer. An external-wallet inbox uses the wallet address itself as the XMTP account identity, then reconnects signer-less after installation approval; routine messaging must not require wallet prompts.
 - XMTP messages are represented to recipients as coming from `senderInboxId`. Converge must not offer a message-level selector for associated account keys. A future transaction-signing key selector belongs to a separate wallet feature.
 - Plaintext key export is implemented under the collapsed Advanced settings section and is never presented as an onboarding task or backup nag. Permanent loss after losing the only local copy is an accepted default tradeoff.
 - Before associating a wallet or account identifier, onboarding and Settings display the public/permanent identity-history warning and require an explicit acknowledgment before approval can continue.
@@ -73,7 +73,7 @@ this contract.
 - An XMTP installation is the device/app-instance key stored in the Browser SDK SQLite database.
 - Create new Converge inbox means a new local account key, a new XMTP inbox, and this browser's first installation for that inbox.
 - Restore from keyfile means reuse the exact private key or mnemonic. A new browser resolves that account to its existing inbox and registers a distinct installation.
-- Add this device to existing inbox registers this browser installation directly under the external wallet identity, without generating intermediate local EOA keys.
+- Connect external wallet registers this browser installation directly under the external wallet identity, without generating intermediate local EOA keys or storing the wallet private key.
 
 ### External-Wallet Device Bootstrap
 
@@ -114,7 +114,7 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - The default UI never moves an already-registered account key.
 - The browser SDK high-level `unsafe_addAccount` implementation rejects an account that already resolves to an inbox, despite the API's reassignment acknowledgement flag.
 - Explicit reassignment would strand that identity's previous inbox and requires a separate lower-level, strongly confirmed workflow. Converge currently refuses it instead of pretending two inboxes can be merged.
-- Settings creates a fresh local account key for a wallet-approved join and leaves the current Converge inbox in the registry.
+- Settings registers the browser installation directly under the selected external wallet identity and leaves the current Converge inbox in the registry.
 
 ### Limits And Recovery
 
@@ -127,7 +127,7 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 
 - Local private keys, mnemonics, decrypted messages, contacts, attachment caches, and Browser SDK SQLite data are unencrypted at rest.
 - Keyfiles contain plaintext private-key or mnemonic material.
-- Wallet signatures authorize XMTP identity and installation changes. The wallet is not required for normal sends after the fresh local key is associated.
+- Wallet signatures authorize XMTP identity and installation changes. The wallet is not required for normal sends after its browser installation is registered and the signer-less client is reopened.
 - Explicit wallet selections resolve only to their matching connector; an unavailable connector fails visibly. EOA/SCW bytecode inspection is bounded and remains the default. When every inspection RPC fails, the user may explicitly identify the signer as a regular wallet or smart account; an explicit smart-account choice is rejected unless the connector supplied a valid chain ID.
 - Passphrase, passkey, and vault-lock controls are hidden until Converge implements real encryption-at-rest and recoverable unlock behavior.
 

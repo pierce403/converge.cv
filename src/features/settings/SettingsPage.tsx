@@ -697,7 +697,7 @@ export function SettingsPage() {
     });
 
     alert(
-      `Added this browser to inbox ${result.inboxId} with a new local account key.\n\nYour previous Converge inbox and key were not moved or abandoned. Keep an older device online while history sync runs.`
+      `Connected this browser to inbox ${result.inboxId} under your external wallet identity.\n\nNo intermediary wallet key was created or stored. Your previous Converge inbox was not moved or abandoned. Keep an older device online while history sync runs.`
     );
     window.location.assign('/');
   };
@@ -767,7 +767,7 @@ export function SettingsPage() {
     if (staleInstallationId && !staleInstallationIsRegistered) {
       await storage.putIdentity({ ...pendingIdentity, staleInstallationId: undefined });
       throw new Error(
-        'The interrupted installation is no longer registered. Retry Approve This Device.'
+        'The interrupted installation is no longer registered. Retry Confirm Inbox Access.'
       );
     }
     const result = await xmtp.revokeOldestInstallationsForIdentity(
@@ -1353,14 +1353,14 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              {/* Add this browser to an existing inbox */}
+              {/* Connect an external wallet identity */}
               <button
                 onClick={handleAddIdentity}
                 className="w-full p-4 text-left hover:bg-primary-950/60 transition-colors flex items-center justify-between"
               >
                 <div>
-                  <div className="font-medium">Add This Device to Existing Inbox</div>
-                  <div className="text-sm text-primary-200">Register this browser installation directly under an external wallet inbox</div>
+                  <div className="font-medium">Connect External Wallet</div>
+                  <div className="text-sm text-primary-200">Use the wallet itself as the XMTP identity for this browser installation</div>
                 </div>
                 <svg className="w-5 h-5 text-primary-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1876,7 +1876,7 @@ function ConnectExistingInboxModal({
       const count = result.revoked.length || 1;
       const recoveredInboxId = result.inboxId ?? recoveryInboxId;
       setRecoveryNotice(
-        `Revoked ${count} installation${count === 1 ? '' : 's'}${recoveredInboxId ? ` from inbox ${shortInboxId(recoveredInboxId)}` : ''}. Try "Approve This Device" again.`
+        `Revoked ${count} installation${count === 1 ? '' : 's'}${recoveredInboxId ? ` from inbox ${shortInboxId(recoveredInboxId)}` : ''}. Try "Confirm Inbox Access" again.`
       );
       setRecoveryStep(null);
       setBlockedInboxId(null);
@@ -1899,7 +1899,7 @@ function ConnectExistingInboxModal({
       <div className="w-full max-w-lg rounded-xl border border-primary-800/60 bg-primary-950 shadow-2xl">
         <div className="p-4 border-b border-primary-800/60 flex items-center justify-between">
           <div>
-            <div className="text-lg font-semibold text-primary-50">Add This Device</div>
+            <div className="text-lg font-semibold text-primary-50">Connect External Wallet</div>
             <div className="text-sm text-primary-200">
               Use a wallet that already controls the XMTP inbox to approve this browser.
             </div>
@@ -2040,7 +2040,7 @@ function ConnectExistingInboxModal({
                   className="btn-primary text-sm px-3 py-2 disabled:opacity-50"
                   title={!associationAcknowledged ? 'Acknowledge the public identity link to continue.' : undefined}
                 >
-                  {isConnectingExistingInbox ? 'Adding device...' : 'Approve This Device'}
+                  {isConnectingExistingInbox ? 'Connecting wallet...' : 'Confirm Inbox Access'}
                 </button>
               </div>
             </div>

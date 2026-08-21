@@ -8,7 +8,7 @@ model.
 
 ### Onboarding And Profiles
 
-- Onboarding always opens on the inbox choice screen with Create new inbox, Restore from keyfile, and Add this device to existing inbox. It does not automatically create an inbox or open a wallet.
+- Onboarding always opens on the inbox choice screen with Create new inbox, Restore from keyfile, and Connect external wallet. It does not automatically create an inbox or open a wallet.
 - Choosing Create new inbox generates a local account key and registers a new XMTP inbox and installation. After that inbox is ready, Converge opens the existing profile editor before contacts or messages.
 - The profile editor starts with the deterministic Color Animal name, supports avatar upload, and is dismissible. Dismissing it keeps the generated profile.
 - Creating another inbox later immediately switches to it and opens the same profile editor.
@@ -20,16 +20,16 @@ model.
 - Each inbox is an independent social identity, similar to managing separate brand accounts. Its profile, contacts, consent view, conversations, attachments, keys, local caches, and current in-memory composer draft remain isolated from every other inbox. Composer drafts are not persisted across reloads.
 - Switcher entries show the inbox profile name and avatar by default. Inbox IDs, account addresses, installation IDs, and key details belong in technical details views.
 - Only the selected inbox opens an XMTP client and syncs. Switching fully closes the current client before opening the next inbox.
-- Add Inbox offers Create new inbox, Import keyfile, and Add this device to existing inbox.
-- An interrupted Add this device flow appears as a separate resume action on the inbox choice screen. Converge does not drop the user directly into wallet approval on a later visit.
+- Add Inbox offers Create new inbox, Import keyfile, and Connect external wallet.
+- An interrupted external-wallet connection appears as a separate resume action on the inbox choice screen. Converge does not drop the user directly into wallet approval on a later visit.
 - Importing a keyfile reuses the exact private key or mnemonic and loads the inbox to which it resolves. An unregistered imported key creates its own new inbox; a registered key reopens its existing inbox and creates only the installation needed by this browser.
 - If an import resolves to an inbox already loaded locally, Converge says "This inbox is already loaded" and changes nothing.
 - Messages are attributed to the sender's XMTP inbox, not a user-selected associated account key. Converge does not expose a "send with key" control. Any future transaction-signing key selector is a separate wallet feature.
 
 ### Local Account Keys And Wallets
 
-- Normal messaging uses an exportable local account key, also called a Converge key. Reserve "installation key" or "device installation" for the separate key managed by the XMTP SDK database.
-- Wallets are optional authority for joining an existing inbox, recovery, and administration. They are not the routine message signer after a local account key has joined the inbox.
+- A generated or restored inbox uses an exportable local account key, also called a Converge key. An external-wallet inbox uses the wallet address itself as its XMTP account identity and reconnects signer-less after installation approval. Reserve "installation key" or "device installation" for the separate key managed by the XMTP SDK database.
+- Connecting an external wallet does not generate or associate an intermediary local EOA. The wallet authorizes its browser installation and identity administration, but routine messaging does not prompt for wallet signatures.
 - Plaintext key export is available only under Advanced settings. Converge never prompts or nags users to write down a seed phrase or export a key.
 - Losing the only device and its only local key copy may permanently lose access; that tradeoff is accepted for the low-friction default.
 - Before associating a wallet or account, both onboarding and Settings warn that the address-to-inbox link is publicly queryable and effectively permanent in XMTP identity history, and require explicit acknowledgment.
@@ -65,7 +65,7 @@ model.
 - Create new Converge inbox remains one click: Converge generates a secp256k1 local account key, uses the SDK's inbox-aware database path, registers a new XMTP inbox/installation, and opens the app without a passphrase.
 - Generated local keys receive the deterministic Color Animal display-name suggestion used by personalization; legacy generated labels remain replaceable.
 - Restore from keyfile reuses the exact private key or mnemonic. It does not create a separate local account key. On a browser without the XMTP database, the same account resolves to the same inbox and registers a new installation.
-- Add this device to existing inbox registers this browser installation directly under the external wallet identity, without generating intermediate local EOA keys.
+- Connect external wallet registers this browser installation directly under the external wallet identity, without generating intermediate local EOA keys or storing the wallet private key.
 - Routine startup and messaging for external-wallet inboxes is signer-less: `Client.build(identifier)` loads the local installation and syncs messages without wallet signatures or prompts.
 - Multi-tab concurrency protection: `navigator.locks` exclusively locks the active inbox database `converge:xmtp-inbox-database:<inboxId>`, preventing corrupting concurrent access across browser tabs.
 - Existing legacy device-join records are automatically detected and force-migrated to the direct wallet model on login.
@@ -93,7 +93,7 @@ model.
 ### Current Inbox Switcher Isolation
 - Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, attachments, and keys never leak across inboxes; composer drafts are memory-only and reset on reload.
 - Switching inboxes triggers a full teardown of the current client/session, rehydrates the registry list, and reopens the selected identity with its own cached message history.
-- The switcher has one row per inbox and shows profile name/avatar rather than protocol identifiers. Add Inbox provides Create new inbox, Import keyfile, and Add this device to existing inbox.
+- The switcher has one row per inbox and shows profile name/avatar rather than protocol identifiers. Add Inbox provides Create new inbox, Import keyfile, and Connect external wallet.
 - A duplicate keyfile import stops before local mutation with "This inbox is already loaded". Creating a new inbox selects it immediately and opens the profile editor.
 - Inbox IDs are normalized when stored and matched so namespace switches persist across reloads instead of snapping back to the previous identity.
 - Burn Inbox lives in the selected inbox's Settings, not in the switcher, and implements the complete wipe/revocation contract above.

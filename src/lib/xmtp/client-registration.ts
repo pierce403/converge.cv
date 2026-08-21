@@ -382,7 +382,7 @@ export async function ensureClientRegistration(
   }
   if (resolvedInboxId && existingInstallationCount >= XMTP_INSTALLATION_LIMIT && !installationAlreadyVisible) {
     throw new Error(
-      `Installation limit reached (10/10) for inbox ${inboxId}. Revoke an old installation before adding this device.`
+      `Installation limit reached (10/10) for inbox ${inboxId}. Revoke an old installation before connecting this browser.`
     );
   }
 

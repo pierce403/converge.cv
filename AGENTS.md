@@ -47,7 +47,7 @@ read the same source of truth.
 - An intentionally empty state after Burn Inbox must remain empty; do not treat it as a true first visit and silently create a replacement inbox.
 
 ### ⚡ ONE-CLICK ONBOARDING
-- On every unauthenticated visit, show Create new inbox, Restore from keyfile, and Add this device to existing inbox before any identity or wallet action. The Color Animal name/avatar editor follows successful creation and is dismissible.
+- On every unauthenticated visit, show Create new inbox, Restore from keyfile, and Connect external wallet before any identity or wallet action. The Color Animal name/avatar editor follows successful creation and is dismissible.
 - Empty onboarding after an intentional final-inbox burn uses the same choice screen without auto-creating another inbox.
 - "Create new Converge inbox" remains a one-click generated-key flow from the Inbox Switcher or empty onboarding.
 - **No manual wallet address entry**
@@ -67,7 +67,7 @@ read the same source of truth.
 ## Product Decisions (updated 2026-07-11)
 
 - Treat the top-left identity control as an Inbox Switcher with one profile-name/avatar entry per XMTP inbox, not one entry per key. Each inbox is an independent social identity and storage namespace; only the selected inbox connects and syncs.
-- Add Inbox supports Create new inbox, Import keyfile, and Add this device to existing inbox. Import reuses the exact key and its resolved inbox. If that inbox is already loaded, say "This inbox is already loaded" and change nothing.
+- Add Inbox supports Create new inbox, Import keyfile, and Connect external wallet. Import reuses the exact key and its resolved inbox. If that inbox is already loaded, say "This inbox is already loaded" and change nothing.
 - Use "local account key" or "Converge key" for the app-held signer. Reserve "installation" for the XMTP SDK device/app-instance key. Do not expose a message-level key selector; recipients see the sender inbox. A future transaction-signing key selector is a separate wallet feature.
 - Keep plaintext key export in Advanced and never prompt users to write down or export a seed phrase. Loss of the only local copy is an accepted default tradeoff.
 - Warn before wallet/account association that address-to-inbox identity links are publicly queryable and effectively permanent.
@@ -105,7 +105,7 @@ Create new Converge inbox →
 Restore from keyfile →
   Reuse the same private key/mnemonic → resolve the same inbox → register only a new installation if needed
 
-Add this device to existing inbox →
+Connect external wallet →
   Connect wallet that owns existing inbox →
   Probe target inbox and installation limit without generating intermediate keys →
   Register/reuse this browser installation directly under wallet identity →
@@ -234,15 +234,15 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 ### ✅ Completed
 - Cloudflare Workers Static Assets is live at `https://converge.cv` with native React SPA fallback, immutable hashed-asset caching, root no-cache service-worker headers, Node 22/pinned Wrangler tooling, and a cutover/rollback runbook. Cloudflare Workers Builds pulls `main` through its GitHub App and owns deployment; GitHub Actions remains provider-neutral, read-only CI. The exact app origin was preserved, so the host migration does not intentionally change IndexedDB, OPFS, service-worker, Push API, or XMTP installation namespaces. The sibling Mini App is live on its separate `miniapp.converge.cv` Worker.
 - Cloudflare Always Use HTTPS is enabled for every active account zone. Every currently proxied hostname was edge-verified to preserve the path and query when redirecting HTTP to HTTPS. The `converge.cv` zone also has a narrow `http_config_settings` rule with `disable_rum: true` for the apex and Mini App hosts; clean Chrome verification must remain free of `static.cloudflareinsights.com`, `/cdn-cgi/rum`, and injected `data-cf-beacon` activity.
-- Choice-first onboarding shows Create, Restore, and Add this device before any identity or wallet action; successful creation registers the inbox before showing the dismissible Color Animal name/avatar editor
-- The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Add this device actions; duplicate imports stop with "This inbox is already loaded"
+- Choice-first onboarding shows Create, Restore, and Connect external wallet before any identity or wallet action; successful creation registers the inbox before showing the dismissible Color Animal name/avatar editor
+- The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Connect external wallet actions; duplicate imports stop with "This inbox is already loaded"
 - Installation revocation in Settings routes through the inbox's recovery identifier: if the active key is an associated member key, Converge prompts or requests the signature from the connected recovery wallet to authorize revocation on XMTP v3
 - "Clear All Browser Data" in Settings performs a complete, resilient local wipe of all IndexedDB database shards (global, default, push state, and per-inbox databases), OPFS SQLite files, Web Storage, cookies, and caches, best-effort disabling push without blocking local reset on network errors, and navigates cleanly to empty onboarding
 - Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
 - Contact persistence is inbox-scoped and action-gated, uses peer-published profiles, and discards legacy private aliases/avatar overrides/notes instead of adding custom contact sync
 - Plaintext keyfile export is available only under collapsed Advanced settings; wallet association requires acknowledging that the address-to-inbox link is public and effectively permanent
 - Notifications use one app/browser toggle, one shared physical `PushSubscription`, cached logical per-inbox/installation relay records, and inactive-inbox activity dots. Active-inbox registration canonicalizes MLS group topics, preserves every HMAC epoch, and adds the deterministic installation welcome topic. Notification clicks always focus/open Converge's root without switching. vapid.party's Cloudflare-only Worker, D1, Queue, and singleton Container listener are deployed; on 2026-07-14 public health reported `deliveryReady: true`, listener `ready`, and bridge `synced`. Continuous delivery readiness remains a separate coarse health signal and must never be inferred from registration success.
-- Explicit onboarding model for new inbox creation, same-key keyfile restore, and fresh-device-key association with an existing wallet inbox
+- Explicit onboarding model for new inbox creation, same-key keyfile restore, and direct external-wallet identity connection
 - Wallet-approved device provisioning verifies membership through the manager's own network refresh, prevents accidental reassignment, and persists the final installation ID. A locally ready but network-absent pending default database is replaced at most once while preserving the staged account key and rechecking 10/10 capacity.
 - Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
 - Mobile wallet connectors own their redirect/deep-link lifecycle, can resume with an account-bound signer before chain state arrives, and every XMTP signature is bound to the selected wallet account
@@ -343,7 +343,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 User wants to enable:
 1. **Create new identity from nothing** → ✅ DONE (identities now properly registered on XMTP network)
 2. **Message someone on the Base app** → ✅ DM creation + sending working (v6, identifier-based)
-3. **Manage multiple independent inboxes and add a fresh local key to an existing wallet-controlled inbox** → ✅ Implemented; continue live cross-device validation
+3. **Manage multiple independent inboxes and connect an external wallet directly as the XMTP identity** → ✅ Implemented; continue live cross-device validation
 
 Focus on **friction-free onboarding** for new users first.
 
@@ -677,7 +677,7 @@ Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the
 ### Implemented Multi-Inbox Product Contract
 - Bumped Converge from `0.4.5` to `0.5.0` for the complete multi-inbox lifecycle, honest local-key security model, app-level notification state, and inbox-scoped contact behavior.
 - Historical `0.5.0` behavior created the first local-key inbox automatically. Version `0.5.2` supersedes that entry with choice-first onboarding; burning the final inbox uses the same choice screen.
-- The top-left control is an Inbox Switcher with one profile-name/avatar row per inbox. It closes the active client before switching and offers Create new inbox, Import keyfile, and Add this device to existing inbox. Duplicate imports stop before mutation with "This inbox is already loaded".
+- The top-left control is an Inbox Switcher with one profile-name/avatar row per inbox. It closes the active client before switching and offers Create new inbox, Import keyfile, and Connect external wallet. Duplicate imports stop before mutation with "This inbox is already loaded".
 - Burn Inbox moved to the selected inbox's Settings, closes the client and uses static revocation for the exact current installation, then performs the complete local namespace/key/OPFS/cache wipe even when remote revocation fails. A blocked local wipe preserves the key and registry for retry. Key export is Advanced-only, and wallet association requires acknowledging its public, effectively permanent identity link.
 - Contacts remain isolated per inbox, are created through explicit participation, use peer-published profiles, and discard legacy private aliases/notes. No custom contact-sync protocol was added.
 - Notifications now use one browser subscription plus cached per-inbox/installation relay records. Inactive pushes create approximate switcher dots and locally named generic notifications without syncing. Clicking focuses/opens Converge without automatically switching inboxes. This historical 0.5.0 implementation did not yet include the canonical group/welcome-topic hardening documented in the 2026-07-12 entry; live relay delivery remains experimental.

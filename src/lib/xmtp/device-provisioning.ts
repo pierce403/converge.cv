@@ -281,7 +281,7 @@ export class InstallationLimitError extends Error {
 
   constructor(inboxId: string) {
     super(
-      `Installation limit reached (10/10) for inbox ${inboxId}. Revoke an old installation before adding this device.`
+      `Installation limit reached (10/10) for inbox ${inboxId}. Revoke an old installation before connecting this browser.`
     );
     this.name = 'InstallationLimitError';
     this.inboxId = inboxId;
@@ -322,7 +322,7 @@ export class InstallationMembershipPendingError extends Error {
 
   constructor(inboxId: string, installationId: string) {
     super(
-      `XMTP has not propagated browser installation ${installationId} far enough. Retry Add This Device; if this installation remains absent, Converge will replace only its pending local XMTP database.`
+      `XMTP has not propagated browser installation ${installationId} far enough. Retry the wallet connection; if this installation remains absent, Converge will replace only its pending local XMTP database.`
     );
     this.name = 'InstallationMembershipPendingError';
     this.inboxId = inboxId;
@@ -336,7 +336,7 @@ export class StaleLocalInstallationError extends Error {
 
   constructor(inboxId: string, installationId: string) {
     super(
-      `Saved browser installation ${installationId} is locally ready but is not a current member of inbox ${inboxId}. Its pending XMTP database must be replaced before device setup can continue.`
+      `Saved browser installation ${installationId} is locally ready but is not a current member of inbox ${inboxId}. Its pending XMTP database must be replaced before the wallet connection can continue.`
     );
     this.name = 'StaleLocalInstallationError';
     this.inboxId = inboxId;
@@ -426,7 +426,7 @@ export async function provisionExternalWalletDevice(
       !installationIdsMatch(manager.installationId, dependencies.knownInstallationId)
     ) {
       throw new Error(
-        'XMTP opened a different local installation while resuming device setup. Registration was stopped.'
+        'XMTP opened a different local installation while resuming the wallet connection. Registration was stopped.'
       );
     }
     await dependencies.onInstallationReady?.(manager.installationId);
@@ -483,7 +483,7 @@ export async function provisionExternalWalletDevice(
           throw error;
         }
         console.info(
-          '[XMTP] Browser installation became locally registered while register() was settling; resuming device setup.'
+          '[XMTP] Browser installation became locally registered while register() was settling; resuming wallet connection.'
         );
       }
       installationRegistered = !hasManagerInstallation;

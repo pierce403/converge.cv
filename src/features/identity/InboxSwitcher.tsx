@@ -388,7 +388,7 @@ export function InboxSwitcher() {
                   disabled={Boolean(operation)}
                   className={`w-full rounded-md px-3 py-2 text-left text-sm ${active ? 'bg-primary-800/80 text-white' : 'text-primary-200'}`}
                 >
-                  Add this device to existing inbox
+                  Connect external wallet
                 </button>
               )}
             </Menu.Item>

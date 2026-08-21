@@ -987,7 +987,7 @@ export function useAuth() {
 
       if (probe.installationCount >= 10) {
         throw new Error(
-          'Installation limit reached (10/10). Revoke an old installation in your wallet settings before adding this device.'
+          'Installation limit reached (10/10). Revoke an old installation in your wallet settings before connecting this browser.'
         );
       }
 
@@ -1024,12 +1024,12 @@ export function useAuth() {
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          console.error('[Auth] Device provisioning stopped', {
+          console.error('[Auth] Wallet connection stopped', {
             phase: lastProvisioningPhase,
             message,
           });
           const provisioningError = new Error(
-            `Device setup stopped during ${lastProvisioningPhase}: ${message}`
+            `Wallet connection stopped during ${lastProvisioningPhase}: ${message}`
           );
           Object.assign(provisioningError, { cause: error });
           throw provisioningError;
@@ -1151,7 +1151,7 @@ export function useAuth() {
               );
             }
           } catch (restoreError) {
-            console.warn('[Auth] Failed to restore the prior inbox after device setup:', restoreError);
+            console.warn('[Auth] Failed to restore the prior inbox after wallet connection:', restoreError);
           }
         }
         throw error;

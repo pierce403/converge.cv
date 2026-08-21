@@ -338,7 +338,7 @@ export function OnboardingPage() {
           );
         }
       } catch (error) {
-        console.warn('[Onboarding] Could not inspect pending device setup:', error);
+        console.warn('[Onboarding] Could not inspect pending wallet connection:', error);
         if (!cancelled) {
           setResumableInstallationId(null);
           setStaleInstallationId(null);
@@ -878,7 +878,7 @@ export function OnboardingPage() {
     }
     if (staleInstallationId) {
       setError(
-        'An interrupted browser installation is still registered but no longer exists locally. Remove it before retrying device setup.'
+        'An interrupted browser installation is still registered but no longer exists locally. Remove it before retrying the wallet connection.'
       );
       return;
     }
@@ -889,7 +889,7 @@ export function OnboardingPage() {
       return;
     }
 
-    setStatusMessage('Adding this device to your existing inbox…');
+    setStatusMessage('Connecting this browser to your wallet identity…');
     setView('processing');
 
     try {
@@ -909,12 +909,12 @@ export function OnboardingPage() {
       const pendingTarget = getPendingTargetUrl();
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {
-      console.error('[Onboarding] Failed to add local account key to wallet inbox:', err);
+      console.error('[Onboarding] Failed to connect external wallet identity:', err);
       if (err instanceof StaleInstallationError) {
         setResumableInstallationId(null);
         setStaleInstallationId(err.installationId);
       }
-      setError(err instanceof Error ? err.message : 'Failed to add this local account key. Please try again.');
+      setError(err instanceof Error ? err.message : 'Failed to connect this external wallet identity. Please try again.');
       setView('results');
     }
   };
@@ -1257,13 +1257,13 @@ export function OnboardingPage() {
             <div className="text-3xl">🔐</div>
             <div className="mt-2 text-xl font-semibold text-primary-50">
               {hasPendingDeviceJoin
-                ? 'Resume adding this device'
-                : 'Add this device to existing inbox'}
+                ? 'Resume wallet connection'
+                : 'Connect external wallet'}
             </div>
             <div className="mt-1 text-sm text-primary-200">
               {hasPendingDeviceJoin
-                ? 'A local device key is waiting for approval. Reconnect the wallet that controls the target inbox to continue.'
-                : 'Use a wallet that already controls the inbox to approve a new private key for this browser.'}
+                ? 'This browser installation is waiting for approval. Reconnect the external wallet that owns the XMTP identity to continue.'
+                : 'Use an external wallet as your XMTP identity. Confirm inbox access in your wallet; no gas is charged.'}
             </div>
           </button>
           <button
@@ -1672,7 +1672,7 @@ export function OnboardingPage() {
                       }
                       className="w-full rounded-md border border-accent-500/60 bg-accent-600/90 px-4 py-3 text-sm font-semibold text-white shadow transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {resumableInstallationId ? 'Resume device setup' : 'Add this device'}
+                      {resumableInstallationId ? 'Resume wallet connection' : 'Confirm inbox access'}
                     </button>
                   )
                 ) : (
