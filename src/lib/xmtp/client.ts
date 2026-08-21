@@ -47,7 +47,7 @@ import type {
   GroupPermissionPolicyCode,
   GroupPermissionsState,
 } from '@/types';
-import { bytesToHex, getAddress, hexToBytes } from 'viem';
+import { bytesToHex, getAddress, hexToBytes, recoverMessageAddress } from 'viem';
 import { getStorage } from '@/lib/storage';
 import { deleteLocalMessage } from '@/lib/message-retention';
 import {
@@ -5541,19 +5541,58 @@ export class XmtpClient {
       identifierKind: IdentifierKind.Ethereum,
     };
 
-    const resolvedWalletInboxId = normalizeInboxId(
-      await getInboxIdForIdentifier(walletIdentifier, 'production')
-    );
     const expected = normalizeInboxId(expectedInboxId);
-    if (!expected || !resolvedWalletInboxId || resolvedWalletInboxId !== expected) {
+    if (!expected) {
+      throw new Error('The saved XMTP inbox ID is invalid. Migration was stopped.');
+    }
+
+    const retryMigrationRead = async <T>(label: string, read: () => Promise<T>): Promise<T> =>
+      await this.retryWithDelay(label, read, {
+        attempts: 4,
+        initialDelayMs: 500,
+        factor: 2,
+        shouldRetry: (error) =>
+          this.isTransientNetworkError(error) || this.isRateLimitError(error),
+        onRateLimit: () => this.noteIdentityRateLimit(label),
+      });
+
+    // GetInboxIds is useful corroboration, but it is not the only safe way to
+    // prove that a wallet controls an already-known inbox. Mobile browsers can
+    // briefly abort this request while returning from an external wallet. A
+    // fresh, exact inbox-state read below remains authoritative because it
+    // contains the account and recovery identifiers for the requested inbox.
+    let resolvedWalletInboxId: string | null = null;
+    try {
+      resolvedWalletInboxId = normalizeInboxId(
+        await retryMigrationRead('migration:getInboxIdForIdentifier', () =>
+          getInboxIdForIdentifier(walletIdentifier, 'production')
+        )
+      );
+    } catch (error) {
+      if (!this.isTransientNetworkError(error) && !this.isRateLimitError(error)) {
+        throw error;
+      }
+      console.warn(
+        '[XMTP] Migration wallet inbox lookup was unavailable; verifying the exact target inbox state instead.',
+        error
+      );
+    }
+    if (resolvedWalletInboxId && resolvedWalletInboxId !== expected) {
       throw new Error('The connected wallet does not resolve to the target XMTP inbox.');
     }
 
-    const initialStates = await Client.fetchInboxStates([expected], 'production');
-    let currentState = initialStates[0];
-    if (!currentState) {
-      throw new Error('XMTP did not return inbox state for the target inbox.');
-    }
+    const fetchExpectedInboxState = async (label: string): Promise<InboxState> => {
+      const states = await retryMigrationRead(label, () =>
+        Client.fetchInboxStates([expected], 'production')
+      );
+      const state = states[0];
+      if (!state || normalizeInboxId(state.inboxId) !== expected) {
+        throw new Error('XMTP did not return the exact target inbox state. Migration was stopped.');
+      }
+      return state;
+    };
+
+    let currentState = await fetchExpectedInboxState('migration:fetchInitialInboxState');
 
     const walletControlsInbox = stateHasIdentifier(currentState, walletIdentifier);
     if (!walletControlsInbox) {
@@ -5596,6 +5635,32 @@ export class XmtpClient {
       expected,
       'rwc'
     );
+    const migrationClientOptions = {
+      env: 'production' as const,
+      dbPath,
+      appVersion: XMTP_APP_VERSION,
+      codecs: XMTP_CONTENT_CODECS,
+      loggingLevel: sdkLoggingLevel,
+      structuredLogging: false,
+      performanceLogging: false,
+      historySyncUrl: getXmtpHistorySyncUrl(),
+      disableAutoRegister: true,
+      // Converge's pinned SDK patch accepts this only after the exact target
+      // state and wallet authority checks above. It avoids another fragile,
+      // redundant GetInboxIds call inside Client.create().
+      knownInboxId: expected,
+    } as NonNullable<Parameters<typeof Client.create>[1]> & {
+      knownInboxId: string;
+    };
+    const openVerifiedMigrationClient = async () => {
+      const client = await Client.create(walletSigner, migrationClientOptions);
+      if (normalizeInboxId(client.inboxId) !== expected) {
+        await client.close();
+        throw new Error('XMTP opened a different inbox than the verified migration target.');
+      }
+      captureLocalInstallationId(client.installationId);
+      return client;
+    };
 
     // 1. If the local EOA is the recovery identifier, move recovery authority to the wallet first
     const localEoaIsRecovery = Boolean(
@@ -5606,28 +5671,15 @@ export class XmtpClient {
     if (localEoaIsRecovery) {
       await notify('updating-recovery');
       console.info('[XMTP] Moving recovery identifier to connected wallet...');
-      const recoveryClient = await Client.create(walletSigner, {
-        env: 'production',
-        dbPath,
-        appVersion: XMTP_APP_VERSION,
-        codecs: XMTP_CONTENT_CODECS,
-        loggingLevel: sdkLoggingLevel,
-        structuredLogging: false,
-        performanceLogging: false,
-        historySyncUrl: getXmtpHistorySyncUrl(),
-        disableAutoRegister: true,
-      });
+      const recoveryClient = await openVerifiedMigrationClient();
       try {
-        captureLocalInstallationId(recoveryClient.installationId);
         await recoveryClient.changeRecoveryIdentifier(walletIdentifier);
       } finally {
         await recoveryClient.close();
       }
 
-      const postRecoveryStates = await Client.fetchInboxStates([expected], 'production');
-      currentState = postRecoveryStates[0];
+      currentState = await fetchExpectedInboxState('migration:fetchPostRecoveryInboxState');
       if (
-        !currentState ||
         !currentState.recoveryIdentifier ||
         !identifiersMatch(currentState.recoveryIdentifier, walletIdentifier)
       ) {
@@ -5644,22 +5696,39 @@ export class XmtpClient {
     if (localEoaIsMember) {
       await notify('removing-local-account');
       console.info('[XMTP] Removing local EOA from inbox account identifiers...');
-      const removeAccountClient = await Client.create(walletSigner, {
-        env: 'production',
-        dbPath,
-        appVersion: XMTP_APP_VERSION,
-        codecs: XMTP_CONTENT_CODECS,
-        loggingLevel: sdkLoggingLevel,
-        structuredLogging: false,
-        performanceLogging: false,
-        historySyncUrl: getXmtpHistorySyncUrl(),
-        disableAutoRegister: true,
-      });
+      const removeAccountClient = await openVerifiedMigrationClient();
       try {
-        captureLocalInstallationId(removeAccountClient.installationId);
         await removeAccountClient.removeAccount(localEoaIdentifier);
       } finally {
         await removeAccountClient.close();
+      }
+    }
+
+    // If a previous interrupted attempt already completed the ledger changes,
+    // there is no XMTP mutation left to generate a wallet signature. Require a
+    // fresh, explicit ownership proof before deleting the legacy local key.
+    if (!localEoaIsRecovery && !localEoaIsMember) {
+      await notify('verifying-wallet');
+      if (walletSigner.type !== 'EOA') {
+        throw new Error(
+          'Converge cannot safely finish an already-updated smart-wallet migration without a verifiable XMTP mutation. Your local key is still stored.'
+        );
+      }
+      const challenge = [
+        'Converge XMTP identity migration',
+        '',
+        `Inbox: ${expected}`,
+        `Wallet: ${walletIdentifier.identifier}`,
+        `Requested at: ${new Date().toISOString()}`,
+        'Purpose: confirm wallet control before removing this browser\'s legacy local key.',
+      ].join('\n');
+      const proof = await walletSigner.signMessage(challenge);
+      const recovered = await recoverMessageAddress({
+        message: challenge,
+        signature: bytesToHex(proof),
+      });
+      if (!ethereumAddressesEqual(recovered, walletIdentifier.identifier)) {
+        throw new Error('Wallet ownership proof did not match the connected migration wallet.');
       }
     }
 
@@ -5667,19 +5736,10 @@ export class XmtpClient {
     // mutation is required. Open the exact local browser database to identify
     // its installation; never substitute an arbitrary ledger installation.
     if (!verifiedLocalInstallationId) {
-      const verificationClient = await Client.create(walletSigner, {
-        env: 'production',
-        dbPath,
-        appVersion: XMTP_APP_VERSION,
-        codecs: XMTP_CONTENT_CODECS,
-        loggingLevel: sdkLoggingLevel,
-        structuredLogging: false,
-        performanceLogging: false,
-        historySyncUrl: getXmtpHistorySyncUrl(),
-        disableAutoRegister: true,
-      });
+      const verificationClient = await openVerifiedMigrationClient();
       try {
-        captureLocalInstallationId(verificationClient.installationId);
+        // Opening the exact database and checking its inbox/installation is the
+        // verification; no identity-ledger mutation is needed in this branch.
       } finally {
         await verificationClient.close();
       }
@@ -5687,17 +5747,31 @@ export class XmtpClient {
 
     // 3. Verify from fresh network state
     await notify('verifying-network-state');
-    const finalStates = await Client.fetchInboxStates([expected], 'production');
-    const finalState = finalStates[0];
-    if (!finalState) {
-      throw new Error('Could not retrieve final inbox state from XMTP network.');
-    }
+    const finalState = await fetchExpectedInboxState('migration:fetchFinalInboxState');
 
-    const finalResolvedWalletInbox = normalizeInboxId(
-      await getInboxIdForIdentifier(walletIdentifier, 'production')
-    );
-    if (finalResolvedWalletInbox !== expected) {
+    let finalResolvedWalletInbox: string | null = null;
+    try {
+      finalResolvedWalletInbox = normalizeInboxId(
+        await retryMigrationRead('migration:verifyWalletInboxId', () =>
+          getInboxIdForIdentifier(walletIdentifier, 'production')
+        )
+      );
+    } catch (error) {
+      if (!this.isTransientNetworkError(error) && !this.isRateLimitError(error)) {
+        throw error;
+      }
+      console.warn(
+        '[XMTP] Final wallet inbox lookup was unavailable; using the verified target inbox state.',
+        error
+      );
+    }
+    if (finalResolvedWalletInbox && finalResolvedWalletInbox !== expected) {
       throw new Error('Wallet inbox ID changed unexpectedly during migration.');
+    }
+    if (!stateHasIdentifier(finalState, walletIdentifier)) {
+      throw new Error(
+        'The connected wallet is no longer an account or recovery authority for this inbox.'
+      );
     }
 
     if (stateHasIdentifier(finalState, localEoaIdentifier)) {

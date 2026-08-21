@@ -167,6 +167,26 @@ keys and messages. A cache-only refresh must preserve service-worker
 registrations and the browser subscription; use **Disable notifications** when
 you intentionally want Converge to delete relay registrations and unsubscribe.
 
+## XMTP `Failed to fetch` before a wallet signature
+
+The pinned Browser SDK's public production endpoint uses TLS port 5558. A
+mobile carrier, Wi-Fi firewall, VPN, or private-DNS filter can block that port
+while ordinary HTTPS continues to work. The same failure can stop
+`GetInboxIds` before MetaMask receives a signature request and can also prevent
+ordinary message sync.
+
+Production builds route the SDK through same-origin `/api/xmtp` on HTTPS/443;
+the Cloudflare Worker streams canonical gRPC-Web posts to XMTP's fixed official
+upstream without storing the body or forwarding browser credentials. Run
+`DEPLOY_URL=https://converge.cv ./check_deploy.sh` after deployment to verify a
+real framed `GetInboxIds` request traverses that route. The SDK patch script is
+pinned to Browser SDK 6.1.2 and intentionally fails a build if its runtime shape
+changes.
+
+Migration identity reads use bounded transient retries. A retry never replays a
+wallet-authorized mutation. If migration still fails, the UI preserves the
+legacy local key; do not clear site data.
+
 ## XMTP SQLite worker missing / build errors
 
 If you see errors referring to `sqlite3-worker1-bundler-friendly.mjs`, re-run:

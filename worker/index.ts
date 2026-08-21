@@ -1,6 +1,10 @@
 const HISTORY_ROUTE_PREFIX = '/api/xmtp-history/';
 const HISTORY_ROUTE_ROOT = '/api/xmtp-history';
 const HISTORY_UPLOAD_PATH = `${HISTORY_ROUTE_PREFIX}upload`;
+const XMTP_PROXY_ROUTE_PREFIX = '/api/xmtp/';
+const XMTP_PROXY_ROUTE_ROOT = '/api/xmtp';
+const XMTP_API_UPSTREAM = 'https://api.production.xmtp.network:5558';
+const XMTP_RPC_PATH = /^\/xmtp\.[A-Za-z0-9._]+\/[A-Za-z0-9_]+$/;
 const HISTORY_FILE_PATH = new RegExp(
   `^${HISTORY_ROUTE_PREFIX}files/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$`,
   'i'
@@ -47,6 +51,84 @@ const isSameOriginUpload = (request: Request, url: URL) => {
   return origin === url.origin;
 };
 
+const isSameOriginXmtpRequest = (request: Request, url: URL) => {
+  const origin = request.headers.get('Origin');
+  const fetchSite = request.headers.get('Sec-Fetch-Site');
+
+  if (origin !== url.origin) return false;
+  if (fetchSite !== null && fetchSite !== 'same-origin') return false;
+
+  return true;
+};
+
+const xmtpRequestHeaders = (request: Request) => {
+  const headers = new Headers();
+  for (const [name, value] of request.headers) {
+    const normalized = name.toLowerCase();
+    if (
+      normalized === 'accept' ||
+      normalized === 'content-type' ||
+      normalized === 'grpc-timeout' ||
+      normalized.startsWith('grpc-') ||
+      normalized.startsWith('x-app-') ||
+      normalized.startsWith('x-client-') ||
+      normalized.startsWith('x-grpc-') ||
+      normalized.startsWith('x-xmtp-') ||
+      normalized === 'x-user-agent'
+    ) {
+      headers.set(name, value);
+    }
+  }
+  return headers;
+};
+
+const xmtpProxyResponse = (upstream: Response) => {
+  const headers = new Headers(upstream.headers);
+  headers.delete('Set-Cookie');
+  headers.set('Cache-Control', 'no-store');
+  headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('Vary', 'Origin, Sec-Fetch-Site');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  const body = [101, 204, 205, 304].includes(upstream.status) ? null : upstream.body;
+
+  return new Response(body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
+};
+
+const handleXmtpProxyRequest = async (
+  request: Request,
+  url: URL,
+  fetchUpstream: FetchUpstream
+) => {
+  const upstreamPath = url.pathname.slice(XMTP_PROXY_ROUTE_ROOT.length);
+  if (url.search !== '' || !XMTP_RPC_PATH.test(upstreamPath)) {
+    return plainResponse('Not Found', 404);
+  }
+  if (request.method !== 'POST') {
+    return plainResponse('Method Not Allowed', 405, { Allow: 'POST' });
+  }
+  if (!isSameOriginXmtpRequest(request, url)) {
+    return plainResponse('Forbidden', 403);
+  }
+
+  try {
+    const upstream = await fetchUpstream(`${XMTP_API_UPSTREAM}${upstreamPath}`, {
+      method: 'POST',
+      headers: xmtpRequestHeaders(request),
+      body: request.body,
+      cache: 'no-store',
+      redirect: 'manual',
+    });
+    return xmtpProxyResponse(upstream);
+  } catch {
+    return plainResponse('XMTP service unavailable', 502);
+  }
+};
+
 const proxyResponse = (upstream: Response, crossOrigin: boolean) => {
   const headers = secureHeaders(
     upstream.headers.get('Content-Type') ?? 'application/octet-stream',
@@ -67,8 +149,16 @@ export const handleRequest = async (
   fetchUpstream: FetchUpstream
 ): Promise<Response> => {
   const url = new URL(request.url);
-  if (url.pathname !== HISTORY_ROUTE_ROOT && !url.pathname.startsWith(HISTORY_ROUTE_PREFIX)) {
+  const isHistoryRoute =
+    url.pathname === HISTORY_ROUTE_ROOT || url.pathname.startsWith(HISTORY_ROUTE_PREFIX);
+  const isXmtpProxyRoute =
+    url.pathname === XMTP_PROXY_ROUTE_ROOT || url.pathname.startsWith(XMTP_PROXY_ROUTE_PREFIX);
+  if (!isHistoryRoute && !isXmtpProxyRoute) {
     return fetchAsset(request);
+  }
+
+  if (isXmtpProxyRoute) {
+    return handleXmtpProxyRequest(request, url, fetchUpstream);
   }
 
   const fileMatch = HISTORY_FILE_PATH.exec(url.pathname);

@@ -40,7 +40,7 @@ import { getStorage } from '@/lib/storage';
 import { formatXmtpIdentifier } from '@/lib/xmtp/identifiers';
 import { StaleInstallationError } from '@/lib/xmtp/device-provisioning';
 import { getResumableKeyfileInstallationId } from './keyfile-resume';
-import { formatCreateInboxError } from '@/lib/identity/identity-errors';
+import { formatCreateInboxError, formatMigrationError } from '@/lib/identity/identity-errors';
 import { isInboxLoadedLocally } from '@/lib/identity/loaded-inbox';
 import { isUsableNetworkDisplayName } from '@/lib/identity/profile-suggestions';
 import { PersonalizationReminderModal } from '@/components/PersonalizationReminderModal';
@@ -234,6 +234,7 @@ export function OnboardingPage() {
   const [showInitialProfile, setShowInitialProfile] = useState(false);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
   const onboardingEntryHandledRef = useRef(false);
+  const migrationInFlightRef = useRef(false);
 
   const currentIdentity = useAuthStore((state) => state.identity);
 
@@ -952,11 +953,19 @@ export function OnboardingPage() {
       setError('Please connect the linked wallet first.');
       return;
     }
+    if (migrationInFlightRef.current) {
+      return;
+    }
+    migrationInFlightRef.current = true;
     setError(null);
     setStatusMessage('Migrating identity to direct wallet control…');
     setView('processing');
     try {
       await auth.migrateDeviceJoinIdentity({
+        walletAddress: walletCandidate.address,
+        walletChainId: walletCandidate.chainId,
+        walletType: walletCandidate.walletType,
+        signMessage: walletCandidate.signMessage,
         onStatus: setStatusMessage,
       });
       clearPendingWalletConnection();
@@ -964,8 +973,10 @@ export function OnboardingPage() {
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {
       console.error('[Migration] Failed to migrate identity:', err);
-      setError(err instanceof Error ? err.message : 'Migration failed. Please try again.');
+      setError(formatMigrationError(err));
       setView('migration');
+    } finally {
+      migrationInFlightRef.current = false;
     }
   };
 

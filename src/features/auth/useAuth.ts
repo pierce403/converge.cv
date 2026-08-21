@@ -1161,36 +1161,36 @@ export function useAuth() {
   );
 
   const migrateDeviceJoinIdentity = useCallback(
-    async (options?: {
+    async (options: {
+      walletAddress: string;
+      walletChainId?: number;
+      walletType?: 'EOA' | 'SCW';
+      signMessage: (message: string) => Promise<string>;
       onStatus?: (message: string) => void;
       onPhase?: (phase: string) => void;
     }) => {
-      if (!walletAddress) {
-        throw new Error('Please connect your wallet to migrate this identity.');
-      }
-      if (!walletSignMessage) {
-        throw new Error('Wallet signing is not available. Please reconnect your wallet.');
-      }
       const activeIdentity = authStore.identity;
       if (!activeIdentity) {
         throw new Error('No identity is currently loaded for migration.');
       }
-      const signMessage = async (message: string) => {
-        return await walletSignMessage(message, walletAddress);
-      };
+      const migrationWalletAddress = requireEthereumAddress(
+        options.walletAddress,
+        'Connected migration wallet'
+      );
 
       const migrated = await migrateLegacyDeviceJoinIdentity({
         localIdentity: activeIdentity,
-        walletAddress,
-        walletChainId,
-        walletType: activeIdentity.walletType ?? 'EOA',
-        signMessage,
+        walletAddress: migrationWalletAddress,
+        walletChainId: options.walletChainId,
+        walletType: options.walletType ?? 'EOA',
+        signMessage: options.signMessage,
         onPhase: (phase) => {
           options?.onPhase?.(phase);
           const messages: Record<string, string> = {
             preflight: 'Checking wallet and target inbox…',
             'updating-recovery': 'Moving recovery authority to your wallet…',
             'removing-local-account': 'Approve removing the generated local key in your wallet…',
+            'verifying-wallet': 'Approve wallet ownership proof to finish migration…',
             'verifying-network-state': 'Verifying updated inbox state on the XMTP network…',
             'updating-local-storage': 'Updating local identity storage…',
             complete: 'Migration verified. Opening inbox…',
@@ -1204,28 +1204,37 @@ export function useAuth() {
       setVaultUnlocked(true);
       clearIntentionalEmptyInboxState();
 
-      await connectXmtpSafely(
-        migrated.address,
-        undefined,
-        migrated.walletChainId,
-        signMessage,
-        {
-          registrationPolicy: 'resume-only',
-          enableHistorySync: true,
-          labelOverride: migrated.displayName,
-          required: true,
-          expectedInboxId: migrated.inboxId,
-          expectedInstallationId: migrated.installationId,
-          requestHistorySync: true,
-        }
-      );
+      try {
+        await connectXmtpSafely(
+          migrated.address,
+          undefined,
+          migrated.walletChainId,
+          options.signMessage,
+          {
+            registrationPolicy: 'resume-only',
+            enableHistorySync: true,
+            labelOverride: migrated.displayName,
+            required: true,
+            expectedInboxId: migrated.inboxId,
+            expectedInstallationId: migrated.installationId,
+            requestHistorySync: true,
+          }
+        );
+      } catch (reconnectError) {
+        // The network mutation and local cutover are already verified and
+        // committed. Do not send the user back through a destructive migration
+        // approval merely because the routine client reopen hit a transient
+        // transport error; startup will retry the same signer-less database.
+        console.warn(
+          '[Auth] Migration completed, but reopening the migrated inbox will retry on startup:',
+          reconnectError
+        );
+        options.onStatus?.('Migration verified. Opening the inbox will retry the network connection…');
+      }
 
       return migrated;
     },
     [
-      walletAddress,
-      walletSignMessage,
-      walletChainId,
       authStore.identity,
       setIdentity,
       setAuthenticated,
