@@ -1,8 +1,8 @@
 # Deployment Guide for Converge.cv
 
 Converge is a static-first Cloudflare Worker. Static Assets serves the app, and
-one stateless route streams opaque XMTP device-history archives to and from the
-fixed XMTP history service. The production Worker owns the `converge.cv` Custom
+two stateless, fixed-upstream transports stream XMTP gRPC-Web requests and
+opaque device-history archives. The production Worker owns the `converge.cv` Custom
 Domain; `converge-miniapp` is a separate Worker at
 `miniapp.converge.cv`. Do not combine the two apps under one Worker or wildcard
 route because their service workers, IndexedDB, OPFS, and XMTP installations
@@ -16,8 +16,10 @@ and XMTP installation namespace.
 ## Repository Contract
 
 - `wrangler.jsonc` defines the production and preview Workers.
-- `worker/index.ts` handles only `/api/xmtp-history/upload` and
-  `/api/xmtp-history/files/<uuid>` before falling through to Static Assets.
+- `worker/index.ts` handles `/api/xmtp/<canonical-rpc>`,
+  `/api/xmtp-history/upload`, and `/api/xmtp-history/files/<uuid>` before
+  falling through to Static Assets. XMTP RPCs are same-origin POST-only and
+  always target `api.production.xmtp.network:5558`.
 - `dist/` is the deployed Static Assets directory.
 - `assets.not_found_handling` serves `index.html` with `200` for React routes.
 - `public/_headers` sets security, immutable hashed-asset caching, root QR-camera
@@ -153,6 +155,7 @@ curl -fsSI https://converge.cv/debug
 curl -fsSI https://converge.cv/sw.js
 curl -fsSI https://converge.cv/manifest.json
 curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp-history/not-allowed
+curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp/not-allowed
 ```
 
 - `/` and `/debug` return `200` from Cloudflare, not `server: GitHub.com`.
@@ -166,6 +169,10 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp-history/
 - An unsupported `/api/xmtp-history/*` path fails closed instead of returning
   the SPA, and a browser history upload/download reaches only the fixed XMTP
   archive service without a cross-origin browser fetch.
+- An unsupported `/api/xmtp/*` path fails closed. A same-origin framed
+  gRPC-Web POST to `GetInboxIds` returns the upstream gRPC response through
+  Cloudflare, while requests without the exact Origin or with a dynamic/query
+  path are rejected.
 - The existing inbox reopens without a new XMTP installation. Keeping the exact
   `https://converge.cv` origin preserves browser IndexedDB, OPFS, service-worker,
   and Push API state across the hosting-provider change.

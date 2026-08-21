@@ -4,6 +4,8 @@ import { handleRequest } from './index';
 const APP_ORIGIN = 'https://converge.cv';
 const FILE_ID = '01234567-89ab-cdef-0123-456789abcdef';
 const UPSTREAM = 'https://message-history.production.ephemera.network';
+const XMTP_UPSTREAM = 'https://api.production.xmtp.network:5558';
+const XMTP_RPC = '/xmtp.identity.api.v1.IdentityApi/GetInboxIds';
 
 type FetchAsset = Parameters<typeof handleRequest>[1];
 type FetchUpstream = Parameters<typeof handleRequest>[2];
@@ -15,9 +17,9 @@ const sameOriginHeaders = (method: 'GET' | 'POST') => {
   return headers;
 };
 
-describe('XMTP history Worker', () => {
-  it.each(['/settings', '/api/xmtp-historyevil'])(
-    'leaves non-history traffic on the static asset path: %s',
+describe('Converge Cloudflare Worker', () => {
+  it.each(['/settings', '/api/xmtp-historyevil', '/api/xmtpevil'])(
+    'leaves non-Worker traffic on the static asset path: %s',
     async (path) => {
       const fetchAsset = assetFetch();
       const fetchUpstream = vi.fn<FetchUpstream>();
@@ -30,6 +32,131 @@ describe('XMTP history Worker', () => {
       expect(fetchUpstream).not.toHaveBeenCalled();
     }
   );
+
+  it('streams same-origin XMTP gRPC-Web traffic through the fixed upstream on port 5558', async () => {
+    const upstreamBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0, 0, 0, 0, 0]));
+        controller.close();
+      },
+    });
+    const upstreamResponse = new Response(upstreamBody, {
+      headers: {
+        'Content-Type': 'application/grpc-web+proto',
+        'Grpc-Status': '0',
+        'Set-Cookie': 'do-not-forward=true',
+      },
+    });
+    const fetchUpstream = vi.fn<FetchUpstream>(async () => upstreamResponse);
+    const headers = new Headers({
+      Accept: 'application/grpc-web+proto',
+      Authorization: 'do-not-forward',
+      'Content-Type': 'application/grpc-web+proto',
+      Cookie: 'do-not-forward=true',
+      Origin: APP_ORIGIN,
+      'Sec-Fetch-Site': 'same-origin',
+      'X-Grpc-Web': '1',
+      'X-User-Agent': 'grpc-web-rust/0.1',
+    });
+    const request = new Request(`${APP_ORIGIN}/api/xmtp${XMTP_RPC}`, {
+      method: 'POST',
+      headers,
+      body: new Uint8Array([0, 0, 0, 0, 0]),
+    });
+    const requestBody = request.body;
+
+    const response = await handleRequest(request, assetFetch(), fetchUpstream);
+
+    expect(fetchUpstream).toHaveBeenCalledOnce();
+    const [url, init] = fetchUpstream.mock.calls[0];
+    expect(url).toBe(`${XMTP_UPSTREAM}${XMTP_RPC}`);
+    expect(init).toMatchObject({
+      method: 'POST',
+      body: requestBody,
+      cache: 'no-store',
+      redirect: 'manual',
+    });
+    expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+      accept: 'application/grpc-web+proto',
+      'content-type': 'application/grpc-web+proto',
+      'x-grpc-web': '1',
+      'x-user-agent': 'grpc-web-rust/0.1',
+    });
+    expect(response.body).toBe(upstreamResponse.body);
+    expect(response.headers.get('Content-Type')).toBe('application/grpc-web+proto');
+    expect(response.headers.get('Grpc-Status')).toBe('0');
+    expect(response.headers.get('Set-Cookie')).toBeNull();
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it.each([
+    { label: 'a cross-origin request', origin: 'https://attacker.example', site: 'cross-site' },
+    { label: 'a request without an Origin', origin: undefined, site: 'same-origin' },
+  ])('rejects $label before forwarding XMTP traffic', async ({ origin, site }) => {
+    const headers = new Headers({
+      'Content-Type': 'application/grpc-web+proto',
+      'Sec-Fetch-Site': site,
+    });
+    if (origin) headers.set('Origin', origin);
+    const fetchUpstream = vi.fn<FetchUpstream>();
+
+    const response = await handleRequest(
+      new Request(`${APP_ORIGIN}/api/xmtp${XMTP_RPC}`, {
+        method: 'POST',
+        headers,
+        body: new Uint8Array([0, 0, 0, 0, 0]),
+      }),
+      assetFetch(),
+      fetchUpstream
+    );
+
+    expect(response.status).toBe(403);
+    expect(fetchUpstream).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['/api/xmtp', 'POST', 404],
+    ['/api/xmtp/not-an-rpc', 'POST', 404],
+    [`/api/xmtp${XMTP_RPC}?debug=true`, 'POST', 404],
+    [`/api/xmtp${XMTP_RPC}`, 'GET', 405],
+  ])('rejects invalid XMTP proxy request %s %s', async (path, method, status) => {
+    const fetchUpstream = vi.fn<FetchUpstream>();
+    const headers = new Headers({
+      Origin: APP_ORIGIN,
+      'Sec-Fetch-Site': 'same-origin',
+    });
+    const response = await handleRequest(
+      new Request(`${APP_ORIGIN}${path}`, { method, headers }),
+      assetFetch(),
+      fetchUpstream
+    );
+
+    expect(response.status).toBe(status);
+    expect(fetchUpstream).not.toHaveBeenCalled();
+  });
+
+  it('returns a generic no-store error when the XMTP upstream is unavailable', async () => {
+    const fetchUpstream = vi.fn<FetchUpstream>(async () => {
+      throw new Error('sensitive upstream failure');
+    });
+    const response = await handleRequest(
+      new Request(`${APP_ORIGIN}/api/xmtp${XMTP_RPC}`, {
+        method: 'POST',
+        headers: new Headers({
+          'Content-Type': 'application/grpc-web+proto',
+          Origin: APP_ORIGIN,
+          'Sec-Fetch-Site': 'same-origin',
+        }),
+        body: new Uint8Array([0, 0, 0, 0, 0]),
+      }),
+      assetFetch(),
+      fetchUpstream
+    );
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(await response.text()).toBe('XMTP service unavailable');
+  });
 
   it('streams an upload body to the fixed upstream without forwarding credentials', async () => {
     const fetchAsset = assetFetch();

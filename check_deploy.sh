@@ -72,6 +72,15 @@ echo "Checking Cloudflare deployment at $DEPLOY_URL..."
 root_headers=$(curl -fsSI "$DEPLOY_URL/")
 debug_status=$(curl -fsS -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Mode: navigate' "$DEPLOY_URL/debug")
 sw_headers=$(curl -fsSI "$DEPLOY_URL/sw.js")
+xmtp_headers=$(
+  printf '\0\0\0\0\0' | curl -fsS -D - -o /dev/null \
+    -H "Origin: $DEPLOY_URL" \
+    -H 'Sec-Fetch-Site: same-origin' \
+    -H 'Content-Type: application/grpc-web+proto' \
+    -H 'X-Grpc-Web: 1' \
+    --data-binary @- \
+    "$DEPLOY_URL/api/xmtp/xmtp.identity.api.v1.IdentityApi/GetInboxIds"
+)
 
 if grep -qi '^server: GitHub\.com' <<<"$root_headers"; then
   echo "Error: $DEPLOY_URL is still served by GitHub Pages." >&2
@@ -93,4 +102,14 @@ if ! grep -qi '^cache-control:.*no-store' <<<"$sw_headers"; then
   exit 1
 fi
 
-echo "Cloudflare origin, SPA fallback, and root service-worker headers passed."
+if ! grep -qi '^content-type:.*grpc' <<<"$xmtp_headers"; then
+  echo "Error: same-origin XMTP transport did not return a gRPC response." >&2
+  exit 1
+fi
+
+if ! grep -qi '^cache-control:.*no-store' <<<"$xmtp_headers"; then
+  echo "Error: same-origin XMTP transport response is cacheable." >&2
+  exit 1
+fi
+
+echo "Cloudflare origin, SPA fallback, root service-worker headers, and XMTP transport passed."

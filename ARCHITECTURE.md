@@ -165,6 +165,13 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - History transfer is optional to ordinary XMTP operation. Requests are keyed by installation, single-flight, time-bounded, and cooldown-limited; message and deletion streams start independently. A request-publication result means only that another installation was asked to respond, not that its archive was uploaded or imported.
 - The relay is a compatibility boundary, not a general proxy. It has no credentials, dynamic upstream, plaintext access, user routing, or durable storage. Direct history URLs emitted by other XMTP clients still depend on their configured service and its browser CORS behavior.
 
+### Production XMTP API Transport
+
+- Browser SDK 6.1.2 hard-codes production gRPC-Web to `api.production.xmtp.network:5558`. Some mobile carrier, Wi-Fi, VPN, or private-DNS paths block or abort that nonstandard public port even though the endpoint and CORS are healthy. That failure prevents identity lookup, migration signatures, ordinary sync, and incoming-message recovery.
+- Install and production build deterministically patch the pinned SDK's main and worker runtimes to use `globalThis.location.origin + "/api/xmtp"`. Vite development and preview expose the same fixed, path-filtered upstream while production uses the Cloudflare Worker route. The patch fails the build if the pinned minified runtime shape changes, forcing a deliberate SDK review instead of silently restoring direct port access.
+- The Cloudflare Worker accepts only same-origin `POST` requests with one canonical `/xmtp.<service>/<method>` path, rejects queries and cross-origin callers, forwards only gRPC/XMTP metadata (never cookies or authorization), and streams the unread body to the fixed `https://api.production.xmtp.network:5558` origin. Responses are no-store and retain gRPC-Web status metadata. The route has no dynamic destination or durable state.
+- Migration treats wallet-to-inbox resolution as corroboration and exact fresh inbox state as authority. A successful different resolution fails closed. After the exact target and wallet authority are verified, Converge supplies that trusted inbox ID to its pinned SDK extension, verifies the opened client reports the same inbox, and only then requests a mutation signature. If a prior attempt already completed all ledger mutations, a fresh ownership signature is required before local-key deletion.
+
 ## Convos XMTP Interop
 
 ### Implemented Now In Converge

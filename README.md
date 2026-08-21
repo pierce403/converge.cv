@@ -103,7 +103,7 @@ Use `pnpm test --run` for a one-shot Vitest run. Plain `pnpm test` starts watch 
 
 ## Deployment
 
-GitHub Actions runs typecheck, lint, Vitest, and the production build on pushes and pull requests. Cloudflare Workers Builds deploys the verified app at [https://converge.cv](https://converge.cv): Static Assets serves the UI, while one stateless route streams already-encrypted XMTP device-history archives to the fixed XMTP service. The checked-in Wrangler configuration also provides an isolated `workers.dev` preview environment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the cutover and rollback runbook.
+GitHub Actions runs typecheck, lint, Vitest, and the production build on pushes and pull requests. Cloudflare Workers Builds deploys the verified app at [https://converge.cv](https://converge.cv): Static Assets serves the UI, while narrow stateless routes stream encrypted device-history archives and same-origin gRPC-Web requests to fixed XMTP services. The gRPC-Web route keeps mobile clients on ordinary HTTPS/443 instead of requiring direct access to XMTP's public port 5558. The checked-in Wrangler configuration also provides an isolated `workers.dev` preview environment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the cutover and rollback runbook.
 
 Push-contract releases are ordered across repositories: apply vapid.party D1 migration `0005_xmtp_diagnostics.sql`, deploy and verify the vapid.party Worker/listener status and diagnostic endpoints, and only then deploy the matching Converge client. The diagnostics-enabled client requires the relay's management-capability response and CORS headers.
 

@@ -4,8 +4,8 @@
   "version": "0.5.7",
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/fix-xmtp-wasm-worker.mjs",
-    "prebuild": "node scripts/fix-xmtp-wasm-worker.mjs && node scripts/generate-build-info.mjs",
+    "postinstall": "node scripts/fix-xmtp-wasm-worker.mjs && node scripts/patch-xmtp-browser-sdk.mjs",
+    "prebuild": "node scripts/fix-xmtp-wasm-worker.mjs && node scripts/patch-xmtp-browser-sdk.mjs && node scripts/generate-build-info.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",

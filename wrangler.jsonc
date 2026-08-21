@@ -14,7 +14,12 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/xmtp-history", "/api/xmtp-history/*"],
+    "run_worker_first": [
+      "/api/xmtp-history",
+      "/api/xmtp-history/*",
+      "/api/xmtp",
+      "/api/xmtp/*"
+    ],
   },
   "observability": {
     "enabled": true,

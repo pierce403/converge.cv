@@ -96,6 +96,7 @@ describe('legacy device join identity migration', () => {
   });
 
   it('migrates legacy identity by removing local key, deleting old storage, and creating wallet identity', async () => {
+    identities.push({ ...legacyIdentity });
     const mockMigrate = vi.fn(async () => ({
       success: true,
       inboxId: targetInbox,
@@ -147,6 +148,30 @@ describe('legacy device join identity migration', () => {
 
     expect(mockStorage.putIdentity).toHaveBeenCalledWith(migrated);
     expect(mockStorage.deleteIdentityByAddress).toHaveBeenCalledWith(localEoa);
+    expect(identities).toEqual([migrated]);
+  });
+
+  it('preserves the legacy identity and local key when network migration fails', async () => {
+    identities.push({ ...legacyIdentity });
+    const mockMigrate = vi.fn(async () => {
+      throw new Error('api client error: TypeError: Failed to fetch');
+    });
+    (getXmtpClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      migrateDeviceJoinIdentity: mockMigrate,
+    });
+
+    await expect(
+      migrateLegacyDeviceJoinIdentity({
+        localIdentity: legacyIdentity,
+        walletAddress: targetWallet,
+        signMessage: async () => '0xsignature',
+      })
+    ).rejects.toThrow(/Failed to fetch/);
+
+    expect(mockStorage.putIdentity).not.toHaveBeenCalled();
+    expect(mockStorage.deleteIdentityByAddress).not.toHaveBeenCalled();
+    expect(identities).toEqual([legacyIdentity]);
+    expect(identities[0]?.privateKey).toBe(legacyIdentity.privateKey);
   });
 
   it('refuses to migrate if connected wallet does not match linked wallet address', async () => {

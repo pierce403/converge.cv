@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCreateInboxError } from './identity-errors';
+import { formatCreateInboxError, formatMigrationError } from './identity-errors';
 
 describe('formatCreateInboxError', () => {
   it('preserves an actionable XMTP failure', () => {
@@ -18,5 +18,29 @@ describe('formatCreateInboxError', () => {
 
   it('does not expose unbounded worker output', () => {
     expect(formatCreateInboxError(new Error('x'.repeat(500))).length).toBeLessThan(340);
+  });
+});
+
+describe('formatMigrationError', () => {
+  it('turns the XMTP browser transport failure into a safe retry message', () => {
+    expect(
+      formatMigrationError(
+        new Error(
+          'api client at endpoint "/xmtp.identity.api.v1.IdentityApi/GetInboxIds" has error status: Unknown error; js api error: TypeError: Failed to fetch'
+        )
+      )
+    ).toBe(
+      'XMTP could not be reached after retrying. Your local key is still stored, but XMTP may have applied part of the migration. Check your connection and retry with the same wallet.'
+    );
+  });
+
+  it('preserves a bounded authorization failure', () => {
+    expect(
+      formatMigrationError(
+        new Error(
+          'The connected wallet is not a current account or recovery authority for this inbox.'
+        )
+      )
+    ).toBe('The connected wallet is not a current account or recovery authority for this inbox.');
   });
 });
