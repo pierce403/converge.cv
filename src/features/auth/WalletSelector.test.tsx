@@ -8,6 +8,11 @@ const walletState = vi.hoisted(() => ({
   chainId: undefined as number | undefined,
   isConnecting: false,
   connectWallet: vi.fn(),
+  pendingWalletConnection: null as null | {
+    attemptId: string;
+    flow: 'onboarding';
+  },
+  resumeWalletConnection: vi.fn(),
   signMessage: undefined as
     | ((message: string, accountAddress?: string) => Promise<string>)
     | undefined,
@@ -30,7 +35,64 @@ describe('WalletSelector', () => {
     walletState.chainId = undefined;
     walletState.isConnecting = false;
     walletState.connectWallet.mockReset();
+    walletState.pendingWalletConnection = null;
+    walletState.resumeWalletConnection.mockReset();
+    walletState.resumeWalletConnection.mockResolvedValue(undefined);
     walletState.signMessage = undefined;
+  });
+
+  it('continues a persisted mobile handoff after the wallet view remounts', async () => {
+    const address = '0x1111111111111111111111111111111111111111';
+    const resumedSigner = vi.fn(async () => '0xresumed');
+    walletState.pendingWalletConnection = {
+      attemptId: 'metamask-return',
+      flow: 'onboarding',
+    };
+    walletState.resumeWalletConnection.mockResolvedValue({
+      accounts: [address],
+      chainId: 8453,
+      signMessage: resumedSigner,
+    });
+    const onWalletConnected = vi.fn(async () => undefined);
+
+    render(<WalletSelector onWalletConnected={onWalletConnected} onBack={() => undefined} />);
+
+    await waitFor(() =>
+      expect(walletState.resumeWalletConnection).toHaveBeenCalledWith('onboarding')
+    );
+    await waitFor(() =>
+      expect(onWalletConnected).toHaveBeenCalledWith(address, 8453, resumedSigner)
+    );
+    expect(walletState.connectWallet).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a persisted handoff when the page returns to the foreground', async () => {
+    const address = '0x2222222222222222222222222222222222222222';
+    const resumedSigner = vi.fn(async () => '0xresumed');
+    walletState.pendingWalletConnection = {
+      attemptId: 'metamask-return',
+      flow: 'onboarding',
+    };
+    walletState.resumeWalletConnection
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        accounts: [address],
+        chainId: 1,
+        signMessage: resumedSigner,
+      });
+    const onWalletConnected = vi.fn(async () => undefined);
+
+    render(<WalletSelector onWalletConnected={onWalletConnected} onBack={() => undefined} />);
+    await waitFor(() =>
+      expect(walletState.resumeWalletConnection).toHaveBeenCalledTimes(1)
+    );
+
+    fireEvent(window, new Event('pageshow'));
+
+    await waitFor(() =>
+      expect(onWalletConnected).toHaveBeenCalledWith(address, 1, resumedSigner)
+    );
+    expect(walletState.resumeWalletConnection).toHaveBeenCalledTimes(2);
   });
 
   it('starts the connector before continuing and emits one transition when account state races', async () => {

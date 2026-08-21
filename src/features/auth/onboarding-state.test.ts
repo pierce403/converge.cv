@@ -85,6 +85,19 @@ describe('onboarding state', () => {
     });
   });
 
+  it('restores only a user-started onboarding wallet handoff', () => {
+    expect(
+      decideOnboardingEntry({ pendingWalletFlow: 'onboarding' })
+    ).toEqual({
+      view: 'wallet',
+      resumeAction: undefined,
+      legacyActionToConsume: undefined,
+    });
+    expect(
+      decideOnboardingEntry({ pendingWalletFlow: 'settings-inbox' }).view
+    ).toBe('landing');
+  });
+
   it('persists a profile editor request and matches it by inbox', () => {
     requestProfileEditor({
       address: identity.address,

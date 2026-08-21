@@ -9,7 +9,7 @@ const option = (id: string, name = id): WalletOption => ({
 });
 
 describe('getInboxConnectionWalletOptions', () => {
-  it('keeps Base/Coinbase, WalletConnect, and browser wallet options', () => {
+  it('keeps the supported external wallet options in display order', () => {
     const options = [
       option('coinbase', 'Coinbase Wallet'),
       option('metamask', 'MetaMask'),
@@ -20,6 +20,7 @@ describe('getInboxConnectionWalletOptions', () => {
 
     expect(getInboxConnectionWalletOptions(options).map((item) => item.id)).toEqual([
       'coinbase',
+      'metamask',
       'walletconnect',
       'injected',
     ]);

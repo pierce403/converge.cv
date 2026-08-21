@@ -197,7 +197,12 @@ const renderRegistryEntry = (
 export function OnboardingPage() {
   const navigate = useNavigate();
   const auth = useAuth();
-  const { disconnectWallet, signMessage } = useWalletConnection();
+  const {
+    clearPendingWalletConnection,
+    disconnectWallet,
+    pendingWalletConnection,
+    signMessage,
+  } = useWalletConnection();
   const signMessageRef = useRef(signMessage);
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
@@ -228,6 +233,7 @@ export function OnboardingPage() {
   const [pendingProvisioning, setPendingProvisioning] = useState<Identity | null>(null);
   const [showInitialProfile, setShowInitialProfile] = useState(false);
   const keyfileInputRef = useRef<HTMLInputElement | null>(null);
+  const onboardingEntryHandledRef = useRef(false);
 
   const currentIdentity = useAuthStore((state) => state.identity);
 
@@ -245,8 +251,20 @@ export function OnboardingPage() {
     signMessageRef.current = signMessage;
   }, [signMessage]);
 
+  useEffect(() => {
+    if (
+      pendingWalletConnection?.flow === 'onboarding' &&
+      view === 'landing' &&
+      !currentIdentity?.migrationRequired
+    ) {
+      setView('wallet');
+    }
+  }, [currentIdentity?.migrationRequired, pendingWalletConnection?.flow, view]);
+
   // Consume explicit deep-link actions so Back followed by reload stays on choices.
   useEffect(() => {
+    if (onboardingEntryHandledRef.current) return;
+    onboardingEntryHandledRef.current = true;
     try {
       const params = new URLSearchParams(window.location.search);
       const explicitAction =
@@ -255,8 +273,13 @@ export function OnboardingPage() {
           : params.get('action') === 'import'
             ? 'import'
             : undefined;
-      const entryDecision = decideOnboardingEntry({ explicitAction });
-      setView(entryDecision.view);
+      const entryDecision = decideOnboardingEntry({
+        explicitAction,
+        pendingWalletFlow: pendingWalletConnection?.flow,
+      });
+      if (!currentIdentity?.migrationRequired) {
+        setView(entryDecision.view);
+      }
       if (entryDecision.legacyActionToConsume === 'connect') {
         params.delete('connect');
       } else if (entryDecision.legacyActionToConsume === 'import') {
@@ -270,7 +293,7 @@ export function OnboardingPage() {
     } catch {
       // ignore
     }
-  }, []);
+  }, [currentIdentity?.migrationRequired, pendingWalletConnection?.flow]);
 
   useEffect(() => {
     let cancelled = false;
@@ -760,6 +783,10 @@ export function OnboardingPage() {
   };
 
   const startConnectFlow = async () => {
+    if (pendingWalletConnection?.flow === 'onboarding') {
+      setView('wallet');
+      return;
+    }
     await resetWalletFlow();
     setView('wallet');
   };
@@ -906,6 +933,7 @@ export function OnboardingPage() {
       );
 
       // Force a reload to ensure a clean state for the new inbox
+      clearPendingWalletConnection();
       const pendingTarget = getPendingTargetUrl();
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {
@@ -931,6 +959,7 @@ export function OnboardingPage() {
       await auth.migrateDeviceJoinIdentity({
         onStatus: setStatusMessage,
       });
+      clearPendingWalletConnection();
       const pendingTarget = getPendingTargetUrl();
       window.location.assign(pendingTarget ?? '/');
     } catch (err) {

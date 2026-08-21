@@ -25,4 +25,18 @@ describe('resolveWalletConnector', () => {
     ).toEqual(connectors[1]);
     expect(resolveWalletConnector({}, connectors)).toEqual(connectors[0]);
   });
+
+  it('uses the stable connector id when multiple providers share a display name', () => {
+    const duplicateMetaMaskConnectors = [
+      { id: 'io.metamask', name: 'MetaMask' },
+      { id: 'metaMaskSDK', name: 'MetaMask' },
+    ];
+
+    expect(
+      resolveWalletConnector(
+        { connectorId: 'metaMaskSDK', connectorName: 'MetaMask' },
+        duplicateMetaMaskConnectors
+      )
+    ).toEqual(duplicateMetaMaskConnectors[1]);
+  });
 });

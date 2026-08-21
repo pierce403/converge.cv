@@ -142,6 +142,7 @@ export function SettingsPage() {
     isConnected: isWalletConnected,
     address: walletAddress,
     chainId: connectedWalletChainId,
+    pendingWalletConnection,
     signMessage,
   } = useWalletConnection();
   const [showQR, setShowQR] = useState(false);
@@ -174,15 +175,21 @@ export function SettingsPage() {
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('connectInbox') === '1') {
+      const hasConnectInboxQuery = params.get('connectInbox') === '1';
+      if (
+        hasConnectInboxQuery ||
+        pendingWalletConnection?.flow === 'settings-inbox'
+      ) {
         setAddIdentityError(null);
         setShowAddIdentityModal(true);
-        navigate('/settings', { replace: true });
+        if (hasConnectInboxQuery) {
+          navigate('/settings', { replace: true });
+        }
       }
     } catch {
       // ignore malformed URLs
     }
-  }, [navigate]);
+  }, [navigate, pendingWalletConnection?.flow]);
 
   const handleConnectionAction = async (
     action: 'reconnect' | 'repair',
@@ -1699,12 +1706,15 @@ function ConnectExistingInboxModal({
   onRecoverInstallations,
 }: ConnectExistingInboxModalProps) {
   const {
+    clearPendingWalletConnection,
     connectWallet,
     walletOptions,
     isConnected,
     isConnecting,
     address,
     chainId,
+    pendingWalletConnection,
+    resumeWalletConnection,
     signMessage,
   } = useWalletConnection();
   const [lastAccounts, setLastAccounts] = useState<readonly string[] | undefined>();
@@ -1741,6 +1751,53 @@ function ConnectExistingInboxModal({
       : undefined;
   const connectedSigner = walletSnapshot?.signMessage ?? signMessage;
   const connectedChainId = walletSnapshot?.chainId ?? chainId;
+  const closeModal = () => {
+    clearPendingWalletConnection();
+    onClose();
+  };
+
+  useEffect(() => {
+    if (pendingWalletConnection?.flow !== 'settings-inbox') return;
+    let cancelled = false;
+    let inFlight = false;
+
+    const resume = () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      void resumeWalletConnection('settings-inbox')
+        .then((result) => {
+          const resumedAddress = result?.accounts?.[0];
+          if (cancelled || !resumedAddress || !result?.signMessage) return;
+          setLastAccounts([resumedAddress]);
+          setWalletSnapshot({
+            accounts: [resumedAddress],
+            chainId: result.chainId,
+            signMessage: result.signMessage,
+          });
+          setConnectionStep(null);
+        })
+        .catch((resumeError) => {
+          console.warn('[Settings] Could not resume wallet handoff:', resumeError);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') resume();
+    };
+
+    resume();
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [pendingWalletConnection?.flow, resumeWalletConnection]);
 
   const runConnect = async (
     getAccounts: () => Promise<readonly string[] | undefined>,
@@ -1773,6 +1830,7 @@ function ConnectExistingInboxModal({
         connectedChainId,
         explicitWalletType
       );
+      clearPendingWalletConnection();
       onClose();
     } catch (err) {
       if (isWalletInspectionRequiredError(err)) {
@@ -1807,7 +1865,7 @@ function ConnectExistingInboxModal({
     onError(null);
     setConnectionStep('Opening wallet connection…');
     try {
-      const result = await connectWallet(option);
+      const result = await connectWallet(option, { flow: 'settings-inbox' });
       const accounts = result?.accounts?.[0] ? [result.accounts[0]] : undefined;
       if (!accounts?.length) {
         throw new Error('The wallet connected without returning an account. Try again.');
@@ -1907,7 +1965,7 @@ function ConnectExistingInboxModal({
           <button
             onClick={() => {
               if (isWorking) return;
-              onClose();
+              closeModal();
             }}
             className="text-primary-300 hover:text-primary-100 transition-colors"
             aria-label="Close"
@@ -2068,7 +2126,7 @@ function ConnectExistingInboxModal({
 
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
-              onClick={onClose}
+              onClick={closeModal}
               disabled={isWorking}
               className="btn-secondary text-sm px-3 py-2 disabled:opacity-50"
             >

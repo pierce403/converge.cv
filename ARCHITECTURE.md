@@ -24,11 +24,11 @@ this contract.
 
 ### Onboarding Lifecycle
 
-- Every unauthenticated visit starts on the inbox choice screen with Create new inbox, Restore from keyfile, and Connect external wallet. Startup must not automatically create an inbox or enter wallet approval.
+- Every fresh unauthenticated visit starts on the inbox choice screen with Create new inbox, Restore from keyfile, and Connect external wallet. Startup must not automatically create an inbox or enter wallet approval. A short-lived, user-started wallet handoff may restore the wallet chooser and query its existing connector session after a mobile app return; it never starts a second connection or signature prompt on load.
 - Create new inbox generates a local account key and registers its new XMTP inbox and first installation only after the user chooses it. It then opens the existing dismissible profile editor, prefilled with the deterministic Color Animal name, before the main messaging UI.
 - Creating another inbox later selects it immediately and opens the same profile editor.
 - Burning the final loaded inbox returns to the same inbox choice screen instead of silently creating a replacement inbox.
-- An interrupted external-wallet connection is represented by an explicit resume action on the choice screen. Startup may discover the pending record, but it must not open the wallet flow until the user chooses to resume it.
+- Before opening an external wallet, Converge persists only the flow, connector ID/name, attempt ID, and timestamp for 15 minutes. A reload or foreground return restores the exact chooser/modal and reconciles only that connector. The record contains no address, signature, XMTP data, or secret and is cleared on completion, explicit cancel/back, disconnect, or expiry.
 
 ### Inbox Registry And Runtime Isolation
 
@@ -45,7 +45,7 @@ this contract.
 - XMTP messages are represented to recipients as coming from `senderInboxId`. Converge must not offer a message-level selector for associated account keys. A future transaction-signing key selector belongs to a separate wallet feature.
 - Plaintext key export is implemented under the collapsed Advanced settings section and is never presented as an onboarding task or backup nag. Permanent loss after losing the only local copy is an accepted default tradeoff.
 - Before associating a wallet or account identifier, onboarding and Settings display the public/permanent identity-history warning and require an explicit acknowledgment before approval can continue.
-- Native Wagmi/Reown is the sole wallet connection stack and owns Coinbase/Base, WalletConnect, MetaMask, and injected-wallet deep-link lifecycles. Privy and Thirdweb wallet-provider UI are removed. Attachment ciphertext is uploaded through Thirdweb's narrow HTTPS storage contract without loading its wallet SDK; Thirdweb is not part of wallet authorization.
+- Native Wagmi/Reown is the sole wallet connection stack and owns Coinbase/Base, WalletConnect, MetaMask, and injected-wallet deep-link lifecycles. On mobile, the MetaMask choice uses the persistent Reown/WalletConnect connector rather than the retired MetaMask SDK relay; desktop extension selection remains pinned to the stable `metaMaskSDK` connector ID. Privy and Thirdweb wallet-provider UI are removed. Attachment ciphertext is uploaded through Thirdweb's narrow HTTPS storage contract without loading its wallet SDK; Thirdweb is not part of wallet authorization.
 
 ### Burn Inbox
 
@@ -128,7 +128,7 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
 - Local private keys, mnemonics, decrypted messages, contacts, attachment caches, and Browser SDK SQLite data are unencrypted at rest.
 - Keyfiles contain plaintext private-key or mnemonic material.
 - Wallet signatures authorize XMTP identity and installation changes. The wallet is not required for normal sends after its browser installation is registered and the signer-less client is reopened.
-- Explicit wallet selections resolve only to their matching connector; an unavailable connector fails visibly. EOA/SCW bytecode inspection is bounded and remains the default. When every inspection RPC fails, the user may explicitly identify the signer as a regular wallet or smart account; an explicit smart-account choice is rejected unless the connector supplied a valid chain ID.
+- Explicit wallet selections resolve only to their matching stable connector ID; an unavailable connector fails visibly. While Wagmi's mutation is pending, Converge also listens to the exact connector and probes it on `pageshow`, visible `visibilitychange`, and focus. A recovered account receives an account-bound signer without starting a concurrent connection request. EOA/SCW bytecode inspection is bounded and remains the default. When every inspection RPC fails, the user may explicitly identify the signer as a regular wallet or smart account; an explicit smart-account choice is rejected unless the connector supplied a valid chain ID.
 - Passphrase, passkey, and vault-lock controls are hidden until Converge implements real encryption-at-rest and recoverable unlock behavior.
 
 ### Message Retention And Deletion
