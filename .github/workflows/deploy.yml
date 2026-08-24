@@ -50,5 +50,11 @@ jobs:
         env:
           NODE_ENV: production
 
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser smoke
+        run: pnpm exec playwright test --config=playwright.smoke.config.ts
+
       - name: Validate Cloudflare bundle
         run: pnpm check:cloudflare

@@ -5,6 +5,8 @@ import { XmtpClient } from './client';
 describe('XmtpClient address resolver cache', () => {
   const address = '0x1111111111111111111111111111111111111111';
   const inboxId = 'a'.repeat(64);
+  const convosInviteCode =
+    'Cm8KPwFi60tQh86A-P9SudQquYnOUrBw_u-Ww6W5balnA4LhWs0r9b93FVXZ02qqi1KGZmK-Mpmqhb3ZSdq47eNMnBIgQ9OkZGgjKYjpQbUXZP9NBg_ieSmfAPl-kEcQRyKvGPwaCmRoaTZDNWloWHASQTGBzqUNDRP7ARA_---jB8EkIpylcyvyVjS52z4N3IqDD_eR0ubZ7BUW5r38Xb2tqa65G2inOOEDb5j46DK37L0B';
 
   it('dedupes concurrent lookups for the same address', async () => {
     const xmtp = new XmtpClient();
@@ -91,13 +93,13 @@ describe('XmtpClient address resolver cache', () => {
       {
         messageDisappearingSettings: {
           fromNs: expect.any(BigInt),
-          inNs: 2_419_200_000_000_000n,
+          inNs: 1_209_600_000_000_000n,
         },
       },
     );
   });
 
-  it('applies four-week disappearing messages to new multi-member groups', async () => {
+  it('applies two-week disappearing messages to new multi-member groups', async () => {
     const xmtp = new XmtpClient();
     const group = { id: 'group-1', createdAtNs: 1_000_000n };
     const createGroup = vi.fn(async () => group);
@@ -124,9 +126,41 @@ describe('XmtpClient address resolver cache', () => {
       {
         messageDisappearingSettings: {
           fromNs: expect.any(BigInt),
-          inNs: 2_419_200_000_000_000n,
+          inNs: 1_209_600_000_000_000n,
         },
       },
     );
+  });
+
+  it('applies two-week disappearing messages to invite-claim DMs', async () => {
+    const xmtp = new XmtpClient();
+    const send = vi.fn(async () => 'message-id');
+    const createDm = vi.fn(async () => ({
+      id: 'invite-dm',
+      createdAtNs: 1_000_000n,
+      send,
+    }));
+    (xmtp as unknown as { client: unknown }).client = {
+      inboxId: 'self-inbox',
+      conversations: { createDm },
+    };
+    xmtp.fetchInboxProfile = vi.fn(async (creatorInboxId: string) => ({
+      inboxId: creatorInboxId,
+      addresses: [],
+      identities: [],
+    }));
+
+    await xmtp.sendConvosInviteJoinRequest(convosInviteCode);
+
+    expect(createDm).toHaveBeenCalledWith(
+      '43d3a46468232988e941b51764ff4d060fe279299f00f97e9047104722af18fc',
+      {
+        messageDisappearingSettings: {
+          fromNs: expect.any(BigInt),
+          inNs: 1_209_600_000_000_000n,
+        },
+      },
+    );
+    expect(send).toHaveBeenCalledOnce();
   });
 });

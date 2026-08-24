@@ -13,7 +13,7 @@ function reasonLabel(reason?: DeletedConversationRecord['reason']): string {
     case 'user-hidden':
       return 'Hidden manually';
     case 'user-muted':
-      return 'Muted conversation';
+      return 'Legacy mute marker';
     case 'system':
       return 'System suppressed';
     default:
@@ -73,7 +73,7 @@ export function IgnoredConversationsModal({ isOpen, onClose }: IgnoredConversati
         <header className="space-y-2 pr-10">
           <h2 className="text-2xl font-bold">Ignored Conversations</h2>
           <p className="text-sm text-primary-200">
-            Conversations in this list are skipped during full resyncs. Unmute or recreate a thread to remove it from this list.
+            Hidden conversations stay out of automatic repairs. Starting the thread again removes its marker.
           </p>
           <div className="flex items-center gap-2 text-xs text-primary-200">
             <span className="rounded-full border border-primary-800/60 bg-primary-950/40 px-2 py-1">

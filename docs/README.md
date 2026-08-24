@@ -2,6 +2,12 @@
 
 This folder contains Converge.cv developer documentation and pointers to the canonical project docs.
 
+The current 2026-08-24 product contract is one visible active identity, with
+legacy registry/namespaced storage retained only for compatibility. Onboarding
+keeps local creation, external-wallet connection, and keyfile restore; ENS,
+XMTP/Convos profiles, contacts, and push remain, while Farcaster/Neynar and
+power-user sync controls are removed.
+
 ## Start Here
 
 - **Project overview**: [`../README.md`](../README.md)
@@ -17,8 +23,9 @@ This folder contains Converge.cv developer documentation and pointers to the can
 - **Storage schema (Dexie/IndexedDB)**: [`storage-schema.md`](storage-schema.md)
 - **Contact management**: [`contacts.md`](contacts.md)
 - **Conversation management**: [`conversations.md`](conversations.md)
-- **Multi-inbox identity and push contracts**: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
+- **Active identity, compatibility storage, and push contracts**: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
 - **Troubleshooting**: [`troubleshooting.md`](troubleshooting.md)
+- **2026-08-24 core simplification audit**: [`audits/2026-08-24-core-simplification.md`](audits/2026-08-24-core-simplification.md)
 - **2026-08-12 retention/XMTP/code-size audit**: [`audits/2026-08-12-retention-xmtp-size.md`](audits/2026-08-12-retention-xmtp-size.md)
 
 ## Conventions

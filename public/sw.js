@@ -1,4 +1,4 @@
-/* Minimal service worker for app-level, multi-inbox Web Push. */
+/* Minimal service worker for app-level Web Push. */
 const PUSH_STATE_DB_NAME = 'ConvergePushState';
 const PUSH_STATE_DB_VERSION = 1;
 const PUSH_META_STORE = 'meta';

@@ -24,13 +24,13 @@ and XMTP installation namespace.
 - `assets.not_found_handling` serves `index.html` with `200` for React routes.
 - `public/_headers` sets security, immutable hashed-asset caching, root QR-camera
   access, and no-cache service-worker behavior.
-- GitHub Actions runs the provider-neutral CI gate, including a Wrangler
-  production-manifest dry run. Cloudflare Workers Builds or an authenticated
+- GitHub Actions runs the provider-neutral CI gate, including desktop/mobile
+  core UI smoke coverage and a Wrangler production-manifest dry run. Cloudflare Workers Builds or an authenticated
   operator performs deployment; GitHub Pages is no longer a deployment target.
 - `CNAME`, `.nojekyll`, and the GitHub Pages `404.html` redirect shim are not part
   of the Cloudflare build.
 
-## Live State (2026-07-15)
+## Live State (2026-08-24)
 
 - `converge-cv` serves `https://converge.cv` as a Worker Custom Domain.
 - `converge-miniapp` independently serves `https://miniapp.converge.cv`.
@@ -47,6 +47,12 @@ and XMTP installation namespace.
 - GitHub Actions is read-only CI. Do not add Cloudflare API tokens, account
   credentials, or deployment secrets to GitHub Actions or GitHub repository
   secrets.
+- The visible app presents one active identity. Legacy multi-inbox registry
+  rows, namespaced IndexedDB databases, OPFS paths, and cached push state remain
+  local compatibility data and must survive deployment and rollback.
+- Production does not install the render watchdog or intercept global console
+  output. Those hooks are development-only. User-invoked diagnostics are
+  reached only through **Settings > Advanced**.
 
 ## Local Verification
 
@@ -59,8 +65,9 @@ pnpm preview:cloudflare
 ```
 
 The Cloudflare preview serves the production bundle with the same SPA routing
-and `_headers` rules used at the edge. Verify `/`, `/debug`, `/sw.js`, the web
-manifest, the XMTP WASM asset, and at least one hashed JavaScript asset.
+and `_headers` rules used at the edge. Verify `/`, `/sw.js`, the web manifest,
+the XMTP WASM asset, at least one hashed JavaScript asset, and the diagnostics
+entry from **Settings > Advanced**.
 
 ## First Cloudflare Deployment
 
@@ -132,8 +139,8 @@ values may enter its build:
   fetches the public key from vapid.party.
 - `VITE_WALLETCONNECT_PROJECT_ID` enables WalletConnect/Reown.
 - `VITE_THIRDWEB_CLIENT_ID` enables the current attachment upload provider.
-- `VITE_NEYNAR_API_KEY`, `VITE_FARCASTER_API_BASE`, `VITE_MAINNET_RPC_URLS`, and
-  `VITE_OG_BASE` are optional public client configuration.
+- `VITE_MAINNET_RPC_URLS` and `VITE_OG_BASE` are optional public client
+  configuration.
 
 Never place server credentials, private VAPID material, or XMTP private keys in
 a `VITE_*` variable.
@@ -151,14 +158,14 @@ old GitHub Pages custom-domain setting:
 
 ```bash
 curl -fsSI https://converge.cv/
-curl -fsSI https://converge.cv/debug
 curl -fsSI https://converge.cv/sw.js
 curl -fsSI https://converge.cv/manifest.json
 curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp-history/not-allowed
 curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp/not-allowed
 ```
 
-- `/` and `/debug` return `200` from Cloudflare, not `server: GitHub.com`.
+- `/` and the diagnostics route opened from **Settings > Advanced** return `200`
+  from Cloudflare, not `server: GitHub.com`.
 - HTML includes the checked-in security headers without Cloudflare HTML
   transformations, Rocket Loader, Zaraz, or challenge injection.
 - A clean browser records no `static.cloudflareinsights.com` request, no
@@ -176,9 +183,12 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://converge.cv/api/xmtp/not-allo
 - The existing inbox reopens without a new XMTP installation. Keeping the exact
   `https://converge.cv` origin preserves browser IndexedDB, OPFS, service-worker,
   and Push API state across the hosting-provider change.
-- Push Trace can run its local display test, relay test, and current-inbox route
-  refresh without creating a second physical subscription.
-- Direct navigation and refresh work for `/debug` and conversation routes.
+- Advanced Push Trace can run its local display test, relay test, and active-inbox
+  route refresh without creating a second physical subscription.
+- Conversation routes refresh directly. Diagnostics have no ordinary header or
+  bottom-navigation entry and are reached through **Settings > Advanced**.
+- The production bundle has no render-watchdog bootstrap or global console
+  interception, while development builds retain those diagnostics.
 
 Keep the old GitHub Pages artifact available until this checklist passes. DNS
 rollback changes the origin server, not the browser origin, so it does not erase
@@ -193,8 +203,8 @@ pnpm exec wrangler deployments list --name converge-cv
 pnpm exec wrangler rollback VERSION_ID --name converge-cv --message "rollback: describe reason"
 ```
 
-After rollback, repeat the cutover verification, including `/debug`, `/sw.js`,
-inbox reopen, and Push Trace.
+After rollback, repeat the cutover verification, including `/sw.js`, active
+identity reopen, and Advanced Push Trace.
 
 ## Security Reality
 

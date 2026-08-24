@@ -8,7 +8,6 @@ import {
 } from '@/lib/stores';
 import { formatDistanceToNow } from '@/lib/utils/date';
 import { getXmtpClient } from '@/lib/xmtp';
-import { WebWorkersPanel } from './WebWorkersPanel';
 import { KeyExplorerModal } from './KeyExplorerModal';
 import { IgnoredConversationsModal } from './IgnoredConversationsModal';
 import { DatabaseExplorerPanel } from './DatabaseExplorerPanel';
@@ -16,9 +15,7 @@ import { PushDiagnosticsPanel } from './PushDiagnosticsPanel';
 import buildInfo from '../../build-info.json'; // Import build info
 import { logNetworkEvent } from '@/lib/stores/debug-store';
 import {
-  extractConvosInviteCode,
   parseConvosInvite,
-  sanitizeConvosInviteCode,
   type ParsedConvosInvite,
 } from '@/lib/utils/convos-invite';
 import { useConversations } from '@/features/conversations/useConversations';
@@ -70,19 +67,6 @@ export function DebugPage() {
       return;
     }
 
-    const extractedCode = extractConvosInviteCode(inviteInput);
-    const sanitizedCode = extractedCode ? sanitizeConvosInviteCode(extractedCode) : null;
-
-    console.log('[Invite Claim] Raw input:', inviteInput);
-    console.log('[Invite Claim] Extracted code:', extractedCode);
-    console.log('[Invite Claim] Sanitized code:', sanitizedCode);
-    if (extractedCode && sanitizedCode && extractedCode !== sanitizedCode) {
-      console.log('[Invite Claim] Sanitized diff:', {
-        originalLength: extractedCode.length,
-        sanitizedLength: sanitizedCode.length,
-      });
-    }
-
     if (!isAuthenticated || !isVaultUnlocked) {
       setInviteError('Sign in and unlock your inbox before claiming an invite.');
       return;
@@ -92,7 +76,6 @@ export function DebugPage() {
     try {
       parsed = parseConvosInvite(inviteInput);
       setInviteDetails(parsed);
-      console.log('[Invite Claim] Parsed payload:', parsed.payload);
     } catch (error) {
       console.log('[Invite Claim] Parse error:', error);
       setInviteError(error instanceof Error ? error.message : 'Invalid invite code.');
@@ -106,25 +89,20 @@ export function DebugPage() {
 
     setInviteSending(true);
     try {
-      console.log('[Invite Claim] Sending Convos join_request to creator:', parsed.payload.creatorInboxId);
       const conversation = await requestConvosInviteJoin(parsed.inviteCode);
       if (!conversation) {
         throw new Error('Failed to send invite request.');
       }
 
-      console.log('[Invite Claim] Join request sent through DM:', {
-        conversationId: conversation.id,
-        peerId: conversation.peerId,
-      });
+      console.log('[Invite Claim] Join request sent through DM');
 
       logNetworkEvent({
         direction: 'outbound',
         event: 'invite:claim',
-        details: `Sent Convos join_request to ${parsed.payload.creatorInboxId}`,
+        details: 'Sent Convos join request',
       });
 
       setInviteSuccess('Invite sent. Waiting for the inviter to accept.');
-      console.log('[Invite Claim] Navigating to conversation:', conversation.id);
       navigate(`/chat/${conversation.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to send invite.';
@@ -419,8 +397,6 @@ export function DebugPage() {
           </article>
         </section>
 
-        <WebWorkersPanel />
-
         <DatabaseExplorerPanel />
 
         <section className="rounded-xl border border-primary-800/60 bg-primary-950/30">
@@ -461,11 +437,6 @@ export function DebugPage() {
                     </div>
                     <p className="mt-1 text-base font-medium text-primary-100">{entry.event}</p>
                     {entry.details && <p className="mt-1 text-xs text-primary-200">{entry.details}</p>}
-                    {entry.payload && (
-                      <pre className="mt-2 overflow-x-auto rounded-lg bg-primary-900/70 p-3 text-[11px] leading-relaxed text-primary-100">
-                        {entry.payload}
-                      </pre>
-                    )}
                   </li>
                 ))}
               </ul>

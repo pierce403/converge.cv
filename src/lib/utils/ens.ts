@@ -72,13 +72,25 @@ async function withRetry<T>(fn: () => Promise<T>, opts?: { maxAttempts?: number 
   return await fn();
 }
 
-const fcastIdCache = new Map<string, string | null>();
-
 /**
  * Check if a string is an ENS name
  */
 export function isENSName(address: string): boolean {
-  return address.endsWith('.eth') || address.endsWith('.xyz') || address.includes('.');
+  const candidate = address.trim();
+  if (
+    candidate.length === 0 ||
+    candidate.length > 255 ||
+    !candidate.includes('.') ||
+    /[\s@/:]/.test(candidate)
+  ) {
+    return false;
+  }
+  try {
+    const normalized = normalize(candidate);
+    return normalized.endsWith('.eth') && !normalized.startsWith('.');
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -93,24 +105,20 @@ export function isEthereumAddress(address: string): boolean {
  */
 export async function resolveENS(ensName: string): Promise<string | null> {
   try {
-    console.log('[ENS] Resolving ENS name:', ensName);
-
     // Normalize the ENS name (handles unicode, etc.)
-    const normalized = normalize(ensName);
-    console.log('[ENS] Normalized name:', normalized);
+    const normalized = normalize(ensName.trim());
     
     // Resolve to address
     const address = await withRetry(() => getEnsClient().getEnsAddress({ name: normalized }));
     
     if (address) {
-      console.log('[ENS] ✅ Resolved to:', address);
       return address;
     } else {
-      console.warn('[ENS] ⚠️  No address found for:', ensName);
+      console.warn('[ENS] No address found for the requested name');
       return null;
     }
   } catch (error) {
-    console.error('[ENS] Failed to resolve:', ensName, error);
+    console.error('[ENS] Failed to resolve name:', error);
     return null;
   }
 }
@@ -119,18 +127,20 @@ export async function resolveENS(ensName: string): Promise<string | null> {
  * Resolve an address or ENS name to an Ethereum address
  */
 export async function resolveAddressOrENS(input: string): Promise<string | null> {
+  const candidate = input.trim();
+
   // Already an Ethereum address
-  if (isEthereumAddress(input)) {
-    return input;
+  if (isEthereumAddress(candidate)) {
+    return candidate;
   }
   
   // Try to resolve as ENS name
-  if (isENSName(input)) {
-    return await resolveENS(input);
+  if (isENSName(candidate)) {
+    return await resolveENS(candidate);
   }
   
   // Invalid input
-  console.error('[ENS] Invalid input (not an address or ENS name):', input);
+  console.error('[ENS] Invalid address or ENS name input');
   return null;
 }
 
@@ -143,17 +153,14 @@ export async function resolveENSFromAddress(address: string): Promise<string | n
       return null;
     }
 
-    console.log('[ENS] Reverse resolving ENS name for address:', address);
-    
     const ensName = await withRetry(() =>
       getEnsClient().getEnsName({ address: address as `0x${string}` })
     );
     
     if (ensName) {
-      console.log('[ENS] ✅ Resolved to:', ensName);
       return ensName;
     } else {
-      console.warn('[ENS] ⚠️  No ENS name found for address:', address);
+      console.warn('[ENS] No reverse ENS name found');
       return null;
     }
   } catch (error) {
@@ -176,46 +183,10 @@ export async function resolveENSAvatar(ensName: string): Promise<string | null> 
 }
 
 /**
- * Resolve a `.fcast.id` name from an Ethereum address.
- *
- * Implementation: uses Neynar verification lookups when a Neynar API key is configured.
- */
-export async function resolveFcastId(address: string): Promise<string | null> {
-  try {
-    if (!isEthereumAddress(address)) {
-      return null;
-    }
-    const normalized = address.trim().toLowerCase();
-    if (fcastIdCache.has(normalized)) {
-      return fcastIdCache.get(normalized) ?? null;
-    }
-    console.log('[Fcast.id] Resolving .fcast.id for address:', address);
-
-    const { useFarcasterStore } = await import('@/lib/stores/farcaster-store');
-    const key = useFarcasterStore.getState().getEffectiveNeynarApiKey?.();
-    if (!key) {
-      fcastIdCache.set(normalized, null);
-      return null;
-    }
-
-    const { fetchNeynarUserByVerification } = await import('@/lib/farcaster/neynar');
-    const user = await fetchNeynarUserByVerification(normalized, key);
-    const username = user?.username?.trim();
-    const resolved = username ? `${username}.fcast.id` : null;
-    fcastIdCache.set(normalized, resolved);
-    return resolved;
-  } catch (error) {
-    console.error('[Fcast.id] Failed to resolve:', error);
-    return null;
-  }
-}
-
-/**
  * Return the reverse-ENS name only if it ends with `.base.eth`.
  */
 export async function resolveBaseEthName(address: string): Promise<string | null> {
   try {
-    console.log('[Base.eth] Resolving .base.eth for address:', address);
     const ensName = await resolveENSFromAddress(address);
     if (ensName && ensName.toLowerCase().endsWith('.base.eth')) {
       return ensName;

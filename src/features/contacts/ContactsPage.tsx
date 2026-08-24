@@ -27,6 +27,8 @@ export function ContactsPage() {
   const upsertContactProfile = useContactStore((state) => state.upsertContactProfile);
   const [showContactCard, setShowContactCard] = useState(false);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshFeedback, setRefreshFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     loadContacts();
@@ -49,64 +51,87 @@ export function ContactsPage() {
     );
   });
 
+  const handleRefreshContacts = async () => {
+    if (isRefreshing) return;
+    if (contacts.length === 0) {
+      setRefreshFeedback('No contacts to refresh.');
+      return;
+    }
+
+    setIsRefreshing(true);
+    setRefreshFeedback(null);
+    let nextIndex = 0;
+    let refreshed = 0;
+    let failed = 0;
+
+    try {
+      const xmtp = (await import('@/lib/xmtp')).getXmtpClient();
+      const refreshNext = async () => {
+        while (nextIndex < contacts.length) {
+          const contact = contacts[nextIndex++];
+          try {
+            let inboxId = contact.inboxId;
+            if (!inboxId || inboxId.startsWith('0x')) {
+              const addressCandidate = contact.primaryAddress || contact.addresses?.[0];
+              if (addressCandidate) {
+                inboxId = await xmtp.resolveInboxIdForAddress(addressCandidate, {
+                  context: 'ContactsPage:refresh',
+                }) ?? '';
+              }
+            }
+
+            if (!inboxId || inboxId.startsWith('0x')) {
+              failed += 1;
+              continue;
+            }
+
+            const profile = await xmtp.refreshInboxProfile(inboxId);
+            await upsertContactProfile({
+              inboxId: profile.inboxId,
+              displayName: profile.displayName,
+              avatarUrl: profile.avatarUrl,
+              primaryAddress: profile.primaryAddress,
+              addresses: profile.addresses,
+              identities: profile.identities,
+              source: 'inbox',
+              metadata: contact,
+            });
+            refreshed += 1;
+          } catch (error) {
+            failed += 1;
+            console.warn('[Contacts] A contact refresh failed', error);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(4, contacts.length) }, () => refreshNext()),
+      );
+      setRefreshFeedback(
+        failed > 0
+          ? `${refreshed} refreshed; ${failed} could not be refreshed.`
+          : `${refreshed} contact${refreshed === 1 ? '' : 's'} refreshed.`,
+      );
+    } catch (error) {
+      console.error('Failed to refresh contacts:', error);
+      setRefreshFeedback('Contacts could not be refreshed. Try again when connected.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       <header className="bg-primary-950/80 border-b border-primary-800/60 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-lg">
         <h2 className="text-xl font-bold text-primary-50">Contacts</h2>
         <div className="flex gap-2">
           <button
-            onClick={async () => {
-              // Refresh all contacts' display name + avatar from XMTP
-              try {
-                const xmtp = (await import('@/lib/xmtp')).getXmtpClient();
-                for (const c of contacts) {
-                  try {
-                    let inboxId = c.inboxId;
-                    if (!inboxId || inboxId.startsWith('0x')) {
-                      const addressCandidate = c.primaryAddress || c.addresses?.[0];
-                      if (addressCandidate) {
-                        try {
-                          const resolved = await xmtp.resolveInboxIdForAddress(addressCandidate, {
-                            context: 'ContactsPage:refresh',
-                          });
-                          if (resolved && !resolved.startsWith('0x')) {
-                            inboxId = resolved.toLowerCase();
-                          }
-                        } catch (resolveErr) {
-                          console.warn('[Contacts] Failed to resolve inbox id during refresh', resolveErr);
-                        }
-                      }
-                    }
-
-                    if (!inboxId || inboxId.startsWith('0x')) {
-                      continue;
-                    }
-
-                    const profile = await xmtp.refreshInboxProfile(inboxId);
-                    await upsertContactProfile({
-                      inboxId: profile.inboxId,
-                      displayName: profile.displayName,
-                      avatarUrl: profile.avatarUrl,
-                      primaryAddress: profile.primaryAddress,
-                      addresses: profile.addresses,
-                      identities: profile.identities,
-                      source: 'inbox',
-                      metadata: c,
-                    });
-                  } catch (e) {
-                    console.warn('[Contacts] Refresh failed for', c.inboxId || c.primaryAddress || c.addresses?.[0], e);
-                  }
-                }
-                alert('Contacts refreshed.');
-              } catch (e) {
-                console.error('Failed to refresh contacts:', e);
-                alert('Failed to refresh contacts');
-              }
-            }}
+            onClick={() => void handleRefreshContacts()}
+            disabled={isRefreshing}
             className="btn-secondary text-sm px-3 py-1"
             title="Refresh avatars and display names"
           >
-            Refresh
+            {isRefreshing ? 'Refreshing…' : 'Refresh'}
           </button>
           <Link
             to="/new-group"
@@ -116,6 +141,12 @@ export function ContactsPage() {
           </Link>
         </div>
       </header>
+
+      {refreshFeedback && (
+        <p className="px-4 pt-3 text-sm text-primary-300" role="status">
+          {refreshFeedback}
+        </p>
+      )}
 
       <div className="p-4">
         <input
@@ -155,13 +186,16 @@ export function ContactsPage() {
               return (
                 <li
                   key={contact.inboxId}
-                  className="bg-primary-900/70 p-3 rounded-lg flex items-center justify-between cursor-pointer hover:bg-primary-800/50 transition-colors"
-                  onClick={() => {
-                    setSelectedContact(contact);
-                    setShowContactCard(true);
-                  }}
+                  className="bg-primary-900/70 rounded-lg flex items-center justify-between hover:bg-primary-800/50 transition-colors"
                 >
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-accent-500"
+                    onClick={() => {
+                      setSelectedContact(contact);
+                      setShowContactCard(true);
+                    }}
+                  >
                     <div className="w-10 h-10 rounded-full bg-primary-700/80 flex items-center justify-center overflow-hidden flex-shrink-0">
                       {wantInitials ? (
                         <span className="text-white font-semibold text-sm" aria-hidden>
@@ -176,36 +210,21 @@ export function ContactsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <p className="text-primary-50 font-medium truncate">
-                        {label}
-                      </p>
-                      {contact.source === 'farcaster' && (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-accent-900/50 text-accent-300 border border-accent-800/50 flex-shrink-0">
-                          FC
-                        </span>
-                      )}
-                      {contact.farcasterScore !== undefined &&
-                        contact.farcasterScore !== null &&
-                        Number.isFinite(contact.farcasterScore) && (
-                          <span className="text-xs px-1 py-0.5 rounded bg-accent-950/50 text-accent-200 border border-accent-900/60 flex-shrink-0">
-                            Score {contact.farcasterScore.toFixed(2)}
-                          </span>
-                        )}
+                      <span className="text-primary-50 font-medium truncate">{label}</span>
                       {contact.isInboxOnly && (
                         <span className="text-xs px-1.5 py-0.5 rounded bg-primary-800/50 text-primary-400 border border-primary-700/50 flex-shrink-0">
                           Inbox
                         </span>
                       )}
                     </div>
-                  </div>
+                  </button>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
+                    onClick={() => {
                       if (confirm('Delete this contact?')) {
-                        removeContact(contact.inboxId);
+                        void removeContact(contact.inboxId);
                       }
                     }}
-                    className="ml-3 text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 border border-red-800/60"
+                    className="mr-3 text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 border border-red-800/60"
                     title="Delete contact"
                   >
                     Delete

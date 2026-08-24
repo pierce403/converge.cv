@@ -45,15 +45,6 @@ export function PersonalizationReminderModal({
 
     const suggestion = suggestAnimalDisplayName(identity?.inboxId || identity?.address || 'converge');
 
-    // Log picks for debugging clarity
-    try {
-      console.log(
-        `[Personalization] Suggested display name parts: color="${suggestion.color}", animal="${suggestion.animal}" -> "${suggestion.displayName}"`
-      );
-    } catch (e) {
-      // ignore console failure in restricted envs
-    }
-
     return suggestion.displayName;
   }, [identity?.displayName, identity?.inboxId, identity?.address, isOnboarding]);
 
@@ -119,7 +110,7 @@ export function PersonalizationReminderModal({
           try {
             const pendingKey = `pending-profile-save:${inboxKey}`;
             window.localStorage.setItem(pendingKey, payload);
-            console.log('[Personalization] XMTP not connected; queued profile save for later:', payload);
+            console.log('[Personalization] XMTP not connected; queued profile save for later');
             try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Profile will be published when connected' })); } catch (e1) {
               // ignore
             }
@@ -134,7 +125,7 @@ export function PersonalizationReminderModal({
           const pendingKey = `pending-profile-save:${inboxKey}`;
           const payload = JSON.stringify({ displayName: updated.displayName, avatarUrl: updated.avatar, ts: Date.now() });
           window.localStorage.setItem(pendingKey, payload);
-          console.log('[Personalization] Queued profile save after failure:', payload);
+          console.log('[Personalization] Queued profile save after failure');
           try { window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Profile will be retried on reconnect' })); } catch (e2) {
             // ignore
           }

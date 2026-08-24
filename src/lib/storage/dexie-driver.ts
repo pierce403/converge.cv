@@ -631,6 +631,37 @@ export class DexieDriver implements StorageDriver {
     );
   }
 
+  async reconcilePublishedMessage(
+    optimisticMessageId: string,
+    message: Message,
+  ): Promise<void> {
+    if (!shouldRetainMessage(message)) {
+      await this.dataDb.messages.delete(optimisticMessageId);
+      return;
+    }
+
+    await this.dataDb.transaction(
+      'rw',
+      [this.dataDb.messages, this.dataDb.conversations],
+      async () => {
+        await this.dataDb.messages.put(message);
+        if (optimisticMessageId !== message.id) {
+          await this.dataDb.messages.delete(optimisticMessageId);
+        }
+
+        const conversation = await this.dataDb.conversations.get(message.conversationId);
+        if (conversation && message.sentAt >= conversation.lastMessageAt) {
+          await this.dataDb.conversations.update(message.conversationId, {
+            lastMessageAt: message.sentAt,
+            lastMessagePreview: getMessagePreview(message),
+            lastMessageId: message.id,
+            lastMessageSender: message.sender,
+          });
+        }
+      },
+    );
+  }
+
   async getMessage(id: string): Promise<Message | undefined> {
     const message = await this.dataDb.messages.get(id);
     return message && shouldRetainMessage(message) ? message : undefined;

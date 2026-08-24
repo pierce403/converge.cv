@@ -31,7 +31,6 @@ export interface Conversation {
   unreadCount: number;
   pinned: boolean;
   archived: boolean;
-  mutedUntil?: number;
   lastMessageId?: string;
   lastMessageSender?: string;
   lastReadAt?: number;
@@ -222,7 +221,6 @@ export interface Identity {
   migrationTargetWallet?: string;
   migrationOldLocalAddress?: string;
   expectedInboxId?: string;
-  farcasterFid?: number; // Farcaster FID for contact syncing
   mnemonic?: string; // Optional BIP39 phrase; currently stored unencrypted in IndexedDB
 }
 

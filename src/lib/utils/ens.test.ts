@@ -1,45 +1,42 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveBaseEthName, resolveFcastId, setEnsClient } from './ens';
-
-const mockFetchNeynarUserByVerification = vi.fn();
-
-vi.mock('@/lib/farcaster/neynar', () => ({
-  fetchNeynarUserByVerification: (...args: unknown[]) => mockFetchNeynarUserByVerification(...args),
-}));
-
-vi.mock('@/lib/stores/farcaster-store', () => ({
-  useFarcasterStore: {
-    getState: () => ({
-      getEffectiveNeynarApiKey: () => 'test-key',
-    }),
-  },
-}));
+import {
+  isENSName,
+  resolveAddressOrENS,
+  resolveBaseEthName,
+  resolveENS,
+  setEnsClient,
+} from './ens';
 
 afterEach(() => {
-  mockFetchNeynarUserByVerification.mockReset();
   setEnsClient(null);
 });
 
 describe('ens utils', () => {
-  it('resolveFcastId returns null for invalid addresses', async () => {
-    const res = await resolveFcastId('not-an-address');
-    expect(res).toBeNull();
-    expect(mockFetchNeynarUserByVerification).not.toHaveBeenCalled();
+  it('accepts normalized ENS names and rejects URLs, emails, and dotted prose', () => {
+    expect(isENSName('alice.eth')).toBe(true);
+    expect(isENSName('alice.base.eth')).toBe(true);
+    expect(isENSName('https://alice.eth')).toBe(false);
+    expect(isENSName('alice@example.eth')).toBe(false);
+    expect(isENSName('not a.name')).toBe(false);
+    expect(isENSName('example.com')).toBe(false);
+    expect(isENSName('plain.dotted.input')).toBe(false);
   });
 
-  it('resolveFcastId resolves username via Neynar and caches per address', async () => {
-    mockFetchNeynarUserByVerification.mockResolvedValueOnce({ username: 'alice' });
+  it('resolves whitespace-padded ENS names using the validated normalized candidate', async () => {
+    const resolvedAddress = '0x1111111111111111111111111111111111111111';
+    const getEnsAddress = vi.fn(async () => resolvedAddress);
+    setEnsClient({
+      getEnsAddress,
+      getEnsName: vi.fn(async () => null),
+    } as unknown as Parameters<typeof setEnsClient>[0]);
 
-    const addr = '0x1111111111111111111111111111111111111111';
-    const first = await resolveFcastId(addr);
-    expect(first).toBe('alice.fcast.id');
+    await expect(resolveAddressOrENS('  alice.eth\n')).resolves.toBe(resolvedAddress);
+    expect(getEnsAddress).toHaveBeenCalledWith({ name: 'alice.eth' });
 
-    const second = await resolveFcastId(addr);
-    expect(second).toBe('alice.fcast.id');
-
-    expect(mockFetchNeynarUserByVerification).toHaveBeenCalledTimes(1);
-    expect(mockFetchNeynarUserByVerification).toHaveBeenCalledWith(addr.toLowerCase(), 'test-key');
+    getEnsAddress.mockClear();
+    await expect(resolveENS('  ALICE.eth\t')).resolves.toBe(resolvedAddress);
+    expect(getEnsAddress).toHaveBeenCalledWith({ name: 'alice.eth' });
   });
 
   it('resolveBaseEthName only returns *.base.eth names', async () => {
@@ -58,4 +55,3 @@ describe('ens utils', () => {
     expect(notBase).toBeNull();
   });
 });
-

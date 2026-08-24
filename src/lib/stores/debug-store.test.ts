@@ -32,4 +32,18 @@ describe('debug store', () => {
     expect(useDebugStore.getState().consoleEntries).toHaveLength(200);
     expect(useDebugStore.getState().consoleEntries[0].message).toBe('m5');
   });
+
+  it('never retains network payloads that may contain message content', () => {
+    logNetworkEvent({
+      direction: 'outbound',
+      event: 'messages:send',
+      details: 'Sending message',
+      payload: 'private disappearing body',
+    });
+
+    const entry = useDebugStore.getState().networkEntries[0];
+    expect(entry).toMatchObject({ event: 'messages:send', details: 'Sending message' });
+    expect(entry.payload).toBeUndefined();
+    expect(JSON.stringify(entry)).not.toContain('private disappearing body');
+  });
 });

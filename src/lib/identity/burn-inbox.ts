@@ -17,7 +17,6 @@ import {
 import { getXmtpClient } from '@/lib/xmtp';
 import { inboxIdsMatch, normalizeInboxId } from '@/lib/utils/inbox';
 import { clearLastRoute } from '@/lib/utils/route-persistence';
-import { clearNeynarVerificationCacheForAddresses } from '@/lib/farcaster/neynar';
 import { removePushRegistrationForInbox } from '@/lib/push';
 import {
   clearIntentionalEmptyInboxState,
@@ -239,10 +238,12 @@ export async function burnInboxWithDependencies(
     localCleanupWarnings.push(`Inbox registry cleanup: ${errorMessage(error)}`);
   }
 
-  const intentionallyEmpty = remainingInboxIds.length === 0;
-  const nextInboxId = wasActive
-    ? remainingInboxIds[0] ?? null
-    : registryState.currentInboxId;
+  // The visible product has one active identity. Burning it must return to the
+  // explicit onboarding choices even when older compatibility identities are
+  // still retained internally; silently selecting one would reopen an inbox
+  // the user can no longer see or choose from the UI.
+  const intentionallyEmpty = wasActive || remainingInboxIds.length === 0;
+  const nextInboxId = wasActive ? null : registryState.currentInboxId;
 
   try {
     dependencies.setCurrentRegistryInbox(nextInboxId);
@@ -309,7 +310,6 @@ export function clearInboxBrowserState(inboxId: string, identities: Identity[]):
   for (const address of addresses) {
     removeBrowserStorageKey(`personalization-reminder:${address}`);
     removeBrowserStorageKey(`pending-profile-save:${address}`);
-    removeBrowserStorageKey(`self-farcaster:last-check:${address}`);
   }
   removeBrowserStorageKey(`pending-profile-save:${normalizedInboxId}`);
   for (const installationId of installationIds) {
@@ -338,7 +338,6 @@ export function clearInboxBrowserState(inboxId: string, identities: Identity[]):
       // Leave unrelated or malformed global onboarding state untouched.
     }
   }
-  clearNeynarVerificationCacheForAddresses(addresses);
 }
 
 const runtimeDependencies: BurnInboxDependencies = {

@@ -5,7 +5,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConversations } from './useConversations';
-// import { getXmtpClient } from '@/lib/xmtp';
 import { resolveAddressOrENS, isENSName, isEthereumAddress } from '@/lib/utils/ens';
 import { QRScanner } from '@/components/QRScanner';
 
@@ -38,7 +37,6 @@ export function NewChatPage() {
   }, [location.search]);
 
   const handleQRScan = (data: string) => {
-    console.log('[NewChat] QR code scanned:', data);
     setShowScanner(false);
     
     // Parse XMTP QR format: xmtp:ethereum:0x...
@@ -73,8 +71,6 @@ export function NewChatPage() {
       
       if (isENSName(inputValue)) {
         setIsResolving(true);
-        console.log('[NewChat] Resolving ENS name:', inputValue);
-        
         const resolved = await resolveAddressOrENS(inputValue);
         setIsResolving(false);
         
@@ -85,7 +81,6 @@ export function NewChatPage() {
         
         targetAddress = resolved;
         setResolvedAddress(resolved);
-        console.log('[NewChat] ✅ Resolved to:', resolved);
       } else if (!isEthereumAddress(inputValue)) {
         setError('Invalid Ethereum address or ENS name format');
         return;

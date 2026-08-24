@@ -23,6 +23,7 @@ const xmtpMock = {
 
 const mockStorage = {
   putMessage: vi.fn(async () => undefined),
+  reconcilePublishedMessage: vi.fn(async () => undefined),
   getMessage: vi.fn(async () => undefined),
   getConversation: vi.fn(async () => undefined),
   listMessages: vi.fn<() => Promise<Message[]>>(async () => []),
@@ -306,10 +307,16 @@ describe('useMessages resolver usage', () => {
       render(<Harness onReady={(value) => (api = value)} />);
     });
 
+    let failure: unknown;
     await act(async () => {
-      await api!.sendMessage('local-conversation-1', 'hello');
+      try {
+        await api!.sendMessage('local-conversation-1', 'hello');
+      } catch (error) {
+        failure = error;
+      }
     });
 
+    expect(failure).toEqual(expect.objectContaining({ message: expect.stringContaining('created locally') }));
     expect(xmtpMock.resolveInboxIdForAddress).not.toHaveBeenCalled();
     expect(xmtpMock.sendMessage).not.toHaveBeenCalled();
     expect(mockStorage.putMessage).not.toHaveBeenCalled();
@@ -319,6 +326,90 @@ describe('useMessages resolver usage', () => {
       }),
     );
     dispatchSpy.mockRestore();
+  });
+
+  it('removes a failed optimistic text row and rejects so the composer can preserve its draft', async () => {
+    const publishError = new Error('network unavailable');
+    xmtpMock.sendMessage.mockRejectedValueOnce(publishError);
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let failure: unknown;
+    await act(async () => {
+      try {
+        await api!.sendMessage('c1', 'keep me');
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(failure).toBe(publishError);
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([]);
+    expect(mockStorage.deleteMessage).toHaveBeenCalledWith(expect.stringMatching(/^msg_/));
+  });
+
+  it('removes the optimistic row without publishing when local storage is unavailable', async () => {
+    const storageError = new Error('IndexedDB unavailable');
+    mockStorage.putMessage.mockRejectedValueOnce(storageError);
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let failure: unknown;
+    await act(async () => {
+      try {
+        await api!.sendMessage('c1', 'keep me');
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(failure).toBe(storageError);
+    expect(xmtpMock.sendMessage).not.toHaveBeenCalled();
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([]);
+  });
+
+  it('does not report a published message as failed when local reconciliation fails', async () => {
+    const storageError = new Error('IndexedDB quota exceeded');
+    const expiresAt = Date.now() + 14 * 24 * 60 * 60 * 1_000;
+    xmtpMock.sendMessage.mockResolvedValueOnce({
+      id: 'remote-published',
+      conversationId: 'c1',
+      senderAddress: 'self-inbox',
+      content: 'sent once',
+      sentAt: Date.now(),
+      expiresAt,
+      isLocalFallback: false,
+    });
+    mockStorage.reconcilePublishedMessage.mockRejectedValueOnce(storageError);
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await expect(api!.sendMessage('c1', 'sent once')).resolves.toBeUndefined();
+    });
+
+    expect(xmtpMock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([
+      expect.objectContaining({
+        id: 'remote-published',
+        body: 'sent once',
+        status: 'sent',
+        expiresAt,
+      }),
+    ]);
+    expect(mockStorage.reconcilePublishedMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/^msg_/),
+      expect.objectContaining({ id: 'remote-published', expiresAt }),
+    );
   });
 
   it('marks an attachment failed and surfaces the XMTP publish error', async () => {
@@ -338,10 +429,16 @@ describe('useMessages resolver usage', () => {
       size: bytes.byteLength,
       arrayBuffer: async () => bytes.buffer,
     } as File;
+    let failure: unknown;
     await act(async () => {
-      await api!.sendAttachment('c1', file);
+      try {
+        await api!.sendAttachment('c1', file);
+      } catch (error) {
+        failure = error;
+      }
     });
 
+    expect(failure).toBe(publishError);
     const messages = useMessageStore.getState().messagesByConversation.c1;
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
@@ -367,15 +464,21 @@ describe('useMessages resolver usage', () => {
       render(<Harness onReady={(value) => (api = value)} />);
     });
 
+    let failure: unknown;
     await act(async () => {
-      await api!.sendAttachment('c1', {
-        name: 'animation.gif',
-        type: 'image/gif',
-        size: 3,
-        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
-      } as File);
+      try {
+        await api!.sendAttachment('c1', {
+          name: 'animation.gif',
+          type: 'image/gif',
+          size: 3,
+          arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+        } as File);
+      } catch (error) {
+        failure = error;
+      }
     });
 
+    expect(failure).toEqual(expect.objectContaining({ message: 'Please select a JPEG, PNG, or WebP image.' }));
     expect(xmtpMock.sendAttachment).not.toHaveBeenCalled();
     expect(mockStorage.putMessage).not.toHaveBeenCalled();
     expect(dispatchSpy).toHaveBeenCalledWith(
@@ -394,21 +497,65 @@ describe('useMessages resolver usage', () => {
       render(<Harness onReady={(value) => (api = value)} />);
     });
 
+    let failure: unknown;
     await act(async () => {
-      await api!.sendAttachment('c1', {
-        name: 'not-really.png',
-        type: 'image/png',
-        size: 16,
-        arrayBuffer: async () => new TextEncoder().encode('<html></html>').buffer,
-      } as File);
+      try {
+        await api!.sendAttachment('c1', {
+          name: 'not-really.png',
+          type: 'image/png',
+          size: 16,
+          arrayBuffer: async () => new TextEncoder().encode('<html></html>').buffer,
+        } as File);
+      } catch (error) {
+        failure = error;
+      }
     });
 
+    expect(failure).toEqual(expect.objectContaining({ message: expect.stringContaining('supported raster image') }));
     expect(xmtpMock.sendAttachment).not.toHaveBeenCalled();
     expect(mockStorage.putMessage).not.toHaveBeenCalled();
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'ui:toast',
         detail: 'Image must be a valid static JPEG, PNG, or WebP within the safety limits.',
+      }),
+    );
+    dispatchSpy.mockRestore();
+  });
+
+  it('removes an optimistic image without publishing when local attachment storage fails', async () => {
+    const storageError = new Error('IndexedDB quota exceeded');
+    mockStorage.putAttachment.mockRejectedValueOnce(storageError);
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    const bytes = pngBytes();
+    const file = {
+      name: 'photo.png',
+      type: 'image/png',
+      size: bytes.byteLength,
+      arrayBuffer: async () => bytes.buffer,
+    } as File;
+    let failure: unknown;
+    await act(async () => {
+      try {
+        await api!.sendAttachment('c1', file);
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(failure).toBe(storageError);
+    expect(xmtpMock.sendAttachment).not.toHaveBeenCalled();
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([]);
+    expect(mockStorage.deleteMessage).toHaveBeenCalledWith(expect.stringMatching(/^msg_/));
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'ui:toast',
+        detail: 'Image was not sent because local storage is unavailable.',
       }),
     );
     dispatchSpy.mockRestore();
@@ -472,6 +619,42 @@ describe('useMessages resolver usage', () => {
       }),
     );
     expect(mockStorage.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps native expiry in memory when an attachment retains its optimistic ID', async () => {
+    const fileBytes = pngBytes();
+    const expiresAt = Date.now() + 14 * 24 * 60 * 60 * 1_000;
+    xmtpMock.sendAttachment.mockResolvedValueOnce({
+      id: '',
+      conversationId: 'c1',
+      senderAddress: 'self-inbox',
+      content: 'photo.png',
+      sentAt: Date.now(),
+      expiresAt,
+      isLocalFallback: false,
+    });
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.sendAttachment('c1', {
+        name: 'photo.png',
+        type: 'image/png',
+        size: fileBytes.byteLength,
+        arrayBuffer: async () => fileBytes.buffer,
+      } as File);
+    });
+
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([
+      expect.objectContaining({ status: 'sent', expiresAt }),
+    ]);
+    expect(mockStorage.reconcilePublishedAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ expiresAt }),
+      }),
+    );
   });
 
   it('does not mark a published image failed when local cache reconciliation fails', async () => {

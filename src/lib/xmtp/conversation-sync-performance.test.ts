@@ -12,8 +12,10 @@ vi.mock('@/lib/storage', () => ({
 
 import { XmtpClient } from './client';
 import {
+  awaitXmtpMessageIngestion,
   registerXmtpDurableSideEffectConsumer,
   registerXmtpMessageConsumer,
+  type XmtpMessageEventDetail,
   type XmtpMessageConsumer,
 } from './message-events';
 import { DEFAULT_MESSAGE_RETENTION_MS } from '@/lib/message-retention-policy';
@@ -51,6 +53,7 @@ describe('XmtpClient conversation sync performance', () => {
       }),
       listConversations: vi.fn(async () => Array.from(storedConversations.values())),
       isConversationDeleted: vi.fn(async () => false),
+      getMessage: vi.fn(async () => undefined),
     };
     mocks.getStorage.mockResolvedValue(storage);
     useConversationStore.setState({
@@ -180,6 +183,44 @@ describe('XmtpClient conversation sync performance', () => {
       expect(storedConversations.get(`group-${i}`)).toBeDefined();
       expect(storedConversations.get(`group-${i}`)?.groupName).toBe(`Group ${i}`);
     }
+  });
+
+  it('repairs an existing DM peer inbox without discarding local UI state', async () => {
+    storedConversations.set('dm-repair', {
+      id: 'dm-repair',
+      peerId: '0x1111111111111111111111111111111111111111',
+      createdAt: 1,
+      lastMessageAt: 42,
+      unreadCount: 3,
+      pinned: true,
+      archived: false,
+      isGroup: false,
+      lastMessagePreview: 'keep preview',
+    });
+    const dm = {
+      id: 'dm-repair',
+      createdAtNs: 1_000_000n,
+      peerInboxId: vi.fn(async () => 'canonical-peer-inbox'),
+    };
+    const xmtp = new XmtpClient();
+    (xmtp as unknown as { client: unknown }).client = {
+      inboxId: 'self-inbox',
+      conversations: {
+        sync: vi.fn(async () => undefined),
+        list: vi.fn(async () => [dm]),
+        listDms: vi.fn(async () => [dm]),
+      },
+    };
+
+    await xmtp.syncConversations({ force: true, reason: 'test-dm-repair' });
+
+    expect(storedConversations.get('dm-repair')).toMatchObject({
+      peerId: 'canonical-peer-inbox',
+      pinned: true,
+      unreadCount: 3,
+      lastMessagePreview: 'keep preview',
+      isGroup: false,
+    });
   });
 
   it('times out stalled operations without wedging', async () => {
@@ -520,6 +561,97 @@ describe('XmtpClient conversation sync performance', () => {
     expect(storedConversations.get('dm-join-request')?.lastSyncedAt).toBe(
       originalCheckpoint
     );
+  });
+
+  it('preserves native expiry when decoding a Convos join request', async () => {
+    const xmtp = new XmtpClient();
+    let received: XmtpMessageEventDetail | undefined;
+    const unregister = registerDurableConsumers(async (detail) => {
+      received = detail;
+    });
+
+    try {
+      const handled = await (
+        xmtp as unknown as {
+          dispatchConvosJoinRequest: (
+            message: unknown,
+            isHistory: boolean,
+            ownerInboxId: string,
+          ) => Promise<boolean>;
+        }
+      ).dispatchConvosJoinRequest(
+        {
+          id: 'join-request-expiry',
+          conversationId: 'join-request-dm',
+          senderInboxId: 'peer-inbox',
+          sentAtNs: 1_000_000_000n,
+          expiresAtNs: 15_000_000_000n,
+          content: { inviteSlug: 'join-example' },
+          contentType: ContentTypeConvosJoinRequest,
+        },
+        true,
+        'self-inbox',
+      );
+
+      expect(handled).toBe(true);
+      expect(received?.message).toMatchObject({
+        id: 'join-request-expiry',
+        sentAt: 1_000,
+        expiresAt: 15_000,
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it('preserves native expiry when scanning an unknown DM for an invite', async () => {
+    const xmtp = new XmtpClient();
+    const lastMessage = {
+      id: 'scanned-invite-expiry',
+      conversationId: 'unknown-dm',
+      senderInboxId: 'peer-inbox',
+      sentAtNs: 2_000_000_000n,
+      expiresAtNs: 16_000_000_000n,
+      content: { inviteSlug: 'scan-example' },
+      contentType: ContentTypeConvosJoinRequest,
+    };
+    const activeClient = {
+      inboxId: 'self-inbox',
+      conversations: {
+        listDms: vi.fn(async () => [
+          { lastMessage: vi.fn(async () => lastMessage) },
+        ]),
+      },
+    };
+    (xmtp as unknown as { client: unknown }).client = activeClient;
+    const consume = vi.fn(async () => undefined);
+    const unregister = registerDurableConsumers(consume);
+
+    try {
+      await (
+        xmtp as unknown as {
+          scanInviteJoinRequests: (
+            client: unknown,
+            reason: string,
+          ) => Promise<void>;
+        }
+      ).scanInviteJoinRequests(activeClient, 'expiry-test');
+      await awaitXmtpMessageIngestion();
+
+      expect(consume).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: 'unknown-dm',
+          message: expect.objectContaining({
+            id: 'scanned-invite-expiry',
+            sentAt: 2_000,
+            expiresAt: 16_000,
+          }),
+          scanReason: 'expiry-test',
+        }),
+      );
+    } finally {
+      unregister();
+    }
   });
 
   it('propagates reply persistence failures instead of stamping the checkpoint', async () => {

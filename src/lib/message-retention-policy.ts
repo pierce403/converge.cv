@@ -1,8 +1,13 @@
 import type { Message } from '@/types';
 
+// Local history remains at the previously released cutoff so changing the
+// default for new chats does not suddenly erase 14–28 day-old browser data.
 export const DEFAULT_MESSAGE_RETENTION_DAYS = 28;
 export const DEFAULT_MESSAGE_RETENTION_MS =
   DEFAULT_MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1_000;
+export const DEFAULT_MESSAGE_DISAPPEARING_DAYS = 14;
+export const DEFAULT_MESSAGE_DISAPPEARING_MS =
+  DEFAULT_MESSAGE_DISAPPEARING_DAYS * 24 * 60 * 60 * 1_000;
 
 const NS_PER_MS = 1_000_000n;
 
@@ -34,6 +39,6 @@ export function getDefaultMessageDisappearingSettings(now = Date.now()): {
 } {
   return {
     fromNs: BigInt(now) * NS_PER_MS,
-    inNs: BigInt(DEFAULT_MESSAGE_RETENTION_MS) * NS_PER_MS,
+    inNs: BigInt(DEFAULT_MESSAGE_DISAPPEARING_MS) * NS_PER_MS,
   };
 }

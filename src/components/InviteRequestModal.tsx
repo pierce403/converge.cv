@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getXmtpClient } from '@/lib/xmtp';
-import { useContactStore, useFarcasterStore } from '@/lib/stores';
+import { useContactStore } from '@/lib/stores';
 import { sanitizeImageSrc } from '@/lib/utils/image';
-import { fetchNeynarUserByVerification } from '@/lib/farcaster/neynar';
 import type { ConvosJoinRequesterProfile, InvitePayload } from '@/types';
 
 export interface InviteRequest {
@@ -32,15 +31,6 @@ interface InviteRequesterProfile {
   avatarUrl?: string;
   address?: string;
   inboxId: string;
-  farcaster?: {
-    username?: string;
-    fid?: number;
-    score?: number;
-    followers?: number;
-    following?: number;
-    activeStatus?: string;
-    powerBadge?: boolean;
-  };
 }
 
 const formatShort = (value?: string, head = 10, tail = 6) => {
@@ -70,7 +60,6 @@ export function InviteRequestModal({
   onDismiss,
 }: InviteRequestModalProps) {
   const [profile, setProfile] = useState<InviteRequesterProfile | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !request) {
@@ -81,7 +70,6 @@ export function InviteRequestModal({
     let cancelled = false;
 
     const loadProfile = async () => {
-      setIsLoading(true);
       try {
         const contactStore = useContactStore.getState();
         let contact =
@@ -121,51 +109,16 @@ export function InviteRequestModal({
           contact?.addresses?.[0] ||
           inboxProfile?.addresses?.[0];
 
-        const farcasterSeed = {
-          username: contact?.farcasterUsername,
-          fid: contact?.farcasterFid,
-          score: contact?.farcasterScore,
-          followers: contact?.farcasterFollowerCount,
-          following: contact?.farcasterFollowingCount,
-          powerBadge: contact?.farcasterPowerBadge,
-          activeStatus: contact?.farcasterActiveStatus,
-        };
-
-        const neynarKey = useFarcasterStore.getState().getEffectiveNeynarApiKey();
-        let farcaster = farcasterSeed;
-
-        if (neynarKey && address) {
-          try {
-            const neynarUser = await fetchNeynarUserByVerification(address, neynarKey);
-            if (neynarUser) {
-              farcaster = {
-                username: neynarUser.username,
-                fid: neynarUser.fid,
-                score: (neynarUser as { score?: number }).score,
-                followers: neynarUser.follower_count,
-                following: neynarUser.following_count,
-                powerBadge: neynarUser.power_badge,
-                activeStatus: neynarUser.active_status,
-              };
-            }
-          } catch (error) {
-            console.warn('[InviteRequestModal] Failed to load Neynar profile', error);
-          }
-        }
-
         if (!cancelled) {
           setProfile({
             inboxId: request.senderInboxId,
             displayName: request.requesterProfile?.name || contact?.preferredName || contact?.name || inboxProfile?.displayName,
             avatarUrl: request.requesterProfile?.imageURL || contact?.preferredAvatar || contact?.avatar || inboxProfile?.avatarUrl,
             address,
-            farcaster,
           });
         }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+      } catch (error) {
+        console.warn('[InviteRequestModal] Failed to load requester profile', error);
       }
     };
 
@@ -187,7 +140,6 @@ export function InviteRequestModal({
   const displayName = profile?.displayName || formatShort(profile?.inboxId || request.senderInboxId);
   const title = payload.name?.trim() || payload.tag?.trim() || 'Group invite request';
   const subtitle = payload.tag ? `Invite tag: ${payload.tag}` : 'Invite request';
-  const showReputation = Boolean(profile?.farcaster?.username || profile?.farcaster?.fid || profile?.farcaster?.score);
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -262,41 +214,6 @@ export function InviteRequestModal({
             </div>
           </div>
 
-          <div className="rounded-lg border border-primary-800/70 bg-primary-950/40 p-3">
-            <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-wide text-primary-400">Reputation</p>
-              {isLoading && <span className="text-xs text-primary-500">Fetching...</span>}
-            </div>
-            {showReputation ? (
-              <div className="mt-2 space-y-1 text-sm text-primary-200">
-                {(profile?.farcaster?.username || profile?.farcaster?.fid) && (
-                  <p>
-                    Farcaster: {profile?.farcaster?.username ? `@${profile.farcaster.username}` : 'FID'}{' '}
-                    {profile?.farcaster?.fid ? `(${profile.farcaster.fid})` : ''}
-                  </p>
-                )}
-                {profile?.farcaster?.score !== undefined && (
-                  <p>Score: {profile.farcaster.score.toFixed(2)}</p>
-                )}
-                {profile?.farcaster?.followers !== undefined && (
-                  <p>Followers: {profile.farcaster.followers}</p>
-                )}
-                {profile?.farcaster?.following !== undefined && (
-                  <p>Following: {profile.farcaster.following}</p>
-                )}
-                {profile?.farcaster?.activeStatus && (
-                  <p>Status: {profile.farcaster.activeStatus}</p>
-                )}
-                {profile?.farcaster?.powerBadge && (
-                  <p className="text-accent-300">Power badge</p>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm text-primary-400 mt-2">
-                {isLoading ? 'Gathering reputation signals...' : 'No reputation data available yet.'}
-              </p>
-            )}
-          </div>
         </div>
 
         <div className="p-5 border-t border-primary-800/80 flex flex-col gap-3 sm:flex-row sm:justify-end">

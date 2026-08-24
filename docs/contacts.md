@@ -1,19 +1,20 @@
 # Contact Management
 
-Converge keeps a separate local contact projection for each loaded XMTP inbox.
-It follows the current Convos model: the peer's published profile is the name
-and avatar source, while contacts are a local convenience rather than a custom
-cross-device address-book protocol.
+Converge keeps a local contact projection for the one active XMTP identity. It
+follows the current Convos model: the peer's published profile is the canonical
+name and avatar source, ENS can provide secondary identity recognition, and
+contacts are a local convenience rather than a custom cross-device address-book
+protocol.
 
 ## Product Contract
 
-- Contacts are scoped to the selected inbox's IndexedDB namespace.
+- Contacts are scoped to the active identity's existing IndexedDB namespace.
 - Starting or sending in a conversation, explicitly choosing Add Contact, or
   another deliberate participation action can create a contact.
 - Passive conversation discovery alone does not create a durable contact.
 - The displayed name/avatar comes from the peer's published XMTP/Convos
-  profile. ENS and Farcaster can enrich identifiers and reputation, but do not
-  replace a newer peer-published profile.
+  profile. ENS can enrich identity recognition but does not replace a newer
+  peer-published profile. Farcaster/Neynar enrichment is removed.
 - Converge does not expose private aliases, private avatar overrides, or notes.
   Legacy `preferredName`, `preferredAvatar`, and `notes` fields remain readable
   for migration compatibility but are cleared whenever a contact is normalized
@@ -40,9 +41,10 @@ contacts: '&inboxId, primaryAddress, *addresses'
 - `primaryAddress` is an optional associated account address.
 - `addresses` is a deduplicated multi-entry list used to resolve known account
   identifiers back to one contact.
-- Switching inboxes changes the storage namespace before contacts are loaded,
-  so one brand/social identity never inherits another inbox's address book.
-- Zustand holds only the active inbox's in-memory projection. Its localStorage
+- The former registry and inactive namespaces remain internal compatibility
+  data. They are not shown or merged, and simplification work must not delete
+  their contact tables.
+- Zustand holds only the active identity's in-memory projection. Its localStorage
   persistence intentionally stores no contact rows; IndexedDB is authoritative.
 
 Source files:
@@ -62,19 +64,12 @@ interface Contact {
   avatar?: string;
   description?: string;
   createdAt: number;
-  source?: 'farcaster' | 'inbox' | 'manual';
+  source?: 'inbox' | 'manual';
   isBlocked?: boolean;
   isInboxOnly?: boolean;
   primaryAddress?: string;
   addresses?: string[];
   identities?: ContactIdentity[];
-  farcasterUsername?: string;
-  farcasterFid?: number;
-  farcasterScore?: number;
-  farcasterFollowerCount?: number;
-  farcasterFollowingCount?: number;
-  farcasterActiveStatus?: string;
-  farcasterPowerBadge?: boolean;
   lastSyncedAt?: number;
 }
 ```
@@ -105,7 +100,7 @@ bubbles.
 - merges associated account identifiers without duplicates;
 - migrates an older address-keyed row to the canonical inbox ID;
 - applies peer-published name/avatar data;
-- preserves Farcaster reputation fields as secondary metadata; and
+- removes obsolete Farcaster/Neynar metadata from normalized rows; and
 - clears legacy private aliases, avatar overrides, and notes.
 
 ## Published Profiles
@@ -131,12 +126,12 @@ XMTP consent is encrypted, network-synchronized state scoped to an inbox. The
 Browser SDK caches it in that inbox's local XMTP database. Converge does not
 copy consent into a global contact table or invent a contact-sync layer.
 
-Only the selected inbox opens an XMTP client. Therefore an inactive inbox does
-not refresh consent in the background; it refreshes after the user selects and
-syncs that inbox.
+Only the active identity opens an XMTP client and refreshes consent. Retained
+compatibility identities do not background-sync and are not selectable in the
+ordinary UI.
 
 ## Burn Inbox
 
-Burn Inbox deletes the selected namespace's contacts along with messages,
-attachments, profile state, keys, and the XMTP database. Contacts from other
-loaded inboxes remain in their own namespaces.
+Burn Inbox deletes the active namespace's contacts along with messages,
+attachments, profile state, keys, and the XMTP database. Retained compatibility
+namespaces are not implicitly merged or deleted.

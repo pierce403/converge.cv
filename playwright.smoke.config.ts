@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: 'multi-inbox-ui.spec.ts',
+  testMatch: 'core-ui.spec.ts',
   timeout: 90_000,
   use: {
     baseURL: 'http://127.0.0.1:4174',
@@ -24,7 +24,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'VITE_E2E_TEST=true pnpm dev --host 127.0.0.1 --port 4174',
+    command: 'VITE_E2E_TEST=true ./node_modules/.bin/vite --host 127.0.0.1 --port 4174',
     url: 'http://127.0.0.1:4174',
     reuseExistingServer: false,
     timeout: 120_000,

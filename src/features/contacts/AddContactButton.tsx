@@ -1,5 +1,4 @@
 import { useContactStore, type Contact, type ContactIdentity } from '@/lib/stores';
-import { getContactInfo } from '@/lib/default-contacts';
 import { getXmtpClient } from '@/lib/xmtp';
 
 interface AddContactButtonProps {
@@ -53,22 +52,19 @@ export function AddContactButton({
       return;
     }
 
-    const defaultInfo = getContactInfo(primaryAddress ?? inboxId);
     const identities: ContactIdentity[] = [];
     if (primaryAddress) {
       identities.push({
         identifier: primaryAddress.toLowerCase(),
         kind: 'Ethereum',
         isPrimary: true,
-        displayLabel: defaultInfo?.name ?? fallbackName,
+        displayLabel: fallbackName,
       });
     }
 
     const newContact: Contact = {
       inboxId: resolvedInboxId,
-      name: fallbackName || defaultInfo?.name || resolvedInboxId,
-      avatar: defaultInfo?.avatar,
-      description: defaultInfo?.description,
+      name: fallbackName || resolvedInboxId,
       createdAt: Date.now(),
       primaryAddress: primaryAddress?.toLowerCase(),
       addresses: identities.map((identity) => identity.identifier),

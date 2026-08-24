@@ -107,7 +107,7 @@ function createDependencies(options?: {
 }
 
 describe('burnInboxWithDependencies', () => {
-  it('revokes first, wipes only matching keys, and selects the newest remaining inbox', async () => {
+  it('revokes first, wipes only matching keys, and returns to onboarding', async () => {
     const target = identity('1', 'target-inbox');
     const other = identity('2', 'other-inbox');
     const harness = createDependencies({
@@ -131,16 +131,16 @@ describe('burnInboxWithDependencies', () => {
       localDataRemoved: true,
       removedIdentityCount: 1,
       remainingInboxIds: ['other-inbox', 'older-inbox'],
-      nextInboxId: 'other-inbox',
-      intentionallyEmpty: false,
+      nextInboxId: null,
+      intentionallyEmpty: true,
     });
     expect(result.revokeWarning).toBeUndefined();
     expect(harness.events.indexOf('revoke')).toBeLessThan(harness.events.indexOf('clear'));
     expect(harness.deletedAddresses).toEqual([target.address]);
     expect(harness.deletedAddresses).not.toContain(other.address);
-    expect(harness.namespaces).toEqual(['other-inbox']);
-    expect(harness.currentInboxIds).toEqual(['other-inbox']);
-    expect(harness.intentionalEmptyStates).toEqual([false]);
+    expect(harness.namespaces).toEqual(['default']);
+    expect(harness.currentInboxIds).toEqual([null]);
+    expect(harness.intentionalEmptyStates).toEqual([true]);
     expect(harness.dependencies.clearInboxData).toHaveBeenCalledWith(
       'target-inbox',
       ['target-inbox', target.address]
@@ -220,7 +220,7 @@ describe('burnInboxWithDependencies', () => {
     expect(harness.deletedAddresses).toEqual([target.address]);
   });
 
-  it('does not mark the app empty when another identity is missing from a stale registry', async () => {
+  it('returns to onboarding while preserving an identity missing from a stale registry', async () => {
     const target = identity('9', 'target-inbox');
     const unregistered = identity('a', 'unregistered-inbox');
     const harness = createDependencies({
@@ -234,9 +234,11 @@ describe('burnInboxWithDependencies', () => {
     const result = await burnInboxWithDependencies('target-inbox', harness.dependencies);
 
     expect(result.remainingInboxIds).toEqual(['unregistered-inbox']);
-    expect(result.nextInboxId).toBe('unregistered-inbox');
-    expect(result.intentionallyEmpty).toBe(false);
-    expect(harness.intentionalEmptyStates).toEqual([false]);
+    expect(result.nextInboxId).toBeNull();
+    expect(result.intentionallyEmpty).toBe(true);
+    expect(harness.currentInboxIds).toEqual([null]);
+    expect(harness.namespaces).toEqual(['default']);
+    expect(harness.intentionalEmptyStates).toEqual([true]);
   });
 });
 
@@ -253,7 +255,6 @@ describe('clearInboxBrowserState', () => {
 
     window.localStorage.setItem(`personalization-reminder:${targetAddress}`, 'target');
     window.localStorage.setItem(`pending-profile-save:target-inbox`, 'target');
-    window.localStorage.setItem(`self-farcaster:last-check:${targetAddress}`, 'target');
     window.localStorage.setItem(`converge.historySyncNotice.${target.installationId}`, 'dismissed');
     window.localStorage.setItem('converge.forceInboxId.v1', 'target-inbox');
     window.localStorage.setItem(
@@ -266,7 +267,6 @@ describe('clearInboxBrowserState', () => {
 
     expect(window.localStorage.getItem(`personalization-reminder:${targetAddress}`)).toBeNull();
     expect(window.localStorage.getItem('pending-profile-save:target-inbox')).toBeNull();
-    expect(window.localStorage.getItem(`self-farcaster:last-check:${targetAddress}`)).toBeNull();
     expect(window.localStorage.getItem(`converge.historySyncNotice.${target.installationId}`)).toBeNull();
     expect(window.localStorage.getItem('converge.forceInboxId.v1')).toBeNull();
     expect(window.localStorage.getItem('converge.profileEditorIntent.v1')).toBeNull();

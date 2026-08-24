@@ -174,19 +174,10 @@ test('two browsers exchange messages and show display names', async ({ browser, 
   await sendMessage(pageA, messageFromA);
   console.log('[Test] A sent message successfully');
 
-  // B needs to sync to see incoming conversations
-  // Click "Check now" button to trigger sync
-  console.log('[Test] B syncing to check for incoming conversations');
-  await pageB.goto('/'); // Make sure we're on the chat list
-  await pageB.waitForTimeout(1000);
-  
-  // Click the "Check now" button to sync
-  const checkNowButton = pageB.getByRole('button', { name: /check now/i });
-  await checkNowButton.click();
-  console.log('[Test] B clicked Check now');
-  
-  // Wait for sync to complete - watch for the conversation to appear
-  await pageB.waitForTimeout(3000);
+  // Returning to the chat list starts the normal background sync. The user no
+  // longer needs a manual "Check now" control to receive a conversation.
+  console.log('[Test] B returning to the chat list for background sync');
+  await pageB.goto('/');
   
   // B opens the new conversation and replies.
   console.log('[Test] B looking for conversation from A');

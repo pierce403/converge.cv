@@ -101,7 +101,10 @@ export const useDebugStore = create<DebugLogState>((set) => ({
           direction: entry.direction,
           event: entry.event,
           details: entry.details,
-          payload: entry.payload,
+          // Payloads can contain message bodies, profile data, or invite
+          // material. Diagnostics retain metadata only so disappearing content
+          // cannot outlive its message in an in-memory debug copy.
+          payload: undefined,
         },
         MAX_NETWORK_ENTRIES,
       ),

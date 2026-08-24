@@ -11,10 +11,9 @@ import {
   INBOX_ALREADY_LOADED_MESSAGE,
   useAuthStore,
   useInboxRegistryStore,
-  getInboxDisplayLabel,
 } from '@/lib/stores';
 import type { IdentityProbeResult } from '@/lib/xmtp/client';
-import type { Identity, InboxRegistryEntry } from '@/types';
+import type { Identity } from '@/types';
 import { resetXmtpClient } from '@/lib/xmtp/client';
 import { assertKeyfileInboxMatch, deriveIdentityFromKeyfile, parseKeyfile } from '@/lib/keyfile';
 import type { KeyfileIdentity } from '@/lib/keyfile';
@@ -138,62 +137,6 @@ interface WalletIdentityCandidate {
   signMessage: (message: string) => Promise<string>;
 }
 
-const renderRegistryEntry = (
-  entry: InboxRegistryEntry,
-  onOpen: (entry: InboxRegistryEntry) => void,
-  isActive: boolean
-) => {
-  const relative = formatRelativeFromMs(entry.lastOpenedAt);
-
-  return (
-    <div
-      key={entry.inboxId}
-      className="rounded-lg border border-primary-800/60 bg-primary-950/60 p-4 shadow-sm"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          {entry.avatar ? (
-            <img
-              src={entry.avatar}
-              alt=""
-              className="h-11 w-11 shrink-0 rounded-full object-cover"
-            />
-          ) : (
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-600 text-sm font-semibold text-white">
-              {getInboxDisplayLabel(entry).charAt(0).toUpperCase()}
-            </span>
-          )}
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-primary-100">
-              {getInboxDisplayLabel(entry)}
-            </div>
-          <div className="text-xs text-primary-500 mt-1">
-            Last opened: {entry.lastOpenedAt ? new Date(entry.lastOpenedAt).toLocaleString() : 'never'}
-          </div>
-          {relative && (
-            <div className="text-[10px] uppercase tracking-wide text-primary-600">({relative})</div>
-          )}
-          {!entry.hasLocalDB && (
-            <div className="mt-2 text-xs text-amber-300">
-              No local XMTP database yet. Full history may require an older device to be online.
-            </div>
-          )}
-          </div>
-        </div>
-        <div>
-          <button
-            onClick={() => onOpen(entry)}
-            disabled={isActive}
-            className="rounded-md border border-accent-500/60 bg-accent-600/90 px-3 py-1 text-sm font-medium text-white shadow-sm transition hover:bg-accent-500 disabled:cursor-not-allowed disabled:border-primary-700 disabled:bg-primary-900 disabled:text-primary-400"
-          >
-            {isActive ? 'Current' : 'Open'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 export function OnboardingPage() {
   const navigate = useNavigate();
   const auth = useAuth();
@@ -207,7 +150,6 @@ export function OnboardingPage() {
 
   const hydrateRegistry = useInboxRegistryStore((state) => state.hydrate);
   const registryEntries = useInboxRegistryStore((state) => state.entries);
-  const setCurrentInbox = useInboxRegistryStore((state) => state.setCurrentInbox);
 
   const [view, setView] = useState<'landing' | 'wallet' | 'probing' | 'results' | 'processing' | 'keyfile' | 'migration'>('landing');
   const [statusMessage, setStatusMessage] = useState('Setting things up…');
@@ -375,10 +317,6 @@ export function OnboardingPage() {
     };
   }, [probeResult]);
 
-  const sortedRegistry = useMemo(
-    () => [...registryEntries].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),
-    [registryEntries]
-  );
   const entryDecision = useMemo(
     () => decideOnboardingEntry({ pendingProvisioning }),
     [pendingProvisioning]
@@ -759,7 +697,7 @@ export function OnboardingPage() {
             const updatedIdentity = { ...identity, displayName: profile.displayName };
             await storage.putIdentity(updatedIdentity);
             useAuthStore.getState().setIdentity(updatedIdentity);
-            console.log('[Onboarding] ✅ Updated display name from XMTP:', profile.displayName);
+            console.log('[Onboarding] ✅ Updated display name from XMTP');
           }
         }
       } catch (profileError) {
@@ -1203,53 +1141,6 @@ export function OnboardingPage() {
     }
   };
 
-  const handleOpenLocalInbox = async (entry: InboxRegistryEntry) => {
-    setStatusMessage('Opening local inbox…');
-    setView('processing');
-    setError(null);
-
-    try {
-      setCurrentInbox(entry.inboxId);
-      const success = await auth.checkExistingIdentity();
-      if (!success) {
-        throw new Error('Unable to rehydrate identity');
-      }
-      // Reload to ensure clean state
-      window.location.reload();
-    } catch (err) {
-      console.error('[Onboarding] Failed to open local inbox:', err);
-      setError('Unable to open that inbox from local storage. Try reconnecting its identity.');
-      setView(walletCandidate && probeResult ? 'results' : 'landing');
-    }
-  };
-
-  const renderLocalRegistry = (activeInboxId: string | null) => (
-    <div className="rounded-xl border border-primary-800/60 bg-primary-950/70 p-6 shadow-lg">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-primary-50">On this device</h3>
-        <span className="rounded-full bg-primary-800 px-3 py-1 text-xs font-medium text-primary-200">
-          {sortedRegistry.length} saved
-        </span>
-      </div>
-
-      {sortedRegistry.length === 0 ? (
-        <p className="mt-4 text-sm text-primary-200">
-          No local inboxes yet. Connect an identity to populate the registry.
-        </p>
-      ) : (
-        <div className="mt-4 space-y-3">
-          {sortedRegistry.map((entry) =>
-            renderRegistryEntry(entry, handleOpenLocalInbox, activeInboxId === entry.inboxId)
-          )}
-        </div>
-      )}
-
-      <div className="mt-6 text-xs text-primary-300">
-        You can add another inbox later from the Inbox Switcher.
-      </div>
-    </div>
-  );
-
   const renderLanding = () => (
     <div className="flex h-screen overflow-y-auto items-center justify-center bg-gradient-to-br from-primary-950 via-primary-900 to-primary-800 p-4">
       <div className="w-full max-w-xl space-y-8 text-center">
@@ -1321,7 +1212,6 @@ export function OnboardingPage() {
           </button>
         </div>
 
-        {sortedRegistry.length > 0 && renderLocalRegistry(null)}
       </div>
     </div>
   );
@@ -1723,7 +1613,6 @@ export function OnboardingPage() {
               </div>
             </div>
 
-            {renderLocalRegistry(probeResult.inboxId ?? null)}
           </div>
 
           <div className="rounded-xl border border-primary-800/40 bg-primary-950/40 p-4 text-xs text-primary-300">

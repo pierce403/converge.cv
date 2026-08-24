@@ -65,19 +65,12 @@ export interface Contact {
   preferredAvatar?: string;
   notes?: string;
   createdAt: number;
-  source?: 'farcaster' | 'inbox' | 'manual';
+  source?: 'inbox' | 'manual';
   isBlocked?: boolean;
   isInboxOnly?: boolean;
   primaryAddress?: string;
   addresses?: string[];
   identities?: ContactIdentity[];
-  farcasterUsername?: string;
-  farcasterFid?: number;
-  farcasterScore?: number;
-  farcasterFollowerCount?: number;
-  farcasterFollowingCount?: number;
-  farcasterActiveStatus?: string;
-  farcasterPowerBadge?: boolean;
   lastSyncedAt?: number;
 }
 
@@ -140,7 +133,7 @@ export interface ContactProfileInput {
   primaryAddress?: string;
   addresses?: string[];
   identities?: ContactIdentity[];
-  source?: 'farcaster' | 'inbox' | 'manual';
+  source?: 'inbox' | 'manual';
   metadata?: Partial<Contact>;
   /** Only deliberate participation/Add Contact actions may create a new row. */
   persistIfMissing?: boolean;
@@ -192,17 +185,13 @@ const mergeContactData = (existing: Contact, updates: ContactUpdates): Contact =
       normalizeContactAddress(updates.primaryAddress) ??
       normalizeContactAddress(existing.primaryAddress) ??
       addresses[0],
-    farcasterUsername: updates.farcasterUsername ?? existing.farcasterUsername,
-    farcasterFid: updates.farcasterFid ?? existing.farcasterFid,
-    farcasterScore: updates.farcasterScore ?? existing.farcasterScore,
-    farcasterFollowerCount: updates.farcasterFollowerCount ?? existing.farcasterFollowerCount,
-    farcasterFollowingCount: updates.farcasterFollowingCount ?? existing.farcasterFollowingCount,
-    farcasterActiveStatus: updates.farcasterActiveStatus ?? existing.farcasterActiveStatus,
-    farcasterPowerBadge: updates.farcasterPowerBadge ?? existing.farcasterPowerBadge,
   };
 };
 
-type LegacyContact = Contact & { address?: string };
+type LegacyContact = Omit<Contact, 'source'> & {
+  address?: string;
+  source?: Contact['source'] | string;
+};
 
 const deriveInboxId = (contact: LegacyContact): string | null => {
   if (contact.inboxId) {
@@ -227,13 +216,11 @@ const deriveInboxId = (contact: LegacyContact): string | null => {
 
 const normaliseContactInput = (contact: LegacyContact): Contact => {
   const derivedInboxId = deriveInboxId(contact);
-  let effectiveInboxId = derivedInboxId;
-  if (!effectiveInboxId) {
-    console.warn('[Contacts] Generating placeholder inbox ID for legacy contact without identifiers:', contact);
-    effectiveInboxId = `legacy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  if (!derivedInboxId) {
+    throw new Error('Cannot normalize a contact without an inbox ID or address');
   }
 
-  const normalizedInboxId = normalizeInboxId(effectiveInboxId);
+  const normalizedInboxId = normalizeInboxId(derivedInboxId);
   const addresses = normalizeContactAddresses([
     ...(contact.addresses ?? []),
     contact.primaryAddress,
@@ -242,37 +229,32 @@ const normaliseContactInput = (contact: LegacyContact): Contact => {
   const normalizedIdentities = normalizeContactIdentities(contact.identities ?? []);
 
   const safeName = sanitizeDisplayLabel(contact.name);
-  const safeFarcasterUsername = sanitizeDisplayLabel(contact.farcasterUsername);
-
   const fallbackName = (() => {
     if (safeName) return safeName;
-    if (safeFarcasterUsername) return safeFarcasterUsername;
     // Never persist an Ethereum address as a "name" fallback.
     if (!isAddressLikeInboxId(normalizedInboxId)) return normalizedInboxId;
     return '';
   })();
 
   return {
-    ...contact,
     inboxId: normalizedInboxId,
     name: fallbackName,
     avatar: contact.avatar ?? contact.preferredAvatar,
+    description: contact.description,
     preferredName: undefined,
     preferredAvatar: undefined,
     notes: undefined,
+    createdAt: Number.isFinite(contact.createdAt) ? contact.createdAt : Date.now(),
+    source: contact.source === 'manual' ? 'manual' : 'inbox',
+    isBlocked: contact.isBlocked,
+    isInboxOnly: contact.isInboxOnly,
     addresses,
     primaryAddress: normalizeContactAddress(contact.primaryAddress) ?? addresses[0],
     identities:
       normalizedIdentities.length > 0
         ? normalizedIdentities
         : ethereumIdentitiesFromAddresses(addresses),
-    farcasterUsername: contact.farcasterUsername,
-    farcasterFid: contact.farcasterFid,
-    farcasterScore: contact.farcasterScore,
-    farcasterFollowerCount: contact.farcasterFollowerCount,
-    farcasterFollowingCount: contact.farcasterFollowingCount,
-    farcasterActiveStatus: contact.farcasterActiveStatus,
-    farcasterPowerBadge: contact.farcasterPowerBadge,
+    lastSyncedAt: contact.lastSyncedAt,
   };
 };
 
@@ -283,6 +265,10 @@ export const useContactStore = create<ContactState>()(
       isLoading: false,
 
       addContact: async (rawContact) => {
+        if (!deriveInboxId(rawContact)) {
+          console.warn('[Contacts] Refusing to add a contact without an inbox ID or address');
+          return;
+        }
         let contact = normaliseContactInput(rawContact);
 
         // Contacts should be keyed by XMTP inboxId, not an Ethereum address.
@@ -409,10 +395,17 @@ export const useContactStore = create<ContactState>()(
         try {
           const storage = await getStorage();
           const storedContacts = await storage.listContacts();
-          const loadedContacts = storedContacts.map((contact) => normaliseContactInput(contact));
+          const validStoredContacts = storedContacts.filter((contact) => {
+            const valid = Boolean(deriveInboxId(contact));
+            if (!valid) {
+              console.warn('[Contacts] Ignoring malformed stored contact without identifiers');
+            }
+            return valid;
+          });
+          const loadedContacts = validStoredContacts.map((contact) => normaliseContactInput(contact));
           await Promise.all(
             loadedContacts.map(async (contact, index) => {
-              if (JSON.stringify(contact) !== JSON.stringify(storedContacts[index])) {
+              if (JSON.stringify(contact) !== JSON.stringify(validStoredContacts[index])) {
                 await storage.putContact(contact);
               }
             })
@@ -526,11 +519,8 @@ export const useContactStore = create<ContactState>()(
             ? normalizedProfileIdentities
             : ethereumIdentitiesFromAddresses(computedAddresses);
 
-        const isPublishedProfile = profile.source !== 'farcaster';
-        const safeDisplayName = isPublishedProfile
-          ? sanitizeDisplayLabel(profile.displayName)
-          : undefined;
-        const publishedAvatar = isPublishedProfile ? profile.avatarUrl : undefined;
+        const safeDisplayName = sanitizeDisplayLabel(profile.displayName);
+        const publishedAvatar = profile.avatarUrl;
         const baseContact: Contact = existing
           ? mergeContactData(existing, {
             name: safeDisplayName ?? existing.name,
@@ -540,16 +530,6 @@ export const useContactStore = create<ContactState>()(
             addresses: computedAddresses.length > 0 ? computedAddresses : existing.addresses,
             identities,
             lastSyncedAt: Date.now(),
-            farcasterUsername: profile.metadata?.farcasterUsername ?? existing.farcasterUsername,
-            farcasterFid: profile.metadata?.farcasterFid ?? existing.farcasterFid,
-            farcasterScore: profile.metadata?.farcasterScore ?? existing.farcasterScore,
-            farcasterFollowerCount:
-              profile.metadata?.farcasterFollowerCount ?? existing.farcasterFollowerCount,
-            farcasterFollowingCount:
-              profile.metadata?.farcasterFollowingCount ?? existing.farcasterFollowingCount,
-            farcasterActiveStatus:
-              profile.metadata?.farcasterActiveStatus ?? existing.farcasterActiveStatus,
-            farcasterPowerBadge: profile.metadata?.farcasterPowerBadge ?? existing.farcasterPowerBadge,
           })
           : normaliseContactInput({
             inboxId: normalizedInboxId,
@@ -563,13 +543,6 @@ export const useContactStore = create<ContactState>()(
             isBlocked: profile.metadata?.isBlocked ?? false,
             isInboxOnly: profile.metadata?.isInboxOnly ?? false,
             primaryAddress: profile.primaryAddress ?? computedAddresses[0],
-            farcasterUsername: profile.metadata?.farcasterUsername,
-            farcasterFid: profile.metadata?.farcasterFid,
-            farcasterScore: profile.metadata?.farcasterScore,
-            farcasterFollowerCount: profile.metadata?.farcasterFollowerCount,
-            farcasterFollowingCount: profile.metadata?.farcasterFollowingCount,
-            farcasterActiveStatus: profile.metadata?.farcasterActiveStatus,
-            farcasterPowerBadge: profile.metadata?.farcasterPowerBadge,
             addresses: computedAddresses,
             identities,
             lastSyncedAt: Date.now(),

@@ -7,7 +7,6 @@ import type { Conversation } from '@/types';
 import { QRCodeOverlay } from './QRCodeOverlay';
 import { useConversations } from '@/features/conversations/useConversations';
 import { useConversationStore } from '@/lib/stores';
-import { useFarcasterStore } from '@/lib/stores/farcaster-store';
 import { useNavigate } from 'react-router-dom';
 import { resolveENS, resolveENSFromAddress } from '@/lib/utils/ens';
 import {
@@ -16,8 +15,6 @@ import {
   normalizeEthereumAddress,
 } from '@/lib/utils/ethereum';
 import { getStorage } from '@/lib/storage';
-import { fetchNeynarUserByVerification, fetchNeynarUserProfile } from '@/lib/farcaster/neynar';
-import { pickFarcasterDisplayName } from '@/lib/farcaster/display-name';
 
 interface ContactCardModalProps {
   contact: Contact;
@@ -55,10 +52,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [inboxState, setInboxState] = useState<InboxState | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const { createConversation, toggleMute } = useConversations();
+  const { createConversation } = useConversations();
   const conversations = useConversationStore((s) => s.conversations);
   const updateConversationInStore = useConversationStore((s) => s.updateConversation);
-  const farcasterStore = useFarcasterStore();
   const navigate = useNavigate();
 
   // Use live contact from store to ensure reactivity (e.g. after refresh)
@@ -155,7 +151,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     setRefreshError(null);
     try {
       const xmtp = getXmtpClient();
-      // Proceed even if not connected, to allow Farcaster/ENS updates
+      // ENS and locally cached identity data can still refresh while XMTP is offline.
       const isXmtpConnected = xmtp.isConnected();
 
       const subject = liveContact;
@@ -216,8 +212,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       inboxState?.accountAddresses?.forEach(addAddress);
       subject.identities?.forEach((identity) => ingestIdentity(identity));
       if (isSelfContact) {
-        // Users can set their Farcaster FID in settings without verifying the generated wallet address.
-        // For "self" refresh, always include the local identity address as a verification candidate.
+        // For a self refresh, always include the local identity address.
         addAddress(identity?.address);
       }
 
@@ -229,15 +224,15 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         subject.name ??
         conversationMatch?.displayName;
       let latestProfileAvatar = subject.avatar ?? conversationMatch?.displayAvatar;
-      let namePriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
-      let avatarPriority: 'message' | 'farcaster' | 'ens' | 'xmtp' = 'message';
+      let namePriority: 'message' | 'ens' | 'xmtp' = 'message';
+      let avatarPriority: 'message' | 'ens' | 'xmtp' = 'message';
 
       const preferName = (
         next: string | null | undefined,
-        priority: 'farcaster' | 'ens' | 'xmtp' | 'message'
+        priority: 'ens' | 'xmtp' | 'message'
       ) => {
         if (!next) return;
-        const rank = { farcaster: -1, ens: -1, xmtp: 2, message: 0 } as const;
+        const rank = { ens: 1, xmtp: 2, message: 0 } as const;
         if (rank[priority] >= rank[namePriority]) {
           latestProfileDisplayName = next;
           namePriority = priority;
@@ -246,10 +241,10 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
       const preferAvatar = (
         next: string | null | undefined,
-        priority: 'farcaster' | 'ens' | 'xmtp' | 'message'
+        priority: 'ens' | 'xmtp' | 'message'
       ) => {
         if (!next) return;
-        const rank = { farcaster: -1, ens: -1, xmtp: 2, message: 0 } as const;
+        const rank = { ens: 1, xmtp: 2, message: 0 } as const;
         if (rank[priority] >= rank[avatarPriority]) {
           latestProfileAvatar = next;
           avatarPriority = priority;
@@ -286,37 +281,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
         }
       };
 
-      // Farcaster first (if available)
-      const neynarKey = farcasterStore.getEffectiveNeynarApiKey?.();
-      const farcasterFid = subject.farcasterFid ?? (isSelfContact ? identity?.farcasterFid : undefined);
-      const farcasterUsername = subject.farcasterUsername;
-      const candidateEthAddresses = Array.from(ethereumAddresses);
-
-      let fcResolvedProfile: (Awaited<ReturnType<typeof fetchNeynarUserProfile>> & { power_badge?: boolean }) | null = null;
-
-      if (neynarKey) {
-        try {
-          fcResolvedProfile =
-            (farcasterFid ? await fetchNeynarUserProfile(farcasterFid, neynarKey) : null) ||
-            (farcasterUsername ? await fetchNeynarUserProfile(farcasterUsername, neynarKey) : null);
-
-          if (!fcResolvedProfile && candidateEthAddresses.length > 0) {
-            for (const address of candidateEthAddresses) {
-              fcResolvedProfile = await fetchNeynarUserByVerification(address, neynarKey);
-              if (fcResolvedProfile) break;
-            }
-          }
-
-          if (fcResolvedProfile) {
-            preferName(pickFarcasterDisplayName(fcResolvedProfile), 'farcaster');
-            preferAvatar(fcResolvedProfile.pfp_url, 'farcaster');
-          }
-        } catch (fcError) {
-          console.warn('[ContactCardModal] Farcaster refresh failed:', fcError);
-        }
-      }
-
-      // ENS second
+      // ENS provides a secondary identity when the peer has not published one.
       if (!ensIdentity) {
         const candidateAddress = Array.from(ethereumAddresses)[0];
         if (candidateAddress) {
@@ -377,7 +342,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       // Use deriveInboxIdFromAddress which handles offline fallback via Utils
       let latestInboxId: string | undefined;
       try {
-        console.log('[ContactCardModal] Resolving Inbox ID for address:', primaryEthereumAddress);
         const resolvedInboxId = await xmtp.deriveInboxIdFromAddress(primaryEthereumAddress);
         if (resolvedInboxId) {
           latestInboxId = normalize(resolvedInboxId);
@@ -399,9 +363,7 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
             return latestInboxId;
           })();
           if (targetInbox) {
-            console.log('[ContactCardModal] Refreshing profile for', targetInbox);
             const profile = await xmtp.refreshInboxProfile(String(targetInbox));
-            console.log('[ContactCardModal] refreshInboxProfile result:', profile);
             ingestProfile(profile);
           }
         } catch (e) {
@@ -480,13 +442,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
       const latestMetadata: Partial<Contact> = {
         ...subject,
         inboxId: normalizedInboxId,
-        farcasterUsername: fcResolvedProfile?.username ?? subject.farcasterUsername,
-        farcasterFid: fcResolvedProfile?.fid ?? (isSelfContact ? identity?.farcasterFid : undefined) ?? subject.farcasterFid,
-        farcasterScore: fcResolvedProfile?.score ?? subject.farcasterScore,
-        farcasterFollowerCount: fcResolvedProfile?.follower_count ?? subject.farcasterFollowerCount,
-        farcasterFollowingCount: fcResolvedProfile?.following_count ?? subject.farcasterFollowingCount,
-        farcasterActiveStatus: fcResolvedProfile?.active_status ?? subject.farcasterActiveStatus,
-        farcasterPowerBadge: fcResolvedProfile?.power_badge ?? subject.farcasterPowerBadge,
       };
 
       const refreshedContact = await upsertContactProfile({
@@ -654,12 +609,9 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
     }
   };
 
-  const dmConversation = conversations.find((c) => !c.isGroup && c.peerId.toLowerCase() === contact.inboxId.toLowerCase());
-  const isMuted = Boolean(dmConversation?.mutedUntil && dmConversation.mutedUntil > Date.now());
-
   const displayName = liveContact.name || formatIdentifier(liveContact.inboxId);
 
-  // Determine avatar (custom > Farcaster)
+  // Use the contact's canonical XMTP/ENS-derived avatar when available.
   const avatarUrl = avatarUrlState;
 
   useEffect(() => {
@@ -706,63 +658,6 @@ export function ContactCardModal({ contact, onClose }: ContactCardModalProps) {
 
             {/* Display Name */}
             <h3 className="text-xl font-semibold mb-2">{displayName}</h3>
-            {(liveContact.farcasterUsername || liveContact.farcasterFid) && (
-              <div className="flex flex-col items-center gap-1 mb-4 text-sm text-primary-200">
-                {liveContact.farcasterUsername && (
-                  <a
-                    href={`https://farcaster.xyz/${liveContact.farcasterUsername}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-accent-400 hover:text-accent-300 underline"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                    View on Farcaster
-                  </a>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
-                  {liveContact.farcasterScore !== undefined && liveContact.farcasterScore !== null && (
-                    <span className="px-2 py-1 rounded bg-accent-900/40 text-accent-200 border border-accent-800/60">
-                      Neynar score: {liveContact.farcasterScore.toFixed(2)}
-                    </span>
-                  )}
-                  {liveContact.farcasterFollowerCount !== undefined && (
-                    <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
-                      Followers: {liveContact.farcasterFollowerCount}
-                    </span>
-                  )}
-                  {liveContact.farcasterFollowingCount !== undefined && (
-                    <span className="px-2 py-1 rounded bg-primary-800/50 text-primary-200 border border-primary-700/60">
-                      Following: {liveContact.farcasterFollowingCount}
-                    </span>
-                  )}
-                  {liveContact.farcasterPowerBadge && (
-                    <span className="px-2 py-1 rounded bg-accent-950/60 text-accent-200 border border-accent-900/70">
-                      Power Badge
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Mute toggle if DM exists */}
-            {dmConversation && (
-              <div className="w-full mb-4">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium text-primary-300">Mute conversation</label>
-                  <button
-                    onClick={async () => {
-                      try { await toggleMute(dmConversation.id); } catch (_e) { /* ignore */ }
-                    }}
-                    className={`px-3 py-1 rounded ${isMuted ? 'bg-primary-800 text-primary-100' : 'bg-primary-900 text-primary-300 hover:bg-primary-800'}`}
-                  >
-                    {isMuted ? 'Unmute' : 'Mute'}
-                  </button>
-                </div>
-                <p className="text-xs text-primary-400 mt-1">{isMuted ? 'Muted' : 'Not muted'}</p>
-              </div>
-            )}
 
             {/* Inbox ID Section */}
             <div className="w-full mb-4">

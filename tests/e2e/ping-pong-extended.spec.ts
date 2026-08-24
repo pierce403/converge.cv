@@ -105,12 +105,8 @@ async function openConversation(page: Page, identifier: string) {
   await expect(page).toHaveURL(/\/chat\//, { timeout: 30_000 });
 }
 
-async function syncInbox(page: Page) {
+async function returnToChatList(page: Page) {
   await page.goto('/');
-  await page.waitForTimeout(1000);
-  const checkNowButton = page.getByRole('button', { name: /check now/i });
-  await checkNowButton.click();
-  await page.waitForTimeout(3000);
 }
 
 async function openMessageActions(page: Page, messageText: string) {
@@ -149,7 +145,7 @@ test('ping pong extended: reply, react, deep link', async ({ browser, baseURL })
   const messageFromA = `A -> B ${Date.now()}`;
   await sendMessage(pageA, messageFromA);
 
-  await syncInbox(pageB);
+  await returnToChatList(pageB);
   await openConversation(pageB, inboxA);
   await expect(pageB.getByText(messageFromA)).toBeVisible({ timeout: 60_000 });
 

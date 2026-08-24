@@ -100,8 +100,6 @@ describe('contact store', () => {
       addresses: ['0x0XABCDEF0000000000000000000000000000000000', '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'],
       metadata: {
         preferredName: 'Legacy Name',
-        farcasterFollowerCount: 10,
-        farcasterPowerBadge: true,
         description: 'test profile',
       },
     });
@@ -117,8 +115,6 @@ describe('contact store', () => {
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       ])
     );
-    expect(enriched.farcasterFollowerCount).toBe(10);
-    expect(enriched.farcasterPowerBadge).toBe(true);
     expect(enriched.identities?.length).toBeGreaterThanOrEqual(2);
     expect(mockStorage.putContact).toHaveBeenCalledWith(expect.objectContaining({ inboxId: enriched.inboxId }));
   });
@@ -151,39 +147,11 @@ describe('contact store', () => {
     expect(mockStorage.putContact).toHaveBeenCalledWith(expect.objectContaining({ inboxId: 'inbox-alice', name: 'Alice' }));
   });
 
-  it('keeps the published profile when Farcaster metadata is refreshed', async () => {
-    const store = useContactStore.getState();
-    await store.addContact({
-      inboxId: 'inbox-profile-source',
-      name: 'Published Name',
-      avatar: 'https://example.com/published.png',
-      createdAt: Date.now(),
-      source: 'inbox',
-    } as unknown as never);
-
-    const updated = await store.upsertContactProfile({
-      inboxId: 'inbox-profile-source',
-      displayName: 'Farcaster Name',
-      avatarUrl: 'https://example.com/farcaster.png',
-      source: 'farcaster',
-      metadata: {
-        farcasterUsername: 'farcaster-user',
-        farcasterFollowerCount: 42,
-      },
-    });
-
-    expect(updated.name).toBe('Published Name');
-    expect(updated.avatar).toBe('https://example.com/published.png');
-    expect(updated.farcasterUsername).toBe('farcaster-user');
-    expect(updated.farcasterFollowerCount).toBe(42);
-  });
-
   it('does not persist address-looking names when normalizing inputs', async () => {
     const store = useContactStore.getState();
     await store.addContact({
       inboxId: 'inbox-bob',
       name: '0x3333333333333333333333333333333333333333',
-      farcasterUsername: 'bob',
       createdAt: Date.now(),
       primaryAddress: '0x3333333333333333333333333333333333333333',
       addresses: ['0x3333333333333333333333333333333333333333'],
@@ -192,7 +160,7 @@ describe('contact store', () => {
     } as unknown as never);
 
     const bob = store.getContactByInboxId('inbox-bob');
-    expect(bob?.name).toBe('bob');
+    expect(bob?.name).toBe('inbox-bob');
   });
 
   it('repairs repeated Ethereum prefixes and drops malformed address-like contact data', async () => {
@@ -270,6 +238,51 @@ describe('contact store', () => {
     expect(contact?.preferredName).toBeUndefined();
     expect(contact?.preferredAvatar).toBeUndefined();
     expect(contact?.notes).toBeUndefined();
+  });
+
+  it('drops retired social metadata while preserving the contact row', async () => {
+    mockStorage.listContacts.mockResolvedValueOnce([
+      {
+        inboxId: 'inbox-legacy-social',
+        name: 'Existing Contact',
+        avatar: 'https://example.com/existing.png',
+        createdAt: 1,
+        source: 'farcaster',
+        farcasterUsername: 'old-profile',
+        farcasterFollowerCount: 42,
+      },
+    ] as never);
+
+    await useContactStore.getState().loadContacts();
+
+    const contact = useContactStore.getState().getContactByInboxId('inbox-legacy-social');
+    expect(contact).toEqual(
+      expect.objectContaining({
+        inboxId: 'inbox-legacy-social',
+        name: 'Existing Contact',
+        avatar: 'https://example.com/existing.png',
+        source: 'inbox',
+      })
+    );
+    expect(Object.prototype.hasOwnProperty.call(contact, 'farcasterUsername')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(contact, 'farcasterFollowerCount')).toBe(false);
+    expect(mockStorage.putContact).toHaveBeenCalledWith(
+      expect.objectContaining({ inboxId: 'inbox-legacy-social', source: 'inbox' })
+    );
+  });
+
+  it('ignores malformed legacy rows instead of inventing unstable contact IDs', async () => {
+    mockStorage.listContacts.mockResolvedValueOnce([
+      {
+        name: 'No identifiers',
+        createdAt: 1,
+      },
+    ] as never);
+
+    await useContactStore.getState().loadContacts();
+
+    expect(useContactStore.getState().contacts).toEqual([]);
+    expect(mockStorage.putContact).not.toHaveBeenCalled();
   });
 
 });

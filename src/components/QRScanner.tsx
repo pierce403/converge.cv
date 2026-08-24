@@ -93,7 +93,6 @@ export function QRScanner({ onScan, onClose }: QRScannerProps) {
       });
 
       if (code && mounted) {
-        console.log('[QRScanner] Found QR code:', code.data);
         onScan(code.data);
         return;
       }

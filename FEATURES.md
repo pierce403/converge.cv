@@ -1,29 +1,26 @@
 # Features and Specifications
 
-## Multi-Inbox Product Model
+## Single Active Identity Product Model
 
-This section describes the multi-inbox behavior shipped on 2026-07-10. Later
-implementation notes add protocol detail but must not contradict this product
-model.
+This is the current product contract as of 2026-08-24. Converge presents one
+active identity and one inbox. The former multi-inbox registry and per-inbox
+namespaces remain internal compatibility state for existing browser profiles;
+they are not a visible switcher and must not be removed as routine cleanup.
 
 ### Onboarding And Profiles
 
 - Fresh onboarding opens on the inbox choice screen with Create new inbox, Restore from keyfile, and Connect external wallet. It does not automatically create an inbox or open a wallet. A user-started wallet handoff may restore only its chooser and existing-session probe after a mobile return or reload.
 - Choosing Create new inbox generates a local account key and registers a new XMTP inbox and installation. After that inbox is ready, Converge opens the existing profile editor before contacts or messages.
 - The profile editor starts with the deterministic Color Animal name, supports avatar upload, and is dismissible. Dismissing it keeps the generated profile.
-- Creating another inbox later immediately switches to it and opens the same profile editor.
-- After burning the last loaded inbox, Converge returns to the same inbox choice screen and does not automatically create a replacement.
+- Burning the active identity returns to the same choice screen and does not automatically create a replacement.
 
-### Inbox Accounts And Switching
+### Active Identity And Compatibility Storage
 
-- The top-left control is an Inbox Switcher. It has one entry per loaded XMTP inbox, not one entry per associated account key or installation.
-- Each inbox is an independent social identity, similar to managing separate brand accounts. Its profile, contacts, consent view, conversations, attachments, keys, local caches, and current in-memory composer draft remain isolated from every other inbox. Composer drafts are not persisted across reloads.
-- Switcher entries show the inbox profile name and avatar by default. Inbox IDs, account addresses, installation IDs, and key details belong in technical details views.
-- Only the selected inbox opens an XMTP client and syncs. Switching fully closes the current client before opening the next inbox.
-- Add Inbox offers Create new inbox, Import keyfile, and Connect external wallet.
+- Only the active identity opens an XMTP client, syncs, and appears in the normal UI. Converge does not expose Add Inbox or account switching.
+- The active identity's profile, contacts, consent view, conversations, attachments, keys, and caches remain isolated in its existing storage namespace. Composer drafts are memory-only and reset on reload.
+- Legacy registry entries, identity rows, namespaced Dexie databases, and XMTP OPFS paths are retained for compatibility and safe recovery. Simplifying the visible product must not merge or delete those records.
 - An in-flight external-wallet connection persists a 15-minute connector intent so Android foreground return, BFCache, or document reload restores the exact flow without issuing another connection or signature request. Cancel, back, disconnect, success, and expiry clear it.
-- Importing a keyfile reuses the exact private key or mnemonic and loads the inbox to which it resolves. An unregistered imported key creates its own new inbox; a registered key reopens its existing inbox and creates only the installation needed by this browser.
-- If an import resolves to an inbox already loaded locally, Converge says "This inbox is already loaded" and changes nothing.
+- Importing a keyfile reuses the exact private key or mnemonic. An unregistered imported key creates its own new inbox; a registered key reopens its existing inbox and creates only the installation needed by this browser.
 - Messages are attributed to the sender's XMTP inbox, not a user-selected associated account key. Converge does not expose a "send with key" control. Any future transaction-signing key selector is a separate wallet feature.
 
 ### Local Account Keys And Wallets
@@ -32,11 +29,11 @@ model.
 - Connecting an external wallet does not generate or associate an intermediary local EOA. The wallet authorizes its browser installation and identity administration, but routine messaging does not prompt for wallet signatures.
 - Plaintext key export is available only under Advanced settings. Converge never prompts or nags users to write down a seed phrase or export a key.
 - Losing the only device and its only local key copy may permanently lose access; that tradeoff is accepted for the low-friction default.
-- Before associating a wallet or account, both onboarding and Settings warn that the address-to-inbox link is publicly queryable and effectively permanent in XMTP identity history, and require explicit acknowledgment.
+- Before associating a wallet or account, onboarding warns that the address-to-inbox link is publicly queryable and effectively permanent in XMTP identity history, and requires explicit acknowledgment.
 
 ### Burn Inbox
 
-- Burn Inbox is available only from the selected inbox's Settings and uses one quick confirmation prompt.
+- Burn Inbox is available only from the active identity's Settings and uses one quick confirmation prompt.
 - Converge captures the exact current installation, closes its client, and attempts XMTP static revocation with the local account signer before wiping the inbox's local account key, XMTP database, messages, contacts, drafts, attachments, profile, and inbox-scoped caches. A non-recovery associated key may be unable to authorize revocation, but that does not block the local wipe.
 - If remote revocation fails, the local wipe still completes and Converge explains that another connected device should revoke the remaining installation.
 - If IndexedDB or XMTP database cleanup is blocked, Converge keeps the key and registry entry so the user can close other tabs and retry instead of falsely claiming a completed wipe.
@@ -44,19 +41,17 @@ model.
 
 ### Contacts And Consent
 
-- Contacts are local and separate per inbox. Converge follows current Convos conventions unless a documented Converge product decision says otherwise.
+- Contacts are local to the active identity. Converge follows current Convos conventions unless a documented Converge product decision says otherwise.
 - A peer becomes a contact after active user participation rather than passive discovery alone.
-- Contact presentation uses the peer's published profile. Converge does not add private aliases, notes, or a custom cross-device contact-sync protocol.
-- XMTP consent is encrypted network state scoped to the inbox and cached locally. An inactive inbox refreshes consent only after the user selects and syncs it.
+- Contact presentation prefers the peer's published XMTP/Convos profile and uses ENS recognition as a secondary identity hint. Converge does not add private aliases, notes, Farcaster/Neynar enrichment, or a custom cross-device contact-sync protocol.
+- XMTP consent is encrypted network state scoped to the active inbox and cached locally.
 
 ### App-Level Notifications
 
-- Notifications are one app/browser-level setting, not separate per-inbox or per-conversation toggles.
-- XMTP alerts are app-scoped logical registrations. Standard Web Push is Converge's current delivery adapter: one physical browser `PushSubscription` is shared by logical registrations keyed per loaded inbox and installation. Deleting one logical registration does not remove another inbox that uses the same endpoint.
-- Enabling notifications registers every loaded inbox while keeping only the selected inbox connected to XMTP. Disabling notifications deletes every loaded-inbox relay registration before unsubscribing the shared browser endpoint.
-- Push for an inactive inbox records an approximate pending-activity hint and lights that inbox in the switcher. It does not connect, sync, or claim an exact unread count until the user selects that inbox.
+- Notifications are one app/browser-level setting, not per-conversation controls.
+- Standard Web Push is Converge's current delivery adapter. One physical browser `PushSubscription` is shared with app-scoped XMTP registration state. Retained compatibility registrations may remain internally until safely cleaned up, but they do not create visible inbox switching.
 - Visible notification copy may use the full locally cached inbox profile name, for example "New activity for Orange Orca." The relay receives only an opaque inbox handle and does not receive the profile name, sender, or message body.
-- Clicking a notification always opens or focuses Converge's root page without automatically switching inboxes. Relay payloads cannot select a route, inbox, conversation, or external URL; the activity dot remains until the user selects the inbox.
+- Clicking a notification always opens or focuses Converge's root page. Relay payloads cannot select an identity, conversation, or external URL.
 - End-to-end welcome and group delivery has been verified with real production XMTP clients, vapid.party's deployed Cloudflare-only Worker/D1/Queue/Container listener, a real Chrome Web Push subscription, and Converge's live service worker. The 2026-07-14 post-deployment canary also verified three HMAC epochs, recipient-own-message and `shouldPush: false` suppression, and cleanup. A successful browser/relay registration is not proof of current continuous delivery; only explicit public readiness can report that operational state.
 
 ## Identity Implementation
@@ -81,7 +76,7 @@ model.
 - Provisioning exposes explicit registration, installation-membership confirmation, account association, ledger-confirmation, and reopen phases. Interrupted responses resume once the exact mutation becomes visible, and an already-registered pending installation can finish even when the inbox has since reached 10/10 only after that installation is confirmed as a current inbox member. A network-absent installation cannot use that exception: replacement rechecks capacity first and offers the safe recovery flow at 10/10.
 - If a pending installation remains on the XMTP ledger but its local database now opens a different installation, Converge blocks retry and asks the recovery identity to remove that exact stale installation before touching older devices. Automatic replacement applies only when the pending installation is absent from fresh network state. Exact recovery never falls back to the oldest device when the stale ID is absent, and pending state is cleared only after fresh ledger reads show the removal.
 - Ethereum identifiers are normalized at signer, storage, contact, member-profile, and display boundaries. Repairable missing, uppercase, or repeated prefixes migrate to one lowercase `0x`; invalid 20-byte addresses are rejected.
-- Registry hydration collapses legacy account-key rows into one entry per inbox. Switching tears down the client, swaps the app-data namespace, and reopens the selected local identity.
+- Registry hydration remains a compatibility layer for reopening the active legacy identity and its existing app-data namespace. It is not a user-facing switcher, and retained records must not be deleted during simplification.
 - Native Wagmi/Reown is the only wallet connection stack. It provides Coinbase/Base, WalletConnect, MetaMask, and injected-wallet connectors; mobile MetaMask uses the persistent WalletConnect transport, while desktop MetaMask targets the stable `metaMaskSDK` connector ID. Settings exposes the same MetaMask choice. The Thirdweb and Privy wallet-provider UI is not part of onboarding or Settings.
 - Thirdweb remains only as the outbound IPFS storage service for already-encrypted attachment payloads. Converge calls its narrow HTTPS upload contract directly and does not ship the Thirdweb wallet SDK, identity provider, embedded wallet, or WalletConnect stack.
 - Mobile wallet deep links are owned by the selected native connector. Converge races Wagmi's pending mutation with exact-connector events and bounded account probes on `pageshow`, visible `visibilitychange`, and focus; a late mutation rejection is handled rather than becoming unhandled. Reload restores the chooser/modal from non-sensitive connector metadata and never calls connect again automatically. Recovered results carry an account-bound signer into the immediate XMTP continuation instead of waiting for React wallet state to catch up.
@@ -90,13 +85,10 @@ model.
 - Network profile fallbacks that merely echo an Ethereum address or 64-character inbox ID are rejected as display names, preserving the generated Color Animal name until a real profile name is available.
 - Deep links return through the chosen onboarding flow and then resume the target route.
 
-### Current Inbox Switcher Isolation
-- Each inbox selection (e.g., personal vs. work) loads a distinct XMTP identity and IndexedDB storage namespace so conversations, contacts, attachments, and keys never leak across inboxes; composer drafts are memory-only and reset on reload.
-- Switching inboxes triggers a full teardown of the current client/session, rehydrates the registry list, and reopens the selected identity with its own cached message history.
-- The switcher has one row per inbox and shows profile name/avatar rather than protocol identifiers. Add Inbox provides Create new inbox, Import keyfile, and Connect external wallet.
-- A duplicate keyfile import stops before local mutation with "This inbox is already loaded". Creating a new inbox selects it immediately and opens the profile editor.
-- Inbox IDs are normalized when stored and matched so namespace switches persist across reloads instead of snapping back to the previous identity.
-- Burn Inbox lives in the selected inbox's Settings, not in the switcher, and implements the complete wipe/revocation contract above.
+### Compatibility Namespace Isolation
+- The active identity continues using its existing IndexedDB namespace and XMTP OPFS path so messages, contacts, attachments, keys, and installation state survive the simplification checkpoint.
+- Older registry entries and inactive namespaces are compatibility data. They may be inspected by migration/recovery code but are not exposed in ordinary navigation and must not be merged, silently selected, or deleted.
+- Inbox IDs remain normalized at persistence and comparison boundaries. Burn Inbox acts only on the active identity and implements the explicit wipe/revocation contract above.
 
 ## Messaging Experience
 - Message bubbles support long-press/right-click actions (reply, copy, delete, forward placeholder) via a modal, and maintain sent/read state indicators for pending/sent/delivered/failed statuses.
@@ -112,7 +104,7 @@ model.
 - Conversation list updates are now idempotent while history is loading: duplicate DM rows are collapsed by conversation ID and canonical peer key so replayed/backfilled message events cannot flood the chat list.
 - New inbound conversations are discovered by a dedicated XMTP conversation stream while connected, so a first DM/group can appear immediately. The message stream subscribes before catch-up begins, preventing a message sent during startup sync from falling between the read and subscription.
 - Startup, stream restart, reconnect, browser-online, page-show, visible-tab resume, and the periodic maintenance pass replay missed retained messages after refreshing conversation discovery. Catch-up advances only a successfully ingested per-conversation watermark; a newer conversation-list check cannot hide an older missed message.
-- Live/backfilled messages, system messages, reactions, and group updates enter one ordered persistence queue. Events decoded before the authenticated app shell mounts are buffered, tagged with their owning inbox, and drained only after the durable consumers are ready; stale work from a previously selected inbox cannot write into the active inbox. Message IDs deduplicate replay.
+- Live/backfilled messages, system messages, reactions, and group updates enter one ordered persistence queue. Events decoded before the authenticated app shell mounts are buffered, tagged with their owning inbox, and drained only after the durable consumers are ready; compatibility work from another identity cannot write into the active namespace. Message IDs deduplicate replay.
 - The first repaired release runs one versioned full retained-history replay per inbox to recover messages hidden by legacy checkpoints. It records completion only after the network replay and every queued durable write succeed, so a partial attempt automatically remains eligible for a later retry.
 - Messages and group updates authored by another installation of the active inbox are processed instead of being discarded as local echoes. Message IDs remain the deduplication boundary for events also produced by the current browser.
 - Read receipts are emitted only for non-self DMs and are throttled by last send time, preventing cross-client metadata spam (for example repeated `{}` rows in xmtp.chat during self-chat testing).
@@ -120,11 +112,11 @@ model.
 - Avatar rendering now prevents raw URL/data payload strings from being printed as text in avatar slots; non-image avatar values are treated as short glyphs only (otherwise initials fallback).
 - Sends, replies, and group creation fail visibly when XMTP is disconnected or rejects the operation. Converge does not label a local optimistic row as "queued" without a durable retry worker; failed messages remain visibly failed so the user can retry after reconnecting.
 
-### Four-Week Message Retention
+### Disappearing Messages And Local Retention
 
-- Converge retains user-visible messages for 28 days by default. At app open, hourly while the app is running, and whenever a visible tab resumes, it sweeps every loaded inbox and transactionally removes older message rows, attachment metadata and bytes, encrypted remote-attachment descriptors, search results, reply targets, and cached conversation previews from local IndexedDB.
+- Converge retains user-visible local history for 28 days. At app open, hourly while the app is running, and whenever a visible tab resumes, it sweeps retained namespaces and transactionally removes older message rows, attachment metadata and bytes, encrypted remote-attachment descriptors, search results, reply targets, and cached conversation previews from local IndexedDB.
 - Every live-message and history/backfill ingest path applies the cutoff before it writes anything, so an older SDK history row cannot repopulate local storage after a sweep. Native XMTP expiry events use the same local deletion path.
-- Every new user-visible one-to-one or group conversation created by Converge requests XMTP message-disappearing settings beginning at creation with a 28-day duration. Existing conversations retain their existing shared setting; Converge does not silently change a group's protocol policy. Self-profile and invite-control DMs are excluded.
+- Every new user-visible one-to-one or group conversation created by Converge requests XMTP message-disappearing settings beginning at creation with a 14-day duration. Existing conversations retain their existing shared setting; Converge does not silently change a group's protocol policy. Self-profile and invite-control DMs are excluded.
 - The local cutoff always applies to Converge's decrypted app database. Browser SDK deletion covers newly configured conversations through XMTP's own expiry behavior, but the Browser SDK exposes no safe arbitrary per-message OPFS deletion API for legacy conversations. Converge never destroys the whole active XMTP database as routine retention or sync maintenance.
 - Deletion runs the next time Converge opens if the browser was closed at expiry. It cannot erase copies already received by other people or devices, screenshots, exports, XMTP infrastructure outside the client contract, or encrypted attachment ciphertext retained by Thirdweb/IPFS.
 
@@ -146,7 +138,7 @@ model.
 - Explicitly or automatically fetching an attachment reveals the browser's network address and request timing to the selected HTTPS host. A "trusted" host classification permits automatic contact; it does not mean Converge trusts the sender or skips content validation.
 - Static URL validation cannot prove where a public hostname will resolve later, prevent every DNS-rebinding case, or replace browser CORS/Private Network Access enforcement. The policy blocks obvious local targets but is not a general browser network sandbox.
 - Validated raster bytes still pass through the browser's image decoders. Converge reduces the accepted format and resource surface but does not provide antivirus scanning, media transcoding, or a guarantee that browser decoders have no vulnerabilities.
-- Attachment envelopes and decrypted cache bytes are stored unencrypted in the selected inbox's IndexedDB namespace. Burning that inbox removes them locally; browser/profile compromise or XSS while the app is available remains in scope for the local-security warning.
+- Attachment envelopes and decrypted cache bytes are stored unencrypted in the active identity's IndexedDB namespace. Burning that identity removes them locally; browser/profile compromise or XSS while the app is available remains in scope for the local-security warning.
 - Thirdweb/IPFS remains the only outbound hosting path for now. The uploaded object is encrypted ciphertext, but sending and later retrieval still depend on that provider's availability, quota/payment policy, and retention behavior; this release does not add alternate hosts or cache-control selection.
 
 ## Dependency Security
@@ -157,7 +149,7 @@ model.
 - The resolved lockfile must return zero findings from npm's current bulk advisory API alongside the normal typecheck, lint, test, and production-build gates. The pinned pnpm 10 client now receives HTTP 410 from npm's retired legacy audit endpoint; use a current pnpm 11 audit client until the repository performs a deliberate package-manager migration.
 
 ## Conversation Controls
-- Conversation menus include contact management (add, block/unblock) and mute/unmute toggles that flip based on the current mutedUntil timestamp. Mute affects notifications only and never hides or deletes the conversation; legacy mute-as-deletion markers are removed when encountered so new messages can arrive normally.
+- Conversation menus include contact management and block/unblock. The unfinished mute UI is removed; legacy mute-as-deletion markers are still repaired so inbound messages are not lost.
 - A destructive “Delete conversation” option removes the thread locally and navigates back to the inbox to prevent resurface during resyncs.
 
 ## Profile Sharing and Enrichment
@@ -167,7 +159,7 @@ model.
 - Address-to-inbox resolution is centralized through a single cached resolver (`resolveInboxIdForAddress`) with in-flight dedupe, a positive TTL cache (15m), and negative cache entries (60s) to reduce repeated `GetInboxIds` pressure.
 - `canMessageWithInbox` resolves and returns the canonical inbox ID in one pass, reducing duplicate identity calls during user-initiated conversation/contact paths.
 - DM creation, message send preflight, conversation cleanup canonicalization, and contacts refresh all route through the shared resolver path instead of chained fallback lookups.
-- Contact Details refresh treats the peer-published XMTP/Convos name and avatar as canonical. Farcaster/ENS data remains secondary identity and reputation metadata and cannot overwrite a newer published profile.
+- Contact Details refresh treats the peer-published XMTP/Convos name and avatar as canonical. ENS remains secondary identity metadata and cannot overwrite a newer published profile.
 - Contact normalization clears legacy private aliases, avatar overrides, and notes; no private contact-sync layer is implied by profile refresh.
 - Legacy/stray text profile payloads are now recognized and consumed as metadata (not chat bubbles), preventing base64-heavy profile payloads from showing in conversation previews/history.
 - Convos profile side channels (`convos.org/profile_update:1.0` and `convos.org/profile_snapshot:1.0`) are the primary name channel. Current Convos iOS unifies name/member kind by inbox locally while avatars remain conversation-encrypted; Converge applies the same wire precedence (`update > snapshot > appData > contact`) with source timestamps so stale history cannot replace a newer self-authored name.
@@ -192,28 +184,28 @@ model.
 - If Chromium's root registration has origin-specific stale provider state, Converge retries on a VAPID-key-versioned recovery scope. This creates a fresh service-worker registration identity without clearing the inbox keys, IndexedDB, XMTP OPFS database, messages, or contacts. Superseded subscriptions are cleaned up only after the replacement endpoint is safely registered and stored.
 - A browser push-provider failure is reported separately from a vapid.party relay failure. Until `PushManager.subscribe()` returns an endpoint, Converge sends no inbox, installation, topic, or subscription data to vapid.party.
 - Brave-specific provider errors are detected through `navigator.brave` and distinguish the site's display permission from Brave's separate browser-wide Web Push provider. The recovery copy asks the user to verify **Use Google services for push messaging** and then fully quit/relaunch Brave. Websites cannot read that setting; site permission can remain granted, and already visible app, native, or extension notifications do not prove that Brave will accept a new origin subscription.
-- Converge caches one logical relay registration per loaded inbox/installation on the shared physical endpoint. Only the active inbox is connected; inactive inboxes reuse their last cached registration material.
+- Converge caches logical relay state on the shared physical endpoint. Compatibility records for older identities remain internal while the active identity is the only visible account.
 - Before collecting active-inbox topics, Converge syncs the XMTP conversation list and preferences, then includes Allowed and Unknown conversations, including every backing group of stitched/duplicate DMs. Denied conversations are excluded.
 - Browser SDK 6.1.2 exposes bare 16-byte MLS group IDs as 32 hex characters. Converge canonicalizes them as `/xmtp/mls/1/g-<32-hex-group-id>/proto`, merges every distinct HMAC epoch returned per conversation, and adds `/xmtp/mls/1/w-<64-hex-installation-id>/proto` as the deterministic no-HMAC welcome topic.
 - Topic snapshots refresh after active-inbox sync/conversation changes and on XMTP HMAC-key or consent updates. Refreshes are debounced, serialized, and coalesced per inbox/installation while preserving one trailing newest snapshot, so a slow relay POST cannot drop a later key rotation. Each release also performs one build-aware bootstrap refresh, repairing registrations created by an older topic normalizer. Disable and Burn invalidate stale work synchronously, abort active relay requests, and are never held behind a notification permission prompt.
-- Push config is public-only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`. Converge remains local-first and has no application database or general backend; its only same-origin server route is a stateless stream for already-encrypted XMTP history archives.
-- The relay payload contains only the push type and opaque inbox handle. The service worker maps that handle to a locally cached profile name, shows copy such as "New activity for Orange Orca," and stores an approximate per-inbox activity hint. The switcher renders that hint as a dot without opening or syncing the inactive inbox.
-- Notification clicks discard relay-supplied navigation and always open/focus the Converge root. They do not switch inboxes; selecting the dotted inbox performs the XMTP sync and determines the real unread state.
+- Push config is public-only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`. Converge remains local-first and has no application database or general backend; its only same-origin server behavior is the pair of stateless, fixed-upstream transports for encrypted XMTP history archives and XMTP gRPC-Web traffic.
+- The relay payload contains only the push type and opaque inbox handle. The service worker maps that handle to a locally cached profile name and may show copy such as "New activity for Orange Orca."
+- Notification clicks discard relay-supplied navigation and always open/focus the Converge root.
 - The version-1 vapid.party compatibility contract is explicitly scoped to app ID `converge.cv`. Converge uses the standard Web Push API without browser-specific request branches, while vapid.party restricts public registrations to known FCM, Mozilla, Apple, and WNS provider endpoints. XMTP topic/HMAC registration is the generic logical layer; other apps or delivery adapters require their own app-scoped authenticated contract and are not silently added to Converge's public route.
 - The vapid.party contract supports public VAPID lookup, one active route per app/inbox/installation with a replaceable shared browser endpoint, logical deletion, authenticated minimal opaque delivery metadata, and a coarse public health response. Its deployed Cloudflare-only runtime uses a Worker, D1 registration bridge, delivery Queue, and singleton Container XMTP listener. Registration success alone never changes delivery readiness to ready.
 - Live verification covers two logical inboxes sharing one browser endpoint, deterministic welcome and canonical group topics, multiple HMAC epochs, duplicate and `shouldPush:false` suppression, independent logical deletion, a genuine XMTP production welcome, a genuine inbound group message, recipient-own-message suppression, opaque activity, and local-only notification copy.
 - Enabling push no longer forces a page reload (service worker takeover should not disconnect wallet-backed identities).
 - Clearing only cached app/network resources preserves notification service-worker registrations and the browser subscription. Notification state is removed only through explicit Disable Notifications or a separately confirmed destructive data wipe.
-- Notification setup results remain visible inline in Settings and Debug instead of relying on transient browser alerts. The Debug Push Trace separately reports site permission, service-worker activation, browser provider subscription, local group/HMAC/welcome counts, capability-verified relay counts, listener/bridge readiness, last XMTP match, provider acceptance, and the last service-worker receipt. A generic healthy Worker response is shown as unknown, not ready.
-- Push Trace can force a current-inbox topic re-registration without the startup cooldown, test local service-worker notification display, and send a bounded relay diagnostic to exactly the current logical registration. Relay management capability receipts remain in IndexedDB, are sent only in an `Authorization` header for refresh, deletion, and fixed no-store diagnostic paths, and are never displayed or logged. A capability conflict stops without an unauthenticated retry. Diagnostic pushes are labelled and never create inbox activity hints.
+- Notification setup results remain visible inline in Settings instead of relying on transient browser alerts. **Settings > Advanced** is the only supported entry to Push Trace and other diagnostics. It reports site permission, service-worker activation, browser provider subscription, local group/HMAC/welcome counts, capability-verified relay counts, listener/bridge readiness, last XMTP match, provider acceptance, and the last service-worker receipt. A generic healthy Worker response is shown as unknown, not ready.
+- Push Trace can force an active-inbox topic re-registration without the startup cooldown, test local service-worker notification display, and send a bounded relay diagnostic to the current logical registration. Relay management capability receipts remain in IndexedDB, are sent only in an `Authorization` header for refresh, deletion, and fixed no-store diagnostic paths, and are never displayed or logged. A capability conflict stops without an unauthenticated retry. Diagnostic pushes are labelled and never create inbox activity hints.
 - Disabling notifications attempts to delete every cached inbox/installation relay record before unsubscribing the shared endpoint. Failed relay deletions remain as local tombstones for later cleanup; the app-level status reports expected versus registered inboxes.
 - Relay requests, including response parsing, are bounded to five seconds. If a relay POST succeeds but final local persistence fails, Converge keeps the working route and browser subscription, retains its management capability in a pending-registration recovery record, and retries the same upsert without deleting the route. Explicit Disable, Burn, or supersession still deletes the intended route and retains a pending-deletion tombstone if cleanup fails.
 - Delivery remains experimental because XMTP `SubscribeAll` has no replay cursor: a listener restart or disconnect can miss an approximate push hint, while XMTP inbox sync remains authoritative when Converge opens. Installed-PWA and mobile reliability are not yet characterized.
 
 ## Local-First Operation
-- Conversation lists, messages, profiles, and inbox-scoped data are persisted in IndexedDB (via Dexie); the small cross-inbox registry is stored in localStorage so the switcher can choose a namespace before opening it.
+- Conversation lists, messages, profiles, and identity-scoped data are persisted in IndexedDB (via Dexie). The legacy registry and namespace pointer remain internal compatibility state used to reopen the active identity safely.
 - Incoming message, conversation, and deletion streams reconcile through the active inbox's serialized lifecycle. Because Browser SDK sync calls cannot be cancelled, timed-out stateful operations remain single-flight so a retry cannot overlap the same worker mutation.
-- **Check now** force-refreshes conversation discovery and replays the complete retained window into IndexedDB. Chat pull-to-refresh likewise waits for the selected conversation's network replay to finish persisting before it reloads local rows. Full Sync remains a strict, non-destructive repair that keeps the active IndexedDB/OPFS databases intact and fails visibly on error.
+- Startup, streams, reconnect, visibility recovery, and bounded periodic maintenance perform normal discovery and retained-history repair automatically. The header **Check now**, ChatList **Full Sync**, and remote conversation pull-to-refresh controls are removed from ordinary UI; equivalent diagnostics are available only under **Settings > Advanced**.
 - Disconnect drains the message, conversation, and deletion `AsyncStreamProxy` instances with their asynchronous `end()` API before closing the client.
 - If the XMTP database worker does not finish closing within its deadline, Converge keeps that inbox locked and asks for a tab reload instead of opening a second worker against the same local database.
 - Private keys, mnemonics, decrypted app data, and the Browser SDK database are stored locally without encryption at rest. Keyfile exports are plaintext sensitive material.
@@ -226,10 +218,11 @@ model.
 - Keyboard-open behavior in mobile PWA mode now uses VisualViewport-driven app height and fully removes the bottom nav from layout while typing, with a focused-input viewport-baseline fallback so iOS/PWA keyboard states still hide nav even when `innerHeight` tracks `visualViewport.height`.
 
 ## Debug and Diagnostics
-- The `/debug` console aggregates logs, XMTP network events, and runtime errors with tools for clearing caches, inspecting storage, and managing push notifications.
-- Push Trace highlights the specific break point in browser display, relay registration, XMTP topic matching, or Web Push delivery. A welcome-only registration is flagged when the loaded inbox has conversations, and local versus relay topic/HMAC counts are compared directly.
+- Diagnostics are reachable only from **Settings > Advanced**. There is no ordinary bottom-navigation debug entry, fake-install control, clear-cache control, or Web Worker management panel.
+- Push Trace highlights the specific break point in browser display, relay registration, XMTP topic matching, or Web Push delivery. A welcome-only registration is flagged when the active inbox has conversations, and local versus relay topic/HMAC counts are compared directly.
 - Messages sent by another installation of the recipient's same XMTP inbox are intentionally sender-suppressed; ordinary notification tests must originate from a different inbox.
 - A "Claim Invite Code" tool accepts Convos invite links or raw codes (including current `https://popup.convos.org/v2?i=...` links), extracts the creator inbox ID from the signed invite payload, and sends a Convos `convos.org/join_request:1.0` DM to request access.
+- The render watchdog and global console interception are development-only and are not installed by the production bundle.
 
 ## Group Invites (Convos-Compatible)
 - Group chat menus can generate Convos-compatible invite codes and provide one-click copy buttons for the Convos link, Converge link, or raw invite slug.
@@ -239,7 +232,7 @@ model.
 - Wallet-based identities without a local key can still generate invites by approving a wallet signature that derives the invite signing/encryption key for the session.
 - Invite requests show as a readable system message stub (group name/tag/expiry) instead of raw base64, with follow-up system notices for acceptance or failure.
 - Invite requests are surfaced even when the DM consent state is unknown by scanning DMs on connect and periodically, then dispatching synthetic message events for valid invite slugs.
-- Invite approvals now present a modal with group details and requester reputation (Farcaster stats when available), letting the creator explicitly accept or decline before any wallet signature prompt appears.
+- Invite approvals present a modal with group and requester details, letting the creator explicitly accept or decline before any wallet signature prompt appears.
 - Invite request messages include inline Accept/Reject/Review actions so admins can act directly from chat history or open the detailed review modal later.
 - Invite approvals that require a wallet signature now reuse the connected wallet signer (prompting for a signature) instead of silently failing when the signer is missing.
 - Wallet-signed invite approvals now derive a stable invite key from the wallet public key, preventing verification failures from non-deterministic signatures.
@@ -251,19 +244,9 @@ model.
 - Invite codes no longer embed group avatars to keep Convos invite links short and compatible with their handler.
 - Invite creation and approval now validate that all group members have XMTP identity updates; invalid members block invites to prevent XMTPiOS “SequenceId not found in local db” sync errors.
 
-## Farcaster + Neynar Integration
-- Users can supply a Neynar API key (or rely on the user-provided built-in client key) from Settings for optional Farcaster identity/reputation lookup.
-- Converge does not bulk-sync a Farcaster following list into the private contact projection. Farcaster data enriches an already relevant peer rather than acting as a cross-device contact source.
-- Contact cards surface Farcaster links alongside Neynar scores, follower/following counts, and power badge badges when available.
-- Farcaster settings configure optional Neynar score/follower/power-badge message thresholds; filters apply globally across conversations.
-- The contacts list highlights Farcaster-derived entries and shows their Neynar score so users can gauge trust at a glance.
-- Browser Neynar lookups use a failure cooldown: CORS/network failures temporarily disable further Neynar calls, verification 404s are cached per address, and Converge no longer retries the legacy Neynar fallback URL from the static PWA.
-
 ## Unified Contact Card
-- **Identity Fusion**: The contact card serves as the central hub for merging a user's fragmentation across web3. It resolves and displays:
-  - **Farcaster Identity**: Fetches real-time profile data (username, PFP, bio, follower counts, badges) via Neynar.
+- **Identity recognition**: The contact card resolves and displays:
   - **ENS**: Resolves primary ENS names (e.g., `dean.eth`) for Ethereum addresses.
   - **XMTP Inbox**: Resolves the canonical, network-derived Inbox ID (v3 identity) instead of relying on raw Ethereum addresses.
-- **Published Profile Precedence**: The peer's XMTP/Convos published name/avatar takes precedence. Farcaster and ENS remain secondary linked identities and reputation signals.
-- **Live Refresh**: A dedicated "Refresh" action re-resolves the canonical XMTP inbox/profile and can refresh optional Farcaster/ENS metadata without creating private overrides.
-- **Trust Indicators**: Displays critical reputation signals like the Farcaster Power Badge and Neynar user score directly on the card, helping users make informed decisions about who they are messaging.
+- **Published Profile Precedence**: The peer's XMTP/Convos published name/avatar takes precedence. ENS remains a secondary linked identity.
+- **Live Refresh**: A dedicated "Refresh" action re-resolves the canonical XMTP inbox/profile and ENS metadata without creating private overrides.

@@ -21,7 +21,7 @@ async function finishProfile(page: import('@playwright/test').Page, name: string
   await expect(dialog).toBeHidden();
 }
 
-test('first-run profile and profile-based inbox switching', async ({ page }) => {
+test('first-run profile and focused active-identity navigation', async ({ page }) => {
   await page.goto('/');
 
   const createInbox = page.getByRole('button').filter({
@@ -54,20 +54,16 @@ test('first-run profile and profile-based inbox switching', async ({ page }) => 
   await finishProfile(page, 'Primary Context');
   await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible();
 
-  let switcher = page.getByRole('button', { name: /inbox switcher, current inbox primary context/i });
-  await expect(switcher).toBeVisible();
-  await switcher.click();
-  await page.getByRole('menuitem', { name: /create new inbox/i }).click();
+  const profileMenu = page.getByRole('button', { name: /open profile menu for primary context/i });
+  await expect(profileMenu).toBeVisible();
+  await profileMenu.click();
+  await expect(page.getByRole('menuitem', { name: /profile & settings/i })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: /contacts/i })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: /copy inbox id/i })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: /create new inbox|switch inbox/i })).toHaveCount(0);
 
-  await finishProfile(page, 'Brand Context');
-  await expect(page.getByRole('link', { name: /new chat/i })).toBeVisible();
-  switcher = page.getByRole('button', { name: /inbox switcher, current inbox brand context/i });
-  await switcher.click();
-  await expect(page.getByRole('menuitem', { name: 'Primary Context' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: /Brand Context/i })).toBeVisible();
-
-  await page.getByRole('menuitem', { name: 'Primary Context' }).click();
-  await expect(
-    page.getByRole('button', { name: /inbox switcher, current inbox primary context/i })
-  ).toBeVisible();
+  await page.getByRole('menuitem', { name: /profile & settings/i }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page.getByText('14-day default')).toBeVisible();
+  await expect(page.getByText(/farcaster|neynar/i)).toHaveCount(0);
 });
