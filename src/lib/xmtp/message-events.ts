@@ -42,6 +42,8 @@ export interface XmtpReactionEventDetail {
 export interface XmtpGroupUpdatedEventDetail {
   conversationId: string;
   ownerInboxId?: string;
+  /** Authoritative XMTP message time in milliseconds. */
+  sentAt?: number;
   content: unknown;
 }
 

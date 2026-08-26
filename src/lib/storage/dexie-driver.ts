@@ -494,7 +494,19 @@ export class DexieDriver implements StorageDriver {
       );
     }
 
-    return await collection.toArray();
+    const conversations = await collection.toArray();
+    const repaired = await Promise.all(
+      conversations.map(async (conversation) => {
+        // A replayed group update in older mobile builds could create a blank
+        // summary stamped with receipt time. Repair only the missing-summary
+        // shape here; ordinary rows retain the indexed fast path.
+        if (!conversation.lastMessageId && conversation.lastMessagePreview === '') {
+          return (await this.repairConversationSummary(conversation.id)) ?? conversation;
+        }
+        return conversation;
+      }),
+    );
+    return repaired.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
   }
 
   async deleteConversation(id: string): Promise<void> {
@@ -600,6 +612,35 @@ export class DexieDriver implements StorageDriver {
     lastSyncedAt: number
   ): Promise<void> {
     await this.dataDb.conversations.update(id, { lastSyncedAt });
+  }
+
+  async repairConversationSummary(id: string): Promise<Conversation | undefined> {
+    return await this.dataDb.transaction(
+      'rw',
+      [this.dataDb.messages, this.dataDb.conversations],
+      async () => {
+        const conversation = await this.dataDb.conversations.get(id);
+        if (!conversation) return undefined;
+
+        const newestMessage = await this.dataDb.messages
+          .where('[conversationId+sentAt]')
+          .between([id, Dexie.minKey], [id, Dexie.maxKey])
+          .reverse()
+          .filter((message) => shouldRetainMessage(message))
+          .first();
+        if (!newestMessage) return conversation;
+
+        const repaired: Conversation = {
+          ...conversation,
+          lastMessageAt: newestMessage.sentAt,
+          lastMessagePreview: getMessagePreview(newestMessage),
+          lastMessageId: newestMessage.id,
+          lastMessageSender: newestMessage.sender,
+        };
+        await this.dataDb.conversations.put(repaired);
+        return repaired;
+      },
+    );
   }
 
   // Messages

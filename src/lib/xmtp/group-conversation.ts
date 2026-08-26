@@ -4,6 +4,36 @@ import type { GroupDetails } from './client';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
+const authoritativeTimestamp = (value?: number): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+
+/**
+ * Create the temporary local row used when a group update arrives before
+ * conversation discovery. Replay/receipt time must never become message time:
+ * an absent timestamp stays at zero until a real message repairs the summary.
+ */
+export const provisionalGroupConversationFromUpdate = (
+  conversationId: string,
+  sentAt?: number,
+  now = Date.now(),
+): Conversation => {
+  const messageTime = authoritativeTimestamp(sentAt);
+  return {
+    id: conversationId,
+    topic: conversationId,
+    peerId: conversationId,
+    createdAt: messageTime ?? now,
+    lastMessageAt: messageTime ?? 0,
+    lastMessagePreview: '',
+    unreadCount: 0,
+    pinned: false,
+    archived: false,
+    isGroup: true,
+  };
+};
+
 const normalizeMemberIdentifier = (value: string): string => {
   const trimmed = value.trim();
   if (!ETH_ADDRESS_REGEX.test(trimmed)) {

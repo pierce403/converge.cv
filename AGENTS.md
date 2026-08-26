@@ -29,7 +29,7 @@ read the same source of truth.
 - **PWA**: hand-maintained service worker and web app manifest
 - **Deployment**: Cloudflare Workers Static Assets plus narrow fixed-upstream XMTP history and gRPC-Web transports at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds pulls and deploys `main`
 
-## Current Product Contract (2026-08-24)
+## Current Product Contract (2026-08-26)
 
 - The visible app has one active identity and one inbox. Do not reintroduce the
   Inbox Switcher or Add Inbox as ordinary product surfaces.
@@ -288,6 +288,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Browser SDK stateful sync calls are non-cancellable. Deadlines must retain keyed single-flight ownership until the original promise settles; never implement timeout retries that overlap the same conversation/global sync against one worker/database.
 - If an XMTP database close exceeds its deadline, retain the inbox Web Lock and block another client open in that tab. Surface a reload-required error instead of risking two workers against the same OPFS database; release only after the late close settles or the tab reloads.
 - All decoded live/history messages plus durable system/reaction/group side effects route through one canonical FIFO ingester. Buffer them until both `Layout` consumers register, scope every queued event to its owning inbox, and await successful Dexie persistence before claiming sync completion. Use per-conversation successful-ingest watermarks rather than `identity.lastSyncedAt` to bound message history.
+- Conversation summaries must use the authoritative XMTP message `sentAt`; discovery/replay receipt time is never message time. Blank provisional group summaries from older builds are rebuilt from the newest retained durable message when conversations load.
 - Keep the versioned, per-inbox one-time full retained-history repair for checkpoints written by older builds. Mark its version complete only after stable message/side-effect consumers drain with no network or durable-ingestion failure; otherwise retry on a later consumer-ready/recovery pass.
 - The mute UI is removed. Keep the compatibility cleanup that removes legacy `user-muted` conversation/peer tombstones so inbound messages are not filtered.
 - Settled reconnect probes both deterministic XMTP logical database filenames without creating an alternate-path file, opens real clients through the named `opfs-libxmtp` VFS, and automatically repairs metadata only for an already-registered, ledger-visible installation. Other installation mismatches surface an explicit Settings repair. A live repair persists that attempt's candidate before mutation and registers it without a pre-registration reopen. It must then close the registered worker and prove that a fresh worker on the exact same database recovers the same registered installation before clearing the journal, reporting success, or performing optional prior-installation cleanup. It may revoke only the exact unavailable saved ID when the signer is recovery authority, uses a free slot otherwise, rechecks 10/10 capacity, requests history, and never clears messages or OPFS; only at 10/10 may required exact cleanup precede registration. Browser SDK 6.1.2 may rotate an unregistered candidate after worker close and may otherwise fall back to an in-memory SQLite VFS after OPFS initialization failure, so interrupted repair resumes from fresh journal and ledger state without promising the same unregistered ID while persistent open/durability failures remain fail-closed.
@@ -354,7 +355,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-08-24): `pnpm test --run` passes (94 files, 703 tests).
+- Current Vitest status (2026-08-26): `pnpm test --run` passes (94 files, 706 tests).
 
 ---
 
@@ -577,8 +578,16 @@ Guidance:
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-08-24 (single-active-identity simplification checkpoint)
+**Last Updated**: 2026-08-26 (authoritative conversation timestamps)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-08-26)
+
+### Authoritative Conversation Timestamps
+- Bumped Converge from `0.6.0` to `0.6.1`.
+- Group discovery and replay now carry the authoritative XMTP message timestamp into provisional conversation rows instead of stamping mobile receipt time as “just now.”
+- Conversation loading repairs the affected blank-summary shape from the newest retained durable message, so already-corrupted mobile caches heal without requiring the original group update to replay again.
 
 
 ## Latest Changes (2026-08-24)

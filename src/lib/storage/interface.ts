@@ -88,6 +88,7 @@ export interface StorageDriver {
     }
   ): Promise<void>;
   updateConversationSyncState(id: string, lastSyncedAt: number): Promise<void>;
+  repairConversationSummary(id: string): Promise<Conversation | undefined>;
 
   // Messages
   putMessage(message: Message): Promise<void>;

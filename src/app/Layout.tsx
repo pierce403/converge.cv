@@ -10,7 +10,10 @@ import { useMessages } from '@/features/messages/useMessages';
 import { getStorage } from '@/lib/storage';
 import { shouldRetainMessage } from '@/lib/message-retention-policy';
 import { getXmtpClient } from '@/lib/xmtp';
-import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation';
+import {
+  groupDetailsToConversationUpdates,
+  provisionalGroupConversationFromUpdate,
+} from '@/lib/xmtp/group-conversation';
 import type { Conversation, Message } from '@/types';
 import {
   dispatchXmtpDurableSideEffect,
@@ -1097,6 +1100,7 @@ export function Layout() {
     const handleGroupUpdated = async ({
       conversationId,
       content,
+      sentAt,
     }: XmtpGroupUpdatedEventDetail) => {
       try {
         if (!conversationId) return;
@@ -1127,22 +1131,20 @@ export function Layout() {
           await storage.putConversation({ ...existing, ...updates });
           useConversationStore.getState().updateConversation(conversationId, updates);
         } else {
-          const now = Date.now();
           const groupConversation: Conversation = {
-            id: conversationId,
-            topic: conversationId,
-            peerId: conversationId,
-            createdAt: now,
-            lastMessageAt: now,
-            lastMessagePreview: '',
-            unreadCount: 0,
-            pinned: false,
-            archived: false,
-            isGroup: true,
+            ...provisionalGroupConversationFromUpdate(conversationId, sentAt),
             ...updates,
           };
           await storage.putConversation(groupConversation);
           useConversationStore.getState().addConversation(groupConversation);
+        }
+
+        // Older mobile builds could stamp a replayed group update with the
+        // current time. Rebuild the summary from the newest durable message so
+        // affected conversation lists heal as soon as history is replayed.
+        const repaired = await storage.repairConversationSummary(conversationId);
+        if (repaired) {
+          useConversationStore.getState().updateConversation(conversationId, repaired);
         }
 
         // Even metadata events are refreshed authoritatively. This also fills member

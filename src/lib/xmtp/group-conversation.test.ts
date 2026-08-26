@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Conversation } from '@/types';
 import type { GroupDetails } from './client';
-import { groupDetailsToConversationUpdates } from './group-conversation';
+import {
+  groupDetailsToConversationUpdates,
+  provisionalGroupConversationFromUpdate,
+} from './group-conversation';
 
 const details = (overrides: Partial<GroupDetails> = {}): GroupDetails => ({
   id: 'group-1',
@@ -27,6 +30,16 @@ const details = (overrides: Partial<GroupDetails> = {}): GroupDetails => ({
 });
 
 describe('groupDetailsToConversationUpdates', () => {
+  it('uses the XMTP event time instead of mobile replay time for a provisional group', () => {
+    const replayed = provisionalGroupConversationFromUpdate('group-1', 1_724_112_000_000, 1_724_630_400_000);
+    const missingTimestamp = provisionalGroupConversationFromUpdate('group-2', undefined, 1_724_630_400_000);
+
+    expect(replayed.createdAt).toBe(1_724_112_000_000);
+    expect(replayed.lastMessageAt).toBe(1_724_112_000_000);
+    expect(missingTimestamp.createdAt).toBe(1_724_630_400_000);
+    expect(missingTimestamp.lastMessageAt).toBe(0);
+  });
+
   it('promotes a locally DM-shaped record to the authoritative group shape', () => {
     const malformed: Conversation = {
       id: 'group-1',

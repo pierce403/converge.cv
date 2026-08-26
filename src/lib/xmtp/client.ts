@@ -1836,16 +1836,17 @@ export class XmtpClient {
     expiresAtNs?: bigint;
     content?: unknown;
   }, ownerInboxId?: string): void {
+    const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : undefined;
     this.dispatchDurableSideEffect({
       type: 'group-updated',
       detail: {
           conversationId: message.conversationId,
+          sentAt,
           content: message.content,
       },
     }, ownerInboxId);
 
     const body = this.formatGroupUpdatedLabel(message.content) || 'Group updated';
-    const sentAt = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
     this.dispatchDurableSideEffect({
       type: 'system',
       detail: {
@@ -1854,7 +1855,7 @@ export class XmtpClient {
             id: `sys_${message.id}`,
             senderInboxId: message.senderInboxId,
             body,
-            sentAt,
+            sentAt: sentAt ?? Date.now(),
             expiresAt: decodedMessageExpiryMs(message),
           },
       },
@@ -6820,17 +6821,18 @@ export class XmtpClient {
               if (isGroupUpdated) {
                 try {
                   const contentObj = (m as unknown as Record<string, unknown>)['content'];
+                  const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : undefined;
                   // Structured event for UI/state updates
                   await this.ingestDurableSideEffect({
                     type: 'group-updated',
                     detail: {
                         conversationId: m.conversationId,
+                        sentAt: ts,
                         content: contentObj,
                     },
                   });
                   const label = this.formatGroupUpdatedLabel(contentObj);
                   const body = label || 'Group updated';
-                  const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
                   await this.ingestDurableSideEffect({
                     type: 'system',
                     detail: {
@@ -6839,7 +6841,7 @@ export class XmtpClient {
                           id: `sys_${m.id}`,
                           senderInboxId: m.senderInboxId,
                           body,
-                          sentAt: ts,
+                          sentAt: ts ?? Date.now(),
                           expiresAt: decodedMessageExpiryMs(m),
                         },
                     },
@@ -7154,16 +7156,17 @@ export class XmtpClient {
                 if (isGroupUpdated) {
                   try {
                     const contentObj = (m as unknown as Record<string, unknown>)['content'];
+                    const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : undefined;
                     await this.ingestDurableSideEffect({
                       type: 'group-updated',
                       detail: {
                         conversationId: m.conversationId,
+                        sentAt: ts,
                         content: contentObj,
                       },
                     });
                     const label = this.formatGroupUpdatedLabel(contentObj);
                     const body = label || 'Group updated';
-                    const ts = m.sentAtNs ? Number(m.sentAtNs / 1000000n) : Date.now();
                     await this.ingestDurableSideEffect({
                       type: 'system',
                       detail: {
@@ -7172,7 +7175,7 @@ export class XmtpClient {
                           id: `sys_${m.id}`,
                           senderInboxId: m.senderInboxId,
                           body,
-                          sentAt: ts,
+                          sentAt: ts ?? Date.now(),
                           expiresAt: decodedMessageExpiryMs(m),
                         },
                       },
@@ -7689,6 +7692,7 @@ export class XmtpClient {
                     type: 'group-updated',
                     detail: {
                         conversationId: message.conversationId,
+                        sentAt: ts,
                         content: {},
                     },
                   }, activeClient.inboxId);
@@ -7752,17 +7756,18 @@ export class XmtpClient {
                 try {
                   // Dispatch structured event so UI can update conversation metadata
                   const contentObj = (message as unknown as Record<string, unknown>)['content'];
+                  const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : undefined;
                   this.dispatchDurableSideEffect({
                     type: 'group-updated',
                     detail: {
                         conversationId: message.conversationId,
+                        sentAt: ts,
                         content: contentObj,
                     },
                   }, activeClient.inboxId);
                   // Also surface a stylized system message label
                   const label = this.formatGroupUpdatedLabel(contentObj);
                   const body = label || 'Group updated';
-                  const ts = message.sentAtNs ? Number(message.sentAtNs / 1000000n) : Date.now();
                   this.dispatchDurableSideEffect({
                     type: 'system',
                     detail: {
@@ -7771,7 +7776,7 @@ export class XmtpClient {
                           id: `sys_${message.id}`,
                           senderInboxId: message.senderInboxId,
                           body,
-                          sentAt: ts,
+                          sentAt: ts ?? Date.now(),
                           expiresAt: decodedMessageExpiryMs(message),
                         },
                     },

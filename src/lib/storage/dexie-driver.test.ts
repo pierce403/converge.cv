@@ -40,6 +40,38 @@ describe('DexieDriver conversation ordering', () => {
     expect(collection.reverse).toHaveBeenCalledTimes(1);
     expect(result.map((item) => item.id)).toEqual(['newest', 'middle', 'oldest']);
   });
+
+  it('heals a persisted blank replay summary while loading conversations', async () => {
+    const corrupted = {
+      ...conversation('group-1', 1_724_630_400_000),
+      lastMessageId: undefined,
+      lastMessagePreview: '',
+    };
+    const repaired = {
+      ...corrupted,
+      lastMessageAt: 1_724_112_000_000,
+      lastMessageId: 'historical-message',
+      lastMessagePreview: 'sent last week',
+    };
+    const collection = {
+      reverse: vi.fn(),
+      filter: vi.fn(),
+      toArray: vi.fn(async () => [corrupted]),
+    };
+    collection.reverse.mockReturnValue(collection);
+    const driver = new DexieDriver('ordering-repair-test');
+    const repairConversationSummary = vi
+      .spyOn(driver, 'repairConversationSummary')
+      .mockResolvedValue(repaired);
+    (driver as unknown as {
+      dataDb: { conversations: { orderBy: () => typeof collection } };
+    }).dataDb = {
+      conversations: { orderBy: () => collection },
+    };
+
+    await expect(driver.listConversations()).resolves.toEqual([repaired]);
+    expect(repairConversationSummary).toHaveBeenCalledWith('group-1');
+  });
 });
 
 describe('DexieDriver message persistence', () => {
@@ -155,6 +187,61 @@ describe('DexieDriver message persistence', () => {
     expect(conversations.update).toHaveBeenCalledWith('conversation-1', {
       lastSyncedAt: 1234,
     });
+  });
+
+  it('repairs a synthetic replay timestamp from the newest durable message', async () => {
+    const storedConversation = {
+      ...conversation('conversation-1', 1_724_630_400_000),
+      lastMessageId: undefined,
+      lastMessagePreview: '',
+    };
+    const newestMessage: Message = {
+      id: 'historical-message',
+      conversationId: 'conversation-1',
+      sender: 'peer-1',
+      sentAt: 1_724_112_000_000,
+      receivedAt: 1_724_630_400_000,
+      type: 'text',
+      body: 'sent last week',
+      status: 'delivered',
+      reactions: [],
+    };
+    const collection = {
+      between: vi.fn(),
+      reverse: vi.fn(),
+      filter: vi.fn(),
+      first: vi.fn(async () => newestMessage),
+    };
+    collection.between.mockReturnValue(collection);
+    collection.reverse.mockReturnValue(collection);
+    collection.filter.mockReturnValue(collection);
+    const messages = { where: vi.fn(() => collection) };
+    const conversations = {
+      get: vi.fn(async () => storedConversation),
+      put: vi.fn(async () => undefined),
+    };
+    const transaction = vi.fn(
+      async (_mode: string, _tables: unknown[], operation: () => Promise<Conversation | undefined>) =>
+        await operation(),
+    );
+    const driver = new DexieDriver('summary-repair-test');
+    (driver as unknown as {
+      dataDb: {
+        messages: typeof messages;
+        conversations: typeof conversations;
+        transaction: typeof transaction;
+      };
+    }).dataDb = { messages, conversations, transaction };
+
+    const repaired = await driver.repairConversationSummary('conversation-1');
+
+    expect(repaired).toMatchObject({
+      lastMessageAt: newestMessage.sentAt,
+      lastMessageId: newestMessage.id,
+      lastMessagePreview: newestMessage.body,
+      lastMessageSender: newestMessage.sender,
+    });
+    expect(conversations.put).toHaveBeenCalledWith(repaired);
   });
 });
 

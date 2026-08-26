@@ -1761,7 +1761,7 @@ describe('XmtpClient message stream cleanup', () => {
         versionMajor: 1,
         versionMinor: 0,
       },
-      sentAtNs: 3n,
+      sentAtNs: 3_000_000n,
       expiresAtNs: 14_000_000n,
     });
     attachStreamingClient(xmtp, stream, vi.fn(async () => undefined));
@@ -1780,6 +1780,7 @@ describe('XmtpClient message stream cleanup', () => {
       conversationId: 'group-1',
       content,
       ownerInboxId: 'self-inbox',
+      sentAt: 3,
     });
     expect(systemEvent.detail).toMatchObject({
       conversationId: 'group-1',
