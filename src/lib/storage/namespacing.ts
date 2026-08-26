@@ -5,9 +5,9 @@ import type { Identity, VaultSecrets } from '@/types';
  * Ensure that the active storage namespace matches the given inbox and that
  * the identity (and vault secrets) are persisted inside that namespace.
  *
- * This is critical for the inbox switcher: without namespacing, we can end up
- * reloading into an empty database even though identities were created earlier
- * in a different shard (e.g., the default namespace).
+ * This preserves compatibility with identities created by older releases:
+ * without namespacing, reload can open an empty database even though the active
+ * identity was stored earlier in a different shard (for example, `default`).
  */
 export async function ensureInboxStorageNamespace(
   inboxId: string | null | undefined,

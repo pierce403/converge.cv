@@ -1,10 +1,9 @@
 /**
  * App-level Web Push registration for Converge.
  *
- * A browser owns one PushSubscription. The relay owns one logical record for
- * each loaded XMTP inbox/installation. Inactive inboxes are re-registered from
- * cached topic material; this module never opens or syncs an inactive XMTP
- * client.
+ * A browser owns one PushSubscription. Routine setup registers the active XMTP
+ * inbox/installation only. Cached legacy registrations remain removable, and
+ * the lower-level batch helper remains available for migration diagnostics.
  */
 
 import { useAuthStore, useInboxRegistryStore } from '@/lib/stores';
@@ -142,6 +141,7 @@ export type AppPushStatus = {
   expectedInboxCount: number;
   missingInboxIds: string[];
   pendingRegistrationCount: number;
+  /** Global cleanup debt, including retained compatibility inboxes. */
   pendingDeletionCount: number;
 };
 
@@ -188,6 +188,7 @@ export type EnablePushOptions = PushRuntimeOptions & {
   topics?: XmtpPushTopic[];
   displayName?: string;
   loadedInboxIds?: string[];
+  /** Legacy compatibility field; ignored by enablePushForCurrentUser. */
   registrations?: InboxPushRegistrationInput[];
   vapidPublicKey?: string;
   permissionPromise?: Promise<NotificationPermission>;
@@ -205,6 +206,7 @@ type QueuedPushRefreshRequest = {
   opts: PushRuntimeOptions;
   fingerprint: string;
   mutationGeneration: number;
+  activeInboxIdToRetain?: string;
 };
 
 type PushRefreshQueue = {
@@ -1123,12 +1125,15 @@ export async function updatePushInboxProfile(
 }
 
 function defaultLoadedInboxIds(): string[] {
-  useInboxRegistryStore.getState().hydrate();
-  const registry = useInboxRegistryStore.getState();
-  return registry.entries.flatMap((entry) => {
-    const normalized = normalizeInboxId(entry.inboxId);
+  const activeIdentity = useAuthStore.getState().identity?.inboxId;
+  if (activeIdentity) {
+    const normalized = normalizeInboxId(activeIdentity);
     return normalized ? [normalized] : [];
-  });
+  }
+  useInboxRegistryStore.getState().hydrate();
+  const currentInboxId = useInboxRegistryStore.getState().currentInboxId;
+  const normalized = normalizeInboxId(currentInboxId);
+  return normalized ? [normalized] : [];
 }
 
 function selectOneRegistrationPerInbox(
@@ -1291,10 +1296,71 @@ async function removeSupersededInboxRegistrations(
   }
 }
 
-/** Enable the shared browser subscription and upsert every loaded inbox with cached material. */
-export function enablePushForLoadedInboxes(
+async function retireInactiveInboxRegistrations(
+  activeInboxId: string,
+  fallbackEndpoint: string | undefined,
+  store: PushStateStore,
+  opts: PushRuntimeOptions,
+): Promise<void> {
+  const normalizedActiveInboxId = normalizeInboxId(activeInboxId);
+  if (!normalizedActiveInboxId) return;
+
+  let registrations: CachedInboxPushRegistration[];
+  try {
+    registrations = await store.listRegistrations();
+  } catch (error) {
+    console.warn('[Push] Could not inspect inactive inbox relay records for retirement', error);
+    return;
+  }
+
+  for (const registration of registrations) {
+    const inboxId = normalizeInboxId(registration.identity.inboxId);
+    if (!inboxId || inboxId === normalizedActiveInboxId) continue;
+
+    // A queued refresh from the former multi-inbox UI must not recreate this
+    // route after routine enablement retires it. A later activation explicitly
+    // clears the invalidation for its current registration key.
+    invalidatedPushRegistrationKeys.add(registration.key);
+
+    const endpoint = registration.endpoint ?? fallbackEndpoint;
+    if (!endpoint) {
+      try {
+        await store.deleteRegistration(registration.key);
+      } catch (error) {
+        console.warn('[Push] Could not remove an inactive local-only registration', error);
+      }
+      continue;
+    }
+
+    try {
+      await unregisterWithVapidParty(
+        endpoint,
+        registration.identity,
+        opts,
+        registration.relayDiagnostics?.receipt,
+      );
+      await store.deleteRegistration(registration.key);
+    } catch (error) {
+      console.warn('[Push] Could not retire an inactive inbox relay record', error);
+      try {
+        await store.putRegistration({
+          ...registration,
+          endpoint,
+          pendingRegistration: false,
+          pendingDeletion: true,
+          updatedAt: Date.now(),
+        });
+      } catch (tombstoneError) {
+        console.warn('[Push] Could not retain an inactive relay deletion tombstone', tombstoneError);
+      }
+    }
+  }
+}
+
+function enablePushRegistrations(
   registrations: InboxPushRegistrationInput[],
-  opts: Omit<EnablePushOptions, 'registrations' | 'identity' | 'topics' | 'displayName'> = {},
+  opts: Omit<EnablePushOptions, 'registrations' | 'identity' | 'topics' | 'displayName'>,
+  activeInboxIdToRetain?: string,
 ): Promise<PushSubscriptionResult> {
   const mutationGeneration = opts.mutationGeneration ?? pushMutationGeneration;
   const browserSubscriptionPromise =
@@ -1302,11 +1368,15 @@ export function enablePushForLoadedInboxes(
   return browserSubscriptionPromise
     .then((browserSubscription) =>
       serializePushMutation(() =>
-        performEnablePushForLoadedInboxes(registrations, {
-          ...opts,
-          browserSubscriptionPromise: Promise.resolve(browserSubscription),
-          mutationGeneration,
-        })
+        performEnablePushForLoadedInboxes(
+          registrations,
+          {
+            ...opts,
+            browserSubscriptionPromise: Promise.resolve(browserSubscription),
+            mutationGeneration,
+          },
+          activeInboxIdToRetain,
+        )
       )
     )
     .catch(async (error) => {
@@ -1320,9 +1390,18 @@ export function enablePushForLoadedInboxes(
     });
 }
 
+/** Enable the shared browser subscription and upsert every loaded inbox with cached material. */
+export function enablePushForLoadedInboxes(
+  registrations: InboxPushRegistrationInput[],
+  opts: Omit<EnablePushOptions, 'registrations' | 'identity' | 'topics' | 'displayName'> = {},
+): Promise<PushSubscriptionResult> {
+  return enablePushRegistrations(registrations, opts);
+}
+
 async function performEnablePushForLoadedInboxes(
   registrations: InboxPushRegistrationInput[],
   opts: Omit<EnablePushOptions, 'registrations' | 'identity' | 'topics' | 'displayName'>,
+  activeInboxIdToRetain?: string,
 ): Promise<PushSubscriptionResult> {
   if (!hasPushSupport()) return { success: false, error: 'Notifications not supported in this browser' };
   const store = opts.stateStore ?? getPushStateStore();
@@ -1471,6 +1550,14 @@ async function performEnablePushForLoadedInboxes(
     }
 
     const enabled = registeredInboxCount + retainedRemoteInboxCount > 0;
+    if (enabled && activeInboxIdToRetain) {
+      await retireInactiveInboxRegistrations(
+        activeInboxIdToRetain,
+        subscription.endpoint,
+        store,
+        opts,
+      );
+    }
     await store.setPreferences({
       enabled,
       endpoint: enabled ? subscription.endpoint : undefined,
@@ -1511,7 +1598,7 @@ async function performEnablePushForLoadedInboxes(
   }
 }
 
-/** Compatibility entry point. It refreshes the active inbox, then includes cached inactive inboxes. */
+/** Enable notifications for the active inbox without making stale inboxes a prerequisite. */
 export async function enablePushForCurrentUser(opts: EnablePushOptions = {}): Promise<PushSubscriptionResult> {
   if (!hasPushSupport()) {
     return { success: false, error: 'Notifications not supported in this browser' };
@@ -1526,11 +1613,19 @@ export async function enablePushForCurrentUser(opts: EnablePushOptions = {}): Pr
       topics: await collectCurrentTopics(opts.topics),
       displayName: currentDisplayName(opts.displayName),
     };
-    return enablePushForLoadedInboxes([current, ...(opts.registrations ?? [])], {
-      ...opts,
+    // Keep accepting the compatibility-shaped options object, but do not let
+    // legacy callers expand routine setup beyond the one active inbox.
+    const activeOnlyOptions = { ...opts };
+    delete activeOnlyOptions.identity;
+    delete activeOnlyOptions.topics;
+    delete activeOnlyOptions.displayName;
+    delete activeOnlyOptions.registrations;
+    return enablePushRegistrations([current], {
+      ...activeOnlyOptions,
+      loadedInboxIds: [current.identity.inboxId],
       browserSubscriptionPromise,
       mutationGeneration,
-    });
+    }, current.identity.inboxId);
   } catch (error) {
     const browserSubscription = await browserSubscriptionPromise.catch(() => undefined);
     if (browserSubscription?.created) {
@@ -1545,6 +1640,14 @@ export function refreshPushRegistrationForInbox(
   input: InboxPushRegistrationInput,
   opts: PushRuntimeOptions = {},
 ): Promise<PushSubscriptionResult> {
+  return queuePushRegistrationRefresh(input, opts);
+}
+
+function queuePushRegistrationRefresh(
+  input: InboxPushRegistrationInput,
+  opts: PushRuntimeOptions,
+  activeInboxIdToRetain?: string,
+): Promise<PushSubscriptionResult> {
   const identity = normalizeIdentity(input.identity);
   const key = [
     opts.apiBase ?? VAPID_PARTY_API_BASE,
@@ -1554,8 +1657,9 @@ export function refreshPushRegistrationForInbox(
   const request: QueuedPushRefreshRequest = {
     input,
     opts,
-    fingerprint: pushRefreshFingerprint(input),
+    fingerprint: pushRefreshFingerprint(input, activeInboxIdToRetain),
     mutationGeneration: pushMutationGeneration,
+    activeInboxIdToRetain,
   };
   const existing = pushRefreshQueues.get(key);
   if (existing) {
@@ -1578,7 +1682,10 @@ export function refreshPushRegistrationForInbox(
   return queue.promise;
 }
 
-function pushRefreshFingerprint(input: InboxPushRegistrationInput): string {
+function pushRefreshFingerprint(
+  input: InboxPushRegistrationInput,
+  activeInboxIdToRetain?: string,
+): string {
   const identity = normalizeIdentity(input.identity);
   const topics = normalizeXmtpPushTopics(input.topics, identity.installationId)
     .map((topic) => ({
@@ -1593,6 +1700,7 @@ function pushRefreshFingerprint(input: InboxPushRegistrationInput): string {
     topics,
     displayName: input.displayName?.trim() || '',
     inboxHandle: input.inboxHandle?.trim() || '',
+    activeInboxIdToRetain: normalizeInboxId(activeInboxIdToRetain) ?? '',
   });
 }
 
@@ -1602,7 +1710,12 @@ async function runPushRefreshQueue(queue: PushRefreshQueue): Promise<PushSubscri
     const revision = queue.revision;
     const request = queue.latest;
     result = await serializePushMutation(() =>
-      performPushRegistrationRefresh(request.input, request.opts, request.mutationGeneration)
+      performPushRegistrationRefresh(
+        request.input,
+        request.opts,
+        request.mutationGeneration,
+        request.activeInboxIdToRetain,
+      )
     );
     if (queue.revision === revision) return result;
   }
@@ -1612,6 +1725,7 @@ async function performPushRegistrationRefresh(
   input: InboxPushRegistrationInput,
   opts: PushRuntimeOptions,
   mutationGeneration: number,
+  activeInboxIdToRetain?: string,
 ): Promise<PushSubscriptionResult> {
   const store = opts.stateStore ?? getPushStateStore();
   try {
@@ -1660,6 +1774,14 @@ async function performPushRegistrationRefresh(
     };
     await store.putRegistration(persistedRegistration);
     await removeSupersededInboxRegistrations(persistedRegistration, store, opts);
+    if (activeInboxIdToRetain) {
+      await retireInactiveInboxRegistrations(
+        activeInboxIdToRetain,
+        subscription.endpoint,
+        store,
+        opts,
+      );
+    }
     await store.setPreferences({ enabled: true, endpoint: subscription.endpoint, updatedAt: Date.now() });
     if (browserRegistration) {
       await cleanupLegacyBrowserPushSubscriptionsIfReady(
@@ -1687,13 +1809,15 @@ export async function refreshPushRegistrationForCurrentInbox(
   opts: EnablePushOptions = {},
 ): Promise<PushSubscriptionResult> {
   try {
-    return refreshPushRegistrationForInbox(
-      {
-        identity: await collectCurrentIdentity(opts.identity),
-        topics: await collectCurrentTopics(opts.topics),
-        displayName: currentDisplayName(opts.displayName),
-      },
+    const current: InboxPushRegistrationInput = {
+      identity: await collectCurrentIdentity(opts.identity),
+      topics: await collectCurrentTopics(opts.topics),
+      displayName: currentDisplayName(opts.displayName),
+    };
+    return queuePushRegistrationRefresh(
+      current,
       opts,
+      current.identity.inboxId,
     );
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -1881,6 +2005,11 @@ export async function getAppPushStatus(
     const registeredInboxIds = new Set(matching.map((entry) => normalizeInboxId(entry.identity.inboxId)));
     const missingInboxIds = expected.filter((inboxId) => !registeredInboxIds.has(inboxId));
     const pendingDeletionCount = cached.filter((entry) => entry.pendingDeletion).length;
+    const missingExpectedPendingDeletionCount = cached.filter((entry) => {
+      if (!entry.pendingDeletion) return false;
+      const inboxId = normalizeInboxId(entry.identity.inboxId);
+      return Boolean(inboxId && (expected.length === 0 || missingInboxIds.includes(inboxId)));
+    }).length;
     const pendingRegistrationCount = matching.filter((entry) => entry.pendingRegistration).length;
     const fullyEnabled =
       preferences.enabled &&
@@ -1890,7 +2019,7 @@ export async function getAppPushStatus(
       pendingRegistrationCount === 0;
     return {
       state:
-        pendingDeletionCount > 0 || pendingRegistrationCount > 0
+        missingExpectedPendingDeletionCount > 0 || pendingRegistrationCount > 0
           ? 'partial'
           : !preferences.enabled
             ? 'disabled'

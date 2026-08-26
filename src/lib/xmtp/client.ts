@@ -1833,6 +1833,7 @@ export class XmtpClient {
     conversationId: string;
     senderInboxId: string;
     sentAtNs?: bigint;
+    expiresAtNs?: bigint;
     content?: unknown;
   }, ownerInboxId?: string): void {
     this.dispatchDurableSideEffect({
@@ -1854,6 +1855,7 @@ export class XmtpClient {
             senderInboxId: message.senderInboxId,
             body,
             sentAt,
+            expiresAt: decodedMessageExpiryMs(message),
           },
       },
     }, ownerInboxId);
@@ -2244,7 +2246,6 @@ export class XmtpClient {
             direction: 'inbound',
             event: 'profile:received',
             details: `Profile update from ${senderInboxId}`,
-            payload: JSON.stringify(convergeProfile),
           });
         } catch (error) {
           console.warn('[XMTP] Failed to process Converge profile message', error);
@@ -2343,13 +2344,6 @@ export class XmtpClient {
       direction: 'inbound',
       event: 'profile:received',
       details: `Convos profile update in ${conversationId ?? 'conversation'}`,
-      payload: JSON.stringify(convosProfiles.map((profile) => ({
-        inboxId: profile.inboxId ?? senderInboxId,
-        displayName: profile.name,
-        encryptedImage: Boolean(profile.encryptedImageUrl),
-        memberKind: profile.memberKind,
-        source: profile.source,
-      }))),
     });
     return true;
   }
@@ -2429,6 +2423,7 @@ export class XmtpClient {
         content: joinRequest.inviteSlug,
         contentTypeId: ContentTypeConvosJoinRequest.typeId,
         sentAt,
+        expiresAt: decodedMessageExpiryMs(msg),
         convosJoinRequest: joinRequest,
       },
       isHistory,
@@ -2541,19 +2536,22 @@ export class XmtpClient {
       content: encoded,
     };
     const messageId = await conv.sendReply(replyContent);
-    const now = Date.now();
+    const details = await this.fetchMessageDetails(messageId);
+    const sentAt = details?.sentAtNs
+      ? Number(details.sentAtNs / 1_000_000n)
+      : Date.now();
     const message: XmtpMessage = {
       id: messageId,
       conversationId,
       senderAddress: this.client?.inboxId ?? this.identity?.address ?? 'unknown',
       content: text,
-      sentAt: now,
+      sentAt,
+      expiresAt: decodedMessageExpiryMs(details),
     };
     logNetworkEvent({
       direction: 'outbound',
       event: 'message:reply',
       details: `Reply sent`,
-      payload: this.formatPayload({ id: messageId }),
     });
     return message;
   }
@@ -3477,7 +3475,7 @@ export class XmtpClient {
 
   async fetchGroupDetails(conversationId: string): Promise<GroupDetails | null> {
     // Group hydration is best-effort and is called from render/event lifecycles
-    // that can overlap inbox switches and disconnects. A missing client is an
+    // that can overlap identity teardown and disconnects. A missing client is an
     // expected lifecycle state, not a failed network request.
     if (!this.client) {
       return null;
@@ -3496,7 +3494,7 @@ export class XmtpClient {
       });
       return details;
     } catch (error) {
-      // The client can disappear after the preflight while an inbox switch is
+      // The client can disappear after the preflight while identity teardown is
       // closing the old worker. Keep this read-only refresh quiet; callers
       // already treat null as "use the locally persisted group details".
       if (!this.client || (error instanceof Error && /Client not connected/i.test(error.message))) {
@@ -3546,7 +3544,6 @@ export class XmtpClient {
         direction: 'outbound',
         event: 'group:metadata_updated',
         details: `Updated metadata for group ${conversationId}`,
-        payload: this.formatPayload(updates),
       });
 
       return await this.buildGroupDetails(conversationId, group);
@@ -3612,6 +3609,7 @@ export class XmtpClient {
                 content: inviteCode,
                 contentTypeId: joinRequest ? ContentTypeConvosJoinRequest.typeId : undefined,
                 sentAt,
+                expiresAt: decodedMessageExpiryMs(last),
               },
               isHistory: false,
               scanReason: reason,
@@ -4041,7 +4039,9 @@ export class XmtpClient {
         : undefined,
     };
 
-    const dm = await this.client.conversations.createDm(creatorInboxId);
+    const dm = await this.client.conversations.createDm(creatorInboxId, {
+      messageDisappearingSettings: getDefaultMessageDisappearingSettings(),
+    });
     const encoded = CONVOS_JOIN_REQUEST_CODEC.encode(payload);
     await dm.send(encoded, { shouldPush: true });
 
@@ -6249,7 +6249,6 @@ export class XmtpClient {
           if (!id) return;
 
           const exists = await storage.getConversation(id);
-          if (exists?.isGroup === false) return;
 
           // Get the peer's inbox ID using the async method
           // This is the actual identity of the person we're chatting with
@@ -6728,7 +6727,6 @@ export class XmtpClient {
                     direction: 'inbound',
                     event: 'profile:received',
                     details: `Profile update from ${senderInboxId}`,
-                    payload: JSON.stringify(profileUpdate),
                   });
                 }
               } catch (e) {
@@ -6842,6 +6840,7 @@ export class XmtpClient {
                           senderInboxId: m.senderInboxId,
                           body,
                           sentAt: ts,
+                          expiresAt: decodedMessageExpiryMs(m),
                         },
                     },
                   });
@@ -6893,6 +6892,7 @@ export class XmtpClient {
                           senderInboxId: m.senderInboxId,
                           body: label,
                           sentAt: ts,
+                          expiresAt: decodedMessageExpiryMs(m),
                         },
                     },
                   });
@@ -6912,6 +6912,7 @@ export class XmtpClient {
                         senderInboxId: m.senderInboxId,
                         body: label,
                         sentAt: ts,
+                        expiresAt: decodedMessageExpiryMs(m),
                       },
                   },
                 });
@@ -7172,6 +7173,7 @@ export class XmtpClient {
                           senderInboxId: m.senderInboxId,
                           body,
                           sentAt: ts,
+                          expiresAt: decodedMessageExpiryMs(m),
                         },
                       },
                     });
@@ -7257,6 +7259,7 @@ export class XmtpClient {
                             senderInboxId: m.senderInboxId,
                             body: label,
                             sentAt: ts,
+                            expiresAt: decodedMessageExpiryMs(m),
                           },
                       },
                     });
@@ -7276,6 +7279,7 @@ export class XmtpClient {
                         senderInboxId: m.senderInboxId,
                         body: label,
                         sentAt: ts,
+                        expiresAt: decodedMessageExpiryMs(m),
                       },
                     },
                   });
@@ -7430,7 +7434,7 @@ export class XmtpClient {
     });
   }
 
-  /** Sync and durably ingest one conversation (used by pull-to-refresh). */
+  /** Sync and durably ingest one conversation for targeted repair. */
   syncConversationMessages(conversationId: string): Promise<void> {
     return this.enqueueLifecycle(async () => {
       if (!this.client) {
@@ -7676,6 +7680,7 @@ export class XmtpClient {
                           senderInboxId: message.senderInboxId,
                           body: 'Group membership changed',
                           sentAt: ts,
+                          expiresAt: decodedMessageExpiryMs(message),
                         },
                     },
                   }, activeClient.inboxId);
@@ -7767,6 +7772,7 @@ export class XmtpClient {
                           senderInboxId: message.senderInboxId,
                           body,
                           sentAt: ts,
+                          expiresAt: decodedMessageExpiryMs(message),
                         },
                     },
                   }, activeClient.inboxId);
@@ -7848,6 +7854,7 @@ export class XmtpClient {
                           senderInboxId: message.senderInboxId,
                           body: label,
                           sentAt: ts,
+                          expiresAt: decodedMessageExpiryMs(message),
                         },
                     },
                   }, activeClient.inboxId);
@@ -7866,6 +7873,7 @@ export class XmtpClient {
                         senderInboxId: message.senderInboxId,
                         body: label,
                         sentAt: ts,
+                        expiresAt: decodedMessageExpiryMs(message),
                       },
                   },
                 }, activeClient.inboxId);
@@ -7879,7 +7887,6 @@ export class XmtpClient {
               id: message.id,
               conversationId: message.conversationId,
               senderInboxId: message.senderInboxId,
-              content: typeof message.content === 'string' ? message.content.substring(0, 50) : '(binary)',
               sentAtNs: message.sentAtNs,
             });
 
@@ -7994,6 +8001,10 @@ export class XmtpClient {
           }
           if (!messageId) continue;
           await deleteLocalMessage(messageId);
+          // Older builds projected non-text XMTP messages to a prefixed local
+          // system row. Remove that compatibility row when the native message
+          // expires or is deleted as well.
+          await deleteLocalMessage(`sys_${messageId}`);
         }
         if (this.messageDeletionStream === stream) {
           console.warn('[XMTP] Message deletion stream ended unexpectedly');
@@ -8191,7 +8202,7 @@ export class XmtpClient {
         const m = msgs[i];
         const profileUpdate = XmtpClient.extractProfileUpdate(m);
         if (!profileUpdate) continue;
-        console.log('[XMTP] ✅ Loaded profile from self-DM:', { displayName: profileUpdate.displayName, hasAvatar: !!profileUpdate.avatarUrl });
+        console.log('[XMTP] ✅ Loaded profile from self-DM:', { hasDisplayName: !!profileUpdate.displayName, hasAvatar: !!profileUpdate.avatarUrl });
         logNetworkEvent({ direction: 'inbound', event: 'profile:load', details: 'Profile loaded from self-DM' });
         return { displayName: profileUpdate.displayName, avatarUrl: profileUpdate.avatarUrl };
       }
@@ -8214,7 +8225,7 @@ export class XmtpClient {
       console.log('[XMTP] loadProfileFromPreferences: Trying preferences API for:', inboxId);
       const profile = await this.fetchInboxProfile(inboxId, { mode: 'network' });
       if (profile.displayName || profile.avatarUrl) {
-        console.log('[XMTP] ✅ Loaded profile from preferences API:', { displayName: profile.displayName, hasAvatar: !!profile.avatarUrl });
+        console.log('[XMTP] ✅ Loaded profile from preferences API:', { hasDisplayName: !!profile.displayName, hasAvatar: !!profile.avatarUrl });
         return { displayName: profile.displayName, avatarUrl: profile.avatarUrl };
       }
     } catch (e) {
@@ -9183,7 +9194,7 @@ export class XmtpClient {
           profileAvatar = profile.avatarUrl;
           console.log('[XMTP] ✅ Fetched profile via fetchInboxProfile:', {
             inboxId: resolvedPeerInboxId,
-            displayName: profileDisplayName,
+            hasDisplayName: !!profileDisplayName,
             hasAvatar: !!profileAvatar,
           });
 
@@ -9224,7 +9235,7 @@ export class XmtpClient {
                     if (profileUpdate.avatarUrl) profileAvatar = profileUpdate.avatarUrl;
                     console.log('[XMTP] ✅ Found profile in DM:', {
                       inboxId: resolvedPeerInboxId,
-                      displayName: profileDisplayName,
+                      hasDisplayName: !!profileDisplayName,
                       hasAvatar: !!profileAvatar,
                       dmId: dm.id,
                     });
@@ -9274,7 +9285,6 @@ export class XmtpClient {
         direction: 'status',
         event: 'conversations:create:success',
         details: `Conversation ${conversation.id} created`,
-        payload: this.formatPayload(conversation),
       });
 
       return conversation;
@@ -9291,7 +9301,6 @@ export class XmtpClient {
         direction: 'status',
         event: 'conversations:create:failed',
         details: `Failed to create XMTP conversation for ${peerAddressOrInboxId}`,
-        payload: this.formatPayload(error instanceof Error ? error.message : String(error)),
       });
 
       throw error;
@@ -9399,7 +9408,6 @@ export class XmtpClient {
         direction: 'status',
         event: 'conversations:create_group:success',
         details: `Group conversation ${conversation.id} created`,
-        payload: this.formatPayload(conversation),
       });
 
       return conversation;
@@ -9433,7 +9441,6 @@ export class XmtpClient {
         direction: 'status',
         event: 'attachments:send:disconnected',
         details: `Cannot send attachment on ${conversationId} while disconnected`,
-        payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
       });
       throw new Error('XMTP is not connected. Reconnect before sending an attachment.');
     }
@@ -9442,7 +9449,6 @@ export class XmtpClient {
       direction: 'outbound',
       event: 'attachments:send',
       details: `Sending attachment on ${conversationId}`,
-      payload: this.formatPayload({ filename: attachment.filename, size: attachment.content.byteLength }),
     });
 
     try {
@@ -9477,6 +9483,10 @@ export class XmtpClient {
       await verifyUploadedRemoteAttachment(remoteAttachment);
 
       const messageId = await conversation.sendRemoteAttachment(remoteAttachment);
+      const details = await this.fetchMessageDetails(messageId);
+      const sentAt = details?.sentAtNs
+        ? Number(details.sentAtNs / 1_000_000n)
+        : Date.now();
       const message: XmtpMessage = {
         id: messageId,
         conversationId,
@@ -9485,14 +9495,14 @@ export class XmtpClient {
         attachment,
         remoteAttachment,
         contentTypeId: 'remoteAttachment',
-        sentAt: Date.now(),
+        sentAt,
+        expiresAt: decodedMessageExpiryMs(details),
       };
 
       logNetworkEvent({
         direction: 'status',
         event: 'attachments:send:success',
         details: `Attachment sent on ${conversationId}`,
-        payload: this.formatPayload({ id: messageId }),
       });
 
       return message;
@@ -9506,11 +9516,6 @@ export class XmtpClient {
         direction: 'status',
         event: 'attachments:send:failed',
         details: `Failed to send attachment on ${conversationId}`,
-        payload: this.formatPayload({
-          filename: attachment.filename,
-          size: attachment.content.byteLength,
-          error: error instanceof Error ? error.message : String(error),
-        }),
       });
       throw error;
     }
@@ -9530,7 +9535,6 @@ export class XmtpClient {
       direction: 'outbound',
       event: 'messages:send',
       details: `Sending message on ${conversationId}`,
-      payload: this.formatPayload(content),
     });
 
     try {
@@ -9571,20 +9575,25 @@ export class XmtpClient {
 
       console.log('[XMTP] ✅ Message sent successfully', { conversationId, messageId });
 
+      const details = await this.fetchMessageDetails(messageId);
+      const sentAt = details?.sentAtNs
+        ? Number(details.sentAtNs / 1_000_000n)
+        : Date.now();
+
       // Create a message object to return
       const message: XmtpMessage = {
         id: messageId,
         conversationId: conversationId,
         senderAddress: this.client?.inboxId ?? this.identity?.address ?? 'unknown',
         content,
-        sentAt: Date.now(),
+        sentAt,
+        expiresAt: decodedMessageExpiryMs(details),
       };
 
       logNetworkEvent({
         direction: 'status',
         event: 'messages:send:success',
         details: `Message sent on ${conversationId}`,
-        payload: this.formatPayload({ id: messageId }),
       });
 
       return message;
@@ -9652,7 +9661,6 @@ export class XmtpClient {
         direction: 'status',
         event: 'canMessage:result',
         details: `${normalizedInput} ${canMessage ? 'can' : 'cannot'} receive messages`,
-        payload: resolvedInboxId ? this.formatPayload({ inboxId: resolvedInboxId }) : undefined,
       });
 
       return {
@@ -9678,6 +9686,7 @@ export class XmtpClient {
       id: string;
       senderInboxId?: string;
       sentAtNs?: bigint;
+      expiresAtNs?: bigint;
       deliveryStatus?: unknown;
       kind?: unknown;
       contentType?: string;
@@ -9694,6 +9703,7 @@ export class XmtpClient {
       // We cannot import types here, so we access known keys defensively.
       const anyRaw = raw as unknown as { [k: string]: unknown };
       const sentAtNs: bigint | undefined = anyRaw['sentAtNs'] as bigint | undefined;
+      const expiresAtNs: bigint | undefined = anyRaw['expiresAtNs'] as bigint | undefined;
       const senderInboxId: string | undefined = anyRaw['senderInboxId'] as string | undefined;
       const deliveryStatus = anyRaw['deliveryStatus'];
       const kind = anyRaw['kind'];
@@ -9708,6 +9718,7 @@ export class XmtpClient {
         id: messageId,
         senderInboxId,
         sentAtNs,
+        expiresAtNs,
         deliveryStatus,
         kind,
         contentType: typeof directType === 'string' ? directType : typeof contentType === 'string' ? contentType : undefined,

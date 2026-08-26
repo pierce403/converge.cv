@@ -19,6 +19,7 @@ import {
   normalizeXmtpGroupTopic,
   normalizeXmtpHmacKeys,
   normalizeXmtpPushTopics,
+  refreshPushRegistrationForCurrentInbox,
   refreshPushRegistrationForInbox,
   removePushRegistrationForInbox,
   updatePushInboxProfile,
@@ -27,6 +28,7 @@ import {
 } from './subscribe';
 import { MemoryPushStateStore, pushRegistrationKey } from './state';
 import { registerServiceWorkerForPush } from './index';
+import { useAuthStore } from '@/lib/stores/auth-store';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const GROUP_ID_A = 'a'.repeat(32);
@@ -175,6 +177,7 @@ describe('push helpers', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    useAuthStore.getState().setIdentity(null);
     delete (window as any).PushManager;
   });
 
@@ -505,6 +508,142 @@ describe('push helpers', () => {
       inboxHandle: 'opaque-inbox-two',
     });
     expect((await stateStore.getPreferences()).enabled).toBe(true);
+  });
+
+  it('enforces active-only enablement and retires a cached inactive relay route', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const inactiveInput = {
+      identity: { inboxId: 'inactive-inbox', installationId: INSTALLATION_ID_B },
+      topics: [{ topic: GROUP_TOPIC_B, hmacKeys: [{ epoch: '2', key: 'inactive-key' }] }],
+    };
+    const inactive = await cacheInboxPushRegistration(
+      inactiveInput,
+      { stateStore },
+    );
+    const subscription = createSubscription();
+    const inactiveReceipt = 'i'.repeat(43);
+    await stateStore.putRegistration({
+      ...inactive,
+      relayDiagnostics: {
+        receipt: inactiveReceipt,
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
+    });
+    installPushBrowserMocks({ subscription });
+    const fetchFn = vi.fn(async () => registrationResponse(201)) as unknown as Mock;
+
+    const result = await enablePushForCurrentUser({
+      identity,
+      topics,
+      registrations: [inactiveInput],
+      stateStore,
+      vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ success: true, registeredInboxCount: 1 });
+    const postedInboxIds = fetchFn.mock.calls
+      .filter((call) => call[1]?.method === 'POST')
+      .map((call) => JSON.parse(String(call[1]?.body)).identity.inboxId);
+    expect(postedInboxIds).toEqual([identity.inboxId]);
+    const deleteCall = fetchFn.mock.calls.find((call) => call[1]?.method === 'DELETE');
+    expect(deleteCall).toBeDefined();
+    expect(JSON.parse(String(deleteCall?.[1]?.body))).toMatchObject({
+      identity: { inboxId: inactiveInput.identity.inboxId },
+    });
+    expect(new Headers(deleteCall?.[1]?.headers).get('Authorization')).toBe(
+      `Bearer ${inactiveReceipt}`,
+    );
+    expect(await stateStore.listRegistrations()).toEqual([
+      expect.objectContaining({
+        identity: expect.objectContaining({ inboxId: identity.inboxId }),
+        pendingDeletion: false,
+      }),
+    ]);
+  });
+
+  it('keeps active status enabled while exposing failed inactive cleanup globally', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription();
+    const inactive = await cacheInboxPushRegistration(
+      {
+        identity: { inboxId: 'inactive-inbox', installationId: INSTALLATION_ID_B },
+        topics: [{ topic: GROUP_TOPIC_B, hmacKeys: [{ epoch: '2', key: 'inactive-key' }] }],
+      },
+      { stateStore },
+    );
+    await stateStore.putRegistration({
+      ...inactive,
+      endpoint: subscription.endpoint,
+      relayDiagnostics: {
+        receipt: 'j'.repeat(43),
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
+    });
+    useAuthStore.getState().setIdentity({
+      address: identity.address!,
+      publicKey: 'test-public-key',
+      createdAt: 1,
+      inboxId: identity.inboxId,
+      installationId: identity.installationId,
+    });
+    installPushBrowserMocks({ subscription });
+    const fetchFn = vi.fn(async (_url, init) =>
+      init?.method === 'DELETE'
+        ? new Response('{}', { status: 503 })
+        : registrationResponse(201)
+    ) as unknown as Mock;
+
+    await expect(enablePushForCurrentUser({
+      identity,
+      topics,
+      stateStore,
+      vapidPublicKey: TEST_VAPID_PUBLIC_KEY,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })).resolves.toMatchObject({ success: true, registeredInboxCount: 1 });
+
+    expect(await stateStore.listRegistrations()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          identity: expect.objectContaining({ inboxId: 'inactive-inbox' }),
+          pendingRegistration: false,
+          pendingDeletion: true,
+        }),
+      ]),
+    );
+    await expect(getAppPushStatus({ stateStore })).resolves.toMatchObject({
+      state: 'enabled',
+      expectedInboxCount: 1,
+      registeredInboxCount: 1,
+      pendingDeletionCount: 1,
+    });
+    await expect(getAppPushStatus({
+      loadedInboxIds: [identity.inboxId, 'inactive-inbox'],
+      stateStore,
+    })).resolves.toMatchObject({
+      state: 'partial',
+      missingInboxIds: ['inactive-inbox'],
+      pendingDeletionCount: 1,
+    });
+
+    fetchFn.mockImplementation(async () => registrationResponse());
+    await expect(refreshPushRegistrationForCurrentInbox({
+      identity,
+      topics,
+      stateStore,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    })).resolves.toMatchObject({ success: true, registeredInboxCount: 1 });
+    await expect(getAppPushStatus({ stateStore })).resolves.toMatchObject({
+      state: 'enabled',
+      pendingDeletionCount: 0,
+    });
+    expect(await stateStore.listRegistrations()).toEqual([
+      expect.objectContaining({
+        identity: expect.objectContaining({ inboxId: identity.inboxId }),
+      }),
+    ]);
   });
 
   it('requires app preference and matching inbox records instead of trusting an endpoint alone', async () => {
@@ -987,6 +1126,60 @@ describe('push helpers', () => {
     expect(recoverySubscription.unsubscribe).not.toHaveBeenCalled();
     expect(registration.unregister).not.toHaveBeenCalled();
     expect(recoveryRegistration.unregister).not.toHaveBeenCalled();
+  });
+
+  it('retires inactive relay routes during the routine current-inbox refresh', async () => {
+    const stateStore = new MemoryPushStateStore();
+    const subscription = createSubscription('https://push.example/current');
+    const { navigatorMock, registration } = installPushBrowserMocks({
+      subscription,
+      existingSubscription: subscription,
+    });
+    (navigatorMock.serviceWorker.getRegistration as Mock)
+      .mockReset()
+      .mockResolvedValue(registration as unknown as ServiceWorkerRegistration);
+    const inactive = await cacheInboxPushRegistration(
+      {
+        identity: { inboxId: 'inactive-inbox', installationId: INSTALLATION_ID_B },
+        topics: [{ topic: GROUP_TOPIC_B, hmacKeys: [{ epoch: '2', key: 'inactive-key' }] }],
+      },
+      { stateStore },
+    );
+    await stateStore.putRegistration({
+      ...inactive,
+      endpoint: subscription.endpoint,
+      relayDiagnostics: {
+        receipt: 'k'.repeat(43),
+        statusPath: '/api/xmtp/status',
+        testPath: '/api/xmtp/status/test',
+      },
+    });
+    await stateStore.setPreferences({
+      enabled: true,
+      endpoint: subscription.endpoint,
+      updatedAt: 1,
+    });
+    const methods: string[] = [];
+    const fetchFn = vi.fn(async (_url, init) => {
+      methods.push(String(init?.method));
+      return registrationResponse();
+    }) as unknown as Mock;
+
+    const result = await refreshPushRegistrationForCurrentInbox({
+      identity,
+      topics,
+      stateStore,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ success: true, registeredInboxCount: 1 });
+    expect(methods).toEqual(['POST', 'DELETE']);
+    expect(await stateStore.listRegistrations()).toEqual([
+      expect.objectContaining({
+        identity: expect.objectContaining({ inboxId: identity.inboxId }),
+        pendingDeletion: false,
+      }),
+    ]);
   });
 
   it('coalesces concurrent refreshes for the same inbox installation', async () => {

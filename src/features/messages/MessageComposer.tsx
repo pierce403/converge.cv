@@ -8,8 +8,8 @@ import { formatMention, type MentionCandidate } from '@/lib/utils/mentions';
 import { sanitizeImageSrc } from '@/lib/utils/image';
 
 interface MessageComposerProps {
-  onSend: (content: string) => void;
-  onSendAttachment?: (file: File) => void;
+  onSend: (content: string) => void | Promise<void>;
+  onSendAttachment?: (file: File) => void | Promise<void>;
   disabled?: boolean;
   replyToMessage?: Message;
   onCancelReply?: () => void;
@@ -29,6 +29,7 @@ export function MessageComposer({
   mentionCandidates = [],
 }: MessageComposerProps) {
   const [message, setMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [mentionState, setMentionState] = useState<{
     start: number;
     end: number;
@@ -141,20 +142,28 @@ export function MessageComposer({
     });
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const trimmed = message.trim();
-    if (!trimmed || disabled) return;
+    if (!trimmed || disabled || isSubmitting) return;
 
-    onSend(trimmed);
-    onTypingChange?.(false);
-    onSent?.();
-    setMessage('');
-    setMentionState(null);
-    setMentionIndex(0);
+    setIsSubmitting(true);
+    try {
+      await onSend(trimmed);
+      onTypingChange?.(false);
+      onSent?.();
+      setMessage('');
+      setMentionState(null);
+      setMentionIndex(0);
 
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+    } catch {
+      // The send layer surfaces the actionable error. Preserve this draft so
+      // the user can retry instead of silently losing what they wrote.
+      textareaRef.current?.focus();
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -165,6 +174,10 @@ export function MessageComposer({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) {
+      return;
+    }
+
     if (isMentionMenuOpen) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -193,7 +206,7 @@ export function MessageComposer({
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -213,14 +226,23 @@ export function MessageComposer({
     fileInputRef.current?.click();
   };
 
-  const handleAttachmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAttachmentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    onTypingChange?.(false);
-    onSendAttachment?.(file);
-    onSent?.();
-    // Reset input so selecting the same file again triggers change
-    e.target.value = '';
+    if (!file || !onSendAttachment || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onSendAttachment(file);
+      onTypingChange?.(false);
+      onSent?.();
+    } catch {
+      // Attachment validation and publishing errors are surfaced by the send
+      // layer. Consume the rejected event-handler promise so React does not
+      // report it as an unhandled rejection.
+    } finally {
+      setIsSubmitting(false);
+      // Reset input so selecting the same file again triggers change.
+      e.target.value = '';
+    }
   };
 
   const renderMentionAvatar = (candidate: MentionCandidate) => {
@@ -258,7 +280,7 @@ export function MessageComposer({
           <button
             type="button"
             className="h-[44px] w-[44px] flex items-center justify-center text-primary-300 hover:text-primary-100 hover:bg-primary-900/50 rounded-lg transition-colors flex-shrink-0 border border-transparent"
-            disabled={disabled}
+            disabled={disabled || isSubmitting}
             onClick={handleAttachmentClick}
             aria-label="Attach image"
           >
@@ -291,7 +313,7 @@ export function MessageComposer({
               placeholder="Type a message..."
               className="w-full px-4 py-2.5 min-h-[44px] bg-primary-950/60 border border-primary-800 rounded-lg text-primary-100 placeholder-primary-300 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950 focus:border-transparent resize-none overflow-y-auto backdrop-blur"
               rows={1}
-              disabled={disabled}
+              disabled={disabled || isSubmitting}
               style={{ maxHeight: '120px' }}
             />
             {isMentionMenuOpen && (
@@ -329,9 +351,10 @@ export function MessageComposer({
           {/* Send button */}
           <button
             type="button"
-            onClick={handleSend}
+            onClick={() => void handleSend()}
             onPointerDown={handleSendPointerDown}
-            disabled={disabled || !message.trim()}
+            disabled={disabled || isSubmitting || !message.trim()}
+            aria-busy={isSubmitting}
             aria-label="Send message"
             className="h-[44px] w-[44px] flex items-center justify-center bg-accent-500 hover:bg-accent-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-lg border border-transparent"
           >

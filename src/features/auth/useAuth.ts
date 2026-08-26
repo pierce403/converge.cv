@@ -45,6 +45,7 @@ import { installationIdsMatch } from '@/lib/xmtp/client-registration';
 import { selectPreviousInstallationForRepair } from '@/lib/xmtp/installation-repair';
 import {
   clearIntentionalEmptyInboxState,
+  hasIntentionalEmptyInboxState,
 } from './onboarding-state';
 import { burnInbox } from '@/lib/identity/burn-inbox';
 import { isInboxLoadedLocally } from '@/lib/identity/loaded-inbox';
@@ -529,6 +530,15 @@ export function useAuth() {
       const registry = useInboxRegistryStore.getState();
       registry.hydrate();
 
+      // Burn Inbox deliberately returns to choice-first onboarding. Retained
+      // legacy identities are compatibility data, not candidates for silent
+      // activation after the visible active identity was removed.
+      if (hasIntentionalEmptyInboxState()) {
+        registry.setCurrentInbox(null);
+        await setStorageNamespace('default');
+        return false;
+      }
+
       // If an explicit inbox was selected just before reload, honor it
       try {
         const forced = typeof window !== 'undefined' ? window.localStorage.getItem('converge.forceInboxId.v1') : null;
@@ -623,10 +633,8 @@ export function useAuth() {
         }
       }
 
-      // If a preferred inbox was selected (e.g., via the inbox switcher) but no identity
-      // was found in that namespace, avoid falling back to a different inbox. Continuing
-      // with another identity causes the UI to show the wrong avatar/name after the
-      // hard reload triggered by the switcher.
+      // If a compatibility registry entry selected an inbox but that namespace
+      // has no identity, never fall through to a different legacy identity.
       if (!identity && normalizedRegistryInbox) {
         console.warn('[Auth] Current inbox selected but no identity found for it; aborting auto-login');
         return false;

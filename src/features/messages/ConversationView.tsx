@@ -1,19 +1,17 @@
 import { useEffect, useRef, useMemo, useState, Fragment, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useMessageStore, useAuthStore, useContactStore, useFarcasterStore } from '@/lib/stores';
+import { useMessageStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
 import { useMessages } from './useMessages';
 import { ContactCardModal } from '@/components/ContactCardModal';
-import { getContactInfo } from '@/lib/default-contacts';
 import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 import { AddContactButton } from '@/features/contacts/AddContactButton';
 import { GroupInviteModal } from '@/features/conversations/GroupInviteModal';
 import type { Message } from '@/types';
 import type { Contact as ContactType } from '@/lib/stores/contact-store';
 import { Menu, Transition, Portal } from '@headlessui/react';
-import { evaluateContactAgainstFilters } from '@/lib/farcaster/filters';
 import type { MentionCandidate } from '@/lib/utils/mentions';
 import { getXmtpClient } from '@/lib/xmtp';
 import { getConversationPresentation } from '@/lib/utils/conversation-presentation';
@@ -45,9 +43,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
   const initialLoadRef = useRef(false);
   const [contactForModal, setContactForModal] = useState<ContactType | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isInviteModalOpen, setInviteModalOpen] = useState(false);
-  const lastScrollTopRef = useRef<number>(0);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [typingByInbox, setTypingByInbox] = useState<Record<string, { expiresAt: number }>>({});
@@ -65,7 +61,6 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     conversations,
     hideConversation,
     deleteGroup,
-    toggleMute,
     markAsRead,
     setActiveConversation,
     refreshGroupDetails,
@@ -93,7 +88,6 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
   const contacts = useContactStore((state) => state.contacts);
   const isContact = useContactStore((state) => state.isContact);
   const loadContacts = useContactStore((state) => state.loadContacts);
-  const farcasterFilters = useFarcasterStore((state) => state.filters);
 
   const contactsByInboxId = useMemo(() => {
     const map = new Map<string, ContactType>();
@@ -195,7 +189,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     return myInbox ? inboxSet.has(myInbox) : false;
   }, [conversation, identity?.inboxId, identity?.address]);
 
-  const showInitialLoading = isConversationLoading && !isRefreshing && !hasLoadedConversation;
+  const showInitialLoading = isConversationLoading && !hasLoadedConversation;
 
   useEffect(() => {
     if (id) {
@@ -215,150 +209,56 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     });
   }, [conversation?.isGroup, id, refreshGroupDetails]);
 
-  // Pull-to-refresh: detect scroll to top and sync messages
+  // Load older local history when the user reaches the top. Live XMTP sync and
+  // push notifications own network refreshes, so scrolling never starts a
+  // second full conversation sync.
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container || !id) return;
 
-    let touchStartY = 0;
-    let isPulling = false;
-    let refreshTimeout: number | null = null;
+    let isLoading = false;
 
     const handleScroll = () => {
       const scrollTop = container.scrollTop;
-      const isAtTop = scrollTop <= 5; // Small threshold for touch devices
-      lastScrollTopRef.current = scrollTop;
-      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const distanceFromBottom = container.scrollHeight - scrollTop - container.clientHeight;
       isAtBottomRef.current = distanceFromBottom < 80;
 
-      // If already at top and user tries to scroll further (scrollTop stays at 0)
-      // This happens when browser tries to scroll but we're already at top
-      if (isAtTop && !isRefreshing && !isConversationLoading && !isPulling) {
-        // Debounce to avoid multiple triggers
-        if (refreshTimeout) {
-          window.clearTimeout(refreshTimeout);
-        }
-        refreshTimeout = window.setTimeout(() => {
-          if (container.scrollTop <= 5 && !isRefreshing && !isConversationLoading) {
-            if (hasMoreMessages && !isLoadingOlder) {
-              isPulling = true;
-              setIsLoadingOlder(true);
-              const prevHeight = container.scrollHeight;
-              const prevTop = container.scrollTop;
-              isPrependingRef.current = true;
-              loadOlderMessages(id)
-                .then((result) => {
-                  setHasMoreMessages(result.hasMore);
-                  requestAnimationFrame(() => {
-                    const nextHeight = container.scrollHeight;
-                    container.scrollTop = nextHeight - prevHeight + prevTop;
-                    isPrependingRef.current = false;
-                  });
-                })
-                .finally(() => {
-                  setIsLoadingOlder(false);
-                  isPulling = false;
-                });
-            } else if (!isRefreshing) {
-              isPulling = true;
-              setIsRefreshing(true);
-              loadMessages(id, true)
-                .then((result) => {
-                  setHasMoreMessages(result.hasMore);
-                })
-                .catch((error) => {
-                  console.warn('[ConversationView] Inbox refresh failed:', error);
-                  window.dispatchEvent(
-                    new CustomEvent('ui:toast', {
-                      detail: 'Inbox refresh failed. Check your connection and try again.',
-                    })
-                  );
-                })
-                .finally(() => {
-                  setIsRefreshing(false);
-                  isPulling = false;
-                });
-            }
-          }
-        }, 100);
+      if (
+        scrollTop > 5 ||
+        !hasMoreMessages ||
+        isLoadingOlder ||
+        isConversationLoading ||
+        isLoading
+      ) {
+        return;
       }
-    };
 
-    const handleTouchStart = (e: TouchEvent) => {
-      touchStartY = e.touches[0].clientY;
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      const touchY = e.touches[0].clientY;
-      const scrollTop = container.scrollTop;
-      const isAtTop = scrollTop <= 5;
-      const pullDistance = touchY - touchStartY;
-      const isPullingDown = pullDistance > 30 && isAtTop; // Require 30px pull
-
-      // If pulling down at top, load older messages (or refresh when at the beginning)
-      if (isPullingDown && !isRefreshing && !isConversationLoading && !isPulling) {
-        isPulling = true;
-        if (hasMoreMessages && !isLoadingOlder) {
-          setIsLoadingOlder(true);
-          const prevHeight = container.scrollHeight;
-          const prevTop = container.scrollTop;
-          isPrependingRef.current = true;
-          loadOlderMessages(id)
-            .then((result) => {
-              setHasMoreMessages(result.hasMore);
-              requestAnimationFrame(() => {
-                const nextHeight = container.scrollHeight;
-                container.scrollTop = nextHeight - prevHeight + prevTop;
-                isPrependingRef.current = false;
-              });
-            })
-            .finally(() => {
-              setIsLoadingOlder(false);
-              isPulling = false;
-            });
-        } else {
-          setIsRefreshing(true);
-          loadMessages(id, true)
-            .then((result) => {
-              setHasMoreMessages(result.hasMore);
-            })
-            .catch((error) => {
-              console.warn('[ConversationView] Inbox refresh failed:', error);
-              window.dispatchEvent(
-                new CustomEvent('ui:toast', {
-                  detail: 'Inbox refresh failed. Check your connection and try again.',
-                })
-              );
-            })
-            .finally(() => {
-              setIsRefreshing(false);
-              isPulling = false;
-            });
-        }
-      }
+      isLoading = true;
+      setIsLoadingOlder(true);
+      const previousHeight = container.scrollHeight;
+      const previousTop = container.scrollTop;
+      isPrependingRef.current = true;
+      void loadOlderMessages(id)
+        .then((result) => {
+          setHasMoreMessages(result.hasMore);
+          requestAnimationFrame(() => {
+            container.scrollTop = container.scrollHeight - previousHeight + previousTop;
+            isPrependingRef.current = false;
+          });
+        })
+        .catch((error) => {
+          isPrependingRef.current = false;
+          console.warn('[ConversationView] Failed to load older messages:', error);
+        })
+        .finally(() => {
+          setIsLoadingOlder(false);
+          isLoading = false;
+        });
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
-    container.addEventListener('touchstart', handleTouchStart, { passive: true });
-    container.addEventListener('touchmove', handleTouchMove, { passive: true });
-
-    return () => {
-      container.removeEventListener('scroll', handleScroll);
-      container.removeEventListener('touchstart', handleTouchStart);
-      container.removeEventListener('touchmove', handleTouchMove);
-      if (refreshTimeout) {
-        window.clearTimeout(refreshTimeout);
-      }
-    };
-  }, [
-    id,
-    loadMessages,
-    loadOlderMessages,
-    isRefreshing,
-    isConversationLoading,
-    hasMoreMessages,
-    isLoadingOlder,
-  ]);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [id, loadOlderMessages, isConversationLoading, hasMoreMessages, isLoadingOlder]);
 
 
 
@@ -581,16 +481,6 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     );
   }, [conversation, contacts]);
 
-  const defaultContactInfo = useMemo(() => {
-    if (!conversation || conversation.isGroup) {
-      return undefined;
-    }
-    const lookupKey = contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
-    return getContactInfo(lookupKey);
-  }, [conversation, contact]);
-
-
-
   const conversationDisplayName = useMemo(() => {
     if (!conversation) {
       return '';
@@ -601,9 +491,8 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     return conversation.displayName
       || contact?.preferredName
       || contact?.name
-      || defaultContactInfo?.name
       || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
-  }, [conversation, conversationPresentation, contact, defaultContactInfo]);
+  }, [conversation, conversationPresentation, contact]);
 
   const conversationAvatar = useMemo(() => {
     if (!conversation) {
@@ -615,10 +504,9 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     return (
       conversation.displayAvatar ||
       contact?.preferredAvatar ||
-      contact?.avatar ||
-      defaultContactInfo?.avatar
+      contact?.avatar
     );
-  }, [conversation, conversationPresentation, contact, defaultContactInfo]);
+  }, [conversation, conversationPresentation, contact]);
 
   const groupMemberProfiles = useMemo(() => {
     const map = new Map<string, { displayName?: string; avatar?: string; address?: string }>();
@@ -750,17 +638,15 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       return undefined;
     }
     const normalizedInbox = inboxIdForActions.toLowerCase();
-    const fallbackAddress = defaultContactInfo?.address?.toLowerCase();
+    const fallbackAddress = /^0x[a-f0-9]{40}$/i.test(normalizedInbox)
+      ? normalizedInbox
+      : undefined;
     const fallbackName =
       conversationDisplayName ||
-      defaultContactInfo?.name ||
       formatIdentifier(normalizedInbox);
     return {
       inboxId: normalizedInbox,
       name: fallbackName,
-      avatar: defaultContactInfo?.avatar,
-      preferredAvatar: defaultContactInfo?.avatar,
-      preferredName: defaultContactInfo?.name,
       createdAt: Date.now(),
       primaryAddress: fallbackAddress,
       addresses: fallbackAddress ? [fallbackAddress] : [],
@@ -776,7 +662,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       isInboxOnly: true,
       source: 'inbox',
     } as ContactType;
-  }, [conversation, conversationDisplayName, contact, inboxIdForActions, defaultContactInfo]);
+  }, [conversation, conversationDisplayName, contact, inboxIdForActions]);
 
   const resolveContactForSender = useCallback((senderLower: string | undefined): ContactType | null => {
     if (!senderLower) {
@@ -823,41 +709,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
     } as ContactType;
   }, [contactsByInboxId, contactsByAddress, groupMemberProfiles]);
 
-  const visibleMessages = useMemo(() => {
-    if (!farcasterFilters.enabled || !conversation) {
-      return messages;
-    }
-
-    return messages.filter((message) => {
-      const senderLower = message.sender?.toLowerCase?.();
-      let senderContact: ContactType | null | undefined = null;
-
-      if (conversation.isGroup && senderLower) {
-        senderContact = resolveContactForSender(senderLower);
-      } else if (!conversation.isGroup) {
-        senderContact = contact;
-      }
-
-      if (!senderContact && senderLower) {
-        senderContact = contactsByInboxId.get(senderLower) || contactsByAddress.get(senderLower);
-      }
-
-      return evaluateContactAgainstFilters(senderContact, farcasterFilters).passes;
-    });
-  }, [
-    messages,
-    farcasterFilters,
-    conversation,
-    resolveContactForSender,
-    contact,
-    contactsByInboxId,
-    contactsByAddress,
-  ]);
-
-  const messagesToDisplay = farcasterFilters.enabled ? visibleMessages : messages;
-  const showFilteredEmpty =
-    farcasterFilters.enabled && hasLoadedConversation && messages.length > 0 && visibleMessages.length === 0;
-  const showVisibleEmpty = !showInitialLoading && messagesToDisplay.length === 0 && hasLoadedConversation;
+  const showVisibleEmpty = !showInitialLoading && messages.length === 0 && hasLoadedConversation;
   const typingDisplayText = useMemo(() => {
     const now = Date.now();
     const names = Object.entries(typingByInbox)
@@ -1176,20 +1028,6 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
                       )
                     )}
                   </Menu.Item>
-                  {/* Mute/Unmute */}
-                  <Menu.Item>
-                    {({ active }) => (
-                      <button
-                        onClick={async () => {
-                          try { await toggleMute(conversation.id); } catch (_e) { /* ignore */ }
-                        }}
-                        className={`w-full rounded px-3 py-2 text-left ${active ? 'bg-primary-900/70 text-primary-100' : 'text-primary-200'}`}
-                      >
-                        {(conversation.mutedUntil && conversation.mutedUntil > Date.now()) ? 'Unmute' : 'Mute'} conversation
-                      </button>
-                    )}
-                  </Menu.Item>
-                  <div className="my-1 h-px bg-primary-800/60" />
                   {/* Delete conversation locally */}
                   <Menu.Item>
                     {({ active }) => (
@@ -1227,28 +1065,9 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
             Loading older messages...
           </div>
         )}
-        {isRefreshing && (
-          <div className="flex items-center justify-center py-2 text-sm text-primary-300">
-            <svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            Syncing messages...
-          </div>
-        )}
         {showInitialLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-primary-200">Loading messages...</div>
-          </div>
-        ) : showFilteredEmpty ? (
-          <div className="flex flex-col items-center justify-center h-full text-center space-y-2">
-            <div className="w-14 h-14 bg-accent-900/50 rounded-full flex items-center justify-center">
-              <svg className="w-8 h-8 text-accent-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
-            <p className="text-primary-200">Messages filtered</p>
-            <p className="text-sm text-primary-300">Adjust Farcaster filters in Settings to see hidden messages.</p>
           </div>
         ) : showVisibleEmpty ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
@@ -1267,7 +1086,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
           </div>
         ) : (
           <>
-            {messagesToDisplay.map((message: Message) => {
+            {messages.map((message: Message) => {
               const senderLower = message.sender?.toLowerCase?.();
               let senderInfo: { displayName?: string; avatarUrl?: string; fallback?: string } | undefined;
               let isSelf = false;

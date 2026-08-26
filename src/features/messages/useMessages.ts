@@ -380,7 +380,6 @@ export function useMessages() {
       try {
         if (!actualInboxId.startsWith('0x')) {
           profile = await xmtp.refreshInboxProfile(actualInboxId);
-          console.log('[useMessages] Refreshed profile for new contact:', profile);
 
           // If profile has a valid inbox ID (not an address), use it
           if (profile.inboxId && !profile.inboxId.startsWith('0x') && profile.inboxId.length > 10) {
@@ -420,7 +419,7 @@ export function useMessages() {
         source: 'inbox',
         persistIfMissing: true,
       });
-      console.log('Automatically added new contact with inbox ID:', actualInboxId, 'display name:', profile?.displayName);
+      console.log('Automatically added a contact from the active conversation');
     },
     [isContact, upsertContactProfile]
   );
@@ -431,34 +430,30 @@ export function useMessages() {
   const sendMessage = useCallback(
     async (conversationId: string, content: string, opts?: { replyToId?: string }) => {
       if (!identity) {
-        console.error('No identity available');
-        return;
+        throw new Error('No messaging identity is available. Reconnect and try again.');
+      }
+
+      const conversation = conversations.find((c) => c.id === conversationId);
+      if (!conversation) {
+        throw new Error('This conversation is no longer available.');
+      }
+
+      if (conversation.isLocalOnly || conversation.id.startsWith('local-conversation')) {
+        const message =
+          'This chat was created locally before XMTP conversation creation succeeded. Start a new chat with this address again so Converge can create a real XMTP conversation.';
+        console.warn('[useMessages] Refusing to send from local-only conversation', {
+          conversationId: conversation.id,
+          isLocalOnly: conversation.isLocalOnly ?? false,
+        });
+        window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
+        throw new Error(message);
       }
 
       try {
         setSending(true);
-
-        const conversation = conversations.find((c) => c.id === conversationId);
-        if (!conversation) {
-          console.error('Conversation not found for ID:', conversationId);
-          setSending(false);
-          return;
-        }
-
-        if (conversation.isLocalOnly || conversation.id.startsWith('local-conversation')) {
-          const message =
-            'This chat was created locally before XMTP conversation creation succeeded. Start a new chat with this address again so Converge can create a real XMTP conversation.';
-          console.warn('[useMessages] Refusing to send from local-only conversation', {
-            conversationId: conversation.id,
-            peerId: conversation.peerId,
-            isLocalOnly: conversation.isLocalOnly ?? false,
-          });
-          window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
-          setSending(false);
-          return;
-        }
-
-        await ensureContactForConversation(conversation);
+        void ensureContactForConversation(conversation).catch((error) => {
+          console.warn('[useMessages] Contact refresh failed before send:', error);
+        });
 
         const parsedInvite = isLikelyConvosInviteCode(content) ? tryParseConvosInvite(content) : null;
         const inviteSummary = parsedInvite ? formatInviteSummary(parsedInvite, { fromSelf: true }) : null;
@@ -490,9 +485,20 @@ export function useMessages() {
         // Add to store immediately
         addMessage(conversationId, message);
 
-        // Persist to storage
-        const storage = await getStorage();
-        await storage.putMessage(message);
+        // Persist the optimistic row before publishing. If IndexedDB is not
+        // writable, remove the in-memory placeholder and keep the draft so the
+        // user never sees a message that was not attempted on the network.
+        let storage: Awaited<ReturnType<typeof getStorage>>;
+        try {
+          storage = await getStorage();
+          await storage.putMessage(message);
+        } catch (storageError) {
+          removeMessage(message.id);
+          window.dispatchEvent(new CustomEvent('ui:toast', {
+            detail: 'Message was not sent because local storage is unavailable.',
+          }));
+          throw storageError;
+        }
 
         let latestMessageId = message.id;
         let latestMessageSentAt = message.sentAt;
@@ -513,6 +519,7 @@ export function useMessages() {
             id: resolvedId,
             sentAt: resolvedSentAt,
             status: finalStatus,
+            expiresAt: sentMessage.expiresAt ?? message.expiresAt,
           };
           latestMessageId = finalMessage.id;
           latestMessageSentAt = finalMessage.sentAt;
@@ -520,23 +527,41 @@ export function useMessages() {
 
           if (resolvedId !== message.id) {
             removeMessage(message.id);
-            await storage.deleteMessage(message.id);
             addMessage(conversationId, finalMessage);
-            await storage.putMessage(finalMessage);
           } else {
-            updateMessage(resolvedId, { status: finalStatus, sentAt: resolvedSentAt });
-            await storage.updateMessageStatus(resolvedId, finalStatus);
+            updateMessage(resolvedId, {
+              status: finalStatus,
+              sentAt: resolvedSentAt,
+              expiresAt: finalMessage.expiresAt,
+            });
+          }
+
+          try {
+            await storage.reconcilePublishedMessage(message.id, finalMessage);
+          } catch (storageError) {
+            // XMTP already accepted this message. Never turn a local cache
+            // failure into a send failure or preserve the draft for a duplicate
+            // retry; the live stream/history repair can reconcile it later.
+            console.error('Message sent, but local cache reconciliation failed:', storageError);
+            window.dispatchEvent(new CustomEvent('ui:toast', {
+              detail: 'Message sent, but its local cache could not be updated.',
+            }));
           }
         } catch (xmtpError) {
           console.error('Failed to send via XMTP:', xmtpError);
-          updateMessage(message.id, { status: 'failed' });
-          await storage.updateMessageStatus(message.id, 'failed');
+          removeMessage(message.id);
+          try {
+            await storage.deleteMessage(message.id);
+          } catch (storageError) {
+            console.warn('[useMessages] Failed to remove an unpublished local message:', storageError);
+          }
           try {
             const msg = xmtpError instanceof Error ? xmtpError.message : 'Failed to send message.';
             window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg }));
           } catch {
             // ignore
           }
+          throw xmtpError;
         }
 
         // Update conversation
@@ -548,6 +573,7 @@ export function useMessages() {
         });
       } catch (error) {
         console.error('Failed to send message:', error);
+        throw error;
       } finally {
         setSending(false);
       }
@@ -570,35 +596,38 @@ export function useMessages() {
   const sendAttachment = useCallback(
     async (conversationId: string, file: File) => {
       if (!identity) {
-        console.error('No identity available');
-        return;
+        throw new Error('No messaging identity is available. Reconnect and try again.');
       }
 
       const normalizedMimeType = file.type.split(';', 1)[0].trim().toLowerCase();
       if (!SUPPORTED_ATTACHMENT_MIME_TYPES.has(normalizedMimeType)) {
+        const error = new Error('Please select a JPEG, PNG, or WebP image.');
         try {
           window.dispatchEvent(
             new CustomEvent('ui:toast', {
-              detail: 'Please select a JPEG, PNG, or WebP image.',
+              detail: error.message,
             })
           );
         } catch {
           // ignore
         }
-        return;
+        throw error;
       }
 
       if (file.size > MAX_ATTACHMENT_BYTES) {
+        const error = new Error(
+          `Image too large (${Math.round(file.size / (1024 * 1024))}MB). Max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`,
+        );
         try {
           window.dispatchEvent(
             new CustomEvent('ui:toast', {
-              detail: `Image too large (${Math.round(file.size / (1024 * 1024))}MB). Max ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB.`,
+              detail: error.message,
             })
           );
         } catch {
           // ignore
         }
-        return;
+        throw error;
       }
 
       try {
@@ -606,9 +635,14 @@ export function useMessages() {
 
         const conversation = conversations.find((c) => c.id === conversationId);
         if (!conversation) {
-          console.error('Conversation not found for ID:', conversationId);
-          setSending(false);
-          return;
+          throw new Error('This conversation is no longer available.');
+        }
+
+        if (conversation.isLocalOnly || conversation.id.startsWith('local-conversation')) {
+          const message =
+            'This chat was created locally before XMTP conversation creation succeeded. Start a new chat before sending an image.';
+          window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
+          throw new Error(message);
         }
 
         const filename = file.name || 'image';
@@ -631,10 +665,12 @@ export function useMessages() {
           } catch {
             // ignore
           }
-          return;
+          throw validationError;
         }
 
-        await ensureContactForConversation(conversation);
+        void ensureContactForConversation(conversation).catch((error) => {
+          console.warn('[useMessages] Contact refresh failed before attachment send:', error);
+        });
 
         const now = Date.now();
         const localMessageId = `msg_${now}_${Math.random().toString(36).substr(2, 9)}`;
@@ -654,9 +690,6 @@ export function useMessages() {
 
         addMessage(conversationId, message);
 
-        const storage = await getStorage();
-        await storage.putMessage(message);
-
         const attachmentMeta: StoredAttachment = {
           id: attachmentId,
           messageId: localMessageId,
@@ -669,7 +702,30 @@ export function useMessages() {
           lastAccessedAt: now,
           evictable: false,
         };
-        await storage.putAttachment(attachmentMeta, fileBuffer);
+
+        let storage: Awaited<ReturnType<typeof getStorage>> | null = null;
+        try {
+          storage = await getStorage();
+          await storage.putMessage(message);
+          await storage.putAttachment(attachmentMeta, fileBuffer);
+        } catch (storageError) {
+          removeMessage(message.id);
+          if (storage) {
+            try {
+              await storage.deleteMessage(message.id);
+            } catch (cleanupError) {
+              console.warn('Failed to clean up an unsent local attachment message:', cleanupError);
+            }
+          }
+          window.dispatchEvent(new CustomEvent('ui:toast', {
+            detail: 'Image was not sent because local storage is unavailable.',
+          }));
+          throw storageError;
+        }
+
+        if (!storage) {
+          throw new Error('Local storage is unavailable.');
+        }
 
         let latestMessageId = message.id;
         let latestMessageSentAt = message.sentAt;
@@ -685,14 +741,18 @@ export function useMessages() {
         } catch (xmtpError) {
           console.error('Failed to send attachment via XMTP:', xmtpError);
           updateMessage(message.id, { status: 'failed' });
-          await storage.updateMessageStatus(message.id, 'failed');
+          try {
+            await storage.updateMessageStatus(message.id, 'failed');
+          } catch (storageError) {
+            console.warn('Failed to persist attachment failure status:', storageError);
+          }
           try {
             const msg = xmtpError instanceof Error ? xmtpError.message : 'Failed to send attachment.';
             window.dispatchEvent(new CustomEvent('ui:toast', { detail: msg }));
           } catch {
             // ignore
           }
-          return;
+          throw xmtpError;
         }
 
         const resolvedId = sentMessage.id || message.id;
@@ -705,6 +765,7 @@ export function useMessages() {
           sentAt: resolvedSentAt,
           status: finalStatus,
           attachmentId: finalAttachmentId,
+          expiresAt: sentMessage.expiresAt ?? message.expiresAt,
         };
         latestMessageId = finalMessage.id;
         latestMessageSentAt = finalMessage.sentAt;
@@ -734,6 +795,7 @@ export function useMessages() {
             status: finalStatus,
             sentAt: resolvedSentAt,
             attachmentId: finalAttachmentId,
+            expiresAt: finalMessage.expiresAt,
           });
         }
 
@@ -775,6 +837,7 @@ export function useMessages() {
         });
       } catch (error) {
         console.error('Failed to send attachment:', error);
+        throw error;
       } finally {
         setSending(false);
       }

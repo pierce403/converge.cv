@@ -6,10 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConversations } from './useConversations';
 import { useMessageStore } from '@/lib/stores';
-import { getXmtpClient } from '@/lib/xmtp';
-import { runNonDestructiveFullSync } from '@/lib/xmtp/full-sync';
 import { formatDistanceToNow } from '@/lib/utils/date';
-import { getContactInfo } from '@/lib/default-contacts';
 import { useContactStore, useAuthStore } from '@/lib/stores';
 import type { Contact } from '@/lib/stores/contact-store';
 import { ContactCardModal } from '@/components/ContactCardModal';
@@ -18,11 +15,10 @@ import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
 import { getConversationPresentation } from '@/lib/utils/conversation-presentation';
 
 export function ChatList() {
-  const { conversations, isLoading, loadConversations } = useConversations();
+  const { conversations, isLoading } = useConversations();
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [detailsConvId, setDetailsConvId] = useState<string | null>(null);
   const [pressTimer, setPressTimer] = useState<number | null>(null);
-  const [isFullSyncing, setIsFullSyncing] = useState(false);
   type ConversationItem = typeof conversations[number];
   const contacts = useContactStore((state) => state.contacts);
   const loadContacts = useContactStore((state) => state.loadContacts);
@@ -190,28 +186,23 @@ export function ChatList() {
           const presentation = getConversationPresentation(conversation, identity?.inboxId);
           const isTrueGroup = presentation.kind === 'group';
           const contact = getContactForConversation(conversation);
-          const defaultContactInfo = !conversation.isGroup
-            ? getContactInfo(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId)
-            : undefined;
-
           const groupName = conversation.isGroup ? presentation.title : undefined;
           const displayName = conversation.isGroup
             ? groupName || 'Group chat'
             : contact?.preferredName
               || contact?.name
               || conversation.displayName
-              || defaultContactInfo?.name
               || formatIdentifier(contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId);
 
           const avatarSource = conversation.isGroup
             ? presentation.avatar
-            : conversation.displayAvatar || contact?.preferredAvatar || contact?.avatar || defaultContactInfo?.avatar;
+            : conversation.displayAvatar || contact?.preferredAvatar || contact?.avatar;
 
           const fallbackAvatarLabel = conversation.isGroup
             ? groupName || 'Group'
             : contact?.primaryAddress ?? contact?.addresses?.[0] ?? conversation.peerId;
 
-          const conversationDescription = contact?.description ?? defaultContactInfo?.description;
+          const conversationDescription = contact?.description;
 
           // Compute preview from most recent message if available for extra correctness
           let subtitle = conversation.lastMessagePreview || '';
@@ -373,31 +364,6 @@ export function ChatList() {
         <Link to="/new-group" className="btn-secondary w-full inline-flex items-center justify-center text-center">
           + New Group
         </Link>
-        <button
-          className="btn-secondary w-full"
-          disabled={isFullSyncing}
-          onClick={async () => {
-            if (isFullSyncing) return;
-            setIsFullSyncing(true);
-            try {
-              const xmtp = getXmtpClient();
-              await runNonDestructiveFullSync(xmtp, { reloadConversations: loadConversations });
-              try {
-                window.dispatchEvent(new CustomEvent('ui:toast', { detail: 'Full sync finished' }));
-              } catch (e) {
-                /* ignore */
-              }
-            } catch (err) {
-              console.error('Full sync failed:', err);
-              const message = err instanceof Error ? err.message : 'Full sync failed.';
-              window.dispatchEvent(new CustomEvent('ui:toast', { detail: message }));
-            } finally {
-              setIsFullSyncing(false);
-            }
-          }}
-        >
-          {isFullSyncing ? 'Syncing…' : 'Full Sync'}
-        </button>
       </div>
 
       {/* User info modal */}

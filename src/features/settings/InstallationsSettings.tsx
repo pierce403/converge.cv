@@ -234,7 +234,7 @@ export function InstallationsSettings() {
     setError(null);
     try {
       const xmtp = getXmtpClient();
-      console.log('[Installations] Revoking installation:', target.id, 'with identity:', signerIdentity.address);
+      console.log('[Installations] Revoking selected installation');
       await xmtp.revokeInstallationsWithRecoveryIdentity(
         signerIdentity,
         inboxId,
@@ -699,4 +699,3 @@ export function InstallationsSettings() {
     </section>
   );
 }
-

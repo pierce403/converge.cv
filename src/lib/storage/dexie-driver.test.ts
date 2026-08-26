@@ -92,6 +92,55 @@ describe('DexieDriver message persistence', () => {
     );
   });
 
+  it('atomically replaces an optimistic row with the published message', async () => {
+    const storedConversation = conversation('conversation-1', 100);
+    const messages = {
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const conversations = {
+      get: vi.fn(async () => storedConversation),
+      update: vi.fn(async () => 1),
+    };
+    const transaction = vi.fn(
+      async (_mode: string, _tables: unknown[], operation: () => Promise<void>) =>
+        await operation(),
+    );
+    const driver = new DexieDriver('published-message-transaction-test');
+    (driver as unknown as {
+      dataDb: {
+        messages: typeof messages;
+        conversations: typeof conversations;
+        transaction: typeof transaction;
+      };
+    }).dataDb = { messages, conversations, transaction };
+    const message: Message = {
+      id: 'published-message',
+      conversationId: 'conversation-1',
+      sender: 'self-inbox',
+      sentAt: Date.now(),
+      type: 'text',
+      body: 'hello',
+      status: 'sent',
+      reactions: [],
+      expiresAt: Date.now() + 60_000,
+    };
+
+    await driver.reconcilePublishedMessage('optimistic-message', message);
+
+    expect(transaction).toHaveBeenCalledWith(
+      'rw',
+      [messages, conversations],
+      expect.any(Function),
+    );
+    expect(messages.put).toHaveBeenCalledWith(message);
+    expect(messages.delete).toHaveBeenCalledWith('optimistic-message');
+    expect(conversations.update).toHaveBeenCalledWith(
+      'conversation-1',
+      expect.objectContaining({ lastMessageId: 'published-message' }),
+    );
+  });
+
   it('updates a sync checkpoint without overwriting the message preview', async () => {
     const conversations = {
       update: vi.fn(async () => 1),

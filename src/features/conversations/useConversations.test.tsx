@@ -2,7 +2,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { useConversations, groupDetailsToConversationUpdates } from './useConversations';
-import { useConversationStore, useAuthStore } from '@/lib/stores';
+import { useConversationStore, useAuthStore, useContactStore } from '@/lib/stores';
 import type { Conversation } from '@/types';
 import { getAddress } from 'viem';
 type GroupDetailsLike = Parameters<typeof groupDetailsToConversationUpdates>[0];
@@ -92,29 +92,6 @@ describe('useConversations controls', () => {
     mockStorage.isPeerDeleted.mockResolvedValue(false);
   });
 
-  it('toggles mute/unmute without treating the conversation as deleted', async () => {
-    let api: ReturnType<typeof useConversations> | null = null;
-    await act(async () => {
-      render(<Harness onReady={(value) => (api = value)} />);
-    });
-
-    await act(async () => {
-      await api!.toggleMute('c1');
-    });
-
-    expect(conversationRecord.mutedUntil).toBeDefined();
-    expect(mockStorage.markConversationDeleted).not.toHaveBeenCalled();
-    expect(mockStorage.isConversationDeleted).toHaveBeenCalledWith('c1');
-
-    await act(async () => {
-      await api!.toggleMute('c1');
-    });
-
-    expect(conversationRecord.mutedUntil).toBeUndefined();
-    expect(mockStorage.isConversationDeleted).toHaveBeenCalledTimes(2);
-    expect(mockStorage.unmarkPeerDeletion).not.toHaveBeenCalled();
-  });
-
   it('does not delete a provisional conversation during DM cleanup', async () => {
     const authoritativeDm: Conversation = {
       ...conversationRecord,
@@ -194,6 +171,11 @@ describe('createConversation existing-peer reuse', () => {
       identity: null,
       vaultSecrets: null,
     });
+    useConversationStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      isLoading: false,
+    });
     xmtpMock.resolveInboxIdForAddress.mockResolvedValue(peerInboxId);
   });
 
@@ -216,7 +198,7 @@ describe('createConversation existing-peer reuse', () => {
     expect(xmtpMock.createConversation).not.toHaveBeenCalled();
   });
 
-  it('reuses a legacy DM when no Convos single-peer group exists', async () => {
+  it('reuses a legacy DM and repairs its canonical inbox ID', async () => {
     const legacyDm = conversation('legacy-dm', false, peerAddress);
     mockStorage.listConversations.mockResolvedValue([legacyDm]);
 
@@ -231,7 +213,85 @@ describe('createConversation existing-peer reuse', () => {
     });
 
     expect(result).toBe(legacyDm);
+    expect((result as Conversation | null)?.peerId).toBe(peerInboxId);
+    expect(mockStorage.putConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'legacy-dm', peerId: peerInboxId }),
+    );
     expect(xmtpMock.createConversation).not.toHaveBeenCalled();
+  });
+
+  it('replaces an unsendable local fallback with a real XMTP conversation', async () => {
+    const localFallback = {
+      ...conversation('local-conversation-1', false, peerAddress),
+      isLocalOnly: true,
+    };
+    mockStorage.listConversations.mockResolvedValue([localFallback]);
+    xmtpMock.createConversation.mockResolvedValue({
+      id: 'real-conversation',
+      peerId: peerInboxId,
+      topic: 'real-topic',
+      isGroup: false,
+      displayName: 'Peer',
+      displayAvatar: undefined,
+    });
+    xmtpMock.refreshInboxProfile.mockResolvedValue({
+      inboxId: peerInboxId,
+      displayName: 'Peer',
+      addresses: [peerAddress],
+      identities: [],
+    });
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let result: Conversation | null = null;
+    await act(async () => {
+      result = await api!.createConversation(peerAddress);
+    });
+
+    expect((result as Conversation | null)?.id).toBe('real-conversation');
+    expect(xmtpMock.createConversation).toHaveBeenCalledWith(peerAddress);
+    expect(mockStorage.deleteConversation).toHaveBeenCalledWith('local-conversation-1');
+  });
+
+  it('returns the real XMTP conversation when stale fallback cleanup fails', async () => {
+    const localFallback = {
+      ...conversation('local-conversation-1', false, peerAddress),
+      isLocalOnly: true,
+    };
+    mockStorage.listConversations.mockResolvedValue([localFallback]);
+    mockStorage.deleteConversation.mockRejectedValueOnce(new Error('IndexedDB blocked'));
+    xmtpMock.createConversation.mockResolvedValue({
+      id: 'real-conversation',
+      peerId: peerInboxId,
+      topic: 'real-topic',
+      isGroup: false,
+      displayName: 'Peer',
+      displayAvatar: undefined,
+    });
+    xmtpMock.refreshInboxProfile.mockResolvedValue({
+      inboxId: peerInboxId,
+      displayName: 'Peer',
+      addresses: [peerAddress],
+      identities: [],
+    });
+
+    let api: ReturnType<typeof useConversations> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    let result: Conversation | null = null;
+    await act(async () => {
+      result = await api!.createConversation(peerAddress);
+    });
+
+    expect(result).toEqual(expect.objectContaining({ id: 'real-conversation' }));
+    expect(useConversationStore.getState().conversations).toEqual([
+      expect.objectContaining({ id: 'real-conversation' }),
+    ]);
   });
 
   it('preserves the derived-title marker returned for a new Convos direct group', async () => {
@@ -513,6 +573,7 @@ describe('groupDetailsToConversationUpdates', () => {
 describe('loadConversations identity lookup dedupe', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useContactStore.setState({ contacts: [] });
     useAuthStore.setState({
       isAuthenticated: false,
       isVaultUnlocked: false,

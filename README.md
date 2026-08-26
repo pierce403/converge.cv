@@ -8,6 +8,23 @@ Converge is a static, local-first messaging PWA for XMTP protocol v3. It uses Re
 - Shipped behavior: [FEATURES.md](./FEATURES.md)
 - Developer docs: [docs/README.md](./docs/README.md)
 
+## Current Product Contract
+
+Converge presents one active identity and one inbox. The previous multi-inbox
+registry and per-inbox storage namespaces remain internal compatibility data so
+existing browser profiles can reopen safely; they are not a user-facing account
+switcher and must not be deleted as routine cleanup.
+
+Onboarding keeps three explicit choices: create a local-key identity, connect an
+external wallet directly, or restore a Converge keyfile. ENS and peer-published
+XMTP/Convos profiles provide identity recognition, and contacts remain local to
+the active identity. Farcaster/Neynar enrichment and message filters are not
+part of the app.
+
+New user-visible chats request 14-day XMTP disappearing messages. Existing
+conversation settings are never rewritten, and the separate local-history
+cutoff remains 28 days.
+
 ## Identity Model
 
 Converge treats XMTP accounts, inboxes, and installations as separate things:
@@ -18,9 +35,11 @@ Converge treats XMTP accounts, inboxes, and installations as separate things:
 - **Connect external wallet** uses the external wallet itself as the XMTP account identity and registers this browser installation under it. No intermediate local EOA keys or private keys are created or stored. Converge reconnects signer-less for routine messaging.
 - **Wallet approval** is authority for an existing inbox. It does not silently create a wallet inbox or move an already-registered Converge key.
 
-The top-left Inbox Switcher has one profile-name/avatar row per inbox. Only the selected inbox connects and syncs. Add Inbox supports creation, exact-key import, and wallet-approved device join; importing a key that resolves to an already loaded inbox stops with `This inbox is already loaded`.
+After onboarding, Converge reopens only the active identity. Legacy registry
+entries and namespaced databases are retained internally for compatibility and
+recovery, but the app does not expose adding or switching inboxes.
 
-Before wallet-approved association can continue, Settings requires an explicit acknowledgment that wallet/account links to an XMTP inbox are publicly queryable and effectively permanent in XMTP identity history.
+Before wallet-approved onboarding can continue, Converge requires an explicit acknowledgment that wallet/account links to an XMTP inbox are publicly queryable and effectively permanent in XMTP identity history.
 
 An XMTP inbox can have up to 10 active installations. Converge checks the target inbox before registration and offers static recovery only when the connected signer is the inbox recovery identity. It rechecks the live count and revokes only enough explicitly confirmed installations to return to 9/10.
 
@@ -34,13 +53,14 @@ New installations explicitly request XMTP device history. A pre-existing install
 - Convos-compatible single-peer groups, group messaging, profiles, typing, invites, and metadata
 - Real-time message streams plus local IndexedDB conversation and message caches
 - Image attachments encrypted before upload through Thirdweb's IPFS storage API
-- Multiple local inboxes with isolated app-data namespaces
+- One active identity with compatibility-safe local storage
 - Inbox-scoped contacts that use peer-published profiles and are created after active participation
 - Settings-only Burn Inbox with static installation revocation, complete local wipe, and blocked-cleanup retry handling
 - Wallet approval through the native Wagmi/Reown stack for Coinbase/Base, WalletConnect, MetaMask, and injected wallets
-- Farcaster profile enrichment through Neynar
+- ENS recognition plus XMTP/Convos published profiles
+- A 14-day XMTP disappearing-message default for new chats, with a separate 28-day local-history cutoff
 - Installable static PWA shell
-- Debug, installation-management, and recovery tools
+- Installation-management, recovery, and Advanced diagnostics
 
 See [FEATURES.md](./FEATURES.md) for the detailed shipped specification.
 
@@ -57,15 +77,24 @@ A keyfile or browser profile containing this data must be protected as sensitive
 
 ## Push Status
 
-Web Push support is experimental. One app/browser toggle manages one physical `PushSubscription` plus an app-scoped logical XMTP alert registration for each loaded inbox/installation. Converge uses the standard Web Push API without browser-specific request branches; vapid.party accepts only known FCM, Mozilla, Apple, and WNS provider endpoints. Only the selected inbox connects to XMTP. Inactive-inbox pushes record an approximate activity dot without connecting, syncing, or claiming an exact unread count.
+Web Push support is experimental. One app/browser toggle manages the browser's
+physical `PushSubscription` and app-scoped XMTP alert registration state.
+Compatibility registrations for retained legacy identities may still exist
+internally during migration, but only the active identity is presented in the
+app. Converge uses the standard Web Push API without browser-specific request
+branches; vapid.party accepts only known FCM, Mozilla, Apple, and WNS provider
+endpoints.
 
 For the active inbox, Converge registers canonical MLS group topics with every HMAC-key epoch exposed by XMTP and adds the installation's deterministic welcome topic for new conversations. The relay receives an opaque inbox handle, not the profile name or message plaintext. The service worker resolves notification copy from the locally cached profile, and every notification click opens or focuses Converge's root page; relay data cannot select an inbox, conversation, or external URL.
 
 On July 14, 2026, vapid.party's Cloudflare-only Worker, D1, Queue, and singleton Container listener reported `deliveryReady: true`, listener `ready`, and bridge `synced`. A post-deployment real-Chrome canary then verified genuine XMTP installation-welcome and 16-byte group-topic delivery, three HMAC epochs, recipient-own-message and `shouldPush: false` suppression, and cleanup. Browser and relay registration alone still do not prove current automatic delivery; the app relies on the public readiness signal.
 
-Push remains experimental. XMTP `SubscribeAll` has no replay cursor, so a listener restart or disconnect can miss an approximate push hint; XMTP inbox sync remains authoritative after Converge opens. Installed-PWA and mobile delivery reliability has not yet been characterized. Settings and Debug report ready only while vapid.party's current coarse public health explicitly confirms the listener and bridge.
+Push remains experimental. XMTP `SubscribeAll` has no replay cursor, so a listener restart or disconnect can miss an approximate push hint; XMTP inbox sync remains authoritative after Converge opens. Installed-PWA and mobile delivery reliability has not yet been characterized. Advanced diagnostics report ready only while vapid.party's current coarse public health explicitly confirms the listener and bridge.
 
-Debug's **Push Trace** isolates local display, browser-provider subscription, private per-inbox relay registration, live XMTP matching, Queue/provider acceptance, and service-worker receipt. It can re-register a stale current-inbox topic snapshot and send a bounded relay test without exposing the registration capability. See [Push troubleshooting](docs/troubleshooting.md#trace-a-missing-xmtp-notification).
+The bounded **Push Trace** under **Settings > Advanced** isolates local display,
+browser-provider subscription, private relay registration, live XMTP matching,
+Queue/provider acceptance, and service-worker receipt without exposing the
+registration capability. See [Push troubleshooting](docs/troubleshooting.md#trace-a-missing-xmtp-notification).
 
 ## Development
 
@@ -101,9 +130,13 @@ pnpm test:e2e
 
 Use `pnpm test --run` for a one-shot Vitest run. Plain `pnpm test` starts watch mode.
 
+The production bundle does not install the render watchdog or intercept global
+console output. Those diagnostics are development-only; user-invoked diagnostics
+are available from **Settings > Advanced**.
+
 ## Deployment
 
-GitHub Actions runs typecheck, lint, Vitest, and the production build on pushes and pull requests. Cloudflare Workers Builds deploys the verified app at [https://converge.cv](https://converge.cv): Static Assets serves the UI, while narrow stateless routes stream encrypted device-history archives and same-origin gRPC-Web requests to fixed XMTP services. The gRPC-Web route keeps mobile clients on ordinary HTTPS/443 instead of requiring direct access to XMTP's public port 5558. The checked-in Wrangler configuration also provides an isolated `workers.dev` preview environment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the cutover and rollback runbook.
+GitHub Actions runs typecheck, lint, Vitest, the production build, desktop/mobile core UI smoke coverage, and a Wrangler dry run on pushes and pull requests. Cloudflare Workers Builds deploys the verified app at [https://converge.cv](https://converge.cv): Static Assets serves the UI, while narrow stateless routes stream encrypted device-history archives and same-origin gRPC-Web requests to fixed XMTP services. The gRPC-Web route keeps mobile clients on ordinary HTTPS/443 instead of requiring direct access to XMTP's public port 5558. The checked-in Wrangler configuration also provides an isolated `workers.dev` preview environment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the cutover and rollback runbook.
 
 Push-contract releases are ordered across repositories: apply vapid.party D1 migration `0005_xmtp_diagnostics.sql`, deploy and verify the vapid.party Worker/listener status and diagnostic endpoints, and only then deploy the matching Converge client. The diagnostics-enabled client requires the relay's management-capability response and CORS headers.
 

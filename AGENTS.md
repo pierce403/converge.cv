@@ -29,6 +29,31 @@ read the same source of truth.
 - **PWA**: hand-maintained service worker and web app manifest
 - **Deployment**: Cloudflare Workers Static Assets plus narrow fixed-upstream XMTP history and gRPC-Web transports at `converge.cv`; GitHub Actions is CI-only and Cloudflare Workers Builds pulls and deploys `main`
 
+## Current Product Contract (2026-08-24)
+
+- The visible app has one active identity and one inbox. Do not reintroduce the
+  Inbox Switcher or Add Inbox as ordinary product surfaces.
+- The old multi-inbox registry, identity rows, per-inbox Dexie namespaces, XMTP
+  OPFS paths, and cached push registration state remain internal compatibility
+  data. Do not merge or delete them during UI simplification, cache maintenance,
+  or migration work.
+- Fresh onboarding keeps exactly three explicit choices: Create new inbox,
+  Connect external wallet, and Restore from keyfile. Preserve direct-wallet
+  provisioning, signer-less routine reopen, keyfile recovery, exact installation
+  verification, and installation-limit recovery.
+- Farcaster/Neynar enrichment, API-key settings, reputation fields, and message
+  filters are removed. Keep ENS recognition, XMTP/Convos published profiles,
+  contacts, and XMTP consent. Startup cleanup must continue removing the legacy
+  persisted settings credential and `converge:neynar:*` cache entries.
+- New user-visible chats request 14-day XMTP disappearing messages. The local
+  decrypted-history cutoff remains 28 days, and existing shared conversation
+  settings are never rewritten.
+- The header Check now, ChatList Full Sync, remote pull-to-refresh, mute UI,
+  clear-cache/fake-install controls, and Web Worker panel are removed. User
+  diagnostics are entered only through **Settings > Advanced**.
+- The render watchdog and global console interception are development-only and
+  must not be installed by the production bundle.
+
 ---
 
 ## Critical User Preferences
@@ -49,7 +74,7 @@ read the same source of truth.
 ### ⚡ ONE-CLICK ONBOARDING
 - On every fresh unauthenticated visit, show Create new inbox, Restore from keyfile, and Connect external wallet before any identity or wallet action. The sole exception is a short-lived, user-started wallet handoff: restore its chooser and query only its existing connector session, without issuing another connect or signature request. The Color Animal name/avatar editor follows successful creation and is dismissible.
 - Empty onboarding after an intentional final-inbox burn uses the same choice screen without auto-creating another inbox.
-- "Create new Converge inbox" remains a one-click generated-key flow from the Inbox Switcher or empty onboarding.
+- "Create new Converge inbox" remains a one-click generated-key flow from empty onboarding.
 - **No manual wallet address entry**
 - **No passphrase setup**
 - **No multi-step wizard** except where wallet approval or installation-limit recovery requires it.
@@ -64,21 +89,21 @@ read the same source of truth.
 
 ---
 
-## Product Decisions (updated 2026-07-11)
+## Product Decisions (updated 2026-08-24)
 
-- Treat the top-left identity control as an Inbox Switcher with one profile-name/avatar entry per XMTP inbox, not one entry per key. Each inbox is an independent social identity and storage namespace; only the selected inbox connects and syncs.
-- Add Inbox supports Create new inbox, Import keyfile, and Connect external wallet. Import reuses the exact key and its resolved inbox. If that inbox is already loaded, say "This inbox is already loaded" and change nothing.
+- Present one active identity. Legacy registry entries and storage namespaces are compatibility-only and must remain intact but invisible in ordinary navigation.
+- Onboarding supports Create new inbox, Restore from keyfile, and Connect external wallet. Do not move external-wallet connection into a post-onboarding Add Inbox flow.
 - Use "local account key" or "Converge key" for the app-held signer. Reserve "installation" for the XMTP SDK device/app-instance key. Do not expose a message-level key selector; recipients see the sender inbox. A future transaction-signing key selector is a separate wallet feature.
 - Keep plaintext key export in Advanced and never prompt users to write down or export a seed phrase. Loss of the only local copy is an accepted default tradeoff.
 - Warn before wallet/account association that address-to-inbox identity links are publicly queryable and effectively permanent.
-- Burn Inbox lives only in the selected inbox's Settings. After one quick confirmation, attempt installation revocation, then wipe every local inbox-scoped key, database, message, contact, draft, attachment, profile, and cache regardless of revoke success. Explain failed remote revocation and return to empty onboarding after the last inbox.
-- Contacts are separate per inbox, created after active participation, and display the peer's published profile. Do not add private aliases, notes, or custom contact sync. XMTP consent is network-synced per inbox, cached locally, and refreshed when that inbox becomes active.
+- Burn Inbox acts only on the active identity. After one quick confirmation, attempt installation revocation, then wipe that identity's local key, database, messages, contacts, drafts, attachments, profile, and scoped caches regardless of revoke success. Explain failed remote revocation and return to empty onboarding.
+- Contacts use the active identity's retained namespace, are created after active participation, and display the peer's published XMTP/Convos profile with ENS as secondary identity recognition. Do not add private aliases, notes, Farcaster/Neynar enrichment, or custom contact sync.
 - Follow current Convos behavior by default, including profile messages that carry human and agent names, unless a Converge-specific difference is explicitly documented.
-- Notifications are app/browser-level: one physical browser subscription, one app-scoped logical XMTP alert registration per loaded inbox/installation, and batched conversation topics per registration. Converge uses standard Web Push without browser-specific request branches; vapid.party accepts only known FCM, Mozilla, Apple, and WNS provider endpoints. Enable covers all loaded inboxes; disable deletes all logical registrations before unsubscribing. Inactive pushes set an approximate switcher activity dot without syncing. Visible copy may name the full inbox profile from local state but must not expose that name, the sender, or message content to the relay. Real group/welcome delivery is verified; only call continuous delivery ready while coarse public health explicitly confirms the deployed listener, registration bridge, and relay path.
-- Future Farcaster Mini App or other XMTP alert delivery should reuse the app-scoped logical listener model through a separate authenticated app/delivery-adapter contract. Never enroll another app through Converge's public compatibility route or expose listener credentials to the browser.
-- Notification clicks open or focus Converge without automatically switching inboxes. The target inbox remains marked with an approximate activity dot until the user selects it.
+- Notifications are app/browser-level. Keep one physical browser subscription, the active identity's app-scoped XMTP alert state, and any retained compatibility registrations needed for safe cleanup. Compatibility push state must not recreate a visible inbox switcher. Converge uses standard Web Push without browser-specific request branches; vapid.party accepts only known FCM, Mozilla, Apple, and WNS provider endpoints. Visible copy may use a locally resolved profile name but must not expose that name, the sender, or message content to the relay. Only call continuous delivery ready while coarse public health explicitly confirms the deployed listener, registration bridge, and relay path.
+- Another app or delivery adapter requires its own authenticated app-scoped contract. Never enroll it through Converge's public compatibility route or expose listener credentials to the browser.
+- Notification clicks open or focus Converge's root without accepting relay-provided identity, conversation, or external navigation.
 - Inbound RemoteAttachments are descriptor-first: receipt/history sync must never contact the attachment host. Only an XMTP-allowed conversation can fetch after a coalesced preferences sync inside the download slot; trusted hosts auto-load only for visible bubbles, unknown hosts require a hostname-labelled click, and every fetched payload must pass the bounded HTTPS/decrypt/static-raster policy documented in `FEATURES.md`. Attachment Accept and conversation Block/Unblock publish XMTP consent. Keep Thirdweb as the outbound ciphertext host until a separate hosting feature is requested.
-- User-visible messages default to four-week retention. Apply the 28-day cutoff before every local ingest/backfill write, cascade message/attachment/descriptor deletion transactionally, and repair conversation previews/read references. New user-visible groups request the matching XMTP disappearing setting; do not silently change existing shared conversation settings or apply it to self/profile/invite-control DMs. Routine retention and Full Sync must never delete an active XMTP OPFS database.
+- New user-visible conversations request 14-day XMTP disappearing settings. Independently apply the 28-day local-history cutoff before every local ingest/backfill write, cascade message/attachment/descriptor deletion transactionally, and repair conversation previews/read references. Do not silently change existing shared conversation settings or apply the protocol default to self/profile/invite-control DMs. Routine retention and diagnostic repair must never delete an active XMTP OPFS database.
 
 `FEATURES.md` contains the shipped user-facing contract. `ARCHITECTURE.md` is the canonical technical implementation contract after context compaction.
 
@@ -235,13 +260,13 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Cloudflare Workers Static Assets is live at `https://converge.cv` with native React SPA fallback, immutable hashed-asset caching, root no-cache service-worker headers, Node 22/pinned Wrangler tooling, and a cutover/rollback runbook. Cloudflare Workers Builds pulls `main` through its GitHub App and owns deployment; GitHub Actions remains provider-neutral, read-only CI. The exact app origin was preserved, so the host migration does not intentionally change IndexedDB, OPFS, service-worker, Push API, or XMTP installation namespaces. The sibling Mini App is live on its separate `miniapp.converge.cv` Worker.
 - Cloudflare Always Use HTTPS is enabled for every active account zone. Every currently proxied hostname was edge-verified to preserve the path and query when redirecting HTTP to HTTPS. The `converge.cv` zone also has a narrow `http_config_settings` rule with `disable_rum: true` for the apex and Mini App hosts; clean Chrome verification must remain free of `static.cloudflareinsights.com`, `/cdn-cgi/rum`, and injected `data-cf-beacon` activity.
 - Choice-first onboarding shows Create, Restore, and Connect external wallet before any identity or wallet action; successful creation registers the inbox before showing the dismissible Color Animal name/avatar editor
-- The top-left Inbox Switcher has one profile-name/avatar row per inbox, keeps only the selected inbox connected, and provides Create, Import keyfile, and Connect external wallet actions; duplicate imports stop with "This inbox is already loaded"
+- The visible app has one active identity. Legacy registry rows, identity records, namespaced Dexie databases, XMTP OPFS paths, and cached push state remain internal compatibility data and are not deleted or exposed as a switcher.
 - Installation revocation in Settings routes through the inbox's recovery identifier: if the active key is an associated member key, Converge prompts or requests the signature from the connected recovery wallet to authorize revocation on XMTP v3
 - "Clear All Browser Data" in Settings performs a complete, resilient local wipe of all IndexedDB database shards (global, default, push state, and per-inbox databases), OPFS SQLite files, Web Storage, cookies, and caches, best-effort disabling push without blocking local reset on network errors, and navigates cleanly to empty onboarding
 - Burn Inbox is Settings-only, attempts current-installation revocation, then wipes the inbox namespace, keys, XMTP OPFS data, messages, contacts, attachments, profile metadata, caches, and runtime state even when revocation fails
-- Contact persistence is inbox-scoped and action-gated, uses peer-published profiles, and discards legacy private aliases/avatar overrides/notes instead of adding custom contact sync
+- Contact persistence uses the active identity's namespace, is action-gated, prefers peer-published XMTP/Convos profiles, keeps ENS recognition, and discards legacy private aliases/avatar overrides/notes and Farcaster/Neynar metadata instead of adding custom contact sync
 - Plaintext keyfile export is available only under collapsed Advanced settings; wallet association requires acknowledging that the address-to-inbox link is public and effectively permanent
-- Notifications use one app/browser toggle, one shared physical `PushSubscription`, cached logical per-inbox/installation relay records, and inactive-inbox activity dots. Active-inbox registration canonicalizes MLS group topics, preserves every HMAC epoch, and adds the deterministic installation welcome topic. Notification clicks always focus/open Converge's root without switching. vapid.party's Cloudflare-only Worker, D1, Queue, and singleton Container listener are deployed; on 2026-07-14 public health reported `deliveryReady: true`, listener `ready`, and bridge `synced`. Continuous delivery readiness remains a separate coarse health signal and must never be inferred from registration success.
+- Notifications use one app/browser toggle and one shared physical `PushSubscription`. Cached logical compatibility records can remain internally, but they do not create inactive-inbox rows or activity dots. Active-identity registration canonicalizes MLS group topics, preserves every HMAC epoch, and adds the deterministic installation welcome topic. Notification clicks always focus/open Converge's root. vapid.party's Cloudflare-only Worker, D1, Queue, and singleton Container listener are deployed; on 2026-07-14 public health reported `deliveryReady: true`, listener `ready`, and bridge `synced`. Continuous delivery readiness remains a separate coarse health signal and must never be inferred from registration success.
 - Explicit onboarding model for new inbox creation, same-key keyfile restore, and direct external-wallet identity connection
 - Wallet-approved device provisioning verifies membership through the manager's own network refresh, prevents accidental reassignment, and persists the final installation ID. A locally ready but network-absent pending default database is replaced at most once while preserving the staged account key and rechecking 10/10 capacity.
 - Ethereum addresses are canonicalized before signer construction and persistence; repeated `0x0x...` display/storage values are repaired only when the remaining payload is a valid 20-byte address
@@ -257,14 +282,14 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - The 2026-07-14 dependency remediation removes the unused Proto, Dexie React hook, Workbox/PWA helper, patch, and full Thirdweb SDK trees; the resolved lockfile returns zero findings through pnpm 11's current bulk advisory API without changing the XMTP or Wagmi major versions. The pinned pnpm 10 audit command now receives HTTP 410 because npm retired its legacy endpoint; do not report that transport failure as an advisory result.
 - GitHub CI, CodeQL, and dormant Socket workflows use their current Node 24-based action majors, while Converge build commands run on Node.js 22; do not reintroduce Node 20 action majors
 - Native Wagmi/Reown is the only wallet connection stack; encrypted attachment uploads call Thirdweb's narrow storage HTTP contract without shipping the Thirdweb SDK
-- Browser push setup resolves the exact root service-worker registration and waits for that registration to activate instead of trusting the one-shot `navigator.serviceWorker.ready` result. It validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. If origin-specific root registration state remains unusable after a VAPID rotation, Converge retries on a key-versioned `/__converge-push/<key-version>/` recovery scope without clearing IndexedDB, OPFS, keys, or messages. Provider failures explicitly say that no subscription or inbox data was sent to vapid.party; the public-key GET may already have succeeded. Settings and Debug retain inline results instead of push setup alerts.
-- Four-week local message retention runs before inbox render, then sweeps every loaded inbox hourly and on visible-tab resume without switching the active namespace; XMTP native deletion events share the same Dexie cascade. New visible groups request matching protocol expiry, while existing shared settings remain unchanged.
-- XMTP connect/disconnect/manual-sync operations are serialized. Subscribe the message stream before catch-up, keep the dedicated conversation and deletion streams alongside it, and repair discovery plus retained messages on restart/resume/online/periodic health passes. A reused client restores all streams/listeners, while Full Sync remains strict and non-destructive.
+- Browser push setup resolves the exact root service-worker registration and waits for that registration to activate instead of trusting the one-shot `navigator.serviceWorker.ready` result. It validates the VAPID public key, single-flights provider registration, and backs off across Chromium's stale-subscription deletion race. If origin-specific root registration state remains unusable after a VAPID rotation, Converge retries on a key-versioned `/__converge-push/<key-version>/` recovery scope without clearing IndexedDB, OPFS, keys, or messages. Provider failures explicitly say that no subscription or inbox data was sent to vapid.party; the public-key GET may already have succeeded. Settings and Advanced diagnostics retain inline results instead of push setup alerts.
+- Local message retention remains 28 days and runs before inbox render plus compatibility sweeps; XMTP native deletion events share the same Dexie cascade. New visible groups request a separate 14-day protocol expiry, while existing shared settings remain unchanged.
+- XMTP connect/disconnect/sync operations are serialized. Subscribe the message stream before catch-up, keep the dedicated conversation and deletion streams alongside it, and repair discovery plus retained messages on restart/resume/online/periodic health passes. A reused client restores all streams/listeners. The strict non-destructive repair is diagnostics-only rather than a ChatList Full Sync button.
 - Browser SDK stateful sync calls are non-cancellable. Deadlines must retain keyed single-flight ownership until the original promise settles; never implement timeout retries that overlap the same conversation/global sync against one worker/database.
 - If an XMTP database close exceeds its deadline, retain the inbox Web Lock and block another client open in that tab. Surface a reload-required error instead of risking two workers against the same OPFS database; release only after the late close settles or the tab reloads.
 - All decoded live/history messages plus durable system/reaction/group side effects route through one canonical FIFO ingester. Buffer them until both `Layout` consumers register, scope every queued event to its owning inbox, and await successful Dexie persistence before claiming sync completion. Use per-conversation successful-ingest watermarks rather than `identity.lastSyncedAt` to bound message history.
 - Keep the versioned, per-inbox one-time full retained-history repair for checkpoints written by older builds. Mark its version complete only after stable message/side-effect consumers drain with no network or durable-ingestion failure; otherwise retry on a later consumer-ready/recovery pass.
-- Mute is notification state, not deletion. Never write `user-muted` conversation/peer tombstones; keep the compatibility cleanup that removes legacy mute markers so inbound messages are not filtered.
+- The mute UI is removed. Keep the compatibility cleanup that removes legacy `user-muted` conversation/peer tombstones so inbound messages are not filtered.
 - Settled reconnect probes both deterministic XMTP logical database filenames without creating an alternate-path file, opens real clients through the named `opfs-libxmtp` VFS, and automatically repairs metadata only for an already-registered, ledger-visible installation. Other installation mismatches surface an explicit Settings repair. A live repair persists that attempt's candidate before mutation and registers it without a pre-registration reopen. It must then close the registered worker and prove that a fresh worker on the exact same database recovers the same registered installation before clearing the journal, reporting success, or performing optional prior-installation cleanup. It may revoke only the exact unavailable saved ID when the signer is recovery authority, uses a free slot otherwise, rechecks 10/10 capacity, requests history, and never clears messages or OPFS; only at 10/10 may required exact cleanup precede registration. Browser SDK 6.1.2 may rotate an unregistered candidate after worker close and may otherwise fall back to an in-memory SQLite VFS after OPFS initialization failure, so interrupted repair resumes from fresh journal and ledger state without promising the same unregistered ID while persistent open/durability failures remain fail-closed.
 - The Installations inventory load/refresh path is read-only with respect to identity storage and drops stale request generations. It must never infer or persist `installationId`, `xmtpDbPathMode`, or repair-journal fields from a ledger list; those fields are owned by verified connection/repair callbacks. Explicit **Revoke** is the panel's only ledger mutation.
 - PWA install prompt with localStorage persistence (currently disabled for debugging)
@@ -275,35 +300,33 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Desktop browser chat view now uses a persistent split pane (conversation list left, selected thread right)
 - Wallet-backed XMTP signing now dedupes concurrent prompts and reuses valid signatures to prevent wallet popup loops
 - External wallet signing now shows a global blocking modal so users clearly see when Converge is waiting on signature approval/rejection
-- Contact Details refresh treats the peer-published XMTP/Convos profile as canonical; Farcaster/ENS are optional secondary identity and reputation metadata
-- Settings profile actions can explicitly replace the selected inbox name/avatar from ENS or Farcaster using the inbox's associated wallet (`linkedWalletAddress`, falling back to the local account address). A successful refresh updates the identity record, Inbox Switcher registry, local push label, and published XMTP profile together.
+- Contact Details refresh treats the peer-published XMTP/Convos profile as canonical; ENS is optional secondary identity metadata.
+- Settings profile actions can explicitly refresh the active identity from ENS using its associated wallet (`linkedWalletAddress`, falling back to the local account address). A successful refresh updates the identity record, local push label, and published XMTP profile together.
 - Address→inbox identity lookup uses a shared cached resolver (`resolveInboxIdForAddress`) and `canMessageWithInbox`, reducing repeated `IdentityApi/GetInboxIds` calls across conversation, send, and contact refresh paths
-- Debug log control in bottom navigation captures console output and surfaces state snapshots
-- Full-screen Debug tab (`/debug`) aggregates console, XMTP network, and runtime error logs
-- Debug Invite Tools: "Claim Invite Code" parses Convos invite links and sends a Convos `join_request` custom content payload to the creator inbox via XMTP DM
+- User diagnostics are entered only through **Settings > Advanced**; there is no bottom-navigation debug control, clear-cache/fake-install control, or Web Worker panel.
+- Advanced Invite Tools can parse Convos invite links and send a Convos `join_request` custom content payload to the creator inbox via XMTP DM.
 - Group settings now include a member validation tool to flag inboxes missing XMTP identity updates.
 - Convos profile compatibility now treats self-authored `profile_update` and roster `profile_snapshot` messages as primary, with compressed protobuf `appData` as a legacy fallback. Current Convos iOS resolves canonical name/member kind by inbox while keeping encrypted avatar slots per conversation; Converge's wire implementation is compatible but its stored relayed profile state remains conversation-scoped.
 - New one-to-one chats now use Convos-style single-peer XMTP groups; legacy DMs remain readable and invite requests still use creator DMs.
 - Group activation/sends/profile saves publish the sender's Convos `profile_update`; group creation and member additions publish roster snapshots so newly joined MLS members can see existing names and agents.
 - Convos typing indicators, profile updates/snapshots, thinking messages, and join requests are registered as SDK custom content types and handled without surfacing side-channel bubbles.
 - XMTP Browser SDK upgraded to 6.1.2 (built-in content types + updated send/create APIs; Utils removed).
-- Default conversations seeded from `DEFAULT_CONTACTS` when a new inbox has no history
 - Image attachments use encrypted XMTP RemoteAttachment payloads hosted through Thirdweb IPFS via a narrow direct HTTPS upload transport. Incoming descriptors are stored without fetching; allowed/visible trusted-host images use bounded authenticated raster downloads, unknown hosts require explicit approval, and recoverable plaintext bytes use a 100 MiB per-inbox LRU cache.
-- Watchdog reloads the PWA if the UI thread stalls for ~10s to restore responsiveness automatically
+- The render watchdog and global console interception are development-only and are not installed in production.
 - Root `ARCHITECTURE.md` is now the canonical architecture/decision tracker, with `docs/architecture.md` linking to it.
 - Static PWA push registration is wired to the intended app-level vapid.party XMTP relay contract without shipping any vapid.party API key:
   - public config only: `VITE_VAPID_PARTY_API_BASE` and optional `VITE_VAPID_PUBLIC_KEY`;
-  - `Enable notifications` registers `/sw.js` at the exact root scope, requests browser permission, creates/reuses one physical `PushSubscription`, and upserts logical registrations for every loaded inbox with available material. A root provider failure may use a key-versioned recovery scope for the same worker and current VAPID key;
+  - `Enable notifications` registers `/sw.js` at the exact root scope, requests browser permission, creates/reuses one physical `PushSubscription`, and upserts the active identity plus retained compatibility registrations with available material. A root provider failure may use a key-versioned recovery scope for the same worker and current VAPID key;
   - the active inbox synchronizes its conversation list and then preferences, includes Allowed/Unknown conversations and stitched-DM backing groups, preserves every distinct HMAC epoch, canonicalizes group topics, and adds `/xmtp/mls/1/w-<installation-id>/proto`;
   - sync/conversation changes plus XMTP HMAC-key and consent updates trigger debounced, serialized refreshes that preserve a trailing newest snapshot;
   - disable deletes every cached logical relay record before unsubscribing, retaining failed deletion tombstones for retry;
-  - the service worker stores opaque per-inbox activity hints, resolves the profile name only from local state, and always focuses/opens the Converge root without accepting relay navigation; plaintext XMTP message content is not sent through push.
+  - the service worker stores opaque activity hints, resolves the profile name only from local state, and always focuses/opens the Converge root without accepting relay navigation; plaintext XMTP message content is not sent through push.
 - vapid.party's contract separates one physical endpoint from logical inbox/installation registrations and accepts minimal opaque delivery events. Its Cloudflare-only Worker, D1, Queue, and singleton Cloudflare Container listener are deployed. A 2026-07-14 post-deployment real-Chrome canary passed genuine XMTP welcome/group delivery, three HMAC epochs, recipient-own-message and `shouldPush:false` suppression, and cleanup. Current production readiness must still come from the public listener/bridge health signal.
 - Push diagnostics distinguish origin-level display permission from the browser-wide Web Push provider. In Brave, accepting the site permission prompt does not prove the Google push transport is available; websites cannot read that browser setting, and a provider `AbortError` occurs before any subscription or inbox data reaches vapid.party.
 - Push diagnostics separate local browser registration, relay reachability, and end-to-end XMTP delivery readiness. A successful registration or generic healthy Worker response is never sufficient; only an explicit public `deliveryReady` signal can render the listener pipeline ready.
-- Debug Push Trace now compares local and relay group-topic/HMAC/welcome counts, shows the last XMTP match separately from provider acceptance and service-worker receipt, and offers force re-registration plus local and relay diagnostic tests. A loaded inbox with conversations and a welcome-only registration is an actionable failure, even when global relay health is ready.
+- Advanced Push Trace compares local and relay group-topic/HMAC/welcome counts, shows the last XMTP match separately from provider acceptance and service-worker receipt, and offers force re-registration plus local and relay diagnostic tests. An active inbox with conversations and a welcome-only registration is an actionable failure, even when global relay health is ready.
 - Relay diagnostic and management access uses a per-registration 256-bit bearer capability stored in `ConvergePushState`. It must only be sent in the `Authorization` header for registration refresh/deletion and fixed no-store status/test paths; never put it in a URL, body, log, visible UI, copied debug report, or referrer. Exact-endpoint refreshes and authorized endpoint replacement preserve a valid capability; exact-endpoint bootstrap/recovery without a valid stored capability may mint a replacement. A `409` conflict must not fall back to an unauthenticated retry. Diagnostic pushes must not create inbox activity.
-- `getPushHmacKeys()` must sync conversations before preferences/listing, and bootstrap push refresh cooldowns must include build version/hash so a release can repair stale topic snapshots once per installation. The explicit Debug re-register action bypasses that startup cooldown.
+- `getPushHmacKeys()` must sync conversations before preferences/listing, and bootstrap push refresh cooldowns must include build version/hash so a release can repair stale topic snapshots once per installation. The explicit Advanced re-register action bypasses that startup cooldown.
 - XMTP protocol runtime:
   - **XMTP SDK v6.1.2 on protocol v3**: ✅ Fully working!
   - **Upgraded from v5.0.1 → v6.1.2** (January 25, 2026)
@@ -320,10 +343,6 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Video + multi-file attachments (image attachments are now supported)
 - Re-enable non-push PWA features (install prompt, update notifications/full app-shell service worker) when ready.
 - Push follow-up: continuously validate the Cloudflare Container XMTP listener and D1-backed registration bridge, and characterize installed-PWA and mobile platform reliability. The listener's XMTP `SubscribeAll` stream has no replay cursor, so restart or disconnect windows can miss push hints; XMTP inbox sync remains authoritative.
-- **Default Contacts/Bots**: `src/lib/default-contacts.ts` has placeholder addresses for suggested bots (Welcome Bot, Base Agent, ENS Resolver, etc.). Replace with actual XMTP-enabled addresses when available. Check:
-  - https://docs.xmtp.org for official XMTP bots
-  - https://base.org for Base ecosystem agents
-  - XMTP community Discord/forums for verified bot addresses
 - **Cloudflare hosting operations**: continue live post-cutover checks for inbox reopen, Push API continuity, the fail-closed encrypted-history route, and recursive DNS convergence. `wrangler.jsonc` deploys the Worker with native SPA fallback; `public/_headers` keeps hashed assets immutable and `/sw.js` uncached at root scope. Do not reintroduce the removed COOP/COEP service-worker shim: it previously caused XMTP/wallet regressions. Keep QR camera permission available to the same origin, and stage any future CSP separately against XMTP workers/WASM, WalletConnect, attachment hosts, RPCs, wallet popups, and the same-origin history route.
 
 ---
@@ -335,7 +354,7 @@ pnpm run deploy       # Verify and deploy production as an authenticated operato
 - Clear IndexedDB with: `indexedDB.deleteDatabase('ConvergeDB')`
 - For Vitest, use `pnpm test --run` so the command exits; plain `pnpm test` starts watch mode and can hang automation.
 - PWA prompts only trigger on HTTPS or localhost
-- Current Vitest status (2026-08-12): `pnpm test --run` passes (89 files, 606 tests).
+- Current Vitest status (2026-08-24): `pnpm test --run` passes (94 files, 703 tests).
 
 ---
 
@@ -554,19 +573,43 @@ Guidance:
   - `curl -L https://docs.xmtp.org/llms/llms-full.txt -o code/xmtp-llms-full.txt`
 - Treat these as required context when implementing or debugging anything that involves LLMs, assistants, or message flows that may be model-driven.
 
-### Farcaster / Neynar Docs (Load for Farcaster features)
-- Neynar API reference: https://docs.neynar.com/reference/overview
-- Users by verification endpoint: https://docs.neynar.com/reference/get-users-by-verifications
-- General Neynar developer docs: https://docs.neynar.com
-
-Use the Converge Neynar client key `e6927a99-c548-421f-a230-ee8bf11e8c48` as the baked-in default (user-provided and not secret). Prefer `VITE_NEYNAR_API_KEY` when present.
-
 ### Operating Practice References
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-08-21 (XMTP mobile transport and migration-signature recovery)
+**Last Updated**: 2026-08-24 (single-active-identity simplification checkpoint)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-08-24)
+
+### Single-Active-Identity Simplification Checkpoint
+- Replaced the visible multi-inbox model with one active identity. The registry,
+  identity rows, namespaced Dexie databases, XMTP OPFS paths, and cached push
+  registrations remain internal compatibility state and were deliberately not
+  deleted or merged.
+- Kept choice-first onboarding for local creation, direct external-wallet
+  connection, and exact keyfile restore. ENS, XMTP/Convos published profiles,
+  contacts, consent, and push remain.
+- Removed Farcaster/Neynar enrichment, reputation fields, configuration, and
+  message filters. Startup also purges the removed integration's persisted API
+  credential and Neynar cooldown/miss caches.
+- Split retention policy: new user-visible chats request 14-day XMTP
+  disappearing messages, local decrypted history still expires after 28 days,
+  and existing shared chat settings remain unchanged.
+- Removed the header Check now, ChatList Full Sync, remote pull-to-refresh, mute
+  UI, clear-cache/fake-install controls, and Web Worker panel. Diagnostics are
+  entered only from **Settings > Advanced**.
+- Production no longer installs the render watchdog or global console
+  interception; both remain development-only.
+- Routine notification setup now registers only the active inbox and retires
+  cached relay routes for inactive compatibility identities. Failed retirement
+  remains a retryable diagnostics tombstone without degrading active status.
+- Text and image sends reconcile their authoritative XMTP IDs and expiry
+  atomically in local storage. Pre-publish storage failures cannot create
+  phantom sends, while post-publish cache failures never invite a duplicate.
+- Burning the active inbox always returns to explicit onboarding instead of
+  silently activating a retained legacy identity.
 
 
 ## Latest Changes (2026-08-21)

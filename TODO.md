@@ -1,6 +1,6 @@
 # converge.cv — TODO
 
-**Last updated**: 2026-08-12
+**Last updated**: 2026-08-24
 
 This is the live backlog. Keep it short and current. Completed work should move to `AGENTS.md` or stay in git history.
 
@@ -9,22 +9,27 @@ This is the live backlog. Keep it short and current. Completed work should move 
 - Encrypt private keys at rest in IndexedDB (device-based; keep no-passphrase default).
 - Complete a live two-browser XMTP validation of wallet-approved device joining,
   distinct installation IDs, reload reuse, and older-device history transfer.
-- Fix conversation mute semantics so muting doesn’t drop inbound messages (see `docs/conversations.md`).
+- Validate the single-active-identity checkpoint against browser profiles that
+  still contain multiple registry rows and namespaces. Existing identity,
+  Dexie, OPFS, contact, and push state must remain intact.
 - Decide on service worker strategy:
   - Keep minimal `public/sw.js` (push-only) vs re-enable `vite-plugin-pwa`/Workbox.
   - If re-enabling caching, avoid “offline messaging” copy.
 
 ## P1 (high)
 
-- Add verified default bot contacts (keep `src/lib/default-contacts.ts` empty until real XMTP-enabled addresses exist).
 - Verify the vapid.party XMTP relay routes, closed-app delivery, and welcome-topic coverage end to end before removing the experimental label.
 - Add unit/integration tests for inbox-id resolution + `canMessage` regressions.
-- Run the desktop/mobile multi-inbox Playwright smoke test in CI and add a stubbed send-message scenario.
+- Add desktop/mobile smoke coverage for all three onboarding choices and
+  signer-less active-identity reopen.
 
 ## Messaging
 
 - Image attachments shipped (RemoteAttachment + Thirdweb IPFS); add multi-file + video support next.
-- Run a real-browser/XMTP expiry integration test for a newly created 28-day disappearing conversation; mocked CI covers creation options and deletion-stream/local-cascade behavior only.
+- Run a real-browser/XMTP expiry integration test for a newly created 14-day
+  disappearing conversation; mocked CI covers creation options and
+  deletion-stream/local-cascade behavior only. Also verify the independent
+  local-history cutoff remains 28 days and existing chat settings are unchanged.
 - Delivery/read state UX.
 
 ## Conversations & Groups

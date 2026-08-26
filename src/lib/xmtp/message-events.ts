@@ -26,6 +26,7 @@ export interface XmtpSystemEventDetail {
     senderInboxId?: string;
     body: string;
     sentAt?: number;
+    expiresAt?: number;
   };
 }
 

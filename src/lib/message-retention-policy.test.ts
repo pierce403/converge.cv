@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_MESSAGE_DISAPPEARING_MS,
   DEFAULT_MESSAGE_RETENTION_MS,
   getDefaultMessageDisappearingSettings,
   getMessageRetentionCutoff,
@@ -18,11 +19,12 @@ describe('message retention policy', () => {
     expect(shouldRetainMessage({ sentAt: now, expiresAt: now }, now)).toBe(false);
   });
 
-  it('uses the same 28-day duration for new XMTP conversations', () => {
+  it('uses a 14-day default for new XMTP conversations without shortening local history', () => {
     expect(getDefaultMessageDisappearingSettings(now)).toEqual({
       fromNs: BigInt(now) * 1_000_000n,
-      inNs: BigInt(DEFAULT_MESSAGE_RETENTION_MS) * 1_000_000n,
+      inNs: BigInt(DEFAULT_MESSAGE_DISAPPEARING_MS) * 1_000_000n,
     });
+    expect(DEFAULT_MESSAGE_RETENTION_MS).toBeGreaterThan(DEFAULT_MESSAGE_DISAPPEARING_MS);
   });
 
   it('never lets a requested history window cross the local cutoff', () => {

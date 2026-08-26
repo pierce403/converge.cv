@@ -9,7 +9,6 @@ import { getStorage } from '@/lib/storage';
 import { getXmtpClient, type GroupDetails } from '@/lib/xmtp';
 import { groupDetailsToConversationUpdates } from '@/lib/xmtp/group-conversation';
 import type { Conversation, DeletedConversationRecord } from '@/types';
-import { DEFAULT_CONTACTS } from '@/lib/default-contacts';
 import { getAddress } from 'viem';
 
 const ETH_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -156,77 +155,6 @@ export function useConversations() {
         // ignore cleanup failure
       }
 
-      // Older default-contact rows predate the explicit DM discriminator. They
-      // are authoritative local DMs, not provisional unknown conversations, so
-      // migrate them before peer-based de-duplication runs.
-      const migratedDefaultConversations = await Promise.all(
-        conversations.map(async (conversation) => {
-          const isLegacyDefaultDm =
-            conversation.isGroup === undefined &&
-            (conversation.id.startsWith('default-') ||
-              conversation.topic?.startsWith('default:'));
-          if (!isLegacyDefaultDm) return conversation;
-
-          const migrated = { ...conversation, isGroup: false };
-          await storage.putConversation(migrated);
-          return migrated;
-        })
-      );
-      conversations = migratedDefaultConversations;
-
-      if (conversations.length === 0) {
-        const now = Date.now();
-        const seededConversations: Conversation[] = [];
-
-        for (const [index, contact] of DEFAULT_CONTACTS.entries()) {
-          const normalizedCandidate = contact.address.toLowerCase();
-          try {
-            if (await storage.isPeerDeleted(normalizedCandidate)) {
-              continue;
-            }
-          } catch (markerError) {
-            console.warn('[useConversations] Failed to check deleted marker for default contact', contact.address, markerError);
-          }
-          const existing = conversations.find(
-            (conversation) =>
-              conversation.peerId.toLowerCase() === contact.address.toLowerCase()
-          );
-
-          if (existing) {
-            continue;
-          }
-
-          const timestamp = now - index * 5 * 60 * 1000;
-          const seededConversation: Conversation = {
-            id: `default-${contact.address}`,
-            peerId: contact.address,
-            topic: `default:${contact.address}`,
-            lastMessageAt: timestamp,
-            lastMessagePreview: contact.description,
-            unreadCount: 0,
-            pinned: index < 2,
-            archived: false,
-            lastMessageId: undefined,
-            lastMessageSender: undefined,
-            lastReadAt: timestamp,
-            lastReadMessageId: undefined,
-            createdAt: timestamp,
-            isGroup: false,
-          };
-
-          await storage.putConversation(seededConversation);
-          seededConversations.push(seededConversation);
-        }
-
-        if (seededConversations.length > 0) {
-          console.info(
-            `Seeded ${seededConversations.length} default conversations`,
-            seededConversations.map((conversation) => conversation.peerId)
-          );
-          conversations = await storage.listConversations({ archived: false });
-        }
-      }
-
       setConversations(conversations);
 
       // Fire-and-forget cleanup that may touch the network (canonicalizing inboxIds,
@@ -360,13 +288,35 @@ export function useConversations() {
         const matchingConversations = existing.filter(
           (conversation) => candidatePeerIds.has(conversation.peerId.toLowerCase())
         );
+        const isUsableExistingConversation = (conversation: Conversation) =>
+          !conversation.isLocalOnly && !conversation.id.startsWith('local-conversation');
         const found =
-          matchingConversations.find((conversation) => conversation.isGroup) ??
-          matchingConversations.find((conversation) => !conversation.isGroup);
+          matchingConversations.find(
+            (conversation) => conversation.isGroup && isUsableExistingConversation(conversation),
+          ) ??
+          matchingConversations.find(
+            (conversation) => !conversation.isGroup && isUsableExistingConversation(conversation),
+          );
 
         if (found) {
+          if (
+            !found.isGroup &&
+            !inboxKey.startsWith('0x') &&
+            found.peerId.toLowerCase() !== inboxKey
+          ) {
+            found.peerId = inboxKey;
+            await storage.putConversation(found);
+            updateConversation(found.id, { peerId: inboxKey });
+          }
+          void ensureConversationProfiles([found]).catch((error) => {
+            console.warn('[useConversations] Existing conversation profile repair failed', error);
+          });
           return found;
         }
+
+        const localFallbacks = matchingConversations.filter(
+          (conversation) => !isUsableExistingConversation(conversation),
+        );
 
         // Create via XMTP
         const xmtpConv = await xmtp.createConversation(peerAddress);
@@ -436,7 +386,7 @@ export function useConversations() {
             });
             console.log('[useConversations] ✅ Fetched and stored contact profile:', {
               inboxId: profileInboxId,
-              displayName: profile.displayName,
+              hasDisplayName: Boolean(profile.displayName),
               hasAvatar: !!profile.avatarUrl,
             });
           }
@@ -495,13 +445,32 @@ export function useConversations() {
         // Add to store
         addConversation(conversation);
 
+        // A local fallback is only a placeholder for an XMTP creation failure.
+        // Once the real conversation exists, remove the stale placeholder so a
+        // later "new chat" cannot loop back into the unsendable thread.
+        for (const localFallback of localFallbacks) {
+          useConversationStore.getState().removeConversation(localFallback.id);
+          try {
+            await storage.deleteConversation(localFallback.id);
+          } catch (cleanupError) {
+            // The XMTP conversation is already created and persisted. Do not
+            // report that successful network operation as a failure because a
+            // stale compatibility row could not be cleaned up immediately.
+            console.warn(
+              '[useConversations] Failed to remove stale local fallback:',
+              localFallback.id,
+              cleanupError,
+            );
+          }
+        }
+
         return conversation;
       } catch (error) {
         console.error('Failed to create conversation:', error);
         return null;
       }
     },
-    [addConversation]
+    [addConversation, ensureConversationProfiles, updateConversation]
   );
 
   const requestConvosInviteJoin = useCallback(
@@ -634,36 +603,6 @@ export function useConversations() {
       }
     },
     [updateConversation]
-  );
-
-  /**
-   * Mute/unmute a conversation (indefinite mute when enabling)
-   */
-  const toggleMute = useCallback(
-    async (conversationId: string) => {
-      try {
-        const storage = await getStorage();
-        const conversation = await storage.getConversation(conversationId);
-        if (!conversation) return;
-        const now = Date.now();
-        const isMuted = Boolean(conversation.mutedUntil && conversation.mutedUntil > now);
-        const mutedUntil = isMuted ? undefined : now + 365 * 24 * 60 * 60 * 1000; // ~1 year
-        await storage.putConversation({ ...conversation, mutedUntil });
-        updateConversation(conversationId, { mutedUntil });
-        // Mute controls notifications only. Older builds wrote a deletion
-        // tombstone here, which caused all later inbound messages to be dropped.
-        try {
-          // The storage read repairs only legacy `user-muted` markers and
-          // deliberately preserves real `user-hidden` deletion tombstones.
-          await storage.isConversationDeleted(conversationId);
-        } catch (markerError) {
-          console.warn('[useConversations] Failed to clear legacy mute marker', markerError);
-        }
-      } catch (error) {
-        console.error('Failed to toggle mute:', error);
-      }
-    },
-    [updateConversation],
   );
 
   const hideConversation = useCallback(
@@ -1017,7 +956,6 @@ export function useConversations() {
     createGroupConversation,
     togglePin,
     toggleArchive,
-    toggleMute,
     hideConversation,
     markAsRead,
     updateConversationAndPersist,

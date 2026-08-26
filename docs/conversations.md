@@ -6,7 +6,7 @@ This document explains how Converge.cv creates, stores, updates, and deletes con
 
 - **Conversation records are persisted in IndexedDB** (Dexie) in the `conversations` table.
 - **Zustand holds the in-memory list** (`useConversationStore`), and `useConversations.loadConversations()` hydrates it from IndexedDB.
-- **`localStorage` is not the conversation database**. It only stores the active storage namespace (`converge.storageNamespace.v1`).
+- **`localStorage` is not the conversation database**. The legacy active-namespace pointer (`converge.storageNamespace.v1`) is compatibility metadata only.
 - **Inbound XMTP messages can create conversations automatically** (so your chat list stays in sync with the network).
 - **“Deleted/ignored” conversations are tracked separately** in `deletedConversations` so they don’t reappear after resync.
 
@@ -28,7 +28,6 @@ export interface Conversation {
   unreadCount: number;
   pinned: boolean;
   archived: boolean;
-  mutedUntil?: number;
   lastMessageId?: string;
   lastMessageSender?: string;
   lastReadAt?: number;
@@ -106,14 +105,19 @@ Notes:
 - Conversations are indexed by `lastMessageAt` for fast chat list sorting.
 - `deletedConversations` has a unique primary key on `conversationId` (`&conversationId`) and an index on `peerId`.
 
-### Namespacing: conversations are per-inbox
+### Namespacing: compatibility boundary for the active identity
 
-Converge splits local data by “namespace” (roughly “which inbox is active”).
+Converge presents one active identity, but continues to open that identity's
+existing namespaced database so upgrades do not strand local history.
 
 - Namespace key in localStorage: `converge.storageNamespace.v1` ([`src/lib/storage/index.ts`](../src/lib/storage/index.ts#L15))
 - Dexie DB names:
   - global DB: `ConvergeDB` (local account identities/legacy vault records)
   - data DB: `ConvergeDB:${namespace}` ([`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L293))
+
+Older registry rows and inactive namespaced databases remain internal
+compatibility data. They are not shown, merged, or deleted by the visible
+single-identity simplification.
 
 ### localStorage — what’s used by conversation flows
 
@@ -131,11 +135,10 @@ The following table is meant to be exhaustive for “create/update/delete persis
 
 | Trigger | Creates record? | Code path |
 |---|---:|---|
-| Load with zero history → seed default bots | Yes | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L216) (seeding at `putConversation`) |
 | “New Chat” UI (user-initiated DM) | Yes | `createConversation()` → [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L394) |
 | Deep link `/i/:inboxId` (start DM) | Yes (via createConversation) | [`src/features/conversations/StartDmPage.tsx`](../src/features/conversations/StartDmPage.tsx#L6) |
 | Incoming message for unknown conversation | Yes | Global listener creates & persists conversation: [`src/app/Layout.tsx`](../src/app/Layout.tsx#L195) (creation at `putConversation`) |
-| XMTP “Check inbox” / sync | Yes | `syncConversations()` persists missing DMs + groups: [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L2033) |
+| Automatic XMTP discovery/sync | Yes | `syncConversations()` persists missing DMs + groups: [`src/lib/xmtp/client.ts`](../src/lib/xmtp/client.ts#L2033) |
 | “New Group” UI | Yes | `createGroupConversation()` → [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L538) |
 
 ### Update (mutate an existing conversation record)
@@ -147,7 +150,6 @@ The following table is meant to be exhaustive for “create/update/delete persis
 | Receive system message | preview + timestamp | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L486) |
 | “Mark read” / open conversation | `unreadCount`, `lastReadAt`, `lastReadMessageId` | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L730) and [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L389) |
 | Pin / Archive | `pinned`, `archived` | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L602) / [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L623) |
-| Mute / unmute | `mutedUntil` (+ also writes deleted marker; see “Gotchas”) | [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L644) |
 | Group membership changes | `members`, `memberInboxes`, `admins`, `groupMembers` | `addMembersToGroup/removeMembersFromGroup`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L792) |
 | Group metadata changes | `groupName`, `groupImage`, `groupDescription` | `updateGroupMetadata`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L951) |
 | Group permissions changes | `groupPermissions` | `updateGroupPermission`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L985) |
@@ -167,11 +169,18 @@ There are two distinct concepts:
 | Hide group (aka deleteGroup) | Same as above | `deleteGroup()` calls `hideConversation`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L875) |
 | Skip recreating on inbound messages | `isConversationDeleted/isPeerDeleted` gates message handler | [`src/app/Layout.tsx`](../src/app/Layout.tsx#L209) |
 
-## How “Full Sync” works
+## Sync and retained-history repair
 
-Full Sync is strict and non-destructive. It keeps the active XMTP client, database, and installation; force-syncs the conversation list; backfills only retained history; applies the local 28-day sweep; and reloads the list.
+Startup, live streams, reconnect, online/visibility recovery, and bounded
+maintenance perform ordinary conversation discovery automatically. Scrolling to
+the top loads older retained local history; it no longer starts a remote
+pull-to-refresh.
 
-- UI flow: [`src/features/conversations/ChatList.tsx`](../src/features/conversations/ChatList.tsx)
+The strict repair operation remains available only through **Settings >
+Advanced** diagnostics. It keeps the active XMTP client, database, and
+installation; force-syncs the conversation list; backfills only retained
+history; applies the local 28-day sweep; and reloads the list.
+
 - Tested orchestration: [`src/lib/xmtp/full-sync.ts`](../src/lib/xmtp/full-sync.ts)
 
 It never disconnects, clears IndexedDB, or deletes the active XMTP OPFS database. A failed network step surfaces an error and leaves existing local data and `deletedConversations` markers intact.
@@ -180,22 +189,26 @@ It never disconnects, clears IndexedDB, or deletes the active XMTP OPFS database
 
 These are code-level inconsistencies that can surprise future work.
 
-1) **Mute currently behaves like “ignore” for inbound messages**
-
-- `toggleMute()` writes a `DeletedConversationRecord` with reason `user-muted`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L644)
-- The global message listener drops messages for any `isConversationDeleted(...)`: [`src/app/Layout.tsx`](../src/app/Layout.tsx#L209)
-
-Net effect: muting may prevent message ingestion entirely, not just notifications/badges.
-
-
-3) **Archived conversations are written but not really viewable**
+1) **Archived conversations are written but not really viewable**
 
 - `toggleArchive()` flips the flag: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L623)
 - `loadConversations()` only loads `archived: false`: [`src/features/conversations/useConversations.ts`](../src/features/conversations/useConversations.ts#L216)
 
 Without an “Archived” view, archived conversations effectively disappear until some other code path loads them.
 
-## Debugging & inspection
+## Diagnostics and inspection
 
-- View “ignored/deleted” conversation markers: [`src/features/debug/IgnoredConversationsModal.tsx`](../src/features/debug/IgnoredConversationsModal.tsx#L1)
+- User-invoked diagnostics are entered only through **Settings > Advanced**;
+  there is no bottom-navigation debug entry, clear-cache/fake-install control,
+  or Web Worker panel.
+- Inspect “ignored/deleted” conversation markers with the Advanced storage tools.
 - Storage entry points (Dexie driver): [`src/lib/storage/dexie-driver.ts`](../src/lib/storage/dexie-driver.ts#L287)
+
+## Disappearing messages versus local retention
+
+- New user-visible one-to-one and group conversations request 14-day XMTP
+  disappearing messages.
+- Existing conversations keep their current shared setting; Converge does not
+  rewrite them during upgrade or sync.
+- Converge's decrypted local-history cutoff remains a separate 28 days.
+- Self-profile and invite-control DMs keep their specialized behavior.

@@ -37,6 +37,7 @@ type StreamMessage = {
     versionMinor: number;
   };
   sentAtNs: bigint;
+  expiresAtNs?: bigint;
 };
 
 class ControlledStream implements AsyncIterable<StreamMessage> {
@@ -1521,6 +1522,7 @@ describe('XmtpClient message stream cleanup', () => {
     ).startMessageDeletionStream();
     await vi.waitFor(() => {
       expect(retentionMocks.deleteLocalMessage).toHaveBeenCalledWith('expired-message');
+      expect(retentionMocks.deleteLocalMessage).toHaveBeenCalledWith('sys_expired-message');
     });
 
     const disconnect = xmtp.disconnect();
@@ -1760,20 +1762,32 @@ describe('XmtpClient message stream cleanup', () => {
         versionMinor: 0,
       },
       sentAtNs: 3n,
+      expiresAtNs: 14_000_000n,
     });
     attachStreamingClient(xmtp, stream, vi.fn(async () => undefined));
 
     const received = new Promise<CustomEvent>((resolve) => {
       window.addEventListener('xmtp:group-updated', (event) => resolve(event as CustomEvent), { once: true });
     });
+    const systemReceived = new Promise<CustomEvent>((resolve) => {
+      window.addEventListener('xmtp:system', (event) => resolve(event as CustomEvent), { once: true });
+    });
 
     await xmtp.startMessageStream();
-    const event = await received;
+    const [event, systemEvent] = await Promise.all([received, systemReceived]);
 
     expect(event.detail).toEqual({
       conversationId: 'group-1',
       content,
       ownerInboxId: 'self-inbox',
+    });
+    expect(systemEvent.detail).toMatchObject({
+      conversationId: 'group-1',
+      ownerInboxId: 'self-inbox',
+      system: {
+        id: 'sys_same-inbox-group-update',
+        expiresAt: 14,
+      },
     });
 
     await xmtp.disconnect();

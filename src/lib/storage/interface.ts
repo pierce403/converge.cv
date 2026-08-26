@@ -91,6 +91,7 @@ export interface StorageDriver {
 
   // Messages
   putMessage(message: Message): Promise<void>;
+  reconcilePublishedMessage(optimisticMessageId: string, message: Message): Promise<void>;
   getMessage(id: string): Promise<Message | undefined>;
   listMessages(conversationId: string, opts?: PageOpts): Promise<Message[]>;
   deleteMessage(id: string): Promise<MessageDeletionResult>;
