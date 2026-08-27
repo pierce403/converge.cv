@@ -24,6 +24,7 @@ import type {
 } from '@/types';
 import { getAddress, isAddress } from 'viem';
 import { isLikelyConvosInviteCode, tryParseConvosInvite } from '@/lib/utils/convos-invite';
+import { isLegacyHiddenSystemMessage } from '@/lib/xmtp/hidden-system-messages';
 
 const MAX_ATTACHMENT_BYTES = MAX_INCOMING_ATTACHMENT_BYTES;
 const MAX_INBOX_ATTACHMENT_CACHE_BYTES = 100 * 1024 * 1024;
@@ -270,12 +271,19 @@ export function useMessages() {
 
         const storage = await getStorage();
         let messages = await storage.listMessages(conversationId, { limit: pageSize });
-        // Filter legacy reaction and reply placeholder bubbles persisted prior to aggregation/structured handling
+        const legacyHiddenIds = messages
+          .filter((message) => message.type === 'system' && isLegacyHiddenSystemMessage(message.body))
+          .map((message) => message.id);
+        if (legacyHiddenIds.length > 0) {
+          const cleanup = await storage.deleteMessages(legacyHiddenIds);
+          cleanup.updatedConversations.forEach((updated) => updateConversation(updated.id, updated));
+          messages = await storage.listMessages(conversationId, { limit: pageSize });
+        }
         messages = messages.filter(
-          (m) =>
+          (message) =>
             !(
-              (m.type === 'system' && (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))) ||
-              (m.type === 'text' && Boolean(parseProfileMessageBody(m.body)))
+              (message.type === 'system' && isLegacyHiddenSystemMessage(message.body)) ||
+              (message.type === 'text' && Boolean(parseProfileMessageBody(message.body)))
             )
         );
         setMessages(conversationId, messages);
@@ -303,7 +311,7 @@ export function useMessages() {
         setLoading(conversationId, false);
       }
     },
-    [setLoading, setMessages, syncConversation]
+    [setLoading, setMessages, syncConversation, updateConversation]
   );
 
   const loadOlderMessages = useCallback(
@@ -323,11 +331,19 @@ export function useMessages() {
       try {
         const storage = await getStorage();
         let messages = await storage.listMessages(conversationId, { limit: pageSize, before: oldest });
+        const legacyHiddenIds = messages
+          .filter((message) => message.type === 'system' && isLegacyHiddenSystemMessage(message.body))
+          .map((message) => message.id);
+        if (legacyHiddenIds.length > 0) {
+          const cleanup = await storage.deleteMessages(legacyHiddenIds);
+          cleanup.updatedConversations.forEach((updated) => updateConversation(updated.id, updated));
+          messages = await storage.listMessages(conversationId, { limit: pageSize, before: oldest });
+        }
         messages = messages.filter(
-          (m) =>
+          (message) =>
             !(
-              (m.type === 'system' && (/^reaction$/i.test(m.body) || /^reply$/i.test(m.body))) ||
-              (m.type === 'text' && Boolean(parseProfileMessageBody(m.body)))
+              (message.type === 'system' && isLegacyHiddenSystemMessage(message.body)) ||
+              (message.type === 'text' && Boolean(parseProfileMessageBody(message.body)))
             )
         );
         if (messages.length > 0) {
@@ -339,7 +355,7 @@ export function useMessages() {
         return { count: 0, hasMore: false };
       }
     },
-    [messagesByConversation, prependMessages, loadMessages]
+    [messagesByConversation, prependMessages, loadMessages, updateConversation]
   );
 
   const ensureContactForConversation = useCallback(

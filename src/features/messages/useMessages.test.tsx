@@ -6,6 +6,7 @@ import { useMessages } from './useMessages';
 import { useAuthStore, useContactStore, useConversationStore, useMessageStore } from '@/lib/stores';
 import type { Attachment, Conversation, Message, StoredRemoteAttachmentEnvelope } from '@/types';
 import type { Contact } from '@/lib/stores/contact-store';
+import type { MessageDeletionResult } from '@/lib/storage/interface';
 
 const xmtpMock = {
   isConnected: vi.fn(() => true),
@@ -47,6 +48,9 @@ const mockStorage = {
   deleteAttachment: vi.fn(async () => undefined),
   updateMessageStatus: vi.fn(async () => undefined),
   deleteMessage: vi.fn(async () => ({ deletedMessageIds: [], updatedConversations: [] })),
+  deleteMessages: vi.fn<(ids: string[]) => Promise<MessageDeletionResult>>(
+    async () => ({ deletedMessageIds: [], updatedConversations: [] }),
+  ),
 };
 
 vi.mock('@/lib/storage', () => ({
@@ -160,6 +164,8 @@ describe('useMessages resolver usage', () => {
     xmtpMock.updateConversationConsentState.mockResolvedValue(undefined);
     xmtpMock.syncConversationMessages.mockResolvedValue(undefined);
     mockStorage.getMessage.mockResolvedValue(undefined);
+    mockStorage.listMessages.mockResolvedValue([]);
+    mockStorage.deleteMessages.mockResolvedValue({ deletedMessageIds: [], updatedConversations: [] });
     mockStorage.getConversation.mockResolvedValue(undefined);
     mockStorage.getAttachment.mockResolvedValue(null);
     mockStorage.getAttachmentMetadata.mockResolvedValue(undefined);
@@ -229,6 +235,57 @@ describe('useMessages resolver usage', () => {
 
     expect(failure).toEqual(expect.objectContaining({ message: 'strict repair failed' }));
     expect(useMessageStore.getState().messagesByConversation.c1).toEqual([persisted]);
+  });
+
+  it('deletes legacy typing placeholders and repairs the conversation preview', async () => {
+    const typingPlaceholder: Message = {
+      id: 'sys-typing',
+      conversationId: 'c1',
+      sender: 'peer-inbox',
+      sentAt: 200,
+      receivedAt: 200,
+      type: 'system',
+      body: 'Typing',
+      status: 'delivered',
+      reactions: [],
+    };
+    const visibleMessage: Message = {
+      ...typingPlaceholder,
+      id: 'visible-message',
+      sentAt: 100,
+      type: 'text',
+      body: 'hello',
+    };
+    const repairedConversation: Conversation = {
+      ...useConversationStore.getState().conversations[0],
+      lastMessageAt: visibleMessage.sentAt,
+      lastMessageId: visibleMessage.id,
+      lastMessagePreview: visibleMessage.body,
+      lastMessageSender: visibleMessage.sender,
+    };
+    mockStorage.listMessages
+      .mockResolvedValueOnce([visibleMessage, typingPlaceholder])
+      .mockResolvedValueOnce([visibleMessage]);
+    mockStorage.deleteMessages.mockResolvedValueOnce({
+      deletedMessageIds: [typingPlaceholder.id],
+      updatedConversations: [repairedConversation],
+    });
+
+    let api: ReturnType<typeof useMessages> | null = null;
+    await act(async () => {
+      render(<Harness onReady={(value) => (api = value)} />);
+    });
+
+    await act(async () => {
+      await api!.loadMessages('c1');
+    });
+
+    expect(mockStorage.deleteMessages).toHaveBeenCalledWith([typingPlaceholder.id]);
+    expect(useMessageStore.getState().messagesByConversation.c1).toEqual([visibleMessage]);
+    expect(useConversationStore.getState().conversations[0]).toMatchObject({
+      lastMessageId: visibleMessage.id,
+      lastMessagePreview: visibleMessage.body,
+    });
   });
 
   it('resolves inbox ID only once per send preflight', async () => {

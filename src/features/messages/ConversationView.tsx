@@ -4,6 +4,7 @@ import { useMessageStore, useAuthStore, useContactStore } from '@/lib/stores';
 import { useConversations } from '@/features/conversations';
 import { MessageBubble } from './MessageBubble';
 import { MessageComposer } from './MessageComposer';
+import { TypingIndicator } from './TypingIndicator';
 import { useMessages } from './useMessages';
 import { ContactCardModal } from '@/components/ContactCardModal';
 import { sanitizeAvatarGlyph, sanitizeImageSrc } from '@/lib/utils/image';
@@ -343,6 +344,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
         conversationId?: string;
         senderInboxId?: string;
         isTyping?: boolean;
+        expiresAt?: number;
       }>).detail;
       if (!detail?.conversationId || detail.conversationId !== id || !detail.senderInboxId) {
         return;
@@ -355,7 +357,8 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       setTypingByInbox((current) => {
         const next = { ...current };
         if (detail.isTyping) {
-          next[senderKey] = { expiresAt: Date.now() + 15000 };
+          const advertisedExpiry = Number.isFinite(detail.expiresAt) ? detail.expiresAt! : Date.now() + 15000;
+          next[senderKey] = { expiresAt: Math.min(advertisedExpiry, Date.now() + 30000) };
         } else {
           delete next[senderKey];
         }
@@ -1167,9 +1170,7 @@ export function ConversationView({ showBackButton = true }: ConversationViewProp
       {/* Composer */}
       <div ref={composerRef}>
         {typingDisplayText && (
-          <div className="border-t border-primary-900/40 bg-primary-950/50 px-4 py-2 text-xs text-primary-300">
-            {typingDisplayText}
-          </div>
+          <TypingIndicator label={typingDisplayText} />
         )}
         {conversation?.isGroup && !isGroupMember ? (
           <div className="bg-primary-900/60 border border-primary-800/60 rounded-lg px-4 py-3 text-sm text-primary-200">

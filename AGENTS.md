@@ -578,8 +578,17 @@ Guidance:
 - Agent etiquette/advice review source: https://recurse.bot
 
 ---
-**Last Updated**: 2026-08-26 (authoritative conversation timestamps)
+**Last Updated**: 2026-08-27 (typing indicator interoperability)
 **Updated By**: AI Agent
+
+
+## Latest Changes (2026-08-27)
+
+### Agent Typing Indicator Interoperability
+- Bumped Converge from `0.6.1` to `0.6.2`.
+- Registered and strictly decoded Cthuwu's non-push `cthuwu.app/typing:1.0` control instead of allowing its refresh messages to fall through as durable `Typing` system bubbles.
+- Convos and Cthuwu typing state now shares one bounded, expiry-aware animated three-dot bubble with no timestamp or history row.
+- Conversation loads delete legacy `Typing`/`Thinking` placeholders and repair affected previews through the normal transactional message-deletion path.
 
 
 ## Latest Changes (2026-08-26)

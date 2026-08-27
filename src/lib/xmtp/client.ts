@@ -141,6 +141,11 @@ import {
   type ConvosProfileUpdateContent,
   type ConvosTypingIndicatorContent,
 } from './convos-codecs';
+import {
+  CthuwuTypingCodec,
+  ContentTypeCthuwuTyping,
+  parseCthuwuTypingControl,
+} from './cthuwu-codecs';
 import { selectRecentConversationIds } from './backfill-targets';
 import { isUsableNetworkDisplayName } from '@/lib/identity/profile-suggestions';
 import {
@@ -172,12 +177,14 @@ const CONVOS_PROFILE_UPDATE_CODEC = new ConvosProfileUpdateCodec();
 const CONVOS_PROFILE_SNAPSHOT_CODEC = new ConvosProfileSnapshotCodec();
 const CONVOS_TYPING_INDICATOR_CODEC = new ConvosTypingIndicatorCodec();
 const CONVOS_JOIN_REQUEST_CODEC = new ConvosJoinRequestCodec();
+const CTHUWU_TYPING_CODEC = new CthuwuTypingCodec();
 const XMTP_CONTENT_CODECS = [
   CONVERGE_PROFILE_CODEC,
   CONVOS_PROFILE_UPDATE_CODEC,
   CONVOS_PROFILE_SNAPSHOT_CODEC,
   CONVOS_TYPING_INDICATOR_CODEC,
   CONVOS_JOIN_REQUEST_CODEC,
+  CTHUWU_TYPING_CODEC,
 ];
 const XMTP_SDK_LOG_LEVEL_STORAGE_KEY = 'converge.xmtpSdkLogLevel.v1';
 const XMTP_APP_VERSION = `converge-app/${buildInfo.version}`;
@@ -2349,11 +2356,13 @@ export class XmtpClient {
     return true;
   }
 
-  private processConvosEphemeralSideChannel(msg: unknown, opts?: { dispatchTyping?: boolean }): boolean {
+  private processEphemeralSideChannel(msg: unknown, opts?: { dispatchTyping?: boolean }): boolean {
     const contentType = this.getContentTypeFromAny(msg);
     if (!contentType) return false;
 
-    if (contentTypeMatches(contentType, ContentTypeConvosTypingIndicator)) {
+    const isConvosTyping = contentTypeMatches(contentType, ContentTypeConvosTypingIndicator);
+    const isCthuwuTyping = contentTypeMatches(contentType, ContentTypeCthuwuTyping);
+    if (isConvosTyping || isCthuwuTyping) {
       if (opts?.dispatchTyping !== false && typeof window !== 'undefined' && msg && typeof msg === 'object') {
         const anyMsg = msg as Record<string, unknown>;
         const senderInboxId = typeof anyMsg['senderInboxId'] === 'string' ? anyMsg['senderInboxId'] : '';
@@ -2364,22 +2373,34 @@ export class XmtpClient {
           const sentAt = typeof anyMsg['sentAtNs'] === 'bigint'
             ? Number(anyMsg['sentAtNs'] / 1000000n)
             : Date.now();
-          const isRecent = Date.now() - sentAt <= 10_000;
-          const decoded =
-            anyMsg['content'] && typeof anyMsg['content'] === 'object'
+          const encoded = XmtpClient.getEncodedContentFromAny(msg);
+          const decodedConvos = isConvosTyping
+            ? anyMsg['content'] && typeof anyMsg['content'] === 'object'
               ? (anyMsg['content'] as Partial<ConvosTypingIndicatorContent>)
-              : (() => {
-                  const encoded = XmtpClient.getEncodedContentFromAny(msg);
-                  return encoded ? CONVOS_TYPING_INDICATOR_CODEC.decode(encoded) : undefined;
-                })();
-          if (isRecent && typeof decoded?.isTyping === 'boolean') {
+              : encoded
+                ? CONVOS_TYPING_INDICATOR_CODEC.decode(encoded)
+                : undefined
+            : undefined;
+          const decodedCthuwu = isCthuwuTyping
+            ? parseCthuwuTypingControl(anyMsg['content']) ||
+              (encoded ? CTHUWU_TYPING_CODEC.decode(encoded) : null)
+            : null;
+          const isTyping = decodedCthuwu?.active ?? decodedConvos?.isTyping;
+          const advertisedExpiry = decodedCthuwu
+            ? Number(BigInt(decodedCthuwu.expiresAtNs) / 1_000_000n)
+            : sentAt + 15_000;
+          const now = Date.now();
+          const expiresAt = Math.min(advertisedExpiry, now + 30_000);
+          const isFreshStart = isTyping !== true || (now - sentAt <= 10_000 && expiresAt > now);
+          if (isFreshStart && typeof isTyping === 'boolean') {
             window.dispatchEvent(
               new CustomEvent('xmtp:typing', {
                 detail: {
                   conversationId,
                   senderInboxId,
-                  isTyping: decoded.isTyping,
+                  isTyping,
                   sentAt,
+                  expiresAt,
                 },
               })
             );
@@ -6708,7 +6729,7 @@ export class XmtpClient {
               });
               continue;
             }
-            if (this.processConvosEphemeralSideChannel(m, { dispatchTyping: false })) {
+            if (this.processEphemeralSideChannel(m, { dispatchTyping: false })) {
               continue;
             }
             // Handle profile broadcasts silently (do not surface as chat messages)
@@ -7131,7 +7152,7 @@ export class XmtpClient {
                 });
                 continue;
               }
-              if (this.processConvosEphemeralSideChannel(m, { dispatchTyping: false })) {
+              if (this.processEphemeralSideChannel(m, { dispatchTyping: false })) {
                 continue;
               }
 
@@ -7722,7 +7743,7 @@ export class XmtpClient {
               });
               continue;
             }
-            if (this.processConvosEphemeralSideChannel(message, { dispatchTyping: true })) {
+            if (this.processEphemeralSideChannel(message, { dispatchTyping: true })) {
               continue;
             }
 

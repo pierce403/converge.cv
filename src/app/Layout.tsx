@@ -24,6 +24,7 @@ import {
   type XmtpReactionEventDetail,
   type XmtpSystemEventDetail,
 } from '@/lib/xmtp/message-events';
+import { isLegacyHiddenSystemMessage } from '@/lib/xmtp/hidden-system-messages';
 import buildInfo from '@/build-info.json';
 import { InboxSwitcher } from '@/features/identity/InboxSwitcher';
 import { saveLastRoute } from '@/lib/utils/route-persistence';
@@ -1012,6 +1013,9 @@ export function Layout() {
       system,
     }: XmtpSystemEventDetail) => {
       try {
+        if (isLegacyHiddenSystemMessage(system.body)) {
+          return;
+        }
         const sentAt = system.sentAt || Date.now();
         if (!shouldRetainMessage({ sentAt, expiresAt: system.expiresAt })) {
           return;

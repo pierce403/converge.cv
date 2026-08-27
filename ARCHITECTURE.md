@@ -196,7 +196,8 @@ Ethereum account identifiers have one canonical representation: lowercase `0x` p
   - `convos.org/profile_snapshot:1.0`
   - `convos.org/typing_indicator:1.0`
   - `convos.org/join_request:1.0`
-- Profile update/snapshot and typing/thinking side channels are handled silently and are not persisted as visible chat bubbles.
+- Converge also registers the exact non-push `cthuwu.app/typing:1.0` control used by Cthuwu agents. Its validated `active` state and nanosecond expiry feed the same bounded transient typing UI as Convos indicators.
+- Profile update/snapshot and typing/thinking side channels are handled silently and are not persisted as visible chat bubbles. Legacy `Typing`/`Thinking` system placeholders are deleted on conversation load, which also repairs affected conversation summaries.
 - Convos names are application profile data, not XMTP identity properties. Current Convos iOS unifies name, member kind, and general received metadata locally by `inboxId`; encrypted avatar slots remain per conversation, and the profile transport is still an MLS group message that must reach each participant/installation.
 - Profile state follows Convos precedence (`profile_update > profile_snapshot > appData > contact`), with the XMTP timestamp breaking ties, lower sources filling gaps only, blank names unable to clear known names, and direct empty metadata updates clearing only the conversation-managed `connections`/`timezone` keys.
 - Group activation, group sends, and explicit profile saves publish the local display name through a self-authored Convos `profile_update`; legacy `group.appData` profiles are read as a lower-authority fallback but are not rewritten by profile publication.
