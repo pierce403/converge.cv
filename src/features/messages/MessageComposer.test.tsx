@@ -1,8 +1,41 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MessageComposer } from './MessageComposer';
 
 describe('MessageComposer', () => {
+  it.each(['success', 'failure'] as const)(
+    'keeps keyboard focus during and after a send (%s)',
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const onSend = vi.fn(() => new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      }));
+      render(<MessageComposer onSend={onSend} />);
+      const textarea = screen.getByRole('textbox');
+      textarea.focus();
+      fireEvent.change(textarea, { target: { value: 'Hello' } });
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+
+      expect(textarea).toBeEnabled();
+      expect(textarea).toHaveFocus();
+      expect(textarea).toHaveAttribute('readonly');
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+      expect(onSend).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        if (outcome === 'success') resolve();
+        else reject(new Error('offline'));
+      });
+      expect(textarea).toHaveFocus();
+      expect(textarea).not.toHaveAttribute('readonly');
+      expect(textarea).toHaveValue(outcome === 'success' ? '' : 'Hello');
+      fireEvent.change(textarea, { target: { value: 'Next message' } });
+      expect(textarea).toHaveValue('Next message');
+    },
+  );
+
   it('does not force the send button to bottom alignment', () => {
     render(<MessageComposer onSend={vi.fn()} />);
 

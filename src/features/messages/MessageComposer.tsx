@@ -161,7 +161,6 @@ export function MessageComposer({
     } catch {
       // The send layer surfaces the actionable error. Preserve this draft so
       // the user can retry instead of silently losing what they wrote.
-      textareaRef.current?.focus();
     } finally {
       setIsSubmitting(false);
     }
@@ -174,6 +173,10 @@ export function MessageComposer({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isSubmitting) {
+      if (e.key === 'Enter') e.preventDefault();
+      return;
+    }
     if (e.nativeEvent.isComposing) {
       return;
     }
@@ -313,7 +316,9 @@ export function MessageComposer({
               placeholder="Type a message..."
               className="w-full px-4 py-2.5 min-h-[44px] bg-primary-950/60 border border-primary-800 rounded-lg text-primary-100 placeholder-primary-300 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-primary-950 focus:border-transparent resize-none overflow-y-auto backdrop-blur"
               rows={1}
-              disabled={disabled || isSubmitting}
+              disabled={disabled}
+              // Read-only preserves focus and the mobile keyboard while sending.
+              readOnly={isSubmitting}
               style={{ maxHeight: '120px' }}
             />
             {isMentionMenuOpen && (
