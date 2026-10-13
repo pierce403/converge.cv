@@ -4,10 +4,12 @@ const closeMock = vi.fn(async () => undefined);
 const initMock = vi.fn(async () => undefined);
 
 vi.mock('./dexie-driver', () => ({
-  DexieDriver: vi.fn().mockImplementation(() => ({
-    init: initMock,
-    close: closeMock,
-  })),
+  DexieDriver: vi.fn().mockImplementation(function () {
+    return {
+      init: initMock,
+      close: closeMock,
+    };
+  }),
 }));
 
 describe('storage namespace handling', () => {
